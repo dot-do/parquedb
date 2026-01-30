@@ -472,29 +472,31 @@ export class ParquetReader {
     min: unknown,
     max: unknown
   ): boolean {
-    if (min === undefined || max === undefined) {
+    if (min === undefined || max === undefined || min === null || max === null) {
       return false // Can't skip without statistics
     }
+
+    const filterVal = filter.value as number | string
 
     switch (filter.op) {
       case 'eq':
         // Skip if value is outside min/max range
-        return filter.value < min || filter.value > max
+        return filterVal < min || filterVal > max
       case 'ne':
         // Can't reliably skip for not-equal
         return false
       case 'gt':
         // Skip if max is not greater than filter value
-        return max <= filter.value
+        return (max as number | string) <= filterVal
       case 'gte':
         // Skip if max is less than filter value
-        return max < filter.value
+        return (max as number | string) < filterVal
       case 'lt':
         // Skip if min is not less than filter value
-        return min >= filter.value
+        return (min as number | string) >= filterVal
       case 'lte':
         // Skip if min is greater than filter value
-        return min > filter.value
+        return (min as number | string) > filterVal
       case 'in':
         // Can't reliably skip for in
         return false

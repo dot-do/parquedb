@@ -496,6 +496,129 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
  * - PATCH /ns/:namespace/:id - Update entity
  * - DELETE /ns/:namespace/:id - Delete entity
  */
+// =============================================================================
+// Example Datasets Configuration
+// =============================================================================
+
+const DATASETS = {
+  imdb: {
+    name: 'IMDB',
+    description: 'Internet Movie Database - 7M+ titles, ratings, cast & crew',
+    collections: ['titles', 'names', 'ratings', 'principals', 'crew'],
+    source: 'https://datasets.imdbws.com/',
+  },
+  onet: {
+    name: 'O*NET',
+    description: 'Occupational Information Network - Skills, abilities, knowledge for 1,000+ occupations',
+    collections: ['occupations', 'skills', 'abilities', 'knowledge', 'interests'],
+    source: 'https://www.onetcenter.org/database.html',
+  },
+  unspsc: {
+    name: 'UNSPSC',
+    description: 'United Nations Standard Products and Services Code - Product taxonomy',
+    collections: ['segments', 'families', 'classes', 'commodities'],
+    source: 'https://www.unspsc.org/',
+  },
+  wikidata: {
+    name: 'Wikidata',
+    description: 'Structured knowledge base - Entities, properties, claims',
+    collections: ['entities', 'properties'],
+    source: 'https://www.wikidata.org/',
+  },
+}
+
+// =============================================================================
+// Response Helpers
+// =============================================================================
+
+interface CfProperties {
+  colo?: string
+  country?: string
+  city?: string
+  region?: string
+  timezone?: string
+  latitude?: string
+  longitude?: string
+  asn?: number
+  asOrganization?: string
+}
+
+function buildResponse(
+  request: Request,
+  data: {
+    api: Record<string, unknown>
+    links: Record<string, string>
+    data?: unknown
+    items?: unknown[]
+    stats?: Record<string, unknown>
+  }
+): Response {
+  const cf = (request.cf || {}) as CfProperties
+
+  const response = {
+    api: data.api,
+    links: data.links,
+    ...(data.data !== undefined ? { data: data.data } : {}),
+    ...(data.items !== undefined ? { items: data.items } : {}),
+    ...(data.stats !== undefined ? { stats: data.stats } : {}),
+    user: {
+      colo: cf.colo,
+      country: cf.country,
+      city: cf.city,
+      region: cf.region,
+      timezone: cf.timezone,
+      coordinates: cf.latitude && cf.longitude ? {
+        lat: parseFloat(cf.latitude),
+        lng: parseFloat(cf.longitude),
+      } : undefined,
+      asn: cf.asn,
+      asOrganization: cf.asOrganization,
+      requestedAt: new Date().toISOString(),
+    },
+  }
+
+  return Response.json(response, {
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'public, max-age=60',
+    },
+  })
+}
+
+function buildErrorResponse(
+  request: Request,
+  error: Error,
+  status: number = 500
+): Response {
+  const cf = (request.cf || {}) as CfProperties
+
+  return Response.json({
+    api: {
+      error: true,
+      message: error.message,
+      status,
+    },
+    links: {
+      home: '/',
+      datasets: '/datasets',
+    },
+    user: {
+      colo: cf.colo,
+      country: cf.country,
+      requestedAt: new Date().toISOString(),
+    },
+  }, {
+    status,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+    },
+  })
+}
+
+// =============================================================================
+// HTTP Handler
+// =============================================================================
+
 export default {
   async fetch(
     request: Request,
@@ -504,75 +627,461 @@ export default {
   ): Promise<Response> {
     const url = new URL(request.url)
     const path = url.pathname
+    const baseUrl = `${url.protocol}//${url.host}`
+
+    // Handle CORS preflight
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+        },
+      })
+    }
 
     // Create worker instance
     const worker = new ParqueDBWorker(ctx, env)
 
     try {
-      // Parse path: /ns/:namespace[/:id]
-      const match = path.match(/^\/ns\/([^/]+)(?:\/([^/]+))?$/)
-      if (!match) {
-        return new Response('Not Found', { status: 404 })
+      // =======================================================================
+      // Root - API Overview
+      // =======================================================================
+      if (path === '/' || path === '') {
+        return buildResponse(request, {
+          api: {
+            name: 'ParqueDB',
+            version: '0.1.0',
+            description: 'A hybrid relational/document/graph database built on Apache Parquet',
+            documentation: 'https://github.com/parquedb/parquedb',
+          },
+          links: {
+            self: baseUrl,
+            datasets: `${baseUrl}/datasets`,
+            imdb: `${baseUrl}/datasets/imdb`,
+            onet: `${baseUrl}/datasets/onet`,
+            health: `${baseUrl}/health`,
+          },
+        })
       }
 
-      const ns = match[1]
-      const id = match[2]
-
-      if (!ns) {
-        return new Response('Namespace required', { status: 400 })
+      // =======================================================================
+      // Health Check
+      // =======================================================================
+      if (path === '/health') {
+        return buildResponse(request, {
+          api: {
+            status: 'healthy',
+            uptime: 'ok',
+            storage: 'r2',
+            compute: 'durable-objects',
+          },
+          links: {
+            home: baseUrl,
+            datasets: `${baseUrl}/datasets`,
+          },
+        })
       }
 
-      switch (request.method) {
-        case 'GET': {
-          if (id) {
-            // Get single entity
-            const entity = await worker.get(ns, id)
-            if (!entity) {
-              return new Response('Not Found', { status: 404 })
+      // =======================================================================
+      // Datasets Overview
+      // =======================================================================
+      if (path === '/datasets') {
+        const datasetLinks: Record<string, string> = { self: `${baseUrl}/datasets` }
+        const datasetList = Object.entries(DATASETS).map(([key, ds]) => {
+          datasetLinks[key] = `${baseUrl}/datasets/${key}`
+          return {
+            id: key,
+            ...ds,
+            href: `${baseUrl}/datasets/${key}`,
+          }
+        })
+
+        return buildResponse(request, {
+          api: {
+            resource: 'datasets',
+            description: 'Available example datasets',
+            count: datasetList.length,
+          },
+          links: {
+            home: baseUrl,
+            ...datasetLinks,
+          },
+          items: datasetList,
+        })
+      }
+
+      // =======================================================================
+      // Dataset Detail - /datasets/:dataset
+      // =======================================================================
+      const datasetMatch = path.match(/^\/datasets\/([^/]+)$/)
+      if (datasetMatch) {
+        const datasetId = datasetMatch[1]!
+        const dataset = DATASETS[datasetId as keyof typeof DATASETS]
+
+        if (!dataset) {
+          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404)
+        }
+
+        const collectionLinks: Record<string, string> = {}
+        for (const col of dataset.collections) {
+          collectionLinks[col] = `${baseUrl}/datasets/${datasetId}/${col}`
+        }
+
+        return buildResponse(request, {
+          api: {
+            resource: 'dataset',
+            id: datasetId,
+            name: dataset.name,
+            description: dataset.description,
+            source: dataset.source,
+          },
+          links: {
+            self: `${baseUrl}/datasets/${datasetId}`,
+            home: baseUrl,
+            datasets: `${baseUrl}/datasets`,
+            ...collectionLinks,
+          },
+          data: {
+            collections: dataset.collections.map(col => ({
+              name: col,
+              href: `${baseUrl}/datasets/${datasetId}/${col}`,
+            })),
+          },
+        })
+      }
+
+      // =======================================================================
+      // Collection List - /datasets/:dataset/:collection
+      // =======================================================================
+      const collectionMatch = path.match(/^\/datasets\/([^/]+)\/([^/]+)$/)
+      if (collectionMatch) {
+        const datasetId = collectionMatch[1]!
+        const collectionId = collectionMatch[2]!
+        const dataset = DATASETS[datasetId as keyof typeof DATASETS]
+
+        if (!dataset) {
+          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404)
+        }
+
+        // Map dataset/collection to namespace
+        const ns = `${datasetId}/${collectionId}`
+
+        const filter = parseQueryFilter(url.searchParams)
+        const options = parseQueryOptions(url.searchParams)
+        if (!options.limit) options.limit = 20
+
+        const result = await worker.find(ns, filter, options)
+
+        // Build enriched items with href links
+        const enrichedItems: unknown[] = []
+        const itemLinks: Record<string, string> = {}
+
+        if (result.items) {
+          for (const item of result.items) {
+            const entity = item as Record<string, unknown>
+            const entityId = entity.$id || entity.id
+            if (entityId) {
+              const localId = String(entityId).split('/').pop() || ''
+              const href = `${baseUrl}/datasets/${datasetId}/${collectionId}/${localId}`
+
+              // Add to quick links (first 10)
+              if (Object.keys(itemLinks).length < 10) {
+                const linkName = String(entity.name || localId)
+                itemLinks[linkName] = href
+              }
+
+              // Find relationship predicates on this entity
+              const predicates: string[] = []
+              for (const [key, value] of Object.entries(entity)) {
+                if (!key.startsWith('$') && value && typeof value === 'object' && !Array.isArray(value)) {
+                  const entries = Object.entries(value as Record<string, unknown>)
+                  if (entries.some(([k, v]) => !k.startsWith('$') && typeof v === 'string' && (v as string).includes('/'))) {
+                    predicates.push(key)
+                  }
+                }
+              }
+
+              // Enrich item with href and relationship hints
+              enrichedItems.push({
+                ...entity,
+                _links: {
+                  self: href,
+                  ...(predicates.length > 0
+                    ? Object.fromEntries(predicates.map(p => [p, `${href}/${p}`]))
+                    : {}
+                  ),
+                },
+              })
+            } else {
+              enrichedItems.push(item)
             }
-            return Response.json(entity)
-          } else {
-            // Find entities
-            const filter = parseQueryFilter(url.searchParams)
-            const options = parseQueryOptions(url.searchParams)
-            const result = await worker.find(ns, filter, options)
+          }
+        }
+
+        return buildResponse(request, {
+          api: {
+            resource: 'collection',
+            dataset: datasetId,
+            collection: collectionId,
+            filter: Object.keys(filter).length > 0 ? filter : undefined,
+            limit: options.limit,
+            skip: options.skip,
+            returned: enrichedItems.length,
+            hasMore: result.hasMore,
+          },
+          links: {
+            self: `${baseUrl}${path}${url.search}`,
+            dataset: `${baseUrl}/datasets/${datasetId}`,
+            home: baseUrl,
+            ...(result.hasMore ? { next: `${baseUrl}${path}?cursor=${(result.stats as unknown as Record<string, unknown>)?.nextCursor || ''}&limit=${options.limit}` } : {}),
+            ...itemLinks,
+          },
+          items: enrichedItems,
+          stats: result.stats as unknown as Record<string, unknown>,
+        })
+      }
+
+      // =======================================================================
+      // Entity Detail - /datasets/:dataset/:collection/:id
+      // =======================================================================
+      const entityMatch = path.match(/^\/datasets\/([^/]+)\/([^/]+)\/(.+)$/)
+      if (entityMatch) {
+        const datasetId = entityMatch[1]!
+        const collectionId = entityMatch[2]!
+        const entityId = entityMatch[3]!
+        const dataset = DATASETS[datasetId as keyof typeof DATASETS]
+
+        if (!dataset) {
+          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404)
+        }
+
+        const ns = `${datasetId}/${collectionId}`
+        const entity = await worker.get(ns, entityId) as EntityRecord | null
+
+        if (!entity) {
+          return buildErrorResponse(request, new Error(`Entity '${entityId}' not found in ${ns}`), 404)
+        }
+
+        // Extract relationships from entity and build navigable links
+        const relationships: Record<string, unknown> = {}
+        const relLinks: Record<string, string | Record<string, string>> = {}
+
+        for (const [key, value] of Object.entries(entity)) {
+          // Skip system fields
+          if (key.startsWith('$') || ['name', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', 'version', 'deletedAt', 'deletedBy'].includes(key)) {
+            continue
+          }
+
+          // Check if this looks like a relationship (object with EntityId values)
+          if (value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+            const relObj = value as Record<string, unknown>
+            const relEntries = Object.entries(relObj).filter(([k]) => !k.startsWith('$'))
+
+            if (relEntries.length > 0) {
+              // This is likely a relationship field
+              const relLinkObj: Record<string, string> = {}
+              for (const [displayName, targetId] of relEntries) {
+                if (typeof targetId === 'string' && targetId.includes('/')) {
+                  // Parse targetId: "namespace/localId" -> link
+                  const [targetNs, ...idParts] = targetId.split('/')
+                  const targetLocalId = idParts.join('/')
+                  // Convert namespace to dataset/collection format
+                  const targetHref = `${baseUrl}/datasets/${datasetId}/${targetNs}/${targetLocalId}`
+                  relLinkObj[displayName] = targetHref
+                }
+              }
+              if (Object.keys(relLinkObj).length > 0) {
+                relationships[key] = relObj
+                relLinks[key] = Object.keys(relLinkObj).length === 1
+                  ? Object.values(relLinkObj)[0]!
+                  : relLinkObj
+              }
+            }
+          }
+        }
+
+        // Build the response with relationships prominently featured
+        return buildResponse(request, {
+          api: {
+            resource: 'entity',
+            dataset: datasetId,
+            collection: collectionId,
+            id: entityId,
+            type: (entity as unknown as Record<string, unknown>).$type,
+          },
+          links: {
+            self: `${baseUrl}${path}`,
+            collection: `${baseUrl}/datasets/${datasetId}/${collectionId}`,
+            dataset: `${baseUrl}/datasets/${datasetId}`,
+            home: baseUrl,
+            // Add relationship links for easy navigation
+            ...relLinks,
+          },
+          data: {
+            $id: (entity as unknown as Record<string, unknown>).$id,
+            $type: (entity as unknown as Record<string, unknown>).$type,
+            name: (entity as unknown as Record<string, unknown>).name,
+            // Include non-relationship fields
+            ...Object.fromEntries(
+              Object.entries(entity).filter(([k, v]) =>
+                !k.startsWith('$') &&
+                !['name', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', 'version', 'deletedAt', 'deletedBy'].includes(k) &&
+                !(v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date) &&
+                  Object.entries(v as Record<string, unknown>).some(([, val]) => typeof val === 'string' && (val as string).includes('/')))
+              )
+            ),
+            // Relationships with $count and clickable structure
+            ...(Object.keys(relationships).length > 0 ? { relationships } : {}),
+          },
+        })
+      }
+
+      // =======================================================================
+      // Relationship Traversal - /datasets/:dataset/:collection/:id/:predicate
+      // =======================================================================
+      const relMatch = path.match(/^\/datasets\/([^/]+)\/([^/]+)\/([^/]+)\/([^/]+)$/)
+      if (relMatch) {
+        const datasetId = relMatch[1]!
+        const collectionId = relMatch[2]!
+        const entityId = relMatch[3]!
+        const predicate = relMatch[4]!
+        const dataset = DATASETS[datasetId as keyof typeof DATASETS]
+
+        if (!dataset) {
+          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404)
+        }
+
+        const ns = `${datasetId}/${collectionId}`
+        const entity = await worker.get(ns, entityId) as EntityRecord | null
+
+        if (!entity) {
+          return buildErrorResponse(request, new Error(`Entity '${entityId}' not found`), 404)
+        }
+
+        // Get the relationship field
+        const relField = (entity as unknown as Record<string, unknown>)[predicate]
+
+        if (!relField || typeof relField !== 'object') {
+          return buildErrorResponse(request, new Error(`Relationship '${predicate}' not found on entity`), 404)
+        }
+
+        const relObj = relField as Record<string, unknown>
+        const relEntries = Object.entries(relObj).filter(([k]) => !k.startsWith('$'))
+        const count = relObj.$count as number | undefined
+
+        // Build linked items
+        const items: Array<{ name: string; id: string; href: string }> = []
+        for (const [displayName, targetId] of relEntries) {
+          if (typeof targetId === 'string' && targetId.includes('/')) {
+            const [targetNs, ...idParts] = targetId.split('/')
+            const targetLocalId = idParts.join('/')
+            items.push({
+              name: displayName,
+              id: targetId,
+              href: `${baseUrl}/datasets/${datasetId}/${targetNs}/${targetLocalId}`,
+            })
+          }
+        }
+
+        return buildResponse(request, {
+          api: {
+            resource: 'relationship',
+            dataset: datasetId,
+            collection: collectionId,
+            entityId,
+            predicate,
+            count: count || items.length,
+          },
+          links: {
+            self: `${baseUrl}${path}`,
+            entity: `${baseUrl}/datasets/${datasetId}/${collectionId}/${entityId}`,
+            collection: `${baseUrl}/datasets/${datasetId}/${collectionId}`,
+            dataset: `${baseUrl}/datasets/${datasetId}`,
+            home: baseUrl,
+            // Direct links to related entities
+            ...Object.fromEntries(items.map(item => [item.name, item.href])),
+          },
+          items,
+        })
+      }
+
+      // =======================================================================
+      // Legacy /ns routes (backwards compatibility)
+      // =======================================================================
+      const nsMatch = path.match(/^\/ns\/([^/]+)(?:\/([^/]+))?$/)
+      if (nsMatch) {
+        const ns = nsMatch[1]!
+        const id = nsMatch[2]
+
+        switch (request.method) {
+          case 'GET': {
+            if (id) {
+              const entity = await worker.get(ns, id)
+              if (!entity) {
+                return buildErrorResponse(request, new Error(`Entity not found`), 404)
+              }
+              return buildResponse(request, {
+                api: { resource: 'entity', namespace: ns, id },
+                links: {
+                  self: `${baseUrl}${path}`,
+                  collection: `${baseUrl}/ns/${ns}`,
+                  home: baseUrl,
+                },
+                data: entity,
+              })
+            } else {
+              const filter = parseQueryFilter(url.searchParams)
+              const options = parseQueryOptions(url.searchParams)
+              const result = await worker.find(ns, filter, options)
+              return buildResponse(request, {
+                api: { resource: 'collection', namespace: ns },
+                links: {
+                  self: `${baseUrl}${path}`,
+                  home: baseUrl,
+                },
+                items: result.items,
+                stats: result.stats as unknown as Record<string, unknown>,
+              })
+            }
+          }
+
+          case 'POST': {
+            const data = (await request.json()) as Partial<EntityRecord>
+            const entity = await worker.create(ns, data)
+            return Response.json(entity, { status: 201 })
+          }
+
+          case 'PATCH': {
+            if (!id) {
+              return buildErrorResponse(request, new Error('ID required for update'), 400)
+            }
+            const updateData = (await request.json()) as Update
+            const result = await worker.update(ns, id, updateData)
             return Response.json(result)
           }
-        }
 
-        case 'POST': {
-          // Create entity
-          const data = (await request.json()) as Partial<EntityRecord>
-          const entity = await worker.create(ns, data)
-          return Response.json(entity, { status: 201 })
-        }
-
-        case 'PATCH': {
-          if (!id) {
-            return new Response('ID required for update', { status: 400 })
+          case 'DELETE': {
+            if (!id) {
+              return buildErrorResponse(request, new Error('ID required for delete'), 400)
+            }
+            const result = await worker.delete(ns, id)
+            return Response.json(result)
           }
-          const updateData = (await request.json()) as Update
-          const result = await worker.update(ns, id, updateData)
-          return Response.json(result)
-        }
 
-        case 'DELETE': {
-          if (!id) {
-            return new Response('ID required for delete', { status: 400 })
-          }
-          const result = await worker.delete(ns, id)
-          return Response.json(result)
+          default:
+            return buildErrorResponse(request, new Error('Method not allowed'), 405)
         }
-
-        default:
-          return new Response('Method Not Allowed', { status: 405 })
       }
+
+      // =======================================================================
+      // 404 - Not Found
+      // =======================================================================
+      return buildErrorResponse(request, new Error(`Route '${path}' not found`), 404)
+
     } catch (error) {
       console.error('ParqueDB error:', error)
-      return new Response(
-        JSON.stringify({ error: (error as Error).message }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      )
+      return buildErrorResponse(request, error as Error, 500)
     }
   },
 }

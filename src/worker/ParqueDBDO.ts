@@ -102,6 +102,7 @@ export interface DOLinkOptions {
 
 /** Entity as stored in SQLite */
 interface StoredEntity {
+  [key: string]: SqlStorageValue
   ns: string
   id: string
   type: string
@@ -118,6 +119,7 @@ interface StoredEntity {
 
 /** Relationship as stored in SQLite */
 interface StoredRelationship {
+  [key: string]: SqlStorageValue
   from_ns: string
   from_id: string
   predicate: string
@@ -134,6 +136,7 @@ interface StoredRelationship {
 
 /** Event as stored in SQLite */
 interface StoredEvent {
+  [key: string]: SqlStorageValue
   id: string
   ts: string
   target: string
@@ -878,7 +881,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Handle scheduled alarm for flushing events
    */
-  async alarm(): Promise<void> {
+  override async alarm(): Promise<void> {
     this.flushAlarmSet = false
     await this.flushToParquet()
   }

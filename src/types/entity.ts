@@ -52,9 +52,9 @@ export interface AuditFields {
 // Relationship Types
 // =============================================================================
 
-/** A relationship link: maps display name to EntityId */
+/** A relationship link: maps display name to EntityId or meta fields */
 export interface RelLink {
-  [displayName: string]: EntityId
+  [displayName: string]: EntityId | number | string | undefined
 }
 
 /** A paginated set of relationship links */

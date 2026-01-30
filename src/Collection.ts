@@ -24,7 +24,7 @@ import type {
   SortSpec,
   SortDirection,
 } from './types'
-import { entityId as createEntityId, normalizeSortDirection } from './types'
+import { normalizeSortDirection } from './types'
 
 /** Aggregation pipeline stage */
 export type AggregationStage =
@@ -200,13 +200,16 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
   const parts = path.split('.')
   let current = obj
   for (let i = 0; i < parts.length - 1; i++) {
-    const part = parts[i]
+    const part = parts[i]!
     if (!(part in current) || typeof current[part] !== 'object' || current[part] === null) {
       current[part] = {}
     }
     current = current[part] as Record<string, unknown>
   }
-  current[parts[parts.length - 1]] = value
+  const lastPart = parts[parts.length - 1]
+  if (lastPart !== undefined) {
+    current[lastPart] = value
+  }
 }
 
 /**
@@ -216,13 +219,16 @@ function deleteNestedValue(obj: Record<string, unknown>, path: string): void {
   const parts = path.split('.')
   let current = obj
   for (let i = 0; i < parts.length - 1; i++) {
-    const part = parts[i]
+    const part = parts[i]!
     if (!(part in current) || typeof current[part] !== 'object' || current[part] === null) {
       return
     }
     current = current[part] as Record<string, unknown>
   }
-  delete current[parts[parts.length - 1]]
+  const lastPart = parts[parts.length - 1]
+  if (lastPart !== undefined) {
+    delete current[lastPart]
+  }
 }
 
 /**
@@ -492,7 +498,7 @@ export class Collection<T = Record<string, unknown>> {
    */
   private extractLocalId(entityId: EntityId): string {
     const parts = (entityId as string).split('/')
-    return parts.length > 1 ? parts.slice(1).join('/') : parts[0]
+    return parts.length > 1 ? parts.slice(1).join('/') : (parts[0] ?? '')
   }
 
   /**
@@ -613,7 +619,8 @@ export class Collection<T = Record<string, unknown>> {
 
     const hasMore = entities.length > limit
     const items = hasMore ? entities.slice(0, limit) : entities
-    const nextCursor = hasMore && items.length > 0 ? items[items.length - 1].$id : undefined
+    const lastItem = items[items.length - 1]
+    const nextCursor = hasMore && items.length > 0 && lastItem ? lastItem.$id : undefined
 
     return {
       items,
@@ -712,6 +719,7 @@ export class Collection<T = Record<string, unknown>> {
         predicateGroups.set(rel.predicate, [])
       }
       const targetNs = rel.to.split('/')[0]
+      if (!targetNs) continue
       const targetLocalId = rel.to.split('/').slice(1).join('/')
       const targetStorage = globalStorage.get(targetNs)
       const targetEntity = targetStorage?.get(targetLocalId)
@@ -739,6 +747,7 @@ export class Collection<T = Record<string, unknown>> {
 
       for (const rel of inboundRels) {
         const sourceNs = rel.from.split('/')[0]
+        if (!sourceNs) continue
         // Determine reverse name based on source namespace and predicate
         // posts/author -> User = posts
         // comments/author -> User = comments
@@ -801,6 +810,7 @@ export class Collection<T = Record<string, unknown>> {
       for (const rel of rels) {
         const targetNs = rel.to.split('/')[0]
         const targetLocalId = rel.to.split('/').slice(1).join('/')
+        if (!targetNs) continue
         const targetStorage = globalStorage.get(targetNs)
         const targetEntity = targetStorage?.get(targetLocalId)
         if (targetEntity) {
@@ -861,6 +871,7 @@ export class Collection<T = Record<string, unknown>> {
       for (const rel of rels) {
         const sourceNs = rel.from.split('/')[0]
         const sourceLocalId = rel.from.split('/').slice(1).join('/')
+        if (!sourceNs) continue
         const sourceStorage = globalStorage.get(sourceNs)
         const sourceEntity = sourceStorage?.get(sourceLocalId)
         if (sourceEntity) {
@@ -927,7 +938,8 @@ export class Collection<T = Record<string, unknown>> {
       // Check if this is a relationship (object with EntityId values)
       if (value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
         const entries = Object.entries(value)
-        if (entries.length > 0 && typeof entries[0][1] === 'string' && (entries[0][1] as string).includes('/')) {
+        const firstEntry = entries[0]
+        if (entries.length > 0 && firstEntry && typeof firstEntry[1] === 'string' && (firstEntry[1] as string).includes('/')) {
           // This is a relationship
           for (const [, targetId] of entries) {
             relationships.push({ predicate: key, target: targetId as EntityId })
@@ -1413,24 +1425,24 @@ export class Collection<T = Record<string, unknown>> {
                 if (specObj.$sum === 1) {
                   result[field] = items.length
                 } else if (typeof specObj.$sum === 'string' && specObj.$sum.startsWith('$')) {
-                  result[field] = items.reduce((sum, item) => {
+                  result[field] = items.reduce((sum: number, item) => {
                     const val = getNestedValue(item as Record<string, unknown>, (specObj.$sum as string).slice(1))
                     return sum + (typeof val === 'number' ? val : 0)
                   }, 0)
                 }
               } else if ('$avg' in specObj && typeof specObj.$avg === 'string' && specObj.$avg.startsWith('$')) {
-                const sum = items.reduce((s, item) => {
+                const sum = items.reduce((s: number, item) => {
                   const val = getNestedValue(item as Record<string, unknown>, (specObj.$avg as string).slice(1))
                   return s + (typeof val === 'number' ? val : 0)
                 }, 0)
                 result[field] = items.length > 0 ? sum / items.length : 0
               } else if ('$max' in specObj && typeof specObj.$max === 'string' && specObj.$max.startsWith('$')) {
-                result[field] = items.reduce((max, item) => {
+                result[field] = items.reduce((max: number | null, item) => {
                   const val = getNestedValue(item as Record<string, unknown>, (specObj.$max as string).slice(1))
                   return typeof val === 'number' && (max === null || val > max) ? val : max
                 }, null as number | null)
               } else if ('$min' in specObj && typeof specObj.$min === 'string' && specObj.$min.startsWith('$')) {
-                result[field] = items.reduce((min, item) => {
+                result[field] = items.reduce((min: number | null, item) => {
                   const val = getNestedValue(item as Record<string, unknown>, (specObj.$min as string).slice(1))
                   return typeof val === 'number' && (min === null || val < min) ? val : min
                 }, null as number | null)

@@ -26,7 +26,7 @@ export interface ParqueDBDOInterface {
  */
 export interface Env {
   /** Durable Object namespace for ParqueDB write operations */
-  PARQUEDB: DurableObjectNamespace<ParqueDBDOInterface>
+  PARQUEDB: DurableObjectNamespace
 
   /** R2 bucket for Parquet file storage */
   BUCKET: R2Bucket
@@ -53,20 +53,7 @@ export interface Env {
  * Service binding type for RPC calls between workers
  * Use import type for better tree-shaking
  */
-export type ParqueDBService = Service<{
-  find(ns: string, filter?: unknown, options?: unknown): Promise<unknown>
-  get(ns: string, id: string, options?: unknown): Promise<unknown>
-  count(ns: string, filter?: unknown): Promise<number>
-  exists(ns: string, filter: unknown): Promise<boolean>
-  create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-  update(ns: string, id: string, update: unknown, options?: unknown): Promise<unknown>
-  updateMany(ns: string, filter: unknown, update: unknown, options?: unknown): Promise<unknown>
-  delete(ns: string, id: string, options?: unknown): Promise<unknown>
-  deleteMany(ns: string, filter: unknown, options?: unknown): Promise<unknown>
-  link(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
-  unlink(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
-  related(ns: string, id: string, options?: unknown): Promise<unknown>
-}>
+export type ParqueDBService = Fetcher
 
 /**
  * RPC request context

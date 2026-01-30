@@ -24,9 +24,6 @@ import type {
   Event,
   EventOp,
   EventTarget,
-  Variant,
-  Namespace,
-  Id,
   RelSet,
   SortSpec,
   Projection,
@@ -300,7 +297,7 @@ function generateId(): string {
  * Error thrown when optimistic concurrency check fails
  */
 export class VersionConflictError extends Error {
-  name = 'VersionConflictError'
+  override name = 'VersionConflictError'
   expectedVersion: number
   actualVersion: number | undefined
 
@@ -879,8 +876,8 @@ class ParqueDBImpl {
     // Track snapshot usage stats for this entity
     // If snapshots exist for this entity, record that they were available
     const entitySnapshots = this.snapshots.filter(s => s.entityId === fullId)
-    if (entitySnapshots.length > 0) {
-      const latestSnapshot = entitySnapshots[entitySnapshots.length - 1]
+    const latestSnapshot = entitySnapshots[entitySnapshots.length - 1]
+    if (entitySnapshots.length > 0 && latestSnapshot) {
       const [ns, ...idParts] = fullId.split('/')
       const entityEvents = this.events.filter(e => e.ns === ns && e.entityId === idParts.join('/'))
       const eventsAfterSnapshot = entityEvents.length - latestSnapshot.sequenceNumber
@@ -948,6 +945,7 @@ class ParqueDBImpl {
               if (match) {
                 handled = true
                 const [, relatedType, relatedField] = match
+                if (!relatedType || !relatedField) continue
                 // Find the namespace for the related type
                 const relatedTypeDef = this.schema[relatedType]
                 const relatedNs = relatedTypeDef?.$ns as string || relatedType.toLowerCase()
@@ -1059,6 +1057,7 @@ class ParqueDBImpl {
             if (match) {
               handled = true
               const [, relatedType, relatedField] = match
+              if (!relatedType || !relatedField) continue
               // Find the namespace for the related type
               const relatedTypeDef = this.schema[relatedType]
               const relatedNs = relatedTypeDef?.$ns as string || relatedType.toLowerCase()
@@ -1207,6 +1206,9 @@ class ParqueDBImpl {
       }
 
       const [, relatedType, relatedField] = match
+      if (!relatedType || !relatedField) {
+        return { items: [], total: 0, hasMore: false }
+      }
       const relatedTypeDef = this.schema[relatedType]
       const relatedNs = relatedTypeDef?.$ns as string || relatedType.toLowerCase()
 
@@ -1429,12 +1431,16 @@ class ParqueDBImpl {
           const parts = key.split('.')
           let current = entity as any
           for (let i = 0; i < parts.length - 1; i++) {
-            if (current[parts[i]] === undefined) {
-              current[parts[i]] = {}
+            const part = parts[i]!
+            if (current[part] === undefined) {
+              current[part] = {}
             }
-            current = current[parts[i]]
+            current = current[part]
           }
-          current[parts[parts.length - 1]] = value
+          const lastPart = parts[parts.length - 1]
+          if (lastPart !== undefined) {
+            current[lastPart] = value
+          }
         } else {
           (entity as any)[key] = value
         }
@@ -1749,7 +1755,7 @@ class ParqueDBImpl {
 
     // Update metadata
     entity.updatedAt = now
-    entity.updatedBy = actor
+    entity.updatedBy = (actor ?? entity.updatedBy) as EntityId
     entity.version = (entity.version ?? 0) + 1
 
     // Store updated entity
@@ -1757,43 +1763,45 @@ class ParqueDBImpl {
 
     // Record UPDATE event
     const [eventNs, ...eventIdParts] = fullId.split('/')
-    await this.recordEvent('UPDATE', 'entity', eventNs, eventIdParts.join('/'), beforeEntityForEvent, entity, actor)
+    if (eventNs) {
+      await this.recordEvent('UPDATE', 'entity', eventNs, eventIdParts.join('/'), beforeEntityForEvent, entity, actor as EntityId | undefined)
 
-    // Record relationship events for $link operations
-    if (update.$link) {
-      for (const [predicate, value] of Object.entries(update.$link)) {
-        const targets = Array.isArray(value) ? value : [value]
-        for (const target of targets) {
-          // Record CREATE rel event
-          await this.recordEvent(
-            'CREATE',
-            'rel',
-            eventNs,
-            eventIdParts.join('/'),
-            null,
-            { predicate, target } as unknown as Entity,
-            actor
-          )
+      // Record relationship events for $link operations
+      if (update.$link) {
+        for (const [predicate, value] of Object.entries(update.$link)) {
+          const targets = Array.isArray(value) ? value : [value]
+          for (const target of targets) {
+            // Record CREATE rel event
+            await this.recordEvent(
+              'CREATE',
+              'rel',
+              eventNs,
+              eventIdParts.join('/'),
+              null,
+              { predicate, target } as unknown as Entity,
+              actor as EntityId | undefined
+            )
+          }
         }
       }
-    }
 
-    // Record relationship events for $unlink operations
-    if (update.$unlink) {
-      for (const [predicate, value] of Object.entries(update.$unlink)) {
-        if (value === '$all') continue // Skip $all unlink
-        const targets = Array.isArray(value) ? value : [value]
-        for (const target of targets) {
-          // Record DELETE rel event
-          await this.recordEvent(
-            'DELETE',
-            'rel',
-            eventNs,
-            eventIdParts.join('/'),
-            { predicate, target } as unknown as Entity,
-            null,
-            actor
-          )
+      // Record relationship events for $unlink operations
+      if (update.$unlink) {
+        for (const [predicate, value] of Object.entries(update.$unlink)) {
+          if (value === '$all') continue // Skip $all unlink
+          const targets = Array.isArray(value) ? value : [value]
+          for (const target of targets) {
+            // Record DELETE rel event
+            await this.recordEvent(
+              'DELETE',
+              'rel',
+              eventNs,
+              eventIdParts.join('/'),
+              { predicate, target } as unknown as Entity,
+              null,
+              actor as EntityId | undefined
+            )
+          }
         }
       }
     }
@@ -2222,7 +2230,7 @@ class ParqueDBImpl {
     for (let i = startIndex; i <= targetEventIndex; i++) {
       const event = allEvents[i]
       if (event.after) {
-        entity = { ...event.after }
+        entity = { ...event.after } as Entity
       } else if (event.op === 'DELETE') {
         entity = null
       }
@@ -2290,10 +2298,10 @@ class ParqueDBImpl {
           this.entities.delete(fullId)
         } else if (event.op === 'UPDATE' && event.before) {
           // Restore previous state
-          this.entities.set(fullId, event.before)
+          this.entities.set(fullId, event.before as Entity)
         } else if (event.op === 'DELETE' && event.before) {
           // Restore deleted entity
-          this.entities.set(fullId, event.before)
+          this.entities.set(fullId, event.before as Entity)
         }
       }
       throw error
@@ -2342,12 +2350,12 @@ class ParqueDBImpl {
       ts: new Date(),
       op,
       target,
-      ns,
-      entityId,
-      before: deepCopy(before),
-      after: deepCopy(after),
-      actor,
-      metadata: meta,
+      ns: ns as unknown as import('./types').Namespace,
+      entityId: entityId as unknown as import('./types').Id,
+      before: deepCopy(before) as import('./types').Variant | null,
+      after: deepCopy(after) as import('./types').Variant | null,
+      actor: actor as EntityId,
+      metadata: meta as import('./types').Variant | undefined,
     }
     this.events.push(event)
 
@@ -2522,11 +2530,11 @@ class ParqueDBImpl {
       op: e.op,
       entityId: e.entityId,
       ns: e.ns,
-      before: e.before ?? null,
-      after: e.after ?? null,
+      before: (e.before ?? null) as Entity | null,
+      after: (e.after ?? null) as Entity | null,
       actor: e.actor,
       metadata: e.metadata,
-    }))
+    })) as HistoryItem[]
 
     return {
       items,
@@ -2560,14 +2568,14 @@ class ParqueDBImpl {
 
     for (const event of relevantEvents) {
       if (event.op === 'CREATE') {
-        entity = event.after ? { ...event.after } : null
+        entity = event.after ? { ...event.after } as Entity : null
         currentVersion = entity?.version ?? 1
       } else if (event.op === 'UPDATE' && entity) {
-        entity = event.after ? { ...event.after } : entity
+        entity = event.after ? { ...event.after } as Entity : entity
         currentVersion = entity?.version ?? currentVersion + 1
       } else if (event.op === 'DELETE' && entity) {
         if (event.after) {
-          entity = { ...event.after }
+          entity = { ...event.after } as Entity
           currentVersion = entity?.version ?? currentVersion + 1
         }
       }
@@ -2654,7 +2662,7 @@ class ParqueDBImpl {
             self.entities.delete(op.entity.$id as string)
             // Remove the CREATE event
             const idx = self.events.findIndex(
-              e => e.op === 'CREATE' && e.entityId === op.entity!.$id
+              e => e.op === 'CREATE' && (e.entityId as string) === (op.entity!.$id as string)
             )
             if (idx >= 0) self.events.splice(idx, 1)
           }

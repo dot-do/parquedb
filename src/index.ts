@@ -24,8 +24,8 @@ export * from './types'
 export {
   MemoryBackend,
   FsBackend,
-  R2Backend,
-  FsxBackend,
+  // R2Backend,
+  // FsxBackend,
 } from './storage'
 
 // =============================================================================
@@ -40,14 +40,14 @@ export {
 } from './schema'
 
 // =============================================================================
-// Client (for RPC)
+// Client (for RPC) - temporarily disabled for Worker build
 // =============================================================================
 
-export {
-  ParqueDBClient,
-  createClient,
-  type ParqueDBClientOptions,
-} from './client'
+// export {
+//   ParqueDBClient,
+//   createParqueDBClient,
+//   type ParqueDBClientOptions,
+// } from './client'
 
 // =============================================================================
 // Query Utilities

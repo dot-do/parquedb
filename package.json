@@ -45,6 +45,7 @@
     "load:all": "tsx scripts/load-all.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.980.0",
     "@graphdl/core": "^0.3.0",
     "@icetype/core": "^0.2.0",
     "@icetype/iceberg": "^0.2.0",
@@ -58,6 +59,7 @@
     "@types/node": "^25.1.0",
     "@vitest/browser": "^3.0.4",
     "csv-parse": "^6.1.0",
+    "dotenv": "^17.2.3",
     "playwright": "^1.49.1",
     "tsx": "^4.7.0",
     "typescript": "^5.7.2",

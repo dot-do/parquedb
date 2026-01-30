@@ -218,7 +218,7 @@ export interface UpdateInput<T = Record<string, unknown>> {
 
   // Relationships (ParqueDB-specific)
   $link?: Record<string, EntityId | EntityId[]>
-  $unlink?: Record<string, EntityId | EntityId[]>
+  $unlink?: Record<string, EntityId | EntityId[] | '$all'>
 
   // Bit
   $bit?: Record<string, { and?: number; or?: number; xor?: number }>
