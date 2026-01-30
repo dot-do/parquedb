@@ -74,7 +74,7 @@ export type IndexType = boolean | 'unique' | 'fts' | 'vector' | 'hash'
 /** Full field definition object */
 export interface FieldDefinition {
   /** Field type */
-  type: FieldTypeString
+  type: FieldTypeString | string  // Allow string for dynamic types
 
   /** Whether field is required */
   required?: boolean
@@ -108,6 +108,18 @@ export interface FieldDefinition {
 
   /** Vector dimensions (for vector type) */
   dimensions?: number
+
+  /** Vector distance metric (for vector type) */
+  metric?: 'cosine' | 'euclidean' | 'dotProduct'
+
+  /** FTS options (for full-text search indexed fields) */
+  ftsOptions?: {
+    language?: string
+    weight?: number
+  }
+
+  /** Similarity threshold for fuzzy relationships (0-1) */
+  threshold?: number
 
   /** Custom metadata */
   meta?: Record<string, unknown>
@@ -365,7 +377,7 @@ export function parseRelation(value: string): ParsedRelationship | null {
 
 /** Parse a field type string */
 export function parseFieldType(value: string): { type: string; required: boolean; isArray: boolean; default?: string } {
-  let type = value
+  let type = value.trim()
   let required = false
   let isArray = false
   let defaultValue: string | undefined

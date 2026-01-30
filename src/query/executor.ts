@@ -1,0 +1,986 @@
+/**
+ * Query Executor for ParqueDB
+ *
+ * Orchestrates query execution with predicate pushdown, column projection,
+ * and parallel row group reading for efficient Parquet queries.
+ */
+
+import type { Filter, FindOptions, SortSpec, Projection } from '../types'
+import type { StorageBackend, StoragePaths } from '../types/storage'
+import {
+  selectRowGroups,
+  toPredicate,
+  extractFilterFields,
+  extractRowGroupStats,
+  type RowGroupStats,
+  type ParquetMetadata,
+} from './predicate'
+import { checkBloomFilter } from './bloom'
+
+// =============================================================================
+// Query Result Types
+// =============================================================================
+
+/**
+ * Query execution result
+ */
+export interface QueryResult<T> {
+  /** Matching rows */
+  rows: T[]
+  /** Total count (if available/requested) */
+  totalCount?: number
+  /** Cursor for pagination */
+  nextCursor?: string
+  /** Whether more results exist */
+  hasMore: boolean
+  /** Query execution statistics */
+  stats: QueryStats
+}
+
+/**
+ * Query execution statistics for monitoring and optimization
+ */
+export interface QueryStats {
+  /** Total row groups in the file */
+  totalRowGroups: number
+  /** Row groups scanned after predicate pushdown */
+  scannedRowGroups: number
+  /** Row groups skipped by predicate pushdown */
+  skippedRowGroups: number
+  /** Total rows scanned */
+  rowsScanned: number
+  /** Rows that matched the filter */
+  rowsMatched: number
+  /** Execution time in milliseconds */
+  executionTimeMs: number
+  /** Columns read from Parquet */
+  columnsRead: string[]
+  /** Whether bloom filter was used */
+  usedBloomFilter: boolean
+}
+
+/**
+ * Query plan for explain mode
+ */
+export interface QueryPlan {
+  /** Filter analysis */
+  filter: {
+    original: Filter
+    fields: string[]
+    hasLogicalOps: boolean
+    hasSpecialOps: boolean
+  }
+  /** Predicate pushdown analysis */
+  predicatePushdown: {
+    enabled: boolean
+    rowGroupsTotal: number
+    rowGroupsSelected: number
+    estimatedSavings: string
+  }
+  /** Column projection */
+  projection: {
+    columns: string[]
+    isFullScan: boolean
+  }
+  /** Sort plan */
+  sort: {
+    fields: string[]
+    canUseSortedData: boolean
+  }
+}
+
+// =============================================================================
+// Parquet Reader Interface
+// =============================================================================
+
+/**
+ * Interface for reading Parquet files
+ * Actual implementation would use parquet-wasm or similar
+ */
+export interface ParquetReader {
+  /**
+   * Read file metadata (schema, row groups, statistics)
+   */
+  readMetadata(path: string): Promise<ParquetMetadata>
+
+  /**
+   * Read specific row groups from a Parquet file
+   */
+  readRowGroups<T>(
+    path: string,
+    rowGroups: number[],
+    columns?: string[]
+  ): Promise<T[]>
+
+  /**
+   * Read all rows from a Parquet file
+   */
+  readAll<T>(path: string, columns?: string[]): Promise<T[]>
+
+  /**
+   * Get bloom filter for a column
+   */
+  getBloomFilter(
+    path: string,
+    rowGroup: number,
+    column: string
+  ): Promise<BloomFilterReader | null>
+}
+
+/**
+ * Bloom filter reader interface
+ */
+export interface BloomFilterReader {
+  /**
+   * Check if value might exist
+   * Returns false = definitely not present
+   * Returns true = might be present (false positive possible)
+   */
+  mightContain(value: unknown): boolean
+}
+
+// =============================================================================
+// Query Executor
+// =============================================================================
+
+/**
+ * Executes queries against Parquet files with predicate pushdown
+ */
+export class QueryExecutor {
+  constructor(
+    private reader: ParquetReader,
+    private storage: StorageBackend
+  ) {}
+
+  /**
+   * Execute a query with filter and options
+   *
+   * @param ns - Namespace (collection name)
+   * @param filter - MongoDB-style filter
+   * @param options - Find options (sort, limit, skip, project, etc.)
+   * @returns Query result with matching rows
+   */
+  async execute<T>(
+    ns: string,
+    filter: Filter,
+    options: FindOptions<T> = {}
+  ): Promise<QueryResult<T>> {
+    const startTime = Date.now()
+
+    // 1. Load metadata
+    const dataPath = `data/${ns}/data.parquet`
+    const metadata = await this.reader.readMetadata(dataPath)
+
+    // 2. Get row group stats
+    const stats = extractRowGroupStats(metadata)
+
+    // 3. Select row groups using predicate pushdown
+    const selectedRowGroups = selectRowGroups(filter, stats)
+
+    // 4. Determine columns to read
+    const columns = this.selectColumns(filter, options)
+
+    // 5. Check bloom filters for equality checks (if available)
+    const bloomFilteredGroups = await this.applyBloomFilters(
+      dataPath,
+      filter,
+      selectedRowGroups,
+      stats
+    )
+
+    // 6. Read selected row groups in parallel
+    const rowBatches = await this.readRowGroupsParallel<T>(
+      dataPath,
+      bloomFilteredGroups,
+      columns
+    )
+
+    // 7. Flatten row batches
+    const allRows = rowBatches.flat()
+
+    // 8. Apply filter (post-predicate pushdown)
+    const predicate = toPredicate(filter)
+    const filtered = allRows.filter(row => predicate(row))
+
+    // 9. Apply sort, limit, skip
+    const result = this.postProcess(filtered, options)
+
+    // 10. Build statistics
+    const executionStats: QueryStats = {
+      totalRowGroups: stats.length,
+      scannedRowGroups: bloomFilteredGroups.length,
+      skippedRowGroups: stats.length - bloomFilteredGroups.length,
+      rowsScanned: allRows.length,
+      rowsMatched: filtered.length,
+      executionTimeMs: Date.now() - startTime,
+      columnsRead: columns,
+      usedBloomFilter: bloomFilteredGroups.length < selectedRowGroups.length,
+    }
+
+    return {
+      rows: result.rows,
+      totalCount: result.totalCount,
+      nextCursor: result.nextCursor,
+      hasMore: result.hasMore,
+      stats: executionStats,
+    }
+  }
+
+  /**
+   * Explain query plan without executing
+   *
+   * @param ns - Namespace (collection name)
+   * @param filter - MongoDB-style filter
+   * @param options - Find options
+   * @returns Query plan
+   */
+  async explain<T>(
+    ns: string,
+    filter: Filter,
+    options: FindOptions<T> = {}
+  ): Promise<QueryPlan> {
+    // Load metadata
+    const dataPath = `data/${ns}/data.parquet`
+    const metadata = await this.reader.readMetadata(dataPath)
+
+    // Get row group stats
+    const stats = extractRowGroupStats(metadata)
+
+    // Select row groups using predicate pushdown
+    const selectedRowGroups = selectRowGroups(filter, stats)
+
+    // Extract filter fields
+    const filterFields = extractFilterFields(filter)
+
+    // Determine columns to read
+    const columns = this.selectColumns(filter, options)
+
+    // Check for logical operators
+    const hasLogicalOps = !!(filter.$and || filter.$or || filter.$not || filter.$nor)
+
+    // Check for special operators
+    const hasSpecialOps = !!(filter.$text || filter.$vector || filter.$geo)
+
+    // Check if data is sorted
+    const sortFields = options.sort ? Object.keys(options.sort) : []
+    const canUseSortedData = this.canUseSortedData(metadata, sortFields)
+
+    // Calculate estimated savings
+    const rowGroupSavings = stats.length - selectedRowGroups.length
+    const savingsPercent = stats.length > 0
+      ? ((rowGroupSavings / stats.length) * 100).toFixed(1)
+      : '0.0'
+
+    return {
+      filter: {
+        original: filter,
+        fields: filterFields,
+        hasLogicalOps,
+        hasSpecialOps,
+      },
+      predicatePushdown: {
+        enabled: true,
+        rowGroupsTotal: stats.length,
+        rowGroupsSelected: selectedRowGroups.length,
+        estimatedSavings: `${savingsPercent}% of row groups skipped`,
+      },
+      projection: {
+        columns,
+        isFullScan: columns.length === 0,
+      },
+      sort: {
+        fields: sortFields,
+        canUseSortedData,
+      },
+    }
+  }
+
+  /**
+   * Execute aggregation query
+   *
+   * @param ns - Namespace (collection name)
+   * @param pipeline - Aggregation pipeline stages
+   * @param options - Aggregation options
+   */
+  async aggregate<T, R>(
+    ns: string,
+    pipeline: AggregationStage[],
+    options: AggregationOptions = {}
+  ): Promise<R[]> {
+    // Extract $match stage if present (for predicate pushdown)
+    const matchStage = pipeline.find(
+      (stage): stage is { $match: Filter } => '$match' in stage
+    )
+    const filter = matchStage?.$match ?? {}
+
+    // Execute base query
+    const result = await this.execute<T>(ns, filter, {
+      includeDeleted: options.includeDeleted,
+      asOf: options.asOf,
+    })
+
+    // Apply remaining pipeline stages
+    let data: unknown[] = result.rows
+
+    for (const stage of pipeline) {
+      if ('$match' in stage) {
+        // Already applied via predicate pushdown
+        continue
+      }
+      data = this.applyAggregationStage(data, stage)
+    }
+
+    return data as R[]
+  }
+
+  /**
+   * Select columns to read based on filter and options
+   */
+  private selectColumns<T>(filter: Filter, options: FindOptions<T>): string[] {
+    // Extract fields from filter
+    const filterFields = extractFilterFields(filter)
+
+    // Extract fields from projection
+    const projectFields = options.project
+      ? Object.keys(options.project).filter(k => {
+          const val = (options.project as Projection)[k]
+          return val === 1 || val === true
+        })
+      : []
+
+    // Extract fields from sort
+    const sortFields = options.sort ? Object.keys(options.sort) : []
+
+    // Combine all fields (use Set to deduplicate)
+    const allFields = new Set([
+      ...filterFields,
+      ...projectFields,
+      ...sortFields,
+      // Always include core fields
+      '$id',
+      '$type',
+      'name',
+      'createdAt',
+      'updatedAt',
+      'deletedAt',
+      'version',
+    ])
+
+    // If projection excludes fields (value = 0), we need all columns
+    if (options.project) {
+      const hasExclusions = Object.values(options.project).some(v => v === 0 || v === false)
+      if (hasExclusions) {
+        return [] // Empty array means read all columns
+      }
+    }
+
+    return Array.from(allFields)
+  }
+
+  /**
+   * Apply bloom filters to further filter row groups
+   */
+  private async applyBloomFilters(
+    path: string,
+    filter: Filter,
+    rowGroups: number[],
+    stats: RowGroupStats[]
+  ): Promise<number[]> {
+    // Extract equality conditions that could use bloom filters
+    const equalityConditions = this.extractEqualityConditions(filter)
+
+    if (equalityConditions.length === 0) {
+      return rowGroups
+    }
+
+    // For each row group, check bloom filters
+    const filteredGroups: number[] = []
+
+    for (const rgIndex of rowGroups) {
+      const rgStats = stats.find(s => s.rowGroup === rgIndex)
+      if (!rgStats) {
+        filteredGroups.push(rgIndex)
+        continue
+      }
+
+      let mightContain = true
+
+      for (const { field, value } of equalityConditions) {
+        const colStats = rgStats.columns.get(field)
+
+        // If column has bloom filter, check it
+        if (colStats?.hasBloomFilter) {
+          const bloomFilter = await this.reader.getBloomFilter(path, rgIndex, field)
+          if (bloomFilter && !bloomFilter.mightContain(value)) {
+            // Bloom filter says value is definitely not present
+            mightContain = false
+            break
+          }
+        }
+      }
+
+      if (mightContain) {
+        filteredGroups.push(rgIndex)
+      }
+    }
+
+    return filteredGroups
+  }
+
+  /**
+   * Extract equality conditions from filter
+   */
+  private extractEqualityConditions(filter: Filter): Array<{ field: string; value: unknown }> {
+    const conditions: Array<{ field: string; value: unknown }> = []
+
+    for (const [field, value] of Object.entries(filter)) {
+      if (field.startsWith('$')) continue
+
+      if (value === null || typeof value !== 'object') {
+        // Direct equality
+        conditions.push({ field, value })
+      } else if ('$eq' in (value as Record<string, unknown>)) {
+        conditions.push({ field, value: (value as { $eq: unknown }).$eq })
+      }
+    }
+
+    return conditions
+  }
+
+  /**
+   * Read row groups in parallel with concurrency limit
+   */
+  private async readRowGroupsParallel<T>(
+    path: string,
+    rowGroups: number[],
+    columns: string[]
+  ): Promise<T[][]> {
+    // Limit concurrency to avoid overwhelming storage
+    const CONCURRENCY = 4
+
+    const batches: number[][] = []
+    for (let i = 0; i < rowGroups.length; i += CONCURRENCY) {
+      batches.push(rowGroups.slice(i, i + CONCURRENCY))
+    }
+
+    const results: T[][] = []
+
+    for (const batch of batches) {
+      const batchResults = await Promise.all(
+        batch.map(rg =>
+          this.reader.readRowGroups<T>(path, [rg], columns.length > 0 ? columns : undefined)
+        )
+      )
+      results.push(...batchResults)
+    }
+
+    return results
+  }
+
+  /**
+   * Apply post-processing (sort, limit, skip)
+   */
+  private postProcess<T>(
+    rows: T[],
+    options: FindOptions<T>
+  ): { rows: T[]; totalCount?: number; nextCursor?: string; hasMore: boolean } {
+    let result = rows
+
+    // Apply soft-delete filter unless includeDeleted is true
+    if (!options.includeDeleted) {
+      result = result.filter(row => {
+        const r = row as Record<string, unknown>
+        return r.deletedAt === undefined || r.deletedAt === null
+      })
+    }
+
+    // Apply sort
+    if (options.sort) {
+      result = this.sortRows(result, options.sort)
+    }
+
+    // Calculate total before pagination
+    const totalCount = result.length
+
+    // Apply skip
+    if (options.skip && options.skip > 0) {
+      result = result.slice(options.skip)
+    }
+
+    // Apply limit
+    let hasMore = false
+    if (options.limit && options.limit > 0) {
+      if (result.length > options.limit) {
+        hasMore = true
+        result = result.slice(0, options.limit)
+      }
+    }
+
+    // Generate cursor for pagination
+    let nextCursor: string | undefined
+    if (hasMore && result.length > 0) {
+      const lastRow = result[result.length - 1] as Record<string, unknown>
+      nextCursor = this.generateCursor(lastRow, options.sort)
+    }
+
+    // Apply projection
+    if (options.project) {
+      result = this.applyProjection(result, options.project)
+    }
+
+    return { rows: result, totalCount, nextCursor, hasMore }
+  }
+
+  /**
+   * Sort rows by sort specification
+   */
+  private sortRows<T>(rows: T[], sort: SortSpec): T[] {
+    const sortEntries = Object.entries(sort)
+    if (sortEntries.length === 0) return rows
+
+    return [...rows].sort((a, b) => {
+      for (const [field, direction] of sortEntries) {
+        const aVal = this.getFieldValue(a, field)
+        const bVal = this.getFieldValue(b, field)
+
+        const cmp = this.compareValues(aVal, bVal)
+        if (cmp !== 0) {
+          const dir = direction === -1 || direction === 'desc' ? -1 : 1
+          return cmp * dir
+        }
+      }
+      return 0
+    })
+  }
+
+  /**
+   * Get field value with dot notation support
+   */
+  private getFieldValue(obj: unknown, path: string): unknown {
+    if (obj === null || obj === undefined) return undefined
+
+    const parts = path.split('.')
+    let current: unknown = obj
+
+    for (const part of parts) {
+      if (current === null || current === undefined) return undefined
+      if (typeof current !== 'object') return undefined
+      current = (current as Record<string, unknown>)[part]
+    }
+
+    return current
+  }
+
+  /**
+   * Compare two values for sorting
+   */
+  private compareValues(a: unknown, b: unknown): number {
+    // Nulls sort first
+    if (a === null || a === undefined) {
+      return b === null || b === undefined ? 0 : -1
+    }
+    if (b === null || b === undefined) return 1
+
+    // Same type comparisons
+    if (typeof a === 'number' && typeof b === 'number') return a - b
+    if (typeof a === 'string' && typeof b === 'string') return a.localeCompare(b)
+    if (a instanceof Date && b instanceof Date) return a.getTime() - b.getTime()
+    if (typeof a === 'boolean' && typeof b === 'boolean') return (a ? 1 : 0) - (b ? 1 : 0)
+
+    // Fallback to string comparison
+    return String(a).localeCompare(String(b))
+  }
+
+  /**
+   * Generate cursor for pagination
+   */
+  private generateCursor(row: Record<string, unknown>, sort?: SortSpec): string {
+    // Include sort fields and $id in cursor
+    const cursorData: Record<string, unknown> = {
+      $id: row.$id,
+    }
+
+    if (sort) {
+      for (const field of Object.keys(sort)) {
+        cursorData[field] = this.getFieldValue(row, field)
+      }
+    }
+
+    // Base64 encode the cursor
+    return Buffer.from(JSON.stringify(cursorData)).toString('base64')
+  }
+
+  /**
+   * Apply projection to rows
+   */
+  private applyProjection<T>(rows: T[], projection: Projection): T[] {
+    const includes = new Set<string>()
+    const excludes = new Set<string>()
+
+    for (const [field, value] of Object.entries(projection)) {
+      if (value === 1 || value === true) {
+        includes.add(field)
+      } else {
+        excludes.add(field)
+      }
+    }
+
+    // Always include core fields
+    const coreFields = ['$id', '$type', 'name']
+    for (const field of coreFields) {
+      includes.add(field)
+      excludes.delete(field)
+    }
+
+    return rows.map(row => {
+      const obj = row as Record<string, unknown>
+      const result: Record<string, unknown> = {}
+
+      if (includes.size > coreFields.length) {
+        // Include mode: only specified fields
+        const includeArr = Array.from(includes)
+        for (const field of includeArr) {
+          if (field in obj) {
+            result[field] = obj[field]
+          }
+        }
+      } else if (excludes.size > 0) {
+        // Exclude mode: all except specified fields
+        for (const [key, value] of Object.entries(obj)) {
+          if (!excludes.has(key)) {
+            result[key] = value
+          }
+        }
+      } else {
+        // No projection: return all
+        return row
+      }
+
+      return result as T
+    })
+  }
+
+  /**
+   * Check if data is already sorted by the requested fields
+   */
+  private canUseSortedData(metadata: ParquetMetadata, sortFields: string[]): boolean {
+    // Check if the Parquet file has sorting columns metadata
+    // This is a simplified check - real implementation would check
+    // the actual sorting columns in the metadata
+    if (sortFields.length === 0) return true
+
+    // Check key-value metadata for sorting info
+    const sortingCols = metadata.keyValueMetadata?.find(
+      kv => kv.key === 'parquet.sorting_columns'
+    )
+
+    if (sortingCols) {
+      try {
+        const sortedBy = JSON.parse(sortingCols.value) as string[]
+        return sortFields.every((f, i) => sortedBy[i] === f)
+      } catch {
+        return false
+      }
+    }
+
+    return false
+  }
+
+  /**
+   * Apply a single aggregation stage
+   */
+  private applyAggregationStage(data: unknown[], stage: AggregationStage): unknown[] {
+    if ('$sort' in stage) {
+      return this.sortRows(data, stage.$sort)
+    }
+
+    if ('$limit' in stage) {
+      return data.slice(0, stage.$limit)
+    }
+
+    if ('$skip' in stage) {
+      return data.slice(stage.$skip)
+    }
+
+    if ('$project' in stage) {
+      return this.applyProjection(data, stage.$project as Projection)
+    }
+
+    if ('$group' in stage) {
+      return this.applyGroup(data, stage.$group)
+    }
+
+    if ('$unwind' in stage) {
+      return this.applyUnwind(data, stage.$unwind)
+    }
+
+    if ('$count' in stage) {
+      return [{ [stage.$count]: data.length }]
+    }
+
+    if ('$addFields' in stage || '$set' in stage) {
+      const fields = '$addFields' in stage ? stage.$addFields : stage.$set
+      return data.map(row => ({
+        ...(row as object),
+        ...this.evaluateAddFields(row, fields),
+      }))
+    }
+
+    if ('$unset' in stage) {
+      const fieldsToRemove = Array.isArray(stage.$unset) ? stage.$unset : [stage.$unset]
+      return data.map(row => {
+        const result = { ...(row as object) }
+        for (const field of fieldsToRemove) {
+          delete (result as Record<string, unknown>)[field]
+        }
+        return result
+      })
+    }
+
+    // $lookup would require access to other collections
+    // For now, return data unchanged
+    if ('$lookup' in stage) {
+      console.warn('$lookup requires cross-collection access, skipping')
+      return data
+    }
+
+    return data
+  }
+
+  /**
+   * Apply $group aggregation stage
+   */
+  private applyGroup(
+    data: unknown[],
+    group: { _id: unknown; [key: string]: unknown }
+  ): unknown[] {
+    const groups = new Map<string, { _id: unknown; rows: unknown[] }>()
+
+    for (const row of data) {
+      const groupKey = this.evaluateExpression(row, group._id)
+      const keyStr = JSON.stringify(groupKey)
+
+      if (!groups.has(keyStr)) {
+        groups.set(keyStr, { _id: groupKey, rows: [] })
+      }
+      groups.get(keyStr)!.rows.push(row)
+    }
+
+    const results: unknown[] = []
+    const groupValues = Array.from(groups.values())
+
+    for (const { _id, rows } of groupValues) {
+      const result: Record<string, unknown> = { _id }
+
+      for (const [field, expr] of Object.entries(group)) {
+        if (field === '_id') continue
+
+        if (typeof expr === 'object' && expr !== null) {
+          const exprObj = expr as Record<string, unknown>
+          if ('$sum' in exprObj) {
+            result[field] = this.sumField(rows, exprObj.$sum)
+          } else if ('$avg' in exprObj) {
+            result[field] = this.avgField(rows, exprObj.$avg)
+          } else if ('$min' in exprObj) {
+            result[field] = this.minField(rows, exprObj.$min)
+          } else if ('$max' in exprObj) {
+            result[field] = this.maxField(rows, exprObj.$max)
+          } else if ('$first' in exprObj) {
+            result[field] = rows.length > 0 ? this.evaluateExpression(rows[0], exprObj.$first) : null
+          } else if ('$last' in exprObj) {
+            result[field] = rows.length > 0 ? this.evaluateExpression(rows[rows.length - 1], exprObj.$last) : null
+          } else if ('$push' in exprObj) {
+            result[field] = rows.map(r => this.evaluateExpression(r, exprObj.$push))
+          }
+        }
+      }
+
+      results.push(result)
+    }
+
+    return results
+  }
+
+  /**
+   * Apply $unwind aggregation stage
+   */
+  private applyUnwind(
+    data: unknown[],
+    unwind: string | { path: string; preserveNullAndEmptyArrays?: boolean }
+  ): unknown[] {
+    const path = typeof unwind === 'string' ? unwind : unwind.path
+    const preserveNullAndEmpty =
+      typeof unwind === 'object' ? unwind.preserveNullAndEmptyArrays ?? false : false
+
+    // Remove leading $ from path
+    const fieldPath = path.startsWith('$') ? path.slice(1) : path
+
+    const results: unknown[] = []
+
+    for (const row of data) {
+      const arrayValue = this.getFieldValue(row, fieldPath)
+
+      if (!Array.isArray(arrayValue)) {
+        if (preserveNullAndEmpty) {
+          results.push({ ...(row as object), [fieldPath]: null })
+        }
+        continue
+      }
+
+      if (arrayValue.length === 0) {
+        if (preserveNullAndEmpty) {
+          results.push({ ...(row as object), [fieldPath]: null })
+        }
+        continue
+      }
+
+      for (const item of arrayValue) {
+        results.push({ ...(row as object), [fieldPath]: item })
+      }
+    }
+
+    return results
+  }
+
+  /**
+   * Evaluate an expression (e.g., '$fieldName' or literal)
+   */
+  private evaluateExpression(row: unknown, expr: unknown): unknown {
+    if (typeof expr === 'string' && expr.startsWith('$')) {
+      const path = expr.slice(1)
+      return this.getFieldValue(row, path)
+    }
+
+    if (typeof expr === 'object' && expr !== null) {
+      // Handle expression operators
+      const exprObj = expr as Record<string, unknown>
+
+      if ('$gt' in exprObj) {
+        const [left, right] = exprObj.$gt as unknown[]
+        const leftVal = this.evaluateExpression(row, left)
+        const rightVal = this.evaluateExpression(row, right)
+        return this.compareValues(leftVal, rightVal) > 0
+      }
+
+      // Add more expression operators as needed
+    }
+
+    return expr
+  }
+
+  /**
+   * Evaluate $addFields expressions
+   */
+  private evaluateAddFields(
+    row: unknown,
+    fields: Record<string, unknown>
+  ): Record<string, unknown> {
+    const result: Record<string, unknown> = {}
+
+    for (const [field, expr] of Object.entries(fields)) {
+      result[field] = this.evaluateExpression(row, expr)
+    }
+
+    return result
+  }
+
+  /**
+   * Sum values for $sum accumulator
+   */
+  private sumField(rows: unknown[], expr: unknown): number {
+    if (expr === 1) {
+      // Count
+      return rows.length
+    }
+
+    let sum = 0
+    for (const row of rows) {
+      const val = this.evaluateExpression(row, expr)
+      sum += typeof val === 'number' ? val : 0
+    }
+    return sum
+  }
+
+  /**
+   * Average values for $avg accumulator
+   */
+  private avgField(rows: unknown[], expr: unknown): number | null {
+    if (rows.length === 0) return null
+
+    const sum = this.sumField(rows, expr)
+    return sum / rows.length
+  }
+
+  /**
+   * Min value for $min accumulator
+   */
+  private minField(rows: unknown[], expr: unknown): unknown {
+    if (rows.length === 0) return null
+
+    let min: unknown = undefined
+
+    for (const row of rows) {
+      const val = this.evaluateExpression(row, expr)
+      if (val === null || val === undefined) continue
+      if (min === undefined || this.compareValues(val, min) < 0) {
+        min = val
+      }
+    }
+
+    return min ?? null
+  }
+
+  /**
+   * Max value for $max accumulator
+   */
+  private maxField(rows: unknown[], expr: unknown): unknown {
+    if (rows.length === 0) return null
+
+    let max: unknown = undefined
+
+    for (const row of rows) {
+      const val = this.evaluateExpression(row, expr)
+      if (val === null || val === undefined) continue
+      if (max === undefined || this.compareValues(val, max) > 0) {
+        max = val
+      }
+    }
+
+    return max ?? null
+  }
+}
+
+// =============================================================================
+// Aggregation Types
+// =============================================================================
+
+/** Aggregation pipeline stage */
+export type AggregationStage =
+  | { $match: Filter }
+  | { $group: { _id: unknown; [key: string]: unknown } }
+  | { $sort: Record<string, 1 | -1> }
+  | { $limit: number }
+  | { $skip: number }
+  | { $project: Record<string, 0 | 1 | boolean | unknown> }
+  | { $unwind: string | { path: string; preserveNullAndEmptyArrays?: boolean } }
+  | { $lookup: { from: string; localField: string; foreignField: string; as: string } }
+  | { $count: string }
+  | { $addFields: Record<string, unknown> }
+  | { $set: Record<string, unknown> }
+  | { $unset: string | string[] }
+
+/** Aggregation options */
+export interface AggregationOptions {
+  /** Maximum time in milliseconds */
+  maxTimeMs?: number
+  /** Allow disk use for large aggregations */
+  allowDiskUse?: boolean
+  /** Hint for index */
+  hint?: string | { [field: string]: 1 | -1 }
+  /** Include soft-deleted entities */
+  includeDeleted?: boolean
+  /** Time-travel */
+  asOf?: Date
+  /** Explain without executing */
+  explain?: boolean
+}

@@ -20,7 +20,7 @@ export interface SortSpec {
 export function normalizeSortDirection(dir: SortDirection): 1 | -1 {
   if (dir === 'asc' || dir === 1) return 1
   if (dir === 'desc' || dir === -1) return -1
-  return 1
+  throw new Error(`Invalid sort direction: ${dir}`)
 }
 
 // =============================================================================

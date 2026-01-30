@@ -137,3 +137,46 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# =============================================================================
+# Vitest Test Artifacts
+# =============================================================================
+
+# Vitest coverage
+html/
+
+# Playwright browser cache and test results
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Wrangler / Miniflare artifacts
+.wrangler/
+.mf/
+
+# Test databases and temporary files
+*.test.db
+*.test.parquet
+test-data/
+.test-*/
+
+# =============================================================================
+# Data Loader Artifacts
+# =============================================================================
+
+# Downloaded and processed datasets (can be very large)
+data/
+!data/.gitkeep
+
+# =============================================================================
+# Backup and Debug Files
+# =============================================================================
+
+# Backup files
+*.bak
+*.orig
+*.backup*
+
+# Debug files
+debug*.ts
+benchmark-results.json

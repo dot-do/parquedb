@@ -1,0 +1,78 @@
+{
+  "name": "parquedb",
+  "version": "0.1.0",
+  "description": "A Parquet-based database that runs in Node.js, browsers, and Cloudflare Workers",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest",
+    "test:unit": "vitest --project 'node:unit'",
+    "test:integration": "vitest --project 'node:integration'",
+    "test:e2e": "vitest --project 'node:e2e'",
+    "test:e2e:workers": "vitest --workspace vitest.workspace.ts --project 'e2e'",
+    "test:e2e:integration": "vitest --workspace vitest.workspace.ts --project 'e2e:integration'",
+    "test:e2e:bench": "vitest bench --workspace vitest.workspace.ts --project 'e2e:bench'",
+    "test:browser": "vitest --project 'browser:*'",
+    "test:workers": "vitest --project 'workers:*'",
+    "test:node": "vitest --project 'node:*'",
+    "test:all": "vitest run",
+    "test:ci": "vitest run --project 'node:*'",
+    "bench": "vitest bench",
+    "bench:crud": "vitest bench tests/benchmarks/crud.bench.ts",
+    "bench:queries": "vitest bench tests/benchmarks/queries.bench.ts",
+    "bench:relationships": "vitest bench tests/benchmarks/relationships.bench.ts",
+    "bench:parquet": "vitest bench tests/benchmarks/parquet.bench.ts",
+    "bench:examples": "vitest bench tests/benchmarks/examples.bench.ts",
+    "typecheck": "tsc --noEmit",
+    "load:onet": "tsx scripts/load-data.ts --dataset onet --output ./data/onet",
+    "load:imdb": "tsx scripts/load-data.ts --dataset imdb --output ./data/imdb",
+    "load:wiktionary": "tsx scripts/load-data.ts --dataset wiktionary --output ./data/wiktionary",
+    "load:unspsc": "tsx scripts/load-data.ts --dataset unspsc --output ./data/unspsc",
+    "load:wikidata": "tsx scripts/load-data.ts --dataset wikidata --output ./data/wikidata",
+    "load:commoncrawl": "tsx scripts/load-data.ts --dataset commoncrawl --output ./data/commoncrawl",
+    "load:all": "tsx scripts/load-all.ts"
+  },
+  "dependencies": {
+    "@graphdl/core": "^0.3.0",
+    "@icetype/core": "^0.2.0",
+    "@icetype/iceberg": "^0.2.0",
+    "hyparquet": "^1.24.1",
+    "hyparquet-compressors": "^1.1.1",
+    "hyparquet-writer": "^0.12.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.12.8",
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "@types/node": "^25.1.0",
+    "@vitest/browser": "^3.0.4",
+    "csv-parse": "^6.1.0",
+    "playwright": "^1.49.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.4",
+    "wrangler": "^3.99.0"
+  },
+  "keywords": [
+    "parquet",
+    "database",
+    "cloudflare-workers",
+    "browser",
+    "nodejs"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

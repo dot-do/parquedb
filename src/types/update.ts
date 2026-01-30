@@ -253,3 +253,8 @@ export function hasRelationshipOperators(update: UpdateInput): boolean {
 export function getUpdateOperatorTypes(update: UpdateInput): string[] {
   return Object.keys(update).filter(k => k.startsWith('$'))
 }
+
+/**
+ * Update type alias (preferred for shorter import)
+ */
+export type Update<T = Record<string, unknown>> = UpdateInput<T>

@@ -1,0 +1,823 @@
+/**
+ * Schema Parser
+ *
+ * Re-exports parsing functions from types/schema.ts and adds validation functions.
+ */
+
+import type {
+  Schema,
+  TypeDefinition,
+  FieldDef,
+  FieldDefinition,
+  IndexType,
+  ParsedSchema,
+  ParsedType,
+  ParsedField,
+  ParsedRelationship,
+  ValidationResult,
+  ValidationError,
+} from '../types/schema'
+
+import {
+  parseFieldType as _parseFieldType,
+  parseRelation as _parseRelation,
+  isRelationString as _isRelationString,
+} from '../types/schema'
+
+// Re-export parsing helpers from types/schema
+export { parseFieldType, parseRelation, isRelationString } from '../types/schema'
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/** Valid primitive types */
+const PRIMITIVE_TYPES = new Set([
+  'string',
+  'text',
+  'markdown',
+  'number',
+  'int',
+  'float',
+  'double',
+  'boolean',
+  'date',
+  'datetime',
+  'timestamp',
+  'uuid',
+  'email',
+  'url',
+  'json',
+  'binary',
+])
+
+/** Valid parametric type prefixes */
+const PARAMETRIC_TYPES = ['decimal', 'varchar', 'char', 'vector', 'enum']
+
+/** Valid index types */
+const VALID_INDEX_TYPES: (IndexType | undefined)[] = [true, false, 'unique', 'fts', 'vector', 'hash', undefined]
+
+/** Reserved metadata field prefixes (only known $-fields are allowed) */
+const KNOWN_META_FIELDS = new Set([
+  '$type',
+  '$ns',
+  '$shred',
+  '$description',
+  '$abstract',
+  '$extends',
+  '$indexes',
+])
+
+// =============================================================================
+// Schema Validation
+// =============================================================================
+
+/**
+ * Validation options
+ */
+export interface ValidationOptions {
+  /** Strict mode - fail on unknown fields */
+  strict?: boolean
+  /** Check relationship targets exist */
+  checkRelationships?: boolean
+}
+
+/**
+ * Validate a schema definition
+ *
+ * @param schema - The schema to validate
+ * @param options - Validation options
+ * @returns Validation result with any errors
+ */
+export function validateSchema(schema: Schema, options?: ValidationOptions): ValidationResult {
+  const errors: ValidationError[] = []
+
+  // Check for empty schema
+  if (!schema || typeof schema !== 'object' || Object.keys(schema).length === 0) {
+    errors.push({
+      path: '',
+      message: 'Schema must contain at least one type definition',
+      code: 'EMPTY_SCHEMA',
+    })
+    return { valid: false, errors }
+  }
+
+  // Validate each type
+  for (const [typeName, typeDef] of Object.entries(schema)) {
+    // Validate type name (must start with uppercase letter and contain only alphanumeric/underscore)
+    if (!/^[A-Z][A-Za-z0-9_]*$/.test(typeName)) {
+      errors.push({
+        path: typeName,
+        message: `Type name '${typeName}' must start with uppercase letter and contain only alphanumeric characters or underscores`,
+        code: 'INVALID_TYPE_NAME',
+      })
+    }
+
+    // Validate type definition
+    const typeResult = validateTypeDefinition(typeName, typeDef)
+    if (!typeResult.valid) {
+      errors.push(...typeResult.errors)
+    }
+  }
+
+  // Optionally check relationship targets
+  if (options?.checkRelationships !== false) {
+    const relResult = validateRelationshipTargets(schema)
+    if (!relResult.valid) {
+      errors.push(...relResult.errors)
+    }
+  }
+
+  return { valid: errors.length === 0, errors }
+}
+
+/**
+ * Validate a type definition
+ *
+ * @param typeName - Name of the type
+ * @param typeDef - The type definition to validate
+ * @returns Validation result with any errors
+ */
+export function validateTypeDefinition(typeName: string, typeDef: TypeDefinition): ValidationResult {
+  const errors: ValidationError[] = []
+
+  // Check for null/non-object
+  if (!typeDef || typeof typeDef !== 'object') {
+    errors.push({
+      path: typeName,
+      message: 'Type definition must be an object',
+      code: 'INVALID_TYPE_DEFINITION',
+    })
+    return { valid: false, errors }
+  }
+
+  // Count non-meta fields
+  let fieldCount = 0
+
+  for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
+    // Handle meta fields
+    if (fieldName.startsWith('$')) {
+      // Check if it's a known meta field
+      if (!KNOWN_META_FIELDS.has(fieldName)) {
+        errors.push({
+          path: `${typeName}.${fieldName}`,
+          message: `Unknown metadata field '${fieldName}'. Fields starting with '$' are reserved`,
+          code: 'RESERVED_FIELD_NAME',
+        })
+      }
+      continue
+    }
+
+    fieldCount++
+
+    // Validate field
+    if (typeof fieldDef === 'string') {
+      // String field definition
+      if (_isRelationString(fieldDef)) {
+        // Validate relation string
+        if (!isValidRelationString(fieldDef)) {
+          errors.push({
+            path: `${typeName}.${fieldName}`,
+            message: `Invalid relation string: '${fieldDef}'`,
+            code: 'INVALID_RELATION',
+          })
+        }
+      } else {
+        // Validate field type
+        if (!isValidFieldType(fieldDef)) {
+          errors.push({
+            path: `${typeName}.${fieldName}`,
+            message: `Invalid field type: '${fieldDef}'`,
+            code: 'INVALID_FIELD_TYPE',
+          })
+        }
+      }
+    } else if (fieldDef && typeof fieldDef === 'object' && !Array.isArray(fieldDef)) {
+      // Object field definition
+      const def = fieldDef as FieldDefinition
+
+      // Check type field
+      if (!def.type) {
+        errors.push({
+          path: `${typeName}.${fieldName}`,
+          message: 'Field definition object must have a "type" property',
+          code: 'MISSING_TYPE',
+        })
+      } else if (!isValidFieldType(def.type)) {
+        errors.push({
+          path: `${typeName}.${fieldName}`,
+          message: `Invalid field type: '${def.type}'`,
+          code: 'INVALID_FIELD_TYPE',
+        })
+      }
+
+      // Check index type
+      if (def.index !== undefined && !VALID_INDEX_TYPES.includes(def.index)) {
+        errors.push({
+          path: `${typeName}.${fieldName}.index`,
+          message: `Invalid index type: '${def.index}'. Must be boolean, 'unique', 'fts', 'vector', or 'hash'`,
+          code: 'INVALID_INDEX_TYPE',
+        })
+      }
+    }
+  }
+
+  // Check for empty type (must have at least one field)
+  if (fieldCount === 0) {
+    errors.push({
+      path: typeName,
+      message: `Type '${typeName}' must have at least one field`,
+      code: 'EMPTY_TYPE',
+    })
+  }
+
+  return { valid: errors.length === 0, errors }
+}
+
+/**
+ * Validate that all relationship targets in a schema exist
+ *
+ * @param schema - The schema to validate
+ * @returns Validation result with any errors
+ */
+export function validateRelationshipTargets(schema: Schema): ValidationResult {
+  const errors: ValidationError[] = []
+  const typeNames = new Set(Object.keys(schema))
+
+  // Map to track relationships for matching
+  // Key: "TargetType.fieldName", Value: { sourceType, sourceField, isBackward }
+  const relationshipMap = new Map<string, { sourceType: string; sourceField: string; direction: 'forward' | 'backward'; mode: 'exact' | 'fuzzy' }[]>()
+
+  for (const [typeName, typeDef] of Object.entries(schema)) {
+    for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
+      if (fieldName.startsWith('$')) continue
+      if (typeof fieldDef !== 'string') continue
+      if (!_isRelationString(fieldDef)) continue
+
+      const rel = _parseRelation(fieldDef)
+      if (!rel) continue
+
+      if (rel.direction === 'forward') {
+        // Forward relation: -> Target.reverse
+        const targetType = rel.toType
+
+        // Check target type exists
+        if (!typeNames.has(targetType)) {
+          errors.push({
+            path: `${typeName}.${fieldName}`,
+            message: `Relationship target type '${targetType}' does not exist`,
+            code: 'MISSING_TARGET_TYPE',
+          })
+          continue
+        }
+
+        // For exact mode, check that reverse field exists on target
+        if (rel.mode === 'exact' && rel.reverse) {
+          const targetDef = schema[targetType]
+          if (!targetDef[rel.reverse]) {
+            errors.push({
+              path: `${typeName}.${fieldName}`,
+              message: `Reverse field '${rel.reverse}' does not exist on type '${targetType}'`,
+              code: 'MISSING_REVERSE_FIELD',
+            })
+            continue
+          }
+
+          // Track this relationship for matching
+          const key = `${targetType}.${rel.reverse}`
+          const existing = relationshipMap.get(key) || []
+          existing.push({ sourceType: typeName, sourceField: fieldName, direction: 'forward', mode: rel.mode })
+          relationshipMap.set(key, existing)
+        }
+      } else {
+        // Backward relation: <- Source.field
+        const sourceType = rel.fromType
+
+        // Check source type exists
+        if (!typeNames.has(sourceType)) {
+          errors.push({
+            path: `${typeName}.${fieldName}`,
+            message: `Relationship source type '${sourceType}' does not exist`,
+            code: 'MISSING_SOURCE_TYPE',
+          })
+          continue
+        }
+
+        // For exact mode, check that source field exists on source type
+        if (rel.mode === 'exact' && rel.fromField) {
+          const sourceDef = schema[sourceType]
+          if (!sourceDef[rel.fromField]) {
+            errors.push({
+              path: `${typeName}.${fieldName}`,
+              message: `Source field '${rel.fromField}' does not exist on type '${sourceType}'`,
+              code: 'MISSING_SOURCE_FIELD',
+            })
+            continue
+          }
+
+          // Track this relationship for matching
+          const key = `${typeName}.${fieldName}`
+          const existing = relationshipMap.get(key) || []
+          existing.push({ sourceType, sourceField: rel.fromField, direction: 'backward', mode: rel.mode })
+          relationshipMap.set(key, existing)
+        }
+      }
+    }
+  }
+
+  // Verify relationship pairs match
+  for (const [typeName, typeDef] of Object.entries(schema)) {
+    for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
+      if (fieldName.startsWith('$')) continue
+      if (typeof fieldDef !== 'string') continue
+      if (!_isRelationString(fieldDef)) continue
+
+      const rel = _parseRelation(fieldDef)
+      if (!rel || rel.mode !== 'exact') continue
+
+      if (rel.direction === 'forward' && rel.reverse) {
+        // Check that the reverse field points back correctly
+        const targetType = rel.toType
+        const targetDef = schema[targetType]
+
+        // Skip if target type doesn't exist (already caught earlier)
+        if (!targetDef) continue
+
+        const reverseFieldDef = targetDef[rel.reverse]
+
+        if (typeof reverseFieldDef === 'string' && _isRelationString(reverseFieldDef)) {
+          const reverseRel = _parseRelation(reverseFieldDef)
+          if (reverseRel) {
+            // The reverse should be either:
+            // 1. A backward relation pointing to this type and field: <- ThisType.thisField
+            // 2. A forward relation pointing back: -> ThisType.fieldName
+            let matches = false
+
+            if (reverseRel.direction === 'backward' && reverseRel.fromType === typeName && reverseRel.fromField === fieldName) {
+              matches = true
+            } else if (reverseRel.direction === 'forward' && reverseRel.toType === typeName && reverseRel.reverse === fieldName) {
+              matches = true
+            }
+
+            if (!matches) {
+              errors.push({
+                path: `${typeName}.${fieldName}`,
+                message: `Relationship mismatch: '${typeName}.${fieldName}' points to '${targetType}.${rel.reverse}' but the reverse does not point back correctly`,
+                code: 'RELATIONSHIP_MISMATCH',
+              })
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { valid: errors.length === 0, errors }
+}
+
+/**
+ * Parse a complete schema into a ParsedSchema object
+ *
+ * @param schema - The schema to parse
+ * @returns The parsed schema
+ */
+export function parseSchema(schema: Schema): ParsedSchema {
+  const types = new Map<string, ParsedType>()
+  const relationships: ParsedRelationship[] = []
+
+  for (const [typeName, typeDef] of Object.entries(schema)) {
+    const parsedType = parseType(typeName, typeDef)
+    types.set(typeName, parsedType)
+
+    // Collect relationships
+    for (const [fieldName, field] of parsedType.fields) {
+      if (field.isRelation && field.targetType) {
+        relationships.push({
+          fromType: typeName,
+          fromField: fieldName,
+          predicate: fieldName,
+          toType: field.targetType,
+          reverse: field.reverseName || fieldName,
+          isArray: field.isArray,
+          direction: field.relationDirection!,
+          mode: field.relationMode!,
+        })
+      }
+    }
+  }
+
+  return {
+    types,
+    getType: (name) => types.get(name),
+    getRelationships: () => relationships,
+    validate: (typeName, data) => {
+      const type = types.get(typeName)
+      if (!type) {
+        return {
+          valid: false,
+          errors: [{ path: '', message: `Unknown type: ${typeName}`, code: 'UNKNOWN_TYPE' }],
+        }
+      }
+      return validateEntity(type, data)
+    },
+  }
+}
+
+/**
+ * Parse a single type definition
+ */
+function parseType(name: string, typeDef: TypeDefinition): ParsedType {
+  const fields = new Map<string, ParsedField>()
+  const indexes = typeDef.$indexes || []
+  const shredFields = typeDef.$shred || []
+
+  for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
+    if (fieldName.startsWith('$')) continue
+
+    const parsedField = parseField(fieldName, fieldDef as FieldDef)
+    fields.set(fieldName, parsedField)
+  }
+
+  return {
+    name,
+    typeUri: typeDef.$type,
+    namespace: typeDef.$ns,
+    shredFields,
+    fields,
+    indexes,
+    isAbstract: typeDef.$abstract || false,
+    extends: typeDef.$extends,
+  }
+}
+
+/**
+ * Parse a single field definition
+ */
+function parseField(name: string, def: FieldDef): ParsedField {
+  if (typeof def === 'string') {
+    // Check if it's a relationship
+    if (_isRelationString(def)) {
+      const rel = _parseRelation(def)!
+
+      // Determine target type and reverse name based on direction
+      let targetType: string
+      let reverseName: string
+
+      if (rel.direction === 'forward') {
+        targetType = rel.toType
+        reverseName = rel.reverse
+      } else {
+        targetType = rel.fromType
+        reverseName = rel.fromField
+      }
+
+      return {
+        name,
+        type: 'relation',
+        required: false,
+        isArray: rel.isArray,
+        isRelation: true,
+        relationDirection: rel.direction,
+        relationMode: rel.mode,
+        targetType,
+        reverseName,
+      }
+    }
+
+    // Regular field type string
+    const { type, required, isArray, default: defaultValue } = _parseFieldType(def)
+    return {
+      name,
+      type,
+      required,
+      isArray,
+      default: defaultValue ? parseDefaultValue(defaultValue) : undefined,
+      isRelation: false,
+    }
+  }
+
+  // Object field definition
+  const fieldObj = def as FieldDefinition
+  const { type, required, isArray } = _parseFieldType(fieldObj.type)
+
+  return {
+    name,
+    type,
+    required: fieldObj.required ?? required,
+    isArray,
+    default: fieldObj.default,
+    index: fieldObj.index,
+    isRelation: false,
+  }
+}
+
+/**
+ * Parse a default value string into its actual value
+ */
+function parseDefaultValue(value: string): unknown {
+  // Try to parse as JSON first
+  try {
+    return JSON.parse(value)
+  } catch {
+    // If it fails, return as-is (for unquoted strings like enum values)
+    return value
+  }
+}
+
+/**
+ * Validate an entity against its type definition
+ */
+function validateEntity(type: ParsedType, data: unknown): ValidationResult {
+  const errors: ValidationError[] = []
+
+  if (!data || typeof data !== 'object') {
+    errors.push({ path: '', message: 'Data must be an object', code: 'INVALID_TYPE' })
+    return { valid: false, errors }
+  }
+
+  const obj = data as Record<string, unknown>
+
+  for (const [fieldName, field] of type.fields) {
+    const value = obj[fieldName]
+
+    // Check required fields
+    if (field.required && (value === undefined || value === null)) {
+      errors.push({
+        path: fieldName,
+        message: `Field '${fieldName}' is required`,
+        code: 'REQUIRED',
+      })
+      continue
+    }
+
+    // Skip validation if value is undefined and not required
+    if (value === undefined) continue
+
+    // Type validation
+    const typeError = validateFieldType(fieldName, value, field)
+    if (typeError) errors.push(typeError)
+  }
+
+  return { valid: errors.length === 0, errors }
+}
+
+/**
+ * Validate a field value against its type
+ */
+function validateFieldType(fieldName: string, value: unknown, field: ParsedField): ValidationError | null {
+  // Handle null values
+  if (value === null) {
+    if (field.required) {
+      return { path: fieldName, message: `Field '${fieldName}' cannot be null`, code: 'NULL_VALUE' }
+    }
+    return null
+  }
+
+  // Handle arrays
+  if (field.isArray) {
+    if (!Array.isArray(value)) {
+      return { path: fieldName, message: `Field '${fieldName}' must be an array`, code: 'EXPECTED_ARRAY' }
+    }
+    // Validate each element
+    for (let i = 0; i < value.length; i++) {
+      const error = validateScalarType(`${fieldName}[${i}]`, value[i], field.type)
+      if (error) return error
+    }
+    return null
+  }
+
+  // Handle relations
+  if (field.isRelation) {
+    // Relations can be strings (IDs) or objects
+    if (typeof value !== 'string' && typeof value !== 'object') {
+      return { path: fieldName, message: `Field '${fieldName}' must be a string ID or object`, code: 'INVALID_RELATION_VALUE' }
+    }
+    return null
+  }
+
+  // Scalar validation
+  return validateScalarType(fieldName, value, field.type)
+}
+
+/**
+ * Validate a scalar value against a type
+ */
+function validateScalarType(path: string, value: unknown, type: string): ValidationError | null {
+  switch (type) {
+    case 'string':
+    case 'text':
+    case 'markdown':
+      if (typeof value !== 'string') {
+        return { path, message: `Expected string, got ${typeof value}`, code: 'TYPE_MISMATCH' }
+      }
+      break
+
+    case 'number':
+    case 'int':
+    case 'float':
+    case 'double':
+      if (typeof value !== 'number') {
+        return { path, message: `Expected number, got ${typeof value}`, code: 'TYPE_MISMATCH' }
+      }
+      if (type === 'int' && !Number.isInteger(value)) {
+        return { path, message: `Expected integer, got float`, code: 'TYPE_MISMATCH' }
+      }
+      break
+
+    case 'boolean':
+      if (typeof value !== 'boolean') {
+        return { path, message: `Expected boolean, got ${typeof value}`, code: 'TYPE_MISMATCH' }
+      }
+      break
+
+    case 'date':
+    case 'datetime':
+    case 'timestamp':
+      if (typeof value !== 'string' && !(value instanceof Date)) {
+        return { path, message: `Expected date string or Date object, got ${typeof value}`, code: 'TYPE_MISMATCH' }
+      }
+      break
+
+    case 'uuid':
+      if (typeof value !== 'string') {
+        return { path, message: `Expected UUID string, got ${typeof value}`, code: 'TYPE_MISMATCH' }
+      }
+      // Basic UUID format check
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+        return { path, message: `Invalid UUID format`, code: 'INVALID_FORMAT' }
+      }
+      break
+
+    case 'email':
+      if (typeof value !== 'string') {
+        return { path, message: `Expected email string, got ${typeof value}`, code: 'TYPE_MISMATCH' }
+      }
+      // Basic email format check
+      if (!/.+@.+\..+/.test(value)) {
+        return { path, message: `Invalid email format`, code: 'INVALID_FORMAT' }
+      }
+      break
+
+    case 'url':
+      if (typeof value !== 'string') {
+        return { path, message: `Expected URL string, got ${typeof value}`, code: 'TYPE_MISMATCH' }
+      }
+      break
+
+    case 'json':
+      // JSON can be any value
+      break
+
+    case 'binary':
+      if (!(value instanceof Uint8Array) && !(value instanceof ArrayBuffer) && typeof value !== 'string') {
+        return { path, message: `Expected binary data (Uint8Array, ArrayBuffer, or base64 string), got ${typeof value}`, code: 'TYPE_MISMATCH' }
+      }
+      break
+
+    default:
+      // Handle parametric types
+      if (type.startsWith('decimal(')) {
+        if (typeof value !== 'number' && typeof value !== 'string') {
+          return { path, message: `Expected decimal number, got ${typeof value}`, code: 'TYPE_MISMATCH' }
+        }
+      } else if (type.startsWith('varchar(') || type.startsWith('char(')) {
+        if (typeof value !== 'string') {
+          return { path, message: `Expected string, got ${typeof value}`, code: 'TYPE_MISMATCH' }
+        }
+      } else if (type.startsWith('vector(')) {
+        if (!Array.isArray(value)) {
+          return { path, message: `Expected vector array, got ${typeof value}`, code: 'TYPE_MISMATCH' }
+        }
+      } else if (type.startsWith('enum(')) {
+        if (typeof value !== 'string') {
+          return { path, message: `Expected enum string, got ${typeof value}`, code: 'TYPE_MISMATCH' }
+        }
+        // Extract enum values and check
+        const enumMatch = type.match(/^enum\((.+)\)$/)
+        if (enumMatch) {
+          const allowedValues = enumMatch[1].split(',').map(v => v.trim())
+          if (!allowedValues.includes(value)) {
+            return { path, message: `Value '${value}' not in enum (${allowedValues.join(', ')})`, code: 'INVALID_ENUM' }
+          }
+        }
+      }
+  }
+
+  return null
+}
+
+/**
+ * Check if a field type string is valid
+ *
+ * @param value - The field type string to validate
+ * @returns true if valid, false otherwise
+ */
+export function isValidFieldType(value: string): boolean {
+  if (!value || typeof value !== 'string') return false
+
+  // Reject relation strings
+  if (_isRelationString(value)) return false
+
+  // Trim the value
+  let type = value.trim()
+
+  // Remove default value if present
+  const defaultMatch = type.match(/^(.+?)\s*=\s*(.+)$/)
+  if (defaultMatch) {
+    type = defaultMatch[1].trim()
+  }
+
+  // Track modifiers for validation
+  let hasRequired = false
+  let hasOptional = false
+
+  // Check for array modifiers: []! or []
+  if (type.endsWith('[]!')) {
+    type = type.slice(0, -3)
+    hasRequired = true
+  } else if (type.endsWith('[]')) {
+    type = type.slice(0, -2)
+  }
+
+  // Check for required: !
+  if (type.endsWith('!')) {
+    if (hasRequired) {
+      // Already had []!, invalid double modifier
+      return false
+    }
+    type = type.slice(0, -1)
+    hasRequired = true
+  }
+
+  // Check for optional: ?
+  if (type.endsWith('?')) {
+    type = type.slice(0, -1)
+    hasOptional = true
+  }
+
+  // Invalid modifier combinations
+  if (hasRequired && hasOptional) return false
+
+  // Check remaining for another ! or ?
+  if (type.endsWith('!') || type.endsWith('?')) return false
+
+  // Check if it's a primitive type
+  if (PRIMITIVE_TYPES.has(type)) return true
+
+  // Check if it's a valid parametric type
+  for (const prefix of PARAMETRIC_TYPES) {
+    if (type.startsWith(`${prefix}(`)) {
+      // Validate parametric syntax
+      const match = type.match(new RegExp(`^${prefix}\\((.+)\\)$`))
+      if (!match) return false
+
+      const params = match[1]
+
+      switch (prefix) {
+        case 'decimal':
+          // decimal(precision, scale) - needs two numbers
+          if (!/^\d+,\s*\d+$/.test(params)) return false
+          break
+        case 'varchar':
+        case 'char':
+        case 'vector':
+          // Single number parameter
+          if (!/^\d+$/.test(params)) return false
+          break
+        case 'enum':
+          // At least one value
+          if (!params || params.trim().length === 0) return false
+          break
+      }
+
+      return true
+    }
+  }
+
+  return false
+}
+
+/**
+ * Check if a relation string is valid
+ *
+ * @param value - The relation string to validate
+ * @returns true if valid, false otherwise
+ */
+export function isValidRelationString(value: string): boolean {
+  if (!value || typeof value !== 'string') return false
+  if (!_isRelationString(value)) return false
+
+  // Forward: -> Type.field or -> Type.field[]
+  if (/^->\s*\w+\.\w+(\[\])?$/.test(value)) return true
+
+  // Backward: <- Type.field or <- Type.field[]
+  if (/^<-\s*\w+\.\w+(\[\])?$/.test(value)) return true
+
+  // Fuzzy forward: ~> Type or ~> Type.field or ~> Type[] or ~> Type.field[]
+  if (/^~>\s*\w+(\.\w+)?(\[\])?$/.test(value)) return true
+
+  // Fuzzy backward: <~ Type or <~ Type.field or <~ Type[] or <~ Type.field[]
+  if (/^<~\s*\w+(\.\w+)?(\[\])?$/.test(value)) return true
+
+  return false
+}

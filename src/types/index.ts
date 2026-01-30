@@ -24,3 +24,6 @@ export * from './storage'
 
 // Integration types (GraphDL, IceType, capnweb)
 export * from './integrations'
+
+// Worker types (Env, DO types, RPC types)
+export * from './worker'

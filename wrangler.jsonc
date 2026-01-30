@@ -1,0 +1,111 @@
+{
+  // =============================================================================
+  // ParqueDB Cloudflare Worker Configuration
+  // =============================================================================
+
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "parquedb",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-01-30",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // =============================================================================
+  // Durable Objects
+  // =============================================================================
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PARQUEDB",
+        "class_name": "ParqueDBDO"
+      }
+    ]
+  },
+
+  // DO migrations - SQLite-backed Durable Objects
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ParqueDBDO"]
+    }
+  ],
+
+  // =============================================================================
+  // R2 Storage
+  // =============================================================================
+
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "parquedb"
+    }
+  ],
+
+  // Note: Service bindings for self-reference are not supported in vitest-pool-workers
+  // Use direct DO binding (PARQUEDB) for testing instead
+
+  // =============================================================================
+  // Environment Variables
+  // =============================================================================
+
+  "vars": {
+    "ENVIRONMENT": "development"
+  },
+
+  // =============================================================================
+  // Development Settings
+  // =============================================================================
+
+  "dev": {
+    "port": 8787,
+    "local_protocol": "http"
+  },
+
+  // =============================================================================
+  // Build Configuration
+  // =============================================================================
+
+  "build": {
+    "command": "npm run build",
+    "watch_dir": "src"
+  },
+
+  // =============================================================================
+  // Environment-specific overrides
+  // =============================================================================
+
+  "env": {
+    "production": {
+      "vars": {
+        "ENVIRONMENT": "production"
+      }
+    },
+    "staging": {
+      "vars": {
+        "ENVIRONMENT": "staging"
+      }
+    },
+    "test": {
+      "vars": {
+        "ENVIRONMENT": "test",
+        "LOG_LEVEL": "debug",
+        "ENABLE_EVENT_SOURCING": "true",
+        "ENABLE_TIME_TRAVEL": "true"
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "PARQUEDB",
+            "class_name": "ParqueDBDO"
+          }
+        ]
+      },
+      "r2_buckets": [
+        {
+          "binding": "BUCKET",
+          "bucket_name": "parquedb-test"
+        }
+      ]
+    }
+  }
+}
