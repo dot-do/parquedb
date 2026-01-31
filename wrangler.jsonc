@@ -62,9 +62,8 @@
 
   "vars": {
     "ENVIRONMENT": "development",
-    // CDN URL for R2 - r2.dev public URL (works, but no edge caching)
-    // TODO: Switch to cdn.workers.do once API gateway is configured to pass through R2
-    "CDN_R2_DEV_URL": "https://pub-259b9edb736e4f3b95672febc7981c49.r2.dev/parquedb"
+    // CDN URL for edge-cached R2 reads via cdn.workers.do custom domain
+    "CDN_R2_DEV_URL": "https://cdn.workers.do/parquedb"
   },
 
   // =============================================================================
