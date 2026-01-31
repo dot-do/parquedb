@@ -438,8 +438,18 @@ export class QueryExecutor {
       return null
     }
 
-    // Read from Parquet
-    const result = await this.find<T>(ns, { id: { $eq: id } }, { limit: 1 })
+    // Read from Parquet - try multiple ID field patterns
+    // Support: $id (ParqueDB), id (legacy), code (O*NET occupations), elementId (O*NET skills/abilities/knowledge)
+    const fullId = id.includes('/') ? id : `${ns.split('/').pop()}/${id}`
+    const result = await this.find<T>(ns, {
+      $or: [
+        { $id: { $eq: fullId } },
+        { $id: { $eq: id } },
+        { code: { $eq: id } },
+        { id: { $eq: id } },
+        { elementId: { $eq: id } },
+      ]
+    }, { limit: 1 })
 
     if (result.stats.usedBloomFilter !== undefined) {
       result.stats.usedBloomFilter = bloom !== null
@@ -815,8 +825,11 @@ export class QueryExecutor {
     }
 
     // Handle field filters
+    // Only skip logical operators ($and, $or, $not, $nor)
+    // Allow field names that start with $ like $id, $type
+    const logicalOperators = new Set(['$and', '$or', '$not', '$nor'])
     for (const [field, condition] of Object.entries(filter)) {
-      if (field.startsWith('$')) continue
+      if (logicalOperators.has(field)) continue
 
       const value = rec[field]
       if (!this.matchesCondition(value, condition)) {

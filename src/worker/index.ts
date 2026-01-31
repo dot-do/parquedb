@@ -12,6 +12,7 @@
  */
 
 import { WorkerEntrypoint } from 'cloudflare:workers'
+import pluralize from 'pluralize'
 import type { Env } from '../types/worker'
 import type { Filter } from '../types/filter'
 import type {
@@ -507,24 +508,42 @@ const DATASETS = {
     description: 'Internet Movie Database - 7M+ titles, ratings, cast & crew',
     collections: ['titles', 'names', 'ratings', 'principals', 'crew'],
     source: 'https://datasets.imdbws.com/',
+    prefix: 'imdb', // R2 path prefix
   },
-  onet: {
+  'onet-graph': {
     name: 'O*NET',
-    description: 'Occupational Information Network - Skills, abilities, knowledge for 1,000+ occupations',
-    collections: ['occupations', 'skills', 'abilities', 'knowledge', 'interests'],
+    description: 'Occupational Information Network - 1,016 occupations with skills, abilities, knowledge relationships',
+    collections: ['occupations', 'skills', 'abilities', 'knowledge'],
     source: 'https://www.onetcenter.org/database.html',
+    prefix: 'onet-graph', // R2 path prefix
+    // Relationship predicates for graph navigation
+    predicates: {
+      occupations: ['skills', 'abilities', 'knowledge'],
+      skills: ['requiredBy'],
+      abilities: ['requiredBy'],
+      knowledge: ['requiredBy'],
+    },
+    // Singular form of predicates (for *Scores field lookup)
+    singular: {
+      skills: 'skill',
+      abilities: 'ability',
+      knowledge: 'knowledge',
+      requiredBy: 'requiredBy',
+    },
   },
   unspsc: {
     name: 'UNSPSC',
     description: 'United Nations Standard Products and Services Code - Product taxonomy',
     collections: ['segments', 'families', 'classes', 'commodities'],
     source: 'https://www.unspsc.org/',
+    prefix: 'unspsc',
   },
   wikidata: {
     name: 'Wikidata',
     description: 'Structured knowledge base - Entities, properties, claims',
     collections: ['entities', 'properties'],
     source: 'https://www.wikidata.org/',
+    prefix: 'wikidata',
   },
 }
 
@@ -552,6 +571,7 @@ function buildResponse(
     data?: unknown
     items?: unknown[]
     stats?: Record<string, unknown>
+    relationships?: Record<string, unknown>
   }
 ): Response {
   const cf = (request.cf || {}) as CfProperties
@@ -560,6 +580,7 @@ function buildResponse(
     api: data.api,
     links: data.links,
     ...(data.data !== undefined ? { data: data.data } : {}),
+    ...(data.relationships !== undefined ? { relationships: data.relationships } : {}),
     ...(data.items !== undefined ? { items: data.items } : {}),
     ...(data.stats !== undefined ? { stats: data.stats } : {}),
     user: {
@@ -701,6 +722,19 @@ export default {
         })
       }
 
+      // Debug: raw entity data
+      if (path === '/debug/entity') {
+        const ns = url.searchParams.get('ns') || 'onet-graph/occupations'
+        const id = url.searchParams.get('id') || '11-1011.00'
+        const entity = await worker.get(ns, id)
+        return Response.json({
+          ns,
+          id,
+          entity,
+          keys: entity ? Object.keys(entity) : null,
+        })
+      }
+
       // =======================================================================
       // Datasets Overview
       // =======================================================================
@@ -782,8 +816,9 @@ export default {
           return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404)
         }
 
-        // Map dataset/collection to namespace
-        const ns = `${datasetId}/${collectionId}`
+        // Map dataset/collection to namespace using prefix
+        const prefix = (dataset as { prefix?: string }).prefix || datasetId
+        const ns = `${prefix}/${collectionId}`
 
         const filter = parseQueryFilter(url.searchParams)
         const options = parseQueryOptions(url.searchParams)
@@ -795,13 +830,17 @@ export default {
         const enrichedItems: unknown[] = []
         const itemLinks: Record<string, string> = {}
 
+        // Get known predicates for this collection
+        const datasetPredicates = (dataset as { predicates?: Record<string, string[]> }).predicates
+        const knownPredicates = datasetPredicates?.[collectionId] || []
+
         if (result.items) {
           for (const item of result.items) {
             const entity = item as Record<string, unknown>
             const entityId = entity.$id || entity.id
             if (entityId) {
               const localId = String(entityId).split('/').pop() || ''
-              const href = `${baseUrl}/datasets/${datasetId}/${collectionId}/${localId}`
+              const href = `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(localId)}`
 
               // Add to quick links (first 10)
               if (Object.keys(itemLinks).length < 10) {
@@ -809,26 +848,53 @@ export default {
                 itemLinks[linkName] = href
               }
 
-              // Find relationship predicates on this entity
+              // Find relationship predicates - check for JSON-encoded relationships
               const predicates: string[] = []
-              for (const [key, value] of Object.entries(entity)) {
-                if (!key.startsWith('$') && value && typeof value === 'object' && !Array.isArray(value)) {
-                  const entries = Object.entries(value as Record<string, unknown>)
-                  if (entries.some(([k, v]) => !k.startsWith('$') && typeof v === 'string' && (v as string).includes('/'))) {
-                    predicates.push(key)
+              for (const predicate of knownPredicates) {
+                const rawValue = entity[predicate]
+                if (rawValue) {
+                  // Parse JSON-encoded relationship data
+                  try {
+                    const parsed = typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue
+                    if (parsed && typeof parsed === 'object' && parsed.$count > 0) {
+                      predicates.push(predicate)
+                    }
+                  } catch {
+                    // Not JSON, check if it's an object
+                    if (typeof rawValue === 'object') {
+                      predicates.push(predicate)
+                    }
                   }
                 }
               }
 
-              // Enrich item with href and relationship hints
+              // Build relationship links
+              const relLinks: Record<string, string> = {}
+              for (const pred of predicates) {
+                relLinks[pred] = `${href}/${pred}`
+              }
+
+              // Enrich item with href and relationship links
               enrichedItems.push({
-                ...entity,
+                $id: entity.$id,
+                $type: entity.$type,
+                name: entity.name,
+                description: entity.description,
+                // Show relationship counts
+                ...(predicates.length > 0 ? {
+                  _relationships: predicates.map(p => {
+                    const rawValue = entity[p]
+                    try {
+                      const parsed = typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue
+                      return { predicate: p, count: parsed?.$count || 0 }
+                    } catch {
+                      return { predicate: p, count: 0 }
+                    }
+                  }),
+                } : {}),
                 _links: {
                   self: href,
-                  ...(predicates.length > 0
-                    ? Object.fromEntries(predicates.map(p => [p, `${href}/${p}`]))
-                    : {}
-                  ),
+                  ...relLinks,
                 },
               })
             } else {
@@ -863,60 +929,96 @@ export default {
       // =======================================================================
       // Entity Detail - /datasets/:dataset/:collection/:id
       // =======================================================================
-      const entityMatch = path.match(/^\/datasets\/([^/]+)\/([^/]+)\/(.+)$/)
+      const entityMatch = path.match(/^\/datasets\/([^/]+)\/([^/]+)\/([^/]+)$/)
       if (entityMatch) {
         const datasetId = entityMatch[1]!
         const collectionId = entityMatch[2]!
-        const entityId = entityMatch[3]!
+        const entityId = decodeURIComponent(entityMatch[3]!)
         const dataset = DATASETS[datasetId as keyof typeof DATASETS]
 
         if (!dataset) {
           return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404)
         }
 
-        const ns = `${datasetId}/${collectionId}`
+        // Use prefix for R2 path
+        const prefix = (dataset as { prefix?: string }).prefix || datasetId
+        const ns = `${prefix}/${collectionId}`
         const entity = await worker.get(ns, entityId) as EntityRecord | null
 
         if (!entity) {
           return buildErrorResponse(request, new Error(`Entity '${entityId}' not found in ${ns}`), 404)
         }
 
-        // Extract relationships from entity and build navigable links
-        const relationships: Record<string, unknown> = {}
-        const relLinks: Record<string, string | Record<string, string>> = {}
+        const entityRaw = entity as unknown as Record<string, unknown>
 
-        for (const [key, value] of Object.entries(entity)) {
-          // Skip system fields
-          if (key.startsWith('$') || ['name', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', 'version', 'deletedAt', 'deletedBy'].includes(key)) {
-            continue
-          }
+        // Get known predicates for this collection
+        const datasetPredicates = (dataset as { predicates?: Record<string, string[]> }).predicates
+        const knownPredicates = datasetPredicates?.[collectionId] || []
 
-          // Check if this looks like a relationship (object with EntityId values)
-          if (value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
-            const relObj = value as Record<string, unknown>
-            const relEntries = Object.entries(relObj).filter(([k]) => !k.startsWith('$'))
+        // Parse relationships and build clickable links
+        const relationships: Record<string, {
+          count: number
+          href: string
+          items?: Array<{ name: string; href: string; importance?: number; level?: number }>
+        }> = {}
 
-            if (relEntries.length > 0) {
-              // This is likely a relationship field
-              const relLinkObj: Record<string, string> = {}
-              for (const [displayName, targetId] of relEntries) {
-                if (typeof targetId === 'string' && targetId.includes('/')) {
-                  // Parse targetId: "namespace/localId" -> link
-                  const [targetNs, ...idParts] = targetId.split('/')
-                  const targetLocalId = idParts.join('/')
-                  // Convert namespace to dataset/collection format
-                  const targetHref = `${baseUrl}/datasets/${datasetId}/${targetNs}/${targetLocalId}`
-                  relLinkObj[displayName] = targetHref
+        // Get singular forms from config (with pluralize as fallback)
+        const singularConfig = (dataset as { singular?: Record<string, string> }).singular || {}
+        const toSingular = (word: string): string => {
+          if (singularConfig[word]) return singularConfig[word]
+          return pluralize.singular(word)
+        }
+
+        for (const predicate of knownPredicates) {
+          const rawValue = entityRaw[predicate]
+          // Scores key: "skills" -> "skillScores" (singular from config)
+          const singularPredicate = toSingular(predicate)
+          const scoresKey = `${singularPredicate}Scores`
+          const rawScores = entityRaw[scoresKey]
+
+          if (rawValue) {
+            try {
+              // Parse JSON-encoded relationship
+              const parsed = typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue
+              const scores = rawScores ? (typeof rawScores === 'string' ? JSON.parse(rawScores) : rawScores) : {}
+
+              if (parsed && typeof parsed === 'object') {
+                const count = parsed.$count || 0
+                const relHref = `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}/${predicate}`
+
+                // Build items with links and scores
+                const items: Array<{ name: string; href: string; importance?: number; level?: number }> = []
+                for (const [name, targetId] of Object.entries(parsed)) {
+                  if (name.startsWith('$')) continue
+                  if (typeof targetId === 'string' && targetId.includes('/')) {
+                    const [targetCollection, ...idParts] = targetId.split('/')
+                    const targetLocalId = idParts.join('/')
+                    const itemScores = scores[name] || {}
+                    items.push({
+                      name,
+                      href: `${baseUrl}/datasets/${datasetId}/${targetCollection}/${encodeURIComponent(targetLocalId)}`,
+                      ...(itemScores.importance ? { importance: itemScores.importance } : {}),
+                      ...(itemScores.level ? { level: itemScores.level } : {}),
+                    })
+                  }
+                }
+
+                relationships[predicate] = {
+                  count,
+                  href: relHref,
+                  ...(items.length <= 10 ? { items } : {}), // Only include items inline if <= 10
                 }
               }
-              if (Object.keys(relLinkObj).length > 0) {
-                relationships[key] = relObj
-                relLinks[key] = Object.keys(relLinkObj).length === 1
-                  ? Object.values(relLinkObj)[0]!
-                  : relLinkObj
-              }
+            } catch {
+              // Not valid JSON, skip
             }
           }
+        }
+
+        // Build relationship links for the links section
+        const relLinks: Record<string, string> = {}
+        for (const [pred, rel] of Object.entries(relationships)) {
+          relLinks[pred] = rel.href
         }
 
         // Build the response with relationships prominently featured
@@ -926,32 +1028,25 @@ export default {
             dataset: datasetId,
             collection: collectionId,
             id: entityId,
-            type: (entity as unknown as Record<string, unknown>).$type,
+            type: entityRaw.$type,
           },
           links: {
             self: `${baseUrl}${path}`,
             collection: `${baseUrl}/datasets/${datasetId}/${collectionId}`,
             dataset: `${baseUrl}/datasets/${datasetId}`,
             home: baseUrl,
-            // Add relationship links for easy navigation
+            // Relationship traversal links
             ...relLinks,
           },
           data: {
-            $id: (entity as unknown as Record<string, unknown>).$id,
-            $type: (entity as unknown as Record<string, unknown>).$type,
-            name: (entity as unknown as Record<string, unknown>).name,
-            // Include non-relationship fields
-            ...Object.fromEntries(
-              Object.entries(entity).filter(([k, v]) =>
-                !k.startsWith('$') &&
-                !['name', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', 'version', 'deletedAt', 'deletedBy'].includes(k) &&
-                !(v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date) &&
-                  Object.entries(v as Record<string, unknown>).some(([, val]) => typeof val === 'string' && (val as string).includes('/')))
-              )
-            ),
-            // Relationships with $count and clickable structure
-            ...(Object.keys(relationships).length > 0 ? { relationships } : {}),
+            $id: entityRaw.$id,
+            $type: entityRaw.$type,
+            name: entityRaw.name,
+            description: entityRaw.description,
+            code: entityRaw.code,
           },
+          // Relationships with counts, links, and top items
+          relationships: Object.keys(relationships).length > 0 ? relationships : undefined,
         })
       }
 
@@ -962,7 +1057,7 @@ export default {
       if (relMatch) {
         const datasetId = relMatch[1]!
         const collectionId = relMatch[2]!
-        const entityId = relMatch[3]!
+        const entityId = decodeURIComponent(relMatch[3]!)
         const predicate = relMatch[4]!
         const dataset = DATASETS[datasetId as keyof typeof DATASETS]
 
@@ -970,37 +1065,65 @@ export default {
           return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404)
         }
 
-        const ns = `${datasetId}/${collectionId}`
+        // Use prefix for R2 path
+        const prefix = (dataset as { prefix?: string }).prefix || datasetId
+        const ns = `${prefix}/${collectionId}`
         const entity = await worker.get(ns, entityId) as EntityRecord | null
 
         if (!entity) {
           return buildErrorResponse(request, new Error(`Entity '${entityId}' not found`), 404)
         }
 
-        // Get the relationship field
-        const relField = (entity as unknown as Record<string, unknown>)[predicate]
+        const entityRaw = entity as unknown as Record<string, unknown>
 
-        if (!relField || typeof relField !== 'object') {
+        // Get the relationship field (may be JSON-encoded)
+        const rawRelField = entityRaw[predicate]
+        // Scores key: "skills" -> "skillScores" (singular), "abilities" -> "abilityScores"
+        const singularConfig = (dataset as { singular?: Record<string, string> }).singular || {}
+        const singularPredicate = singularConfig[predicate] || pluralize.singular(predicate)
+        const scoresKey = `${singularPredicate}Scores`
+        const rawScores = entityRaw[scoresKey]
+
+        if (!rawRelField) {
           return buildErrorResponse(request, new Error(`Relationship '${predicate}' not found on entity`), 404)
         }
 
-        const relObj = relField as Record<string, unknown>
-        const relEntries = Object.entries(relObj).filter(([k]) => !k.startsWith('$'))
+        // Parse JSON-encoded relationship
+        let relObj: Record<string, unknown>
+        let scores: Record<string, { importance?: number; level?: number }> = {}
+        try {
+          relObj = typeof rawRelField === 'string' ? JSON.parse(rawRelField) : rawRelField as Record<string, unknown>
+          if (rawScores) {
+            const parsedScores = typeof rawScores === 'string' ? JSON.parse(rawScores) : rawScores
+            scores = parsedScores as Record<string, { importance?: number; level?: number }>
+          }
+        } catch (e) {
+          console.error('Parse error:', e)
+          return buildErrorResponse(request, new Error(`Invalid relationship data for '${predicate}'`), 500)
+        }
+
         const count = relObj.$count as number | undefined
 
-        // Build linked items
-        const items: Array<{ name: string; id: string; href: string }> = []
-        for (const [displayName, targetId] of relEntries) {
+        // Build linked items with scores
+        const items: Array<{ name: string; id: string; href: string; importance?: number; level?: number }> = []
+        for (const [displayName, targetId] of Object.entries(relObj)) {
+          if (displayName.startsWith('$')) continue
           if (typeof targetId === 'string' && targetId.includes('/')) {
             const [targetNs, ...idParts] = targetId.split('/')
             const targetLocalId = idParts.join('/')
+            const itemScores = scores[displayName] || {}
             items.push({
               name: displayName,
               id: targetId,
-              href: `${baseUrl}/datasets/${datasetId}/${targetNs}/${targetLocalId}`,
+              href: `${baseUrl}/datasets/${datasetId}/${targetNs}/${encodeURIComponent(targetLocalId)}`,
+              ...(itemScores.importance !== undefined ? { importance: itemScores.importance } : {}),
+              ...(itemScores.level !== undefined ? { level: itemScores.level } : {}),
             })
           }
         }
+
+        // Sort by importance (descending) for better UX
+        items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
 
         return buildResponse(request, {
           api: {
@@ -1013,12 +1136,12 @@ export default {
           },
           links: {
             self: `${baseUrl}${path}`,
-            entity: `${baseUrl}/datasets/${datasetId}/${collectionId}/${entityId}`,
+            entity: `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}`,
             collection: `${baseUrl}/datasets/${datasetId}/${collectionId}`,
             dataset: `${baseUrl}/datasets/${datasetId}`,
             home: baseUrl,
-            // Direct links to related entities
-            ...Object.fromEntries(items.map(item => [item.name, item.href])),
+            // Top 10 links for quick navigation
+            ...Object.fromEntries(items.slice(0, 10).map(item => [item.name, item.href])),
           },
           items,
         })
