@@ -460,7 +460,11 @@ export class QueryExecutor {
     }
 
     try {
-      const path = `data/${ns}/data.parquet`
+      // New 2-file architecture: {dataset}/data.parquet contains all nodes
+      // Path format: either "{dataset}" or "{dataset}/{collection}"
+      // For both, we read from {dataset}/data.parquet
+      const datasetId = ns.includes('/') ? ns.split('/')[0] : ns
+      const path = `${datasetId}/data.parquet`
 
       // Use ParquetReader when available (real implementation)
       if (this.parquetReader && this.storageAdapter) {
@@ -621,6 +625,58 @@ export class QueryExecutor {
     return result.items.length > 0
   }
 
+  /**
+   * Get relationships from rels.parquet
+   *
+   * Reads edges from the unified rels.parquet file, filtered by from_id and predicate.
+   * Much faster than scanning all nodes to find reverse relationships.
+   *
+   * @param dataset - Dataset prefix (e.g., 'onet-graph')
+   * @param fromId - Source entity ID (e.g., '2.C.2.b')
+   * @param predicate - Relationship predicate (e.g., 'requiredBy')
+   * @returns Array of relationship edges
+   */
+  async getRelationships(
+    dataset: string,
+    fromId: string,
+    predicate?: string
+  ): Promise<Array<{
+    to_ns: string
+    to_id: string
+    to_name: string
+    to_type: string
+    predicate: string
+    importance: number | null
+    level: number | null
+  }>> {
+    if (!this.parquetReader || !this.storageAdapter) {
+      return []
+    }
+
+    try {
+      const path = `${dataset}/rels.parquet`
+      const allRels = await this.parquetReader.read<{
+        from_ns: string
+        from_id: string
+        predicate: string
+        to_ns: string
+        to_id: string
+        to_name: string
+        to_type: string
+        importance: number | null
+        level: number | null
+      }>(path)
+
+      // Filter by from_id and optionally predicate
+      return allRels.filter(rel =>
+        rel.from_id === fromId &&
+        (!predicate || rel.predicate === predicate)
+      )
+    } catch {
+      return []
+    }
+  }
+
   // ===========================================================================
   // Query Planning
   // ===========================================================================
@@ -686,8 +742,9 @@ export class QueryExecutor {
       return cached
     }
 
-    // Read from R2
-    const path = `data/${ns}/data.parquet`
+    // Read from R2 - new 2-file architecture: {dataset}/data.parquet
+    const datasetId = ns.includes('/') ? ns.split('/')[0] : ns
+    const path = `${datasetId}/data.parquet`
 
     // Read footer to get metadata length
     const footer = await this.readPath.readParquetFooter(path)
@@ -890,7 +947,9 @@ export class QueryExecutor {
     rowGroup: RowGroupMetadata,
     metadata: ParquetMetadata
   ): Promise<{ records: EntityRecord[]; bytesRead: number } | null> {
-    const path = `data/${ns}/data.parquet`
+    // New 2-file architecture: {dataset}/data.parquet
+    const datasetId = ns.includes('/') ? ns.split('/')[0] : ns
+    const path = `${datasetId}/data.parquet`
 
     // Read row group bytes
     const data = await this.readPath.readRange(

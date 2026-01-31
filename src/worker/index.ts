@@ -118,6 +118,26 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     return this.queryExecutor?.getStorageStats() || { cdnHits: 0, primaryHits: 0, edgeHits: 0, totalReads: 0, usingCdn: false, usingEdge: false }
   }
 
+  /**
+   * Get relationships from rels.parquet
+   */
+  async getRelationships(
+    dataset: string,
+    fromId: string,
+    predicate?: string
+  ): Promise<Array<{
+    to_ns: string
+    to_id: string
+    to_name: string
+    to_type: string
+    predicate: string
+    importance: number | null
+    level: number | null
+  }>> {
+    await this.ensureInitialized()
+    return this.queryExecutor.getRelationships(dataset, fromId, predicate)
+  }
+
   // ===========================================================================
   // READ Operations - Direct to R2 with Cache
   // ===========================================================================
@@ -1094,6 +1114,7 @@ export default {
 
       // =======================================================================
       // Entity Detail - /datasets/:dataset/:collection/:id
+      // GENERIC: Reads from data.parquet + rels.parquet, no hardcoded config
       // =======================================================================
       const entityMatch = path.match(/^\/datasets\/([^/]+)\/([^/]+)\/([^/]+)$/)
       if (entityMatch) {
@@ -1101,181 +1122,70 @@ export default {
         const datasetId = entityMatch[1]!
         const collectionId = entityMatch[2]!
         const entityId = decodeURIComponent(entityMatch[3]!)
-        const dataset = DATASETS[datasetId as keyof typeof DATASETS]
 
-        if (!dataset) {
-          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404, startTime)
-        }
+        // Construct the full $id (e.g., "knowledge/2.C.2.b")
+        const fullId = `${collectionId}/${entityId}`
 
-        // Use prefix for R2 path
-        const prefix = (dataset as { prefix?: string }).prefix || datasetId
-        const ns = `${prefix}/${collectionId}`
-
+        // Read entity from data.parquet
         markTiming(timing, 'entity_start')
-        const entity = await worker.get(ns, entityId) as EntityRecord | null
+        const entityResult = await worker.find<EntityRecord>(datasetId, { $id: fullId }, { limit: 1 })
         measureTiming(timing, 'entity', 'entity_start')
 
-        if (!entity) {
-          return buildErrorResponse(request, new Error(`Entity '${entityId}' not found in ${ns}`), 404, startTime)
+        if (entityResult.items.length === 0) {
+          return buildErrorResponse(request, new Error(`Entity '${fullId}' not found in ${datasetId}`), 404, startTime)
         }
 
+        const entity = entityResult.items[0]
         const entityRaw = entity as unknown as Record<string, unknown>
 
-        // Get known predicates for this collection
-        const datasetPredicates = (dataset as { predicates?: Record<string, string[]> }).predicates
-        const knownPredicates = datasetPredicates?.[collectionId] || []
+        // Read ALL relationships for this entity from rels.parquet
+        markTiming(timing, 'rels_start')
+        const allRels = await worker.getRelationships(datasetId, entityId)
+        measureTiming(timing, 'rels', 'rels_start')
 
-        // Parse relationships and build clickable links
+        // Group relationships by predicate
         const relationships: Record<string, {
           count: number
           href: string
-          items?: Array<{ name: string; href: string; importance?: number; level?: number }>
+          items: Array<{ name: string; href: string; importance?: number; level?: number }>
         }> = {}
 
-        // Get singular forms from config (with pluralize as fallback)
-        const singularConfig = (dataset as { singular?: Record<string, string> }).singular || {}
-        const toSingular = (word: string): string => {
-          if (singularConfig[word]) return singularConfig[word]
-          return pluralize.singular(word)
-        }
-
-        for (const predicate of knownPredicates) {
-          const rawValue = entityRaw[predicate]
-          // Scores key: "skills" -> "skillScores" (singular from config)
-          const singularPredicate = toSingular(predicate)
-          const scoresKey = `${singularPredicate}Scores`
-          const rawScores = entityRaw[scoresKey]
-
-          if (rawValue) {
-            try {
-              // Parse JSON-encoded relationship
-              const parsed = typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue
-              const scores = rawScores ? (typeof rawScores === 'string' ? JSON.parse(rawScores) : rawScores) : {}
-
-              if (parsed && typeof parsed === 'object') {
-                const count = parsed.$count || 0
-                const relHref = `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}/${predicate}`
-
-                // Build items with links and scores
-                const items: Array<{ name: string; href: string; importance?: number; level?: number }> = []
-                for (const [name, targetId] of Object.entries(parsed)) {
-                  if (name.startsWith('$')) continue
-                  if (typeof targetId === 'string' && targetId.includes('/')) {
-                    const [targetCollection, ...idParts] = targetId.split('/')
-                    const targetLocalId = idParts.join('/')
-                    const itemScores = scores[name] || {}
-                    items.push({
-                      name,
-                      href: `${baseUrl}/datasets/${datasetId}/${targetCollection}/${encodeURIComponent(targetLocalId)}`,
-                      ...(itemScores.importance ? { importance: itemScores.importance } : {}),
-                      ...(itemScores.level ? { level: itemScores.level } : {}),
-                    })
-                  }
-                }
-
-                // Sort items by importance (descending) and always include them
-                items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
-
-                relationships[predicate] = {
-                  count,
-                  href: relHref,
-                  items,  // Always include items for entity detail view
-                }
-              }
-            } catch {
-              // Not valid JSON, skip
+        for (const rel of allRels) {
+          if (!relationships[rel.predicate]) {
+            relationships[rel.predicate] = {
+              count: 0,
+              href: `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}/${rel.predicate}`,
+              items: [],
             }
           }
+          relationships[rel.predicate].count++
+          relationships[rel.predicate].items.push({
+            name: rel.to_name,
+            href: `${baseUrl}/datasets/${datasetId}/${rel.to_ns}/${encodeURIComponent(rel.to_id)}`,
+            ...(rel.importance ? { importance: rel.importance } : {}),
+            ...(rel.level ? { level: rel.level } : {}),
+          })
         }
 
-        // For skills/abilities/knowledge, compute reverse "requiredBy" relationship
-        // by scanning occupations that reference this entity
-        const shortId = String(entityRaw.$id).split('/').pop() || entityId
-
-        markTiming(timing, 'rels_start')
-        if (['skills', 'abilities', 'knowledge'].includes(collectionId) && knownPredicates.includes('requiredBy')) {
-          const occupationsNs = `${prefix}/occupations`
-
-          markTiming(timing, 'occ_fetch_start')
-          const occupationsResult = await worker.find(occupationsNs, {}, { limit: 2000 })
-          measureTiming(timing, 'occ_fetch', 'occ_fetch_start')
-
-          const reverseItems: Array<{ name: string; href: string; importance?: number; level?: number }> = []
-          const entityLocalId = String(entityRaw.elementId || shortId || entityId)
-
-          for (const occ of occupationsResult.items) {
-            const occRaw = occ as unknown as Record<string, unknown>
-            const relField = occRaw[collectionId]  // e.g., occupations.skills
-            const scoresField = occRaw[`${toSingular(collectionId)}Scores`]
-
-            if (relField) {
-              try {
-                const parsed = typeof relField === 'string' ? JSON.parse(relField) : relField
-                const scores = scoresField ? (typeof scoresField === 'string' ? JSON.parse(scoresField) : scoresField) : {}
-
-                // Check if this occupation has this skill/ability/knowledge
-                for (const [displayName, targetId] of Object.entries(parsed as Record<string, unknown>)) {
-                  if (displayName.startsWith('$')) continue
-                  if (typeof targetId === 'string') {
-                    const targetLocalId = targetId.split('/').pop()
-                    if (targetLocalId === entityLocalId || targetId === `${collectionId}/${entityLocalId}`) {
-                      const occCode = String(occRaw.code || occRaw.$id).split('/').pop()
-                      const itemScores = (scores as Record<string, { importance?: number; level?: number }>)[displayName] || {}
-                      reverseItems.push({
-                        name: String(occRaw.name),
-                        href: `${baseUrl}/datasets/${datasetId}/occupations/${encodeURIComponent(occCode || '')}`,
-                        ...(itemScores.importance ? { importance: itemScores.importance } : {}),
-                        ...(itemScores.level ? { level: itemScores.level } : {}),
-                      })
-                      break  // Found this entity in this occupation, move to next
-                    }
-                  }
-                }
-              } catch {
-                // Skip invalid JSON
-              }
-            }
-          }
-
-          // Sort by importance (descending)
-          reverseItems.sort((a, b) => (b.importance || 0) - (a.importance || 0))
-
-          if (reverseItems.length > 0) {
-            // Include top items by importance (already sorted)
-            relationships['requiredBy'] = {
-              count: reverseItems.length,
-              href: `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}/requiredBy`,
-              items: reverseItems,  // Always include - they're sorted by importance
-            }
-          }
+        // Sort items by importance (descending) within each predicate
+        for (const pred of Object.keys(relationships)) {
+          relationships[pred].items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
         }
-        measureTiming(timing, 'rels', 'rels_start')
 
-        // Build relationship links as object map {name: href} for each predicate
+        // Build response
         const useArrays = url.searchParams.has('arrays')
         const selfUrl = `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}`
 
-        // Convert relationships to rich format with items as object maps
+        // Convert to object map format unless ?arrays is set
         const relWithItems: Record<string, Record<string, string>> = {}
         for (const [pred, rel] of Object.entries(relationships)) {
-          // Build object map {name: href} for items
-          const itemsMap: Record<string, string> = {
-            $id: rel.href,  // Link to full relationship list
-          }
-          if (rel.items) {
-            for (const item of rel.items) {
-              itemsMap[item.name] = item.href
-            }
-          }
-          // If no items were included (count > 10), add a $count indicator
-          if (!rel.items && rel.count > 0) {
-            itemsMap.$count = String(rel.count)
+          const itemsMap: Record<string, string> = { $id: rel.href }
+          for (const item of rel.items) {
+            itemsMap[item.name] = item.href
           }
           relWithItems[pred] = itemsMap
         }
 
-        // Build the response with relationships prominently featured
-        // $id is now the full clickable URL, id is the short form (computed earlier)
         return buildResponse(request, {
           api: {
             resource: 'entity',
@@ -1291,289 +1201,65 @@ export default {
             home: baseUrl,
           },
           data: {
-            $id: selfUrl,  // Full clickable URL
+            $id: selfUrl,
             $type: entityRaw.$type,
-            id: shortId,   // Short form for display/reference
-            name: entityRaw.name,
-            description: entityRaw.description,
-            ...(entityRaw.code ? { code: entityRaw.code } : {}),
-            ...(entityRaw.elementId ? { elementId: entityRaw.elementId } : {}),
+            ...entityRaw,  // Include all entity fields
           },
-          // Relationships with items as object maps {name: href}
-          // ?arrays gives the original format with count/items arrays
           relationships: Object.keys(relationships).length > 0
             ? (useArrays ? relationships : relWithItems)
             : undefined,
-        }, timing, worker.getStorageStats())  // Include storage stats for debugging
+        }, timing, worker.getStorageStats())
       }
 
       // =======================================================================
       // Relationship Traversal - /datasets/:dataset/:collection/:id/:predicate
+      // GENERIC: Reads from rels.parquet, no hardcoded config
       // =======================================================================
       const relMatch = path.match(/^\/datasets\/([^/]+)\/([^/]+)\/([^/]+)\/([^/]+)$/)
       if (relMatch) {
+        const timing = createTimingContext()
         const datasetId = relMatch[1]!
         const collectionId = relMatch[2]!
         const entityId = decodeURIComponent(relMatch[3]!)
         const predicate = relMatch[4]!
-        const dataset = DATASETS[datasetId as keyof typeof DATASETS]
 
-        if (!dataset) {
-          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404, startTime)
-        }
+        // Read relationships from rels.parquet
+        markTiming(timing, 'rels_start')
+        const rels = await worker.getRelationships(datasetId, entityId, predicate)
+        measureTiming(timing, 'rels', 'rels_start')
 
-        // Use prefix for R2 path
-        const prefix = (dataset as { prefix?: string }).prefix || datasetId
-        const ns = `${prefix}/${collectionId}`
-        const entity = await worker.get(ns, entityId) as EntityRecord | null
+        // Convert to display format
+        const items = rels.map(rel => ({
+          $id: `${baseUrl}/datasets/${datasetId}/${rel.to_ns}/${encodeURIComponent(rel.to_id)}`,
+          name: rel.to_name,
+          type: rel.to_type,
+          ...(rel.importance ? { importance: rel.importance } : {}),
+          ...(rel.level ? { level: rel.level } : {}),
+        }))
 
-        if (!entity) {
-          return buildErrorResponse(request, new Error(`Entity '${entityId}' not found`), 404, startTime)
-        }
-
-        const entityRaw = entity as unknown as Record<string, unknown>
-
-        // Get singular forms from config (with pluralize as fallback)
-        const singularConfig = (dataset as { singular?: Record<string, string> }).singular || {}
-        const toSingular = (word: string): string => {
-          if (singularConfig[word]) return singularConfig[word]
-          return pluralize.singular(word)
-        }
-
-        // Special handling for "requiredBy" reverse relationship on skills/abilities/knowledge
-        if (predicate === 'requiredBy' && ['skills', 'abilities', 'knowledge'].includes(collectionId)) {
-          const occupationsNs = `${prefix}/occupations`
-          const occupationsResult = await worker.find(occupationsNs, {}, { limit: 2000 })
-
-          const useArrays = url.searchParams.has('arrays')
-          const items: Array<{ $id: string; id: string; name: string; importance?: number; level?: number }> = []
-          const itemsMap: Record<string, string> = {}
-          const entityLocalId = String(entityRaw.elementId || String(entityRaw.$id).split('/').pop() || entityId)
-
-          for (const occ of occupationsResult.items) {
-            const occRaw = occ as unknown as Record<string, unknown>
-            const relField = occRaw[collectionId]
-            const scoresField = occRaw[`${toSingular(collectionId)}Scores`]
-
-            if (relField) {
-              try {
-                const parsed = typeof relField === 'string' ? JSON.parse(relField) : relField
-                const scores = scoresField ? (typeof scoresField === 'string' ? JSON.parse(scoresField) : scoresField) : {}
-
-                for (const [displayName, targetId] of Object.entries(parsed as Record<string, unknown>)) {
-                  if (displayName.startsWith('$')) continue
-                  if (typeof targetId === 'string') {
-                    const targetLocalId = targetId.split('/').pop()
-                    if (targetLocalId === entityLocalId || targetId === `${collectionId}/${entityLocalId}`) {
-                      const occCode = String(occRaw.code || String(occRaw.$id).split('/').pop())
-                      const occName = String(occRaw.name)
-                      const fullUrl = `${baseUrl}/datasets/${datasetId}/occupations/${encodeURIComponent(occCode)}`
-                      const itemScores = (scores as Record<string, { importance?: number; level?: number }>)[displayName] || {}
-
-                      items.push({
-                        $id: fullUrl,
-                        id: `occupations/${occCode}`,
-                        name: occName,
-                        ...(itemScores.importance ? { importance: itemScores.importance } : {}),
-                        ...(itemScores.level ? { level: itemScores.level } : {}),
-                      })
-                      itemsMap[occName] = fullUrl
-                      break
-                    }
-                  }
-                }
-              } catch {
-                // Skip invalid JSON
-              }
-            }
-          }
-
-          // Sort by importance (descending)
-          items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
-
-          // Apply pagination - default limit 50
-          const limit = parseInt(url.searchParams.get('limit') || '50', 10)
-          const skip = parseInt(url.searchParams.get('skip') || '0', 10)
-          const totalCount = items.length
-          const paginatedItems = items.slice(skip, skip + limit)
-
-          // Build pagination links
-          const basePath = `${baseUrl}${path}`
-          const arrayParam = useArrays ? '&arrays' : ''
-          const paginationLinks: Record<string, string> = {}
-
-          // Add limit option links
-          const limitOptions = [20, 50, 100, 500, 1000]
-          for (const limitOpt of limitOptions) {
-            if (limitOpt !== limit) {
-              paginationLinks[`limit${limitOpt}`] = `${basePath}?limit=${limitOpt}${arrayParam}`
-            }
-          }
-
-          // Add next/prev links
-          if (skip + limit < totalCount) {
-            paginationLinks.next = `${basePath}?skip=${skip + limit}&limit=${limit}${arrayParam}`
-          }
-          if (skip > 0) {
-            const prevSkip = Math.max(0, skip - limit)
-            paginationLinks.prev = `${basePath}?skip=${prevSkip}&limit=${limit}${arrayParam}`
-          }
-
-          // Build paginated itemsMap
-          const paginatedItemsMap: Record<string, string> = {
-            $count: String(totalCount),
-            ...(skip + limit < totalCount ? { $next: paginationLinks.next } : {}),
-            ...(skip > 0 ? { $prev: paginationLinks.prev } : {}),
-          }
-          for (const item of paginatedItems) {
-            paginatedItemsMap[item.name] = item.$id
-          }
-
-          return buildResponse(request, {
-            api: {
-              resource: 'relationship',
-              dataset: datasetId,
-              collection: collectionId,
-              entityId,
-              predicate: 'requiredBy',
-              count: totalCount,
-              limit,
-              skip,
-              returned: paginatedItems.length,
-              hasMore: skip + limit < totalCount,
-            },
-            links: {
-              self: `${baseUrl}${path}`,
-              entity: `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}`,
-              collection: `${baseUrl}/datasets/${datasetId}/${collectionId}`,
-              dataset: `${baseUrl}/datasets/${datasetId}`,
-              home: baseUrl,
-              ...paginationLinks,
-            },
-            data: useArrays ? paginatedItems : paginatedItemsMap,
-            ...(useArrays ? {} : { items: paginatedItems }),
-          }, startTime)
-        }
-
-        // Get the relationship field (may be JSON-encoded)
-        const rawRelField = entityRaw[predicate]
-        // Scores key: "skills" -> "skillScores" (singular), "abilities" -> "abilityScores"
-        const singularPredicate = singularConfig[predicate] || pluralize.singular(predicate)
-        const scoresKey = `${singularPredicate}Scores`
-        const rawScores = entityRaw[scoresKey]
-
-        if (!rawRelField) {
-          return buildErrorResponse(request, new Error(`Relationship '${predicate}' not found on entity`), 404, startTime)
-        }
-
-        // Parse JSON-encoded relationship
-        let relObj: Record<string, unknown>
-        let scores: Record<string, { importance?: number; level?: number }> = {}
-        try {
-          relObj = typeof rawRelField === 'string' ? JSON.parse(rawRelField) : rawRelField as Record<string, unknown>
-          if (rawScores) {
-            const parsedScores = typeof rawScores === 'string' ? JSON.parse(rawScores) : rawScores
-            scores = parsedScores as Record<string, { importance?: number; level?: number }>
-          }
-        } catch (e) {
-          console.error('Parse error:', e)
-          return buildErrorResponse(request, new Error(`Invalid relationship data for '${predicate}'`), 500, startTime)
-        }
-
-        const count = relObj.$count as number | undefined
-
-        // Build linked items with scores - $id is now full URL
-        const useArrays = url.searchParams.has('arrays')
-        const items: Array<{ $id: string; id: string; name: string; importance?: number; level?: number }> = []
-        const itemsMap: Record<string, string> = {}  // {name: $id} for object format
-
-        for (const [displayName, targetId] of Object.entries(relObj)) {
-          if (displayName.startsWith('$')) continue
-          if (typeof targetId === 'string' && targetId.includes('/')) {
-            const [targetNs, ...idParts] = targetId.split('/')
-            const targetLocalId = idParts.join('/')
-            const itemScores = scores[displayName] || {}
-            const fullUrl = `${baseUrl}/datasets/${datasetId}/${targetNs}/${encodeURIComponent(targetLocalId)}`
-
-            items.push({
-              $id: fullUrl,  // Full clickable URL
-              id: targetId,  // Short form like "skills/2.B.4.e"
-              name: displayName,
-              ...(itemScores.importance !== undefined ? { importance: itemScores.importance } : {}),
-              ...(itemScores.level !== undefined ? { level: itemScores.level } : {}),
-            })
-
-            itemsMap[displayName] = fullUrl
-          }
-        }
-
-        // Sort by importance (descending) for better UX
+        // Sort by importance
         items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
 
-        // Apply pagination - default limit 50
-        const limit = parseInt(url.searchParams.get('limit') || '50', 10)
-        const skip = parseInt(url.searchParams.get('skip') || '0', 10)
-        const totalCount = count || items.length
+        // Pagination
+        const limit = parseInt(url.searchParams.get('limit') || '100')
+        const skip = parseInt(url.searchParams.get('skip') || '0')
         const paginatedItems = items.slice(skip, skip + limit)
-
-        // Build pagination links
-        const basePath = `${baseUrl}${path}`
-        const arrayParam = useArrays ? '&arrays' : ''
-        const paginationLinks: Record<string, string> = {}
-
-        // Add limit option links
-        const limitOptions = [20, 50, 100, 500, 1000]
-        for (const limitOpt of limitOptions) {
-          if (limitOpt !== limit) {
-            paginationLinks[`limit${limitOpt}`] = `${basePath}?limit=${limitOpt}${arrayParam}`
-          }
-        }
-
-        // Add next/prev links
-        if (skip + limit < totalCount) {
-          paginationLinks.next = `${basePath}?skip=${skip + limit}&limit=${limit}${arrayParam}`
-        }
-        if (skip > 0) {
-          const prevSkip = Math.max(0, skip - limit)
-          paginationLinks.prev = `${basePath}?skip=${prevSkip}&limit=${limit}${arrayParam}`
-        }
-
-        // Build paginated itemsMap with navigation
-        const paginatedItemsMap: Record<string, string> = {
-          $count: String(totalCount),
-          ...(skip + limit < totalCount ? { $next: paginationLinks.next } : {}),
-          ...(skip > 0 ? { $prev: paginationLinks.prev } : {}),
-        }
-        for (const item of paginatedItems) {
-          paginatedItemsMap[item.name] = item.$id
-        }
 
         return buildResponse(request, {
           api: {
-            resource: 'relationship',
+            resource: 'relationships',
             dataset: datasetId,
             collection: collectionId,
-            entityId,
+            id: entityId,
             predicate,
-            count: totalCount,
-            limit,
-            skip,
-            returned: paginatedItems.length,
-            hasMore: skip + limit < totalCount,
+            count: items.length,
           },
           links: {
-            self: `${baseUrl}${path}`,
+            self: `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}/${predicate}`,
             entity: `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}`,
-            collection: `${baseUrl}/datasets/${datasetId}/${collectionId}`,
-            dataset: `${baseUrl}/datasets/${datasetId}`,
-            home: baseUrl,
-            ...paginationLinks,
           },
-          // Return {name: $id} object by default, or array with ?arrays
-          data: useArrays ? paginatedItems : paginatedItemsMap,
-          // Include full items array for detail when using arrays format
-          ...(useArrays ? {} : { items: paginatedItems }),
-        }, startTime)
+          items: paginatedItems,
+        }, timing, worker.getStorageStats())
       }
 
       // =======================================================================

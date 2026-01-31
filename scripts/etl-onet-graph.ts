@@ -63,14 +63,8 @@ async function loadParquet<T>(filePath: string): Promise<T[]> {
 async function main() {
   console.log('=== O*NET Graph ETL ===\n')
 
-  // Create output directory
+  // Create output directory (simple: just data.parquet + rels.parquet)
   fs.mkdirSync(OUTPUT_DIR, { recursive: true })
-  fs.mkdirSync(path.join(OUTPUT_DIR, 'data', 'occupations'), { recursive: true })
-  fs.mkdirSync(path.join(OUTPUT_DIR, 'data', 'skills'), { recursive: true })
-  fs.mkdirSync(path.join(OUTPUT_DIR, 'data', 'abilities'), { recursive: true })
-  fs.mkdirSync(path.join(OUTPUT_DIR, 'data', 'knowledge'), { recursive: true })
-  fs.mkdirSync(path.join(OUTPUT_DIR, 'rels', 'forward'), { recursive: true })
-  fs.mkdirSync(path.join(OUTPUT_DIR, 'rels', 'reverse'), { recursive: true })
 
   // 1. Load reference data (skills, abilities, knowledge definitions)
   console.log('Loading Content Model Reference...')
@@ -399,94 +393,96 @@ async function main() {
 
   console.log(`  Built ${forwardRels.length} relationship edges`)
 
-  // 9. Write output files (JSON for now, Parquet optimization later)
+  // 9. Write output files: data.parquet (all nodes) + rels.parquet (all edges both directions)
   console.log('\nWriting output files...')
 
-  // Flatten entities for Parquet (nested objects need special handling)
-  const flatOccupations = occupationEntities.map(occ => ({
-    $id: occ.$id,
-    $type: occ.$type,
-    name: occ.name,
-    code: occ.code,
-    description: occ.description,
-    skillCount: occ.skills.$count,
-    abilityCount: occ.abilities.$count,
-    knowledgeCount: occ.knowledge.$count,
-    // Store relationships as JSON strings for now
-    skills: JSON.stringify(occ.skills),
-    skillScores: JSON.stringify(occ.skillScores),
-    abilities: JSON.stringify(occ.abilities),
-    abilityScores: JSON.stringify(occ.abilityScores),
-    knowledge: JSON.stringify(occ.knowledge),
-    knowledgeScores: JSON.stringify(occ.knowledgeScores),
-  }))
+  // Combine ALL entities into single data.parquet
+  const allNodes = [
+    // Occupations
+    ...occupationEntities.map(occ => ({
+      $id: occ.$id,
+      $type: occ.$type,
+      name: occ.name,
+      code: occ.code,
+      elementId: null as string | null,
+      description: occ.description,
+    })),
+    // Skills
+    ...skillEntities.map(s => ({
+      $id: s.$id,
+      $type: s.$type,
+      name: s.name,
+      code: null as string | null,
+      elementId: s.elementId,
+      description: s.description,
+    })),
+    // Abilities
+    ...abilityEntities.map(a => ({
+      $id: a.$id,
+      $type: a.$type,
+      name: a.name,
+      code: null as string | null,
+      elementId: a.elementId,
+      description: a.description,
+    })),
+    // Knowledge
+    ...knowledgeEntities.map(k => ({
+      $id: k.$id,
+      $type: k.$type,
+      name: k.name,
+      code: null as string | null,
+      elementId: k.elementId,
+      description: k.description,
+    })),
+  ]
 
-  // Write occupations
-  const occBuffer = parquetWriteBuffer({ columnData: objectsToColumns(flatOccupations) })
-  fs.writeFileSync(
-    path.join(OUTPUT_DIR, 'data', 'occupations', 'data.parquet'),
-    Buffer.from(occBuffer)
-  )
-  console.log(`  Wrote ${flatOccupations.length} occupations`)
+  // Sort by $id for fast lookups
+  allNodes.sort((a, b) => a.$id.localeCompare(b.$id))
 
-  // Flatten skill entities
-  const flatSkills = skillEntities.map(s => ({
-    $id: s.$id,
-    $type: s.$type,
-    name: s.name,
-    elementId: s.elementId,
-    description: s.description,
-  }))
+  const dataBuffer = parquetWriteBuffer({ columnData: objectsToColumns(allNodes) })
+  fs.writeFileSync(path.join(OUTPUT_DIR, 'data.parquet'), Buffer.from(dataBuffer))
+  console.log(`  Wrote ${allNodes.length} nodes to data.parquet`)
 
-  // Write skills
-  const skillBuffer = parquetWriteBuffer({ columnData: objectsToColumns(flatSkills) })
-  fs.writeFileSync(
-    path.join(OUTPUT_DIR, 'data', 'skills', 'data.parquet'),
-    Buffer.from(skillBuffer)
-  )
-  console.log(`  Wrote ${flatSkills.length} skills`)
+  // Build ALL edges in BOTH directions into single rels.parquet
+  const allEdges: typeof forwardRels = []
 
-  // Flatten ability entities
-  const flatAbilities = abilityEntities.map(a => ({
-    $id: a.$id,
-    $type: a.$type,
-    name: a.name,
-    elementId: a.elementId,
-    description: a.description,
-  }))
+  // Add forward edges (occupation -> skill/ability/knowledge)
+  for (const rel of forwardRels) {
+    allEdges.push(rel)
+  }
 
-  // Write abilities
-  const abilityBuffer = parquetWriteBuffer({ columnData: objectsToColumns(flatAbilities) })
-  fs.writeFileSync(
-    path.join(OUTPUT_DIR, 'data', 'abilities', 'data.parquet'),
-    Buffer.from(abilityBuffer)
-  )
-  console.log(`  Wrote ${flatAbilities.length} abilities`)
+  // Add reverse edges (skill/ability/knowledge -> occupation)
+  for (const rel of forwardRels) {
+    allEdges.push({
+      from_ns: rel.to_ns,
+      from_id: rel.to_id,
+      from_name: rel.to_name,
+      from_type: rel.to_type,
+      predicate: rel.reverse,  // 'requiredBy'
+      reverse: rel.predicate,  // 'skills', 'abilities', 'knowledge'
+      to_ns: rel.from_ns,
+      to_id: rel.from_id,
+      to_name: rel.from_name,
+      to_type: rel.from_type,
+      importance: rel.importance,
+      level: rel.level,
+      standardError: rel.standardError,
+      date: rel.date,
+    })
+  }
 
-  // Flatten knowledge entities
-  const flatKnowledge = knowledgeEntities.map(k => ({
-    $id: k.$id,
-    $type: k.$type,
-    name: k.name,
-    elementId: k.elementId,
-    description: k.description,
-  }))
+  // Sort by (from_ns, from_id, predicate) for fast lookups in either direction
+  allEdges.sort((a, b) => {
+    const nsCompare = a.from_ns.localeCompare(b.from_ns)
+    if (nsCompare !== 0) return nsCompare
+    const idCompare = a.from_id.localeCompare(b.from_id)
+    if (idCompare !== 0) return idCompare
+    return a.predicate.localeCompare(b.predicate)
+  })
 
-  // Write knowledge
-  const knowledgeBuffer = parquetWriteBuffer({ columnData: objectsToColumns(flatKnowledge) })
-  fs.writeFileSync(
-    path.join(OUTPUT_DIR, 'data', 'knowledge', 'data.parquet'),
-    Buffer.from(knowledgeBuffer)
-  )
-  console.log(`  Wrote ${flatKnowledge.length} knowledge areas`)
-
-  // Write forward relationships
-  const relBuffer = parquetWriteBuffer({ columnData: objectsToColumns(forwardRels) })
-  fs.writeFileSync(
-    path.join(OUTPUT_DIR, 'rels', 'forward', 'occupations.parquet'),
-    Buffer.from(relBuffer)
-  )
-  console.log(`  Wrote ${forwardRels.length} relationships`)
+  const relsBuffer = parquetWriteBuffer({ columnData: objectsToColumns(allEdges) })
+  fs.writeFileSync(path.join(OUTPUT_DIR, 'rels.parquet'), Buffer.from(relsBuffer))
+  console.log(`  Wrote ${allEdges.length} edges to rels.parquet (${forwardRels.length} forward + ${forwardRels.length} reverse)`)
 
   // Summary
   console.log('\n=== ETL Complete ===')
