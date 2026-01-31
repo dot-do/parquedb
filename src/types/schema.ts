@@ -34,6 +34,14 @@ export type ParametricType =
   | `vector(${number})`               // vector(1536)
   | `enum(${string})`                 // enum(draft,published,archived)
 
+/** Index modifier shortcuts */
+export type IndexModifier =
+  | '#'      // Indexed (boolean true - implies shredded)
+  | '##'     // Unique index
+  | '#fts'   // Full-text search index
+  | '#vec'   // Vector similarity index
+  | '#hash'  // Hash index (O(1) lookups)
+
 /** Type with modifiers */
 export type TypeWithModifiers =
   | `${PrimitiveType | ParametricType}!`           // Required
@@ -41,6 +49,14 @@ export type TypeWithModifiers =
   | `${PrimitiveType | ParametricType}[]`          // Array
   | `${PrimitiveType | ParametricType}[]!`         // Required array
   | `${PrimitiveType | ParametricType} = ${string}` // With default
+  // Indexed types (# suffix implies shredded for predicate pushdown)
+  | `${PrimitiveType | ParametricType}#`           // Indexed
+  | `${PrimitiveType | ParametricType}#!`          // Indexed + required
+  | `${PrimitiveType | ParametricType}##`          // Unique index
+  | `${PrimitiveType | ParametricType}##!`         // Unique + required
+  | `${PrimitiveType | ParametricType}#fts`        // FTS index
+  | `${PrimitiveType | ParametricType}#vec`        // Vector index
+  | `${PrimitiveType | ParametricType}#hash`       // Hash index
 
 /** All field type strings */
 export type FieldTypeString = PrimitiveType | ParametricType | TypeWithModifiers
@@ -376,10 +392,17 @@ export function parseRelation(value: string): ParsedRelationship | null {
 }
 
 /** Parse a field type string */
-export function parseFieldType(value: string): { type: string; required: boolean; isArray: boolean; default?: string } {
+export function parseFieldType(value: string): {
+  type: string
+  required: boolean
+  isArray: boolean
+  index?: IndexType
+  default?: string
+} {
   let type = value.trim()
   let required = false
   let isArray = false
+  let index: IndexType | undefined
   let defaultValue: string | undefined
 
   // Check for default: "string = 'default'"
@@ -399,6 +422,30 @@ export function parseFieldType(value: string): { type: string; required: boolean
     isArray = true
   }
 
+  // Check for index modifiers (must be before required/optional check)
+  // Order matters: check longer patterns first
+  if (type.endsWith('#fts!') || type.endsWith('#fts')) {
+    index = 'fts'
+    type = type.replace(/#fts!?$/, '')
+    if (value.endsWith('!')) required = true
+  } else if (type.endsWith('#vec!') || type.endsWith('#vec')) {
+    index = 'vector'
+    type = type.replace(/#vec!?$/, '')
+    if (value.endsWith('!')) required = true
+  } else if (type.endsWith('#hash!') || type.endsWith('#hash')) {
+    index = 'hash'
+    type = type.replace(/#hash!?$/, '')
+    if (value.endsWith('!')) required = true
+  } else if (type.endsWith('##!') || type.endsWith('##')) {
+    index = 'unique'
+    type = type.replace(/##!?$/, '')
+    if (value.endsWith('!')) required = true
+  } else if (type.endsWith('#!') || type.endsWith('#')) {
+    index = true
+    type = type.replace(/#!?$/, '')
+    if (value.endsWith('!')) required = true
+  }
+
   // Check for required: "string!"
   if (type.endsWith('!')) {
     type = type.slice(0, -1)
@@ -411,7 +458,7 @@ export function parseFieldType(value: string): { type: string; required: boolean
     required = false
   }
 
-  return { type, required, isArray, default: defaultValue }
+  return { type, required, isArray, index, default: defaultValue }
 }
 
 /** Check if a string is a relationship definition */
