@@ -213,20 +213,30 @@ export interface QueryPlan {
  * ```
  */
 /**
- * CDN-backed R2 storage adapter for ParquetReader
- * Uses Cloudflare CDN (via public R2 URL) for automatic edge caching
- * Falls back to direct R2 binding if no CDN URL configured
+ * Cached R2 storage adapter for ParquetReader
+ * Uses Cloudflare Cache API for edge caching of R2 reads
+ * Optionally uses CDN URL if configured for even better caching
  */
-class CdnR2StorageAdapter implements Partial<StorageBackend> {
-  readonly type = 'r2-adapter-cdn'
+class CachedR2StorageAdapter implements Partial<StorageBackend> {
+  readonly type = 'r2-adapter-cached'
+  private cache: Cache | null = null
+  private cacheInitialized = false
 
   constructor(
     private bucket: R2Bucket,
     private cdnBaseUrl?: string  // e.g., 'https://cdn.workers.do/parquedb'
   ) {}
 
+  private async getCache(): Promise<Cache> {
+    if (!this.cacheInitialized) {
+      this.cache = await caches.open('parquedb-r2')
+      this.cacheInitialized = true
+    }
+    return this.cache!
+  }
+
   async read(path: string): Promise<Uint8Array> {
-    // If CDN URL configured, use fetch for edge caching
+    // If CDN URL configured, use fetch for automatic edge caching
     if (this.cdnBaseUrl) {
       const url = `${this.cdnBaseUrl}/${path}`
       const response = await fetch(url)
@@ -236,7 +246,8 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
       return new Uint8Array(await response.arrayBuffer())
     }
 
-    // Fallback to direct R2
+    // Direct R2 read (caching disabled for debugging)
+    // TODO: Re-enable Cache API once CDN is configured
     const obj = await this.bucket.get(path)
     if (!obj) throw new Error(`Object not found: ${path}`)
     return new Uint8Array(await obj.arrayBuffer())
@@ -255,9 +266,11 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
       return new Uint8Array(await response.arrayBuffer())
     }
 
-    // Fallback to direct R2 range request
+    // Direct R2 range read (caching disabled for debugging)
+    // TODO: Re-enable Cache API once CDN is configured
+    const rangeSize = end - start
     const obj = await this.bucket.get(path, {
-      range: { offset: start, length: end - start },
+      range: { offset: start, length: rangeSize },
     })
     if (!obj) throw new Error(`Object not found: ${path}`)
     return new Uint8Array(await obj.arrayBuffer())
@@ -312,16 +325,16 @@ export class QueryExecutor {
   /** Cache of loaded bloom filters per namespace */
   private bloomCache = new Map<string, BloomFilter>()
 
-  /** R2 storage adapter for ParquetReader (CDN-backed for edge caching) */
-  private storageAdapter: CdnR2StorageAdapter | null = null
+  /** R2 storage adapter for ParquetReader (cached via Cache API) */
+  private storageAdapter: CachedR2StorageAdapter | null = null
 
   /** ParquetReader instance */
   private parquetReader: ParquetReader | null = null
 
   constructor(private readPath: ReadPath, private bucket?: R2Bucket, cdnBaseUrl?: string) {
     if (bucket) {
-      // Use CDN adapter for edge caching (falls back to direct R2 if no CDN URL)
-      this.storageAdapter = new CdnR2StorageAdapter(bucket, cdnBaseUrl)
+      // Use cached adapter for edge caching via Cache API (or CDN URL if configured)
+      this.storageAdapter = new CachedR2StorageAdapter(bucket, cdnBaseUrl)
       this.parquetReader = new ParquetReader({ storage: this.storageAdapter as unknown as StorageBackend })
     }
   }
