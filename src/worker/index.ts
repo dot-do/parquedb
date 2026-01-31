@@ -93,8 +93,13 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
   private async initializeCache(): Promise<void> {
     this.#cache = await caches.open('parquedb')
     this.readPath = new ReadPath(this.env.BUCKET, this.#cache, DEFAULT_CACHE_CONFIG)
-    // Pass R2Bucket and CDN URL to QueryExecutor for edge-cached Parquet reading
-    this.queryExecutor = new QueryExecutor(this.readPath, this.env.BUCKET, this.env.CDN_BASE_URL)
+    // Pass R2Buckets and r2.dev URL to QueryExecutor for edge caching
+    this.queryExecutor = new QueryExecutor(
+      this.readPath,
+      this.env.BUCKET,
+      this.env.CDN_BUCKET,
+      this.env.CDN_R2_DEV_URL
+    )
   }
 
   /**
@@ -104,6 +109,13 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     if (!this.readPath) {
       await this.initializeCache()
     }
+  }
+
+  /**
+   * Get storage statistics for debugging
+   */
+  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean } {
+    return this.queryExecutor?.getStorageStats() || { cdnHits: 0, primaryHits: 0, edgeHits: 0, totalReads: 0, usingCdn: false, usingEdge: false }
   }
 
   // ===========================================================================
@@ -614,7 +626,8 @@ function buildResponse(
     stats?: Record<string, unknown>
     relationships?: Record<string, unknown>
   },
-  timing?: TimingContext | number
+  timing?: TimingContext | number,
+  storageStats?: { cdnHits: number; primaryHits: number; edgeHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean }
 ): Response {
   const cf = (request.cf || {}) as CfProperties & { httpProtocol?: string }
 
@@ -662,6 +675,16 @@ function buildResponse(
       requestedAt,
       ...(latency !== undefined ? { latency: `${latency}ms` } : {}),
       ...(timingInfo && Object.keys(timingInfo).length > 0 ? { timing: timingInfo } : {}),
+      ...(storageStats?.totalReads ? {
+        storage: {
+          edgeHits: storageStats.edgeHits,
+          cdnHits: storageStats.cdnHits,
+          primaryHits: storageStats.primaryHits,
+          totalReads: storageStats.totalReads,
+          usingEdge: storageStats.usingEdge,
+          usingCdn: storageStats.usingCdn,
+        }
+      } : {}),
     },
   }
 
@@ -1281,7 +1304,7 @@ export default {
           relationships: Object.keys(relationships).length > 0
             ? (useArrays ? relationships : relWithItems)
             : undefined,
-        }, timing)  // Use timing context for detailed Server-Timing headers
+        }, timing, worker.getStorageStats())  // Include storage stats for debugging
       }
 
       // =======================================================================

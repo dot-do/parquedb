@@ -124,6 +124,7 @@ export default defineWorkspace([
             // Configure bindings directly for vitest-pool-workers
             r2Buckets: {
               BUCKET: 'parquedb-test',
+              CDN_BUCKET: 'parquedb-test',
             },
             // Configure Durable Objects with SQLite enabled
             durableObjects: {
@@ -162,6 +163,7 @@ export default defineWorkspace([
             compatibilityFlags: ['nodejs_compat'],
             r2Buckets: {
               BUCKET: 'parquedb-test',
+              CDN_BUCKET: 'parquedb-test',
             },
             durableObjects: {
               PARQUEDB: {
@@ -203,6 +205,7 @@ export default defineWorkspace([
             compatibilityFlags: ['nodejs_compat'],
             r2Buckets: {
               BUCKET: 'parquedb-test',
+              CDN_BUCKET: 'parquedb-test',
             },
             durableObjects: {
               PARQUEDB: {

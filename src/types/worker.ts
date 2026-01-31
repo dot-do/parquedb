@@ -28,8 +28,11 @@ export interface Env {
   /** Durable Object namespace for ParqueDB write operations */
   PARQUEDB: DurableObjectNamespace
 
-  /** R2 bucket for Parquet file storage */
+  /** R2 bucket for Parquet file storage (primary) */
   BUCKET: R2Bucket
+
+  /** R2 bucket for CDN-cached reads (cdn bucket with edge caching) */
+  CDN_BUCKET?: R2Bucket
 
   /** Optional FSX binding for POSIX-style file access */
   FSX?: Fetcher
@@ -44,8 +47,8 @@ export interface Env {
   /** Optional secret for authentication */
   AUTH_SECRET?: string
 
-  /** CDN base URL for R2 (enables edge caching), e.g. 'https://cdn.workers.do/parquedb' */
-  CDN_BASE_URL?: string
+  /** CDN r2.dev URL for public access, e.g. 'https://pub-xxx.r2.dev/parquedb' */
+  CDN_R2_DEV_URL?: string
 }
 
 // =============================================================================

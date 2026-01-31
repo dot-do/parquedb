@@ -213,63 +213,97 @@ export interface QueryPlan {
  * ```
  */
 /**
- * Cached R2 storage adapter for ParquetReader
- * Uses Cloudflare Cache API for edge caching of R2 reads
- * Optionally uses CDN URL if configured for even better caching
+ * CDN-backed R2 storage adapter for ParquetReader
+ *
+ * Uses CDN bucket (separate R2 bucket) for reads, which enables:
+ * - Read/write separation (CDN bucket is read-only copy)
+ * - Edge caching via CDN custom domain
+ * - Reduced load on primary bucket
+ *
+ * Files in CDN bucket are stored under parquedb/ prefix.
  */
-class CachedR2StorageAdapter implements Partial<StorageBackend> {
-  readonly type = 'r2-adapter-cached'
-  private cache: Cache | null = null
-  private cacheInitialized = false
+class CdnR2StorageAdapter implements Partial<StorageBackend> {
+  readonly type = 'r2-cdn-adapter'
+
+  // Stats for debugging
+  public cdnHits = 0
+  public primaryHits = 0
+  public edgeHits = 0
+  public totalReads = 0
 
   constructor(
-    private bucket: R2Bucket,
-    private cdnBaseUrl?: string  // e.g., 'https://cdn.workers.do/parquedb'
+    private cdnBucket: R2Bucket,      // CDN bucket (cdn) for reads
+    private primaryBucket: R2Bucket,  // Primary bucket (parquedb) as fallback
+    private cdnPrefix: string = 'parquedb',  // Prefix in CDN bucket
+    private r2DevUrl?: string  // r2.dev URL for edge caching (e.g. 'https://pub-xxx.r2.dev/parquedb')
   ) {}
 
-  private async getCache(): Promise<Cache> {
-    if (!this.cacheInitialized) {
-      this.cache = await caches.open('parquedb-r2')
-      this.cacheInitialized = true
-    }
-    return this.cache!
-  }
-
   async read(path: string): Promise<Uint8Array> {
-    // If CDN URL configured, use fetch for automatic edge caching
-    if (this.cdnBaseUrl) {
-      const url = `${this.cdnBaseUrl}/${path}`
-      const response = await fetch(url)
-      if (!response.ok) {
-        throw new Error(`CDN fetch failed: ${response.status} for ${path}`)
+    this.totalReads++
+
+    // If r2.dev URL configured, use fetch() for edge caching
+    if (this.r2DevUrl) {
+      const url = `${this.r2DevUrl}/${path}`
+      const response = await fetch(url, {
+        cf: {
+          cacheTtl: 3600,  // 1 hour edge cache
+          cacheEverything: true,
+        },
+      })
+      if (response.ok) {
+        this.edgeHits++
+        return new Uint8Array(await response.arrayBuffer())
       }
-      return new Uint8Array(await response.arrayBuffer())
     }
 
-    // Direct R2 read (caching disabled for debugging)
-    // TODO: Re-enable Cache API once CDN is configured
-    const obj = await this.bucket.get(path)
+    // Try CDN bucket with prefix
+    const cdnPath = `${this.cdnPrefix}/${path}`
+    const cdnObj = await this.cdnBucket.get(cdnPath)
+    if (cdnObj) {
+      this.cdnHits++
+      return new Uint8Array(await cdnObj.arrayBuffer())
+    }
+
+    // Fall back to primary bucket
+    this.primaryHits++
+    const obj = await this.primaryBucket.get(path)
     if (!obj) throw new Error(`Object not found: ${path}`)
     return new Uint8Array(await obj.arrayBuffer())
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
-    // If CDN URL configured, use fetch with Range header for edge caching
-    if (this.cdnBaseUrl) {
-      const url = `${this.cdnBaseUrl}/${path}`
+    this.totalReads++
+    const rangeSize = end - start
+
+    // If r2.dev URL configured, use fetch() with Range header for edge caching
+    if (this.r2DevUrl) {
+      const url = `${this.r2DevUrl}/${path}`
       const response = await fetch(url, {
-        headers: { 'Range': `bytes=${start}-${end - 1}` }
+        headers: { 'Range': `bytes=${start}-${end - 1}` },
+        cf: {
+          cacheTtl: 3600,
+          cacheEverything: true,
+        },
       })
-      if (!response.ok && response.status !== 206) {
-        throw new Error(`CDN range fetch failed: ${response.status} for ${path}`)
+      if (response.ok || response.status === 206) {
+        this.edgeHits++
+        return new Uint8Array(await response.arrayBuffer())
       }
-      return new Uint8Array(await response.arrayBuffer())
     }
 
-    // Direct R2 range read (caching disabled for debugging)
-    // TODO: Re-enable Cache API once CDN is configured
-    const rangeSize = end - start
-    const obj = await this.bucket.get(path, {
+    // Try CDN bucket with prefix
+    const cdnPath = `${this.cdnPrefix}/${path}`
+    const cdnObj = await this.cdnBucket.get(cdnPath, {
+      range: { offset: start, length: rangeSize },
+    })
+    if (cdnObj) {
+      this.cdnHits++
+      return new Uint8Array(await cdnObj.arrayBuffer())
+    }
+
+    // Fall back to primary bucket
+    this.primaryHits++
+    const obj = await this.primaryBucket.get(path, {
       range: { offset: start, length: rangeSize },
     })
     if (!obj) throw new Error(`Object not found: ${path}`)
@@ -277,12 +311,31 @@ class CachedR2StorageAdapter implements Partial<StorageBackend> {
   }
 
   async exists(path: string): Promise<boolean> {
-    const head = await this.bucket.head(path)
+    // Check CDN bucket first
+    const cdnPath = `${this.cdnPrefix}/${path}`
+    const cdnHead = await this.cdnBucket.head(cdnPath)
+    if (cdnHead !== null) return true
+
+    // Fall back to primary
+    const head = await this.primaryBucket.head(path)
     return head !== null
   }
 
   async stat(path: string): Promise<FileStat | null> {
-    const head = await this.bucket.head(path)
+    // Check CDN bucket first
+    const cdnPath = `${this.cdnPrefix}/${path}`
+    const cdnHead = await this.cdnBucket.head(cdnPath)
+    if (cdnHead) {
+      return {
+        path,
+        size: cdnHead.size,
+        mtime: cdnHead.uploaded,
+        isDirectory: false,
+      }
+    }
+
+    // Fall back to primary
+    const head = await this.primaryBucket.head(path)
     if (!head) return null
     return {
       path,
@@ -293,12 +346,17 @@ class CachedR2StorageAdapter implements Partial<StorageBackend> {
   }
 
   async list(prefix: string): Promise<ListResult> {
-    const result = await this.bucket.list({ prefix, limit: 1000 })
+    // List from CDN bucket with prefix
+    const cdnPrefix = `${this.cdnPrefix}/${prefix}`
+    const result = await this.cdnBucket.list({ prefix: cdnPrefix, limit: 1000 })
+
+    // Remove CDN prefix from paths
+    const prefixLen = this.cdnPrefix.length + 1
     return {
-      files: result.objects.map(obj => obj.key),
+      files: result.objects.map(obj => obj.key.slice(prefixLen)),
       hasMore: result.truncated,
       stats: result.objects.map(obj => ({
-        path: obj.key,
+        path: obj.key.slice(prefixLen),
         size: obj.size,
         mtime: obj.uploaded,
         isDirectory: false,
@@ -325,17 +383,47 @@ export class QueryExecutor {
   /** Cache of loaded bloom filters per namespace */
   private bloomCache = new Map<string, BloomFilter>()
 
-  /** R2 storage adapter for ParquetReader (cached via Cache API) */
-  private storageAdapter: CachedR2StorageAdapter | null = null
+  /** R2 storage adapter for ParquetReader */
+  private storageAdapter: CdnR2StorageAdapter | null = null
 
   /** ParquetReader instance */
   private parquetReader: ParquetReader | null = null
 
-  constructor(private readPath: ReadPath, private bucket?: R2Bucket, cdnBaseUrl?: string) {
+  /**
+   * Create a QueryExecutor
+   *
+   * @param readPath - ReadPath for legacy metadata reads
+   * @param bucket - Primary R2 bucket (parquedb) for writes and fallback reads
+   * @param cdnBucket - Optional CDN R2 bucket (cdn) for optimized reads
+   * @param r2DevUrl - Optional r2.dev URL for edge caching (e.g. 'https://pub-xxx.r2.dev/parquedb')
+   */
+  constructor(private readPath: ReadPath, private bucket?: R2Bucket, private cdnBucket?: R2Bucket, private r2DevUrl?: string) {
     if (bucket) {
-      // Use cached adapter for edge caching via Cache API (or CDN URL if configured)
-      this.storageAdapter = new CachedR2StorageAdapter(bucket, cdnBaseUrl)
+      // Use CDN adapter if CDN bucket is available, otherwise direct primary bucket access
+      if (cdnBucket) {
+        this.storageAdapter = new CdnR2StorageAdapter(cdnBucket, bucket, 'parquedb', r2DevUrl)
+      } else {
+        // Create adapter that uses primary bucket only
+        this.storageAdapter = new CdnR2StorageAdapter(bucket, bucket, '', r2DevUrl)
+      }
       this.parquetReader = new ParquetReader({ storage: this.storageAdapter as unknown as StorageBackend })
+    }
+  }
+
+  /**
+   * Get storage stats for debugging
+   */
+  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean } {
+    if (!this.storageAdapter) {
+      return { cdnHits: 0, primaryHits: 0, edgeHits: 0, totalReads: 0, usingCdn: false, usingEdge: false }
+    }
+    return {
+      cdnHits: this.storageAdapter.cdnHits,
+      primaryHits: this.storageAdapter.primaryHits,
+      edgeHits: this.storageAdapter.edgeHits,
+      totalReads: this.storageAdapter.totalReads,
+      usingCdn: !!this.cdnBucket,
+      usingEdge: !!this.r2DevUrl,
     }
   }
 
