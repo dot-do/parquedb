@@ -780,6 +780,18 @@ export default {
           collectionLinks[col] = `${baseUrl}/datasets/${datasetId}/${col}`
         }
 
+        // Build collections as object map {name: href} or array [{name, href}] with ?arrays
+        const useArrays = url.searchParams.has('arrays')
+        const collectionsData = useArrays
+          ? dataset.collections.map(col => ({
+              name: col,
+              href: `${baseUrl}/datasets/${datasetId}/${col}`,
+            }))
+          : Object.fromEntries(dataset.collections.map(col => [
+              col,
+              `${baseUrl}/datasets/${datasetId}/${col}`,
+            ]))
+
         return buildResponse(request, {
           api: {
             resource: 'dataset',
@@ -795,10 +807,7 @@ export default {
             ...collectionLinks,
           },
           data: {
-            collections: dataset.collections.map(col => ({
-              name: col,
-              href: `${baseUrl}/datasets/${datasetId}/${col}`,
-            })),
+            collections: collectionsData,
           },
         })
       }
@@ -1015,13 +1024,75 @@ export default {
           }
         }
 
-        // Build relationship links for the links section
-        const relLinks: Record<string, string> = {}
-        for (const [pred, rel] of Object.entries(relationships)) {
-          relLinks[pred] = rel.href
+        // For skills/abilities/knowledge, compute reverse "requiredBy" relationship
+        // by scanning occupations that reference this entity
+        const shortId = String(entityRaw.$id).split('/').pop() || entityId
+
+        if (['skills', 'abilities', 'knowledge'].includes(collectionId) && knownPredicates.includes('requiredBy')) {
+          const occupationsNs = `${prefix}/occupations`
+          const occupationsResult = await worker.find(occupationsNs, {}, { limit: 2000 })
+
+          const reverseItems: Array<{ name: string; href: string; importance?: number; level?: number }> = []
+          const entityLocalId = String(entityRaw.elementId || shortId || entityId)
+
+          for (const occ of occupationsResult.items) {
+            const occRaw = occ as unknown as Record<string, unknown>
+            const relField = occRaw[collectionId]  // e.g., occupations.skills
+            const scoresField = occRaw[`${toSingular(collectionId)}Scores`]
+
+            if (relField) {
+              try {
+                const parsed = typeof relField === 'string' ? JSON.parse(relField) : relField
+                const scores = scoresField ? (typeof scoresField === 'string' ? JSON.parse(scoresField) : scoresField) : {}
+
+                // Check if this occupation has this skill/ability/knowledge
+                for (const [displayName, targetId] of Object.entries(parsed as Record<string, unknown>)) {
+                  if (displayName.startsWith('$')) continue
+                  if (typeof targetId === 'string') {
+                    const targetLocalId = targetId.split('/').pop()
+                    if (targetLocalId === entityLocalId || targetId === `${collectionId}/${entityLocalId}`) {
+                      const occCode = String(occRaw.code || occRaw.$id).split('/').pop()
+                      const itemScores = (scores as Record<string, { importance?: number; level?: number }>)[displayName] || {}
+                      reverseItems.push({
+                        name: String(occRaw.name),
+                        href: `${baseUrl}/datasets/${datasetId}/occupations/${encodeURIComponent(occCode || '')}`,
+                        ...(itemScores.importance ? { importance: itemScores.importance } : {}),
+                        ...(itemScores.level ? { level: itemScores.level } : {}),
+                      })
+                      break  // Found this entity in this occupation, move to next
+                    }
+                  }
+                }
+              } catch {
+                // Skip invalid JSON
+              }
+            }
+          }
+
+          // Sort by importance (descending)
+          reverseItems.sort((a, b) => (b.importance || 0) - (a.importance || 0))
+
+          if (reverseItems.length > 0) {
+            relationships['requiredBy'] = {
+              count: reverseItems.length,
+              href: `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}/requiredBy`,
+              ...(reverseItems.length <= 10 ? { items: reverseItems } : {}),
+            }
+          }
+        }
+
+        // Build relationship links as object map {predicate: href} or array with ?arrays
+        const useArrays = url.searchParams.has('arrays')
+        const selfUrl = `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}`
+
+        // Convert relationships to simpler format: {predicate: href}
+        const relLinksMap: Record<string, string> = {}
+        for (const [pred] of Object.entries(relationships)) {
+          relLinksMap[pred] = `${selfUrl}/${pred}`
         }
 
         // Build the response with relationships prominently featured
+        // $id is now the full clickable URL, id is the short form (computed earlier)
         return buildResponse(request, {
           api: {
             resource: 'entity',
@@ -1031,22 +1102,24 @@ export default {
             type: entityRaw.$type,
           },
           links: {
-            self: `${baseUrl}${path}`,
+            self: selfUrl,
             collection: `${baseUrl}/datasets/${datasetId}/${collectionId}`,
             dataset: `${baseUrl}/datasets/${datasetId}`,
             home: baseUrl,
-            // Relationship traversal links
-            ...relLinks,
           },
           data: {
-            $id: entityRaw.$id,
+            $id: selfUrl,  // Full clickable URL
             $type: entityRaw.$type,
+            id: shortId,   // Short form for display/reference
             name: entityRaw.name,
             description: entityRaw.description,
-            code: entityRaw.code,
+            ...(entityRaw.code ? { code: entityRaw.code } : {}),
+            ...(entityRaw.elementId ? { elementId: entityRaw.elementId } : {}),
           },
-          // Relationships with counts, links, and top items
-          relationships: Object.keys(relationships).length > 0 ? relationships : undefined,
+          // Relationships as object map {predicate: href} or with details if ?arrays
+          relationships: Object.keys(relationships).length > 0
+            ? (useArrays ? relationships : relLinksMap)
+            : undefined,
         })
       }
 
@@ -1076,10 +1149,88 @@ export default {
 
         const entityRaw = entity as unknown as Record<string, unknown>
 
+        // Get singular forms from config (with pluralize as fallback)
+        const singularConfig = (dataset as { singular?: Record<string, string> }).singular || {}
+        const toSingular = (word: string): string => {
+          if (singularConfig[word]) return singularConfig[word]
+          return pluralize.singular(word)
+        }
+
+        // Special handling for "requiredBy" reverse relationship on skills/abilities/knowledge
+        if (predicate === 'requiredBy' && ['skills', 'abilities', 'knowledge'].includes(collectionId)) {
+          const occupationsNs = `${prefix}/occupations`
+          const occupationsResult = await worker.find(occupationsNs, {}, { limit: 2000 })
+
+          const useArrays = url.searchParams.has('arrays')
+          const items: Array<{ $id: string; id: string; name: string; importance?: number; level?: number }> = []
+          const itemsMap: Record<string, string> = {}
+          const entityLocalId = String(entityRaw.elementId || String(entityRaw.$id).split('/').pop() || entityId)
+
+          for (const occ of occupationsResult.items) {
+            const occRaw = occ as unknown as Record<string, unknown>
+            const relField = occRaw[collectionId]
+            const scoresField = occRaw[`${toSingular(collectionId)}Scores`]
+
+            if (relField) {
+              try {
+                const parsed = typeof relField === 'string' ? JSON.parse(relField) : relField
+                const scores = scoresField ? (typeof scoresField === 'string' ? JSON.parse(scoresField) : scoresField) : {}
+
+                for (const [displayName, targetId] of Object.entries(parsed as Record<string, unknown>)) {
+                  if (displayName.startsWith('$')) continue
+                  if (typeof targetId === 'string') {
+                    const targetLocalId = targetId.split('/').pop()
+                    if (targetLocalId === entityLocalId || targetId === `${collectionId}/${entityLocalId}`) {
+                      const occCode = String(occRaw.code || String(occRaw.$id).split('/').pop())
+                      const occName = String(occRaw.name)
+                      const fullUrl = `${baseUrl}/datasets/${datasetId}/occupations/${encodeURIComponent(occCode)}`
+                      const itemScores = (scores as Record<string, { importance?: number; level?: number }>)[displayName] || {}
+
+                      items.push({
+                        $id: fullUrl,
+                        id: `occupations/${occCode}`,
+                        name: occName,
+                        ...(itemScores.importance ? { importance: itemScores.importance } : {}),
+                        ...(itemScores.level ? { level: itemScores.level } : {}),
+                      })
+                      itemsMap[occName] = fullUrl
+                      break
+                    }
+                  }
+                }
+              } catch {
+                // Skip invalid JSON
+              }
+            }
+          }
+
+          // Sort by importance (descending)
+          items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
+
+          return buildResponse(request, {
+            api: {
+              resource: 'relationship',
+              dataset: datasetId,
+              collection: collectionId,
+              entityId,
+              predicate: 'requiredBy',
+              count: items.length,
+            },
+            links: {
+              self: `${baseUrl}${path}`,
+              entity: `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}`,
+              collection: `${baseUrl}/datasets/${datasetId}/${collectionId}`,
+              dataset: `${baseUrl}/datasets/${datasetId}`,
+              home: baseUrl,
+            },
+            data: useArrays ? items : itemsMap,
+            ...(useArrays ? {} : { items }),
+          })
+        }
+
         // Get the relationship field (may be JSON-encoded)
         const rawRelField = entityRaw[predicate]
         // Scores key: "skills" -> "skillScores" (singular), "abilities" -> "abilityScores"
-        const singularConfig = (dataset as { singular?: Record<string, string> }).singular || {}
         const singularPredicate = singularConfig[predicate] || pluralize.singular(predicate)
         const scoresKey = `${singularPredicate}Scores`
         const rawScores = entityRaw[scoresKey]
@@ -1104,21 +1255,28 @@ export default {
 
         const count = relObj.$count as number | undefined
 
-        // Build linked items with scores
-        const items: Array<{ name: string; id: string; href: string; importance?: number; level?: number }> = []
+        // Build linked items with scores - $id is now full URL
+        const useArrays = url.searchParams.has('arrays')
+        const items: Array<{ $id: string; id: string; name: string; importance?: number; level?: number }> = []
+        const itemsMap: Record<string, string> = {}  // {name: $id} for object format
+
         for (const [displayName, targetId] of Object.entries(relObj)) {
           if (displayName.startsWith('$')) continue
           if (typeof targetId === 'string' && targetId.includes('/')) {
             const [targetNs, ...idParts] = targetId.split('/')
             const targetLocalId = idParts.join('/')
             const itemScores = scores[displayName] || {}
+            const fullUrl = `${baseUrl}/datasets/${datasetId}/${targetNs}/${encodeURIComponent(targetLocalId)}`
+
             items.push({
+              $id: fullUrl,  // Full clickable URL
+              id: targetId,  // Short form like "skills/2.B.4.e"
               name: displayName,
-              id: targetId,
-              href: `${baseUrl}/datasets/${datasetId}/${targetNs}/${encodeURIComponent(targetLocalId)}`,
               ...(itemScores.importance !== undefined ? { importance: itemScores.importance } : {}),
               ...(itemScores.level !== undefined ? { level: itemScores.level } : {}),
             })
+
+            itemsMap[displayName] = fullUrl
           }
         }
 
@@ -1140,10 +1298,11 @@ export default {
             collection: `${baseUrl}/datasets/${datasetId}/${collectionId}`,
             dataset: `${baseUrl}/datasets/${datasetId}`,
             home: baseUrl,
-            // Top 10 links for quick navigation
-            ...Object.fromEntries(items.slice(0, 10).map(item => [item.name, item.href])),
           },
-          items,
+          // Return {name: $id} object by default, or array with ?arrays
+          data: useArrays ? items : itemsMap,
+          // Include full items array for detail when using arrays format
+          ...(useArrays ? {} : { items }),
         })
       }
 
