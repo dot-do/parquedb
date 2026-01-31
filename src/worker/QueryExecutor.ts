@@ -213,21 +213,49 @@ export interface QueryPlan {
  * ```
  */
 /**
- * Simple R2 storage adapter for ParquetReader
- * Implements only the methods needed for Parquet reading
+ * CDN-backed R2 storage adapter for ParquetReader
+ * Uses Cloudflare CDN (via public R2 URL) for automatic edge caching
+ * Falls back to direct R2 binding if no CDN URL configured
  */
-class R2StorageAdapter implements Partial<StorageBackend> {
-  readonly type = 'r2-adapter'
+class CdnR2StorageAdapter implements Partial<StorageBackend> {
+  readonly type = 'r2-adapter-cdn'
 
-  constructor(private bucket: R2Bucket) {}
+  constructor(
+    private bucket: R2Bucket,
+    private cdnBaseUrl?: string  // e.g., 'https://cdn.workers.do/parquedb'
+  ) {}
 
   async read(path: string): Promise<Uint8Array> {
+    // If CDN URL configured, use fetch for edge caching
+    if (this.cdnBaseUrl) {
+      const url = `${this.cdnBaseUrl}/${path}`
+      const response = await fetch(url)
+      if (!response.ok) {
+        throw new Error(`CDN fetch failed: ${response.status} for ${path}`)
+      }
+      return new Uint8Array(await response.arrayBuffer())
+    }
+
+    // Fallback to direct R2
     const obj = await this.bucket.get(path)
     if (!obj) throw new Error(`Object not found: ${path}`)
     return new Uint8Array(await obj.arrayBuffer())
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    // If CDN URL configured, use fetch with Range header for edge caching
+    if (this.cdnBaseUrl) {
+      const url = `${this.cdnBaseUrl}/${path}`
+      const response = await fetch(url, {
+        headers: { 'Range': `bytes=${start}-${end - 1}` }
+      })
+      if (!response.ok && response.status !== 206) {
+        throw new Error(`CDN range fetch failed: ${response.status} for ${path}`)
+      }
+      return new Uint8Array(await response.arrayBuffer())
+    }
+
+    // Fallback to direct R2 range request
     const obj = await this.bucket.get(path, {
       range: { offset: start, length: end - start },
     })
@@ -284,15 +312,16 @@ export class QueryExecutor {
   /** Cache of loaded bloom filters per namespace */
   private bloomCache = new Map<string, BloomFilter>()
 
-  /** R2 storage adapter for ParquetReader */
-  private storageAdapter: R2StorageAdapter | null = null
+  /** R2 storage adapter for ParquetReader (CDN-backed for edge caching) */
+  private storageAdapter: CdnR2StorageAdapter | null = null
 
   /** ParquetReader instance */
   private parquetReader: ParquetReader | null = null
 
-  constructor(private readPath: ReadPath, private bucket?: R2Bucket) {
+  constructor(private readPath: ReadPath, private bucket?: R2Bucket, cdnBaseUrl?: string) {
     if (bucket) {
-      this.storageAdapter = new R2StorageAdapter(bucket)
+      // Use CDN adapter for edge caching (falls back to direct R2 if no CDN URL)
+      this.storageAdapter = new CdnR2StorageAdapter(bucket, cdnBaseUrl)
       this.parquetReader = new ParquetReader({ storage: this.storageAdapter as unknown as StorageBackend })
     }
   }

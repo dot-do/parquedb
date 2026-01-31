@@ -93,8 +93,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
   private async initializeCache(): Promise<void> {
     this.#cache = await caches.open('parquedb')
     this.readPath = new ReadPath(this.env.BUCKET, this.#cache, DEFAULT_CACHE_CONFIG)
-    // Pass R2Bucket to QueryExecutor for real Parquet reading
-    this.queryExecutor = new QueryExecutor(this.readPath, this.env.BUCKET)
+    // Pass R2Bucket and CDN URL to QueryExecutor for edge-cached Parquet reading
+    this.queryExecutor = new QueryExecutor(this.readPath, this.env.BUCKET, this.env.CDN_BASE_URL)
   }
 
   /**
@@ -563,6 +563,47 @@ interface CfProperties {
   asOrganization?: string
 }
 
+// Timing context for Server-Timing headers
+interface TimingContext {
+  startTime: number
+  marks: Map<string, number>
+  durations: Map<string, number>
+}
+
+function createTimingContext(): TimingContext {
+  return {
+    startTime: performance.now(),
+    marks: new Map(),
+    durations: new Map(),
+  }
+}
+
+function markTiming(ctx: TimingContext, name: string): void {
+  ctx.marks.set(name, performance.now())
+}
+
+function measureTiming(ctx: TimingContext, name: string, startMark?: string): void {
+  const start = startMark ? ctx.marks.get(startMark) : ctx.startTime
+  if (start !== undefined) {
+    ctx.durations.set(name, performance.now() - start)
+  }
+}
+
+function buildServerTimingHeader(ctx: TimingContext): string {
+  const parts: string[] = []
+
+  // Add total time
+  const total = performance.now() - ctx.startTime
+  parts.push(`total;dur=${total.toFixed(1)}`)
+
+  // Add individual durations
+  for (const [name, dur] of ctx.durations) {
+    parts.push(`${name};dur=${dur.toFixed(1)}`)
+  }
+
+  return parts.join(', ')
+}
+
 function buildResponse(
   request: Request,
   data: {
@@ -573,9 +614,13 @@ function buildResponse(
     stats?: Record<string, unknown>
     relationships?: Record<string, unknown>
   },
-  startTime?: number
+  timing?: TimingContext | number
 ): Response {
   const cf = (request.cf || {}) as CfProperties & { httpProtocol?: string }
+
+  // Handle both old startTime number and new TimingContext
+  const startTime = typeof timing === 'number' ? timing : timing?.startTime
+  const timingCtx = typeof timing === 'object' ? timing : undefined
 
   // Calculate latency
   const latency = startTime ? Math.round(performance.now() - startTime) : undefined
@@ -590,6 +635,14 @@ function buildResponse(
   const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0]
   const rayId = request.headers.get('cf-ray')?.split('-')[0]
   const ray = rayId && cf.colo ? `${rayId}-${cf.colo}` : rayId
+
+  // Build timing info for response body
+  const timingInfo: Record<string, string> | undefined = timingCtx ? {} : undefined
+  if (timingCtx && timingInfo) {
+    for (const [name, dur] of timingCtx.durations) {
+      timingInfo[name] = `${dur.toFixed(0)}ms`
+    }
+  }
 
   const response = {
     api: data.api,
@@ -608,15 +661,22 @@ function buildResponse(
       timezone: cf.timezone,
       requestedAt,
       ...(latency !== undefined ? { latency: `${latency}ms` } : {}),
+      ...(timingInfo && Object.keys(timingInfo).length > 0 ? { timing: timingInfo } : {}),
     },
   }
 
-  return Response.json(response, {
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Cache-Control': 'public, max-age=60',
-    },
-  })
+  // Build headers
+  const headers: Record<string, string> = {
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'public, max-age=60',
+  }
+
+  // Add Server-Timing header if we have timing context
+  if (timingCtx) {
+    headers['Server-Timing'] = buildServerTimingHeader(timingCtx)
+  }
+
+  return Response.json(response, { headers })
 }
 
 function buildErrorResponse(
@@ -766,6 +826,15 @@ export default {
           id,
           entity,
           keys: entity ? Object.keys(entity) : null,
+        })
+      }
+
+      // Debug: cache stats
+      if (path === '/debug/cache') {
+        const cacheStats = await worker.getCacheStats()
+        return Response.json({
+          cacheStats,
+          timestamp: new Date().toISOString(),
         })
       }
 
@@ -1005,6 +1074,7 @@ export default {
       // =======================================================================
       const entityMatch = path.match(/^\/datasets\/([^/]+)\/([^/]+)\/([^/]+)$/)
       if (entityMatch) {
+        const timing = createTimingContext()
         const datasetId = entityMatch[1]!
         const collectionId = entityMatch[2]!
         const entityId = decodeURIComponent(entityMatch[3]!)
@@ -1017,7 +1087,10 @@ export default {
         // Use prefix for R2 path
         const prefix = (dataset as { prefix?: string }).prefix || datasetId
         const ns = `${prefix}/${collectionId}`
+
+        markTiming(timing, 'entity_start')
         const entity = await worker.get(ns, entityId) as EntityRecord | null
+        measureTiming(timing, 'entity', 'entity_start')
 
         if (!entity) {
           return buildErrorResponse(request, new Error(`Entity '${entityId}' not found in ${ns}`), 404, startTime)
@@ -1096,9 +1169,13 @@ export default {
         // by scanning occupations that reference this entity
         const shortId = String(entityRaw.$id).split('/').pop() || entityId
 
+        markTiming(timing, 'rels_start')
         if (['skills', 'abilities', 'knowledge'].includes(collectionId) && knownPredicates.includes('requiredBy')) {
           const occupationsNs = `${prefix}/occupations`
+
+          markTiming(timing, 'occ_fetch_start')
           const occupationsResult = await worker.find(occupationsNs, {}, { limit: 2000 })
+          measureTiming(timing, 'occ_fetch', 'occ_fetch_start')
 
           const reverseItems: Array<{ name: string; href: string; importance?: number; level?: number }> = []
           const entityLocalId = String(entityRaw.elementId || shortId || entityId)
@@ -1149,6 +1226,7 @@ export default {
             }
           }
         }
+        measureTiming(timing, 'rels', 'rels_start')
 
         // Build relationship links as object map {name: href} for each predicate
         const useArrays = url.searchParams.has('arrays')
@@ -1203,7 +1281,7 @@ export default {
           relationships: Object.keys(relationships).length > 0
             ? (useArrays ? relationships : relWithItems)
             : undefined,
-        }, startTime)
+        }, timing)  // Use timing context for detailed Server-Timing headers
       }
 
       // =======================================================================

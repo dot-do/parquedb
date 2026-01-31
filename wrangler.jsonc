@@ -58,6 +58,8 @@
 
   "vars": {
     "ENVIRONMENT": "development"
+    // CDN URL for R2 - enables Cloudflare edge caching (uncomment when configured)
+    // "CDN_BASE_URL": "https://cdn.workers.do/parquedb"
   },
 
   // =============================================================================

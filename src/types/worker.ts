@@ -43,6 +43,9 @@ export interface Env {
 
   /** Optional secret for authentication */
   AUTH_SECRET?: string
+
+  /** CDN base URL for R2 (enables edge caching), e.g. 'https://cdn.workers.do/parquedb' */
+  CDN_BASE_URL?: string
 }
 
 // =============================================================================
