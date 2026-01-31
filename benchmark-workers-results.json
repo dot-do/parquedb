@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-01-30T15:53:00Z",
+  "runtime": "cloudflare-workers (miniflare/workerd)",
+  "note": "Timing resolution is ~1ms in workerd test environment. 0ms values indicate sub-millisecond operations.",
+  "results": {
+    "r2_bucket": {
+      "write_small_100B": { "mean_ms": 1.06, "p95_ms": 2.0, "ops_per_sec": 943 },
+      "write_medium_1KB": { "mean_ms": 0.46, "p95_ms": 2.0, "ops_per_sec": 2174 },
+      "write_large_10KB": { "mean_ms": "<1", "p95_ms": "<1", "ops_per_sec": ">5000" },
+      "read_small_100B": { "mean_ms": 0.24, "p95_ms": 1.0, "ops_per_sec": 4167 },
+      "read_medium_1KB": { "mean_ms": 0.20, "p95_ms": 1.0, "ops_per_sec": 5000 },
+      "read_large_10KB": { "mean_ms": 0.18, "p95_ms": 1.0, "ops_per_sec": 5556 },
+      "head_check_existence": { "mean_ms": 0.08, "p95_ms": 1.0, "ops_per_sec": 12500 },
+      "read_nonexistent": { "mean_ms": 0.10, "p95_ms": 1.0, "ops_per_sec": 10000 },
+      "list_10_items": { "mean_ms": 0.06, "p95_ms": 1.0, "ops_per_sec": 16667 },
+      "concurrent_writes_5_parallel": { "mean_ms": 3.40, "p95_ms": 6.0, "ops_per_sec": 294 }
+    },
+    "durable_object": {
+      "cold_start_first_rpc": { "mean_ms": 3.0, "p95_ms": 4.0, "ops_per_sec": 333 },
+      "warm_create": { "mean_ms": 1.14, "p95_ms": 2.0, "ops_per_sec": 877 },
+      "warm_get_by_id": { "mean_ms": 0.72, "p95_ms": 1.0, "ops_per_sec": 1389 },
+      "warm_update_set": { "mean_ms": 1.06, "p95_ms": 2.0, "ops_per_sec": 943 },
+      "warm_update_inc": { "mean_ms": 1.88, "p95_ms": 3.0, "ops_per_sec": 532 },
+      "sqlite_get_by_id": { "mean_ms": 0.66, "p95_ms": 1.0, "ops_per_sec": 1515 },
+      "sqlite_get_rels_outbound": { "mean_ms": 0.66, "p95_ms": 1.0, "ops_per_sec": 1515 },
+      "sqlite_get_rels_inbound": { "mean_ms": 0.74, "p95_ms": 1.0, "ops_per_sec": 1351 },
+      "create_small_100B": { "mean_ms": 1.46, "p95_ms": 3.0, "ops_per_sec": 685 },
+      "create_medium_1KB": { "mean_ms": 0.98, "p95_ms": 2.0, "ops_per_sec": 1020 },
+      "create_large_10KB": { "mean_ms": 0.86, "p95_ms": 2.0, "ops_per_sec": 1163 },
+      "sequential_creates_5": { "mean_ms": 4.8, "p95_ms": 5.0, "ops_per_sec": 208 },
+      "batched_creates_5_promise_all": { "mean_ms": 2.6, "p95_ms": 5.0, "ops_per_sec": 385 },
+      "sequential_reads_5": { "mean_ms": 3.15, "p95_ms": 6.0, "ops_per_sec": 317 },
+      "batched_reads_5_promise_all": { "mean_ms": 1.5, "p95_ms": 2.0, "ops_per_sec": 667 }
+    },
+    "end_to_end": {
+      "full_crud_cycle": { "mean_ms": 3.6, "p95_ms": 5.0, "ops_per_sec": 278 },
+      "do_create_r2_write_sequential": { "mean_ms": 2.55, "p95_ms": 5.0, "ops_per_sec": 392 },
+      "do_create_r2_write_parallel": { "mean_ms": 2.85, "p95_ms": 5.0, "ops_per_sec": 351 }
+    }
+  },
+  "observations": [
+    "R2 local operations are extremely fast (<1ms for most ops)",
+    "DO cold start adds ~3ms overhead vs warm operations (~1ms)",
+    "DO SQLite queries are fast: ~0.7ms for get by ID, relationship lookups",
+    "Batched operations (Promise.all) are ~2x faster than sequential for DOs",
+    "Full CRUD cycle (create->read->update->delete) completes in ~3.6ms",
+    "Payload size has minimal impact on DO create latency (0.86-1.46ms for 100B-10KB)",
+    "R2 concurrent writes scale well: 5 parallel writes in ~3.4ms total"
+  ]
+}

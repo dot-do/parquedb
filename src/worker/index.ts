@@ -1012,10 +1012,13 @@ export default {
                   }
                 }
 
+                // Sort items by importance (descending) and always include them
+                items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
+
                 relationships[predicate] = {
                   count,
                   href: relHref,
-                  ...(items.length <= 10 ? { items } : {}), // Only include items inline if <= 10
+                  items,  // Always include items for entity detail view
                 }
               }
             } catch {
@@ -1073,22 +1076,36 @@ export default {
           reverseItems.sort((a, b) => (b.importance || 0) - (a.importance || 0))
 
           if (reverseItems.length > 0) {
+            // Include top items by importance (already sorted)
             relationships['requiredBy'] = {
               count: reverseItems.length,
               href: `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}/requiredBy`,
-              ...(reverseItems.length <= 10 ? { items: reverseItems } : {}),
+              items: reverseItems,  // Always include - they're sorted by importance
             }
           }
         }
 
-        // Build relationship links as object map {predicate: href} or array with ?arrays
+        // Build relationship links as object map {name: href} for each predicate
         const useArrays = url.searchParams.has('arrays')
         const selfUrl = `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(entityId)}`
 
-        // Convert relationships to simpler format: {predicate: href}
-        const relLinksMap: Record<string, string> = {}
-        for (const [pred] of Object.entries(relationships)) {
-          relLinksMap[pred] = `${selfUrl}/${pred}`
+        // Convert relationships to rich format with items as object maps
+        const relWithItems: Record<string, Record<string, string>> = {}
+        for (const [pred, rel] of Object.entries(relationships)) {
+          // Build object map {name: href} for items
+          const itemsMap: Record<string, string> = {
+            $id: rel.href,  // Link to full relationship list
+          }
+          if (rel.items) {
+            for (const item of rel.items) {
+              itemsMap[item.name] = item.href
+            }
+          }
+          // If no items were included (count > 10), add a $count indicator
+          if (!rel.items && rel.count > 0) {
+            itemsMap.$count = String(rel.count)
+          }
+          relWithItems[pred] = itemsMap
         }
 
         // Build the response with relationships prominently featured
@@ -1116,9 +1133,10 @@ export default {
             ...(entityRaw.code ? { code: entityRaw.code } : {}),
             ...(entityRaw.elementId ? { elementId: entityRaw.elementId } : {}),
           },
-          // Relationships as object map {predicate: href} or with details if ?arrays
+          // Relationships with items as object maps {name: href}
+          // ?arrays gives the original format with count/items arrays
           relationships: Object.keys(relationships).length > 0
-            ? (useArrays ? relationships : relLinksMap)
+            ? (useArrays ? relationships : relWithItems)
             : undefined,
         })
       }
