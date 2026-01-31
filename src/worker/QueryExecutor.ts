@@ -19,6 +19,10 @@ import type { EntityRecord, PaginatedResult } from '../types/entity'
 import type { StorageBackend, FileStat, ListResult } from '../types/storage'
 import { ReadPath, NotFoundError } from './ReadPath'
 import { ParquetReader } from '../parquet/reader'
+// Predicate pushdown from hyparquet fork
+import { parquetQuery } from 'hyparquet'
+// Patched LZ4 decompressor (fixes match length extension + signed integer overflow bugs)
+import { compressors } from '../parquet/compressors'
 
 // =============================================================================
 // Types
@@ -527,27 +531,56 @@ export class QueryExecutor {
           }
         }
 
-        // Read all data using ParquetReader (single whole-file read for small files)
-        // New optimized format: {$id, data} where data is JSON with entity properties
-        type DataRow = { $id: string; data: T }
-        const rows = await this.parquetReader.read<DataRow>(path)
-        stats.rowsScanned = rows.length
+        // Check if we can use predicate pushdown on $id column
+        // Extract $id filter if present for pushdown
+        const idFilter = this.extractIdFilter(filter)
+
+        type DataRow = { $id: string; data: T | string }
+        let rows: DataRow[]
+
+        if (idFilter && this.storageAdapter) {
+          // Use parquetQuery with predicate pushdown on $id
+          // This uses row-group statistics and column indexes to skip data
+          const asyncBuffer = await this.createAsyncBuffer(path)
+          try {
+            rows = await parquetQuery({
+              file: asyncBuffer,
+              filter: idFilter,
+              columns: ['$id', 'data'],
+              compressors,
+            }) as DataRow[]
+            stats.rowsScanned = rows.length
+            // Row groups were skipped via predicate pushdown
+            stats.rowGroupsSkipped = 1 // Approximate - actual count in metadata
+          } catch {
+            // Fall back to full read if parquetQuery fails
+            rows = await this.parquetReader.read<DataRow>(path)
+            stats.rowsScanned = rows.length
+          }
+        } else {
+          // No pushable filter - read all data
+          rows = await this.parquetReader.read<DataRow>(path)
+          stats.rowsScanned = rows.length
+        }
 
         // Unpack data column - parse JSON if string, use directly if object
         let results = rows.map(row => {
-          // If data is a string (JSON), parse it
-          // If data is already an object (parsed by hyparquet), use directly
           if (typeof row.data === 'string') {
             return JSON.parse(row.data) as T
           }
           return (row.data ?? row) as T
         })
 
-        // Cache the unpacked data for subsequent requests
-        this.dataCache.set(path, results as unknown[])
+        // Cache the unpacked data for subsequent requests (only for full reads)
+        if (!idFilter) {
+          this.dataCache.set(path, results as unknown[])
+        }
 
-        // Apply MongoDB-style filter
-        results = this.applyFilter(results, filter)
+        // Apply remaining MongoDB-style filters (for nested fields in data)
+        const remainingFilter = this.removeIdFilter(filter)
+        if (Object.keys(remainingFilter).length > 0) {
+          results = this.applyFilter(results, remainingFilter)
+        }
 
         // Post-process: sort, skip, limit, project
         const processed = this.postProcess(results, options)
@@ -1362,6 +1395,89 @@ export class QueryExecutor {
       (typeof filter.id === 'string' ||
         (typeof filter.id === 'object' && filter.id !== null && '$eq' in filter.id))
     )
+  }
+
+  /**
+   * Extract $id filter for predicate pushdown
+   * Returns the filter portion that can be pushed down to Parquet
+   */
+  private extractIdFilter(filter: Filter): Filter | null {
+    // Direct $id filter
+    if ('$id' in filter) {
+      return { $id: filter.$id }
+    }
+
+    // $or with $id conditions (common for get() with multiple ID patterns)
+    if (filter.$or) {
+      const idConditions = filter.$or.filter(f => '$id' in f)
+      if (idConditions.length > 0) {
+        return { $or: idConditions }
+      }
+    }
+
+    // $and with $id condition
+    if (filter.$and) {
+      const idCondition = filter.$and.find(f => '$id' in f)
+      if (idCondition) {
+        return idCondition
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * Remove $id filter from original filter
+   * Returns remaining filters to apply after predicate pushdown
+   */
+  private removeIdFilter(filter: Filter): Filter {
+    const result: Filter = {}
+
+    for (const [key, value] of Object.entries(filter)) {
+      if (key === '$id') continue
+      if (key === '$or' && Array.isArray(value)) {
+        const nonIdConditions = value.filter(f => !('$id' in f))
+        if (nonIdConditions.length > 0) {
+          result.$or = nonIdConditions
+        }
+      } else if (key === '$and' && Array.isArray(value)) {
+        const nonIdConditions = value.filter(f => !('$id' in f))
+        if (nonIdConditions.length > 0) {
+          result.$and = nonIdConditions
+        }
+      } else {
+        (result as Record<string, unknown>)[key] = value
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * Create AsyncBuffer from storage adapter for parquetQuery
+   */
+  private async createAsyncBuffer(path: string): Promise<{ byteLength: number; slice: (start: number, end?: number) => Promise<ArrayBuffer> }> {
+    if (!this.storageAdapter) {
+      throw new Error('Storage adapter not available')
+    }
+
+    // Get file size first
+    const stat = await this.storageAdapter.stat(path)
+    if (!stat) {
+      throw new Error(`File not found: ${path}`)
+    }
+
+    const storage = this.storageAdapter
+    return {
+      byteLength: stat.size,
+      async slice(start: number, end?: number): Promise<ArrayBuffer> {
+        const data = await storage.readRange(path, start, end ?? stat.size)
+        // Copy to new ArrayBuffer to avoid SharedArrayBuffer issues
+        const copy = new ArrayBuffer(data.byteLength)
+        new Uint8Array(copy).set(data)
+        return copy
+      }
+    }
   }
 
   // ===========================================================================

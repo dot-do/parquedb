@@ -10,8 +10,8 @@
  * For writing: Includes a pure JS LZ4 compressor that works in all environments.
  */
 
-// Re-export decompressors from hyparquet-compressors for reading
-export { compressors } from 'hyparquet-compressors'
+// Re-export patched decompressors (fixes LZ4 bugs)
+export { compressors } from './compressors'
 
 // =============================================================================
 // LZ4 Compressor (for writing)
