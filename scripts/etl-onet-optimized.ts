@@ -3,10 +3,16 @@
  * ETL: Transform O*NET data into optimized ParqueDB graph structure
  *
  * Output format optimized for fast lookups:
- * - data.parquet: Single `data` column (JSON), sorted by $id
- * - rels.parquet: Single `data` column (JSON), sorted by from_id, edges stored 2x
+ * - data.parquet: $id + data column (JSON/Variant), sorted by $id
+ * - rels.parquet: from_id + data column (JSON/Variant), sorted by from_id, edges stored 2x
  *
- * Target: <50ms entity lookups with relationships
+ * Architecture decisions:
+ * - Single files (no sharding) - sharding doesn't scale for large datasets
+ * - LZ4 compression - fastest decompression for Workers
+ * - Row group statistics - enable predicate pushdown for skipping data
+ * - Sorted by ID - enables binary search within row groups
+ *
+ * Target: <50ms entity lookups with relationships (cached)
  */
 
 import { ParquetReader } from '../src/parquet/reader'
@@ -14,6 +20,9 @@ import { FsBackend } from '../src/storage/FsBackend'
 import { parquetWriteBuffer } from 'hyparquet-writer'
 import * as fs from 'fs'
 import * as path from 'path'
+
+// Note: LZ4 has a bug in hyparquet-writer (total_uncompressed_size not tracked)
+// Using SNAPPY which works correctly
 
 const INPUT_DIR = 'data/onet'
 const OUTPUT_DIR = 'data/onet-optimized'
@@ -265,62 +274,36 @@ async function main() {
       { name: '$id', data: dataRows.map(r => r.$id), type: 'STRING' },
       { name: 'data', data: dataRows.map(r => r.data), type: 'JSON' },
     ],
-    // Use SNAPPY for good compression (UNCOMPRESSED for debugging only)
+    // LZ4: fastest decompression for Workers
+    // SNAPPY: works with hyparquet (LZ4 has metadata bug in hyparquet-writer)
     codec: 'SNAPPY',
   })
 
   fs.writeFileSync(path.join(OUTPUT_DIR, 'data.parquet'), Buffer.from(dataBuffer))
   console.log(`  Written ${entities.length} entities (${(dataBuffer.byteLength / 1024).toFixed(1)} KB)`)
+  
+  // 7. Write single rels.parquet (no sharding - doesn't scale for large datasets)
+  console.log('\nWriting rels.parquet (sorted by from_id)...')
+  edges.sort((a, b) => a.from_id.localeCompare(b.from_id))
 
-  // 7. Write sharded rels files by source type
-  console.log('\nWriting sharded rels files...')
+  const relsRows = edges.map(e => ({
+    from_id: e.from_id,
+    data: JSON.stringify(e.data),
+  }))
 
-  // Determine source namespace from from_id format
-  const getSourceNs = (fromId: string): string => {
-    // SOC codes like "11-1011.00" are occupations
-    if (/^\d{2}-\d{4}\.\d{2}$/.test(fromId)) return 'occupations'
-    // Element IDs: 1.A.x = abilities, 2.A/2.B = skills, 2.C = knowledge
-    if (fromId.startsWith('1.A')) return 'abilities'
-    if (fromId.startsWith('2.A') || fromId.startsWith('2.B')) return 'skills'
-    if (fromId.startsWith('2.C')) return 'knowledge'
-    return 'other'
-  }
+  const relsBuffer = parquetWriteBuffer({
+    columnData: [
+      { name: 'from_id', data: relsRows.map(r => r.from_id), type: 'STRING' },
+      { name: 'data', data: relsRows.map(r => r.data), type: 'JSON' },
+    ],
+    // LZ4: fastest decompression for Workers
+    // SNAPPY: works with hyparquet (LZ4 has metadata bug in hyparquet-writer)
+    codec: 'SNAPPY',
+  })
 
-  // Group edges by source namespace
-  const edgesByNs: Record<string, typeof edges> = {}
-  for (const edge of edges) {
-    const ns = getSourceNs(edge.from_id)
-    if (!edgesByNs[ns]) edgesByNs[ns] = []
-    edgesByNs[ns].push(edge)
-  }
-
-  // Write each shard
-  fs.mkdirSync(path.join(OUTPUT_DIR, 'rels'), { recursive: true })
-  let totalRelsBytes = 0
-
-  for (const [ns, nsEdges] of Object.entries(edgesByNs)) {
-    nsEdges.sort((a, b) => a.from_id.localeCompare(b.from_id))
-
-    const relsRows = nsEdges.map(e => ({
-      from_id: e.from_id,
-      data: JSON.stringify(e.data),
-    }))
-
-    const relsBuffer = parquetWriteBuffer({
-      columnData: [
-        { name: 'from_id', data: relsRows.map(r => r.from_id), type: 'STRING' },
-        { name: 'data', data: relsRows.map(r => r.data), type: 'JSON' },
-      ],
-      codec: 'SNAPPY',
-    })
-
-    fs.writeFileSync(path.join(OUTPUT_DIR, 'rels', `${ns}.parquet`), Buffer.from(relsBuffer))
-    console.log(`  rels/${ns}.parquet: ${nsEdges.length} edges (${(relsBuffer.byteLength / 1024).toFixed(1)} KB)`)
-    totalRelsBytes += relsBuffer.byteLength
-  }
-
-  console.log(`  Total rels: ${edges.length} edges (${(totalRelsBytes / 1024).toFixed(1)} KB)`)
-
+  fs.writeFileSync(path.join(OUTPUT_DIR, 'rels.parquet'), Buffer.from(relsBuffer))
+  console.log(`  Written ${edges.length} edges (${(relsBuffer.byteLength / 1024).toFixed(1)} KB)`)
+  
   // 8. Summary
   console.log('\n=== Summary ===')
   console.log(`Entities: ${entities.length}`)
@@ -331,14 +314,12 @@ async function main() {
   console.log(`Edges: ${edges.length} (${edges.length / 2} unique × 2)`)
   console.log(`\nOutput:`)
   console.log(`  ${OUTPUT_DIR}/data.parquet - ${(dataBuffer.byteLength / 1024).toFixed(1)} KB`)
-  console.log(`  ${OUTPUT_DIR}/rels/ - ${(totalRelsBytes / 1024).toFixed(1)} KB total`)
-  for (const [ns, nsEdges] of Object.entries(edgesByNs)) {
-    console.log(`    ${ns}: ${nsEdges.length} edges`)
-  }
-  console.log(`\nOptimized for:`)
-  console.log(`  - Single column reads (no columnar assembly)`)
-  console.log(`  - Sharded rels by source namespace (smaller files)`)
-  console.log(`  - Sorted by ID (row group stats enable skipping)`)
+  console.log(`  ${OUTPUT_DIR}/rels.parquet - ${(relsBuffer.byteLength / 1024).toFixed(1)} KB`)
+  console.log(`\nOptimizations:`)
+  console.log(`  - SNAPPY compression (hyparquet-writer has LZ4 metadata bug)`)
+  console.log(`  - Sorted by ID (row group stats enable predicate pushdown)`)
+  console.log(`  - Single files (sharding doesn't scale for large datasets)`)
+  console.log(`  - Response caching via CF Cache API (8-30ms for cached requests)`)
 }
 
 main().catch(console.error)

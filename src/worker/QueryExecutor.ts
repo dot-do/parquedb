@@ -312,7 +312,8 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
 
     // Use edge cache via cdn.workers.do for better global performance
     if (this.r2DevUrl) {
-      const url = `${this.r2DevUrl}/${path}?v=sharded-snappy`
+      // Version string for cache invalidation
+      const url = `${this.r2DevUrl}/${path}?v=single-snappy`
       const response = await fetch(url, {
         cf: {
           cacheTtl: 3600,  // 1 hour edge cache
@@ -705,21 +706,6 @@ export class QueryExecutor {
    * @param predicate - Relationship predicate (e.g., 'requiredBy')
    * @returns Array of relationship edges
    */
-  /**
-   * Determine source namespace from entity ID format
-   * - SOC codes like "11-1011.00" -> occupations
-   * - Element IDs: 1.A.x -> abilities, 2.A/2.B -> skills, 2.C -> knowledge
-   */
-  private getSourceNamespace(fromId: string): string {
-    // SOC codes like "11-1011.00" are occupations
-    if (/^\d{2}-\d{4}\.\d{2}$/.test(fromId)) return 'occupations'
-    // Element IDs: 1.A.x = abilities, 2.A/2.B = skills, 2.C = knowledge
-    if (fromId.startsWith('1.A')) return 'abilities'
-    if (fromId.startsWith('2.A') || fromId.startsWith('2.B')) return 'skills'
-    if (fromId.startsWith('2.C')) return 'knowledge'
-    return 'other'
-  }
-
   async getRelationships(
     dataset: string,
     fromId: string,
@@ -737,7 +723,7 @@ export class QueryExecutor {
       return []
     }
 
-    // New optimized format: from_id (string) + data (JSON)
+    // Optimized format: from_id (string) + data (JSON)
     type RelRow = {
       from_id: string
       data: {
@@ -752,9 +738,8 @@ export class QueryExecutor {
     }
 
     try {
-      // Determine source namespace and read sharded rels file
-      const sourceNs = this.getSourceNamespace(fromId)
-      const path = `${dataset}/rels/${sourceNs}.parquet`
+      // Single rels.parquet file (no sharding - doesn't scale for large datasets)
+      const path = `${dataset}/rels.parquet`
 
       // Check in-memory cache first (cache stores parsed data)
       let allRels = this.dataCache.get(path) as RelRow[] | undefined

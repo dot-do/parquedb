@@ -62,6 +62,7 @@
     "@vitest/browser": "^3.0.4",
     "csv-parse": "^6.1.0",
     "dotenv": "^17.2.3",
+    "lz4": "^0.6.5",
     "playwright": "^1.49.1",
     "tsx": "^4.7.0",
     "typescript": "^5.7.2",
