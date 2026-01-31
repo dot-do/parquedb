@@ -92,7 +92,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
   private async initializeCache(): Promise<void> {
     this.#cache = await caches.open('parquedb')
     this.readPath = new ReadPath(this.env.BUCKET, this.#cache, DEFAULT_CACHE_CONFIG)
-    this.queryExecutor = new QueryExecutor(this.readPath)
+    // Pass R2Bucket to QueryExecutor for real Parquet reading
+    this.queryExecutor = new QueryExecutor(this.readPath, this.env.BUCKET)
   }
 
   /**
@@ -680,6 +681,23 @@ export default {
             home: baseUrl,
             datasets: `${baseUrl}/datasets`,
           },
+        })
+      }
+
+      // =======================================================================
+      // Debug R2 endpoint
+      // =======================================================================
+      if (path === '/debug/r2') {
+        const testPath = url.searchParams.get('path') || 'data/onet/skills/data.parquet'
+        const headResult = await env.BUCKET.head(testPath)
+        const listResult = await env.BUCKET.list({ prefix: 'data/onet/', limit: 10 })
+
+        return Response.json({
+          testPath,
+          exists: !!headResult,
+          size: headResult?.size,
+          etag: headResult?.etag,
+          objects: listResult.objects.map(o => ({ key: o.key, size: o.size })),
         })
       }
 

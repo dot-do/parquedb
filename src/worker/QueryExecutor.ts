@@ -16,7 +16,9 @@ import type {
   Projection,
 } from '../types/options'
 import type { EntityRecord, PaginatedResult } from '../types/entity'
+import type { StorageBackend, FileStat, ListResult } from '../types/storage'
 import { ReadPath, NotFoundError } from './ReadPath'
+import { ParquetReader } from '../parquet/reader'
 
 // =============================================================================
 // Types
@@ -210,6 +212,71 @@ export interface QueryPlan {
  * const plan = await executor.explain('posts', { score: { $gte: 100 } })
  * ```
  */
+/**
+ * Simple R2 storage adapter for ParquetReader
+ * Implements only the methods needed for Parquet reading
+ */
+class R2StorageAdapter implements Partial<StorageBackend> {
+  readonly type = 'r2-adapter'
+
+  constructor(private bucket: R2Bucket) {}
+
+  async read(path: string): Promise<Uint8Array> {
+    const obj = await this.bucket.get(path)
+    if (!obj) throw new Error(`Object not found: ${path}`)
+    return new Uint8Array(await obj.arrayBuffer())
+  }
+
+  async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    const obj = await this.bucket.get(path, {
+      range: { offset: start, length: end - start },
+    })
+    if (!obj) throw new Error(`Object not found: ${path}`)
+    return new Uint8Array(await obj.arrayBuffer())
+  }
+
+  async exists(path: string): Promise<boolean> {
+    const head = await this.bucket.head(path)
+    return head !== null
+  }
+
+  async stat(path: string): Promise<FileStat | null> {
+    const head = await this.bucket.head(path)
+    if (!head) return null
+    return {
+      path,
+      size: head.size,
+      mtime: head.uploaded,
+      isDirectory: false,
+    }
+  }
+
+  async list(prefix: string): Promise<ListResult> {
+    const result = await this.bucket.list({ prefix, limit: 1000 })
+    return {
+      files: result.objects.map(obj => obj.key),
+      hasMore: result.truncated,
+      stats: result.objects.map(obj => ({
+        path: obj.key,
+        size: obj.size,
+        mtime: obj.uploaded,
+        isDirectory: false,
+      })),
+    }
+  }
+
+  // Write operations not needed for reading
+  async write(): Promise<never> { throw new Error('Not implemented') }
+  async writeAtomic(): Promise<never> { throw new Error('Not implemented') }
+  async append(): Promise<never> { throw new Error('Not implemented') }
+  async delete(): Promise<never> { throw new Error('Not implemented') }
+  async deletePrefix(): Promise<never> { throw new Error('Not implemented') }
+  async mkdir(): Promise<never> { throw new Error('Not implemented') }
+  async rmdir(): Promise<never> { throw new Error('Not implemented') }
+  async copy(): Promise<never> { throw new Error('Not implemented') }
+  async move(): Promise<never> { throw new Error('Not implemented') }
+}
+
 export class QueryExecutor {
   /** Cache of loaded metadata per namespace */
   private metadataCache = new Map<string, ParquetMetadata>()
@@ -217,7 +284,18 @@ export class QueryExecutor {
   /** Cache of loaded bloom filters per namespace */
   private bloomCache = new Map<string, BloomFilter>()
 
-  constructor(private readPath: ReadPath) {}
+  /** R2 storage adapter for ParquetReader */
+  private storageAdapter: R2StorageAdapter | null = null
+
+  /** ParquetReader instance */
+  private parquetReader: ParquetReader | null = null
+
+  constructor(private readPath: ReadPath, private bucket?: R2Bucket) {
+    if (bucket) {
+      this.storageAdapter = new R2StorageAdapter(bucket)
+      this.parquetReader = new ParquetReader({ storage: this.storageAdapter as unknown as StorageBackend })
+    }
+  }
 
   // ===========================================================================
   // Find Operations
@@ -226,11 +304,8 @@ export class QueryExecutor {
   /**
    * Execute find query against Parquet files
    *
-   * Uses predicate pushdown for efficiency:
-   * 1. Load Parquet metadata (cached)
-   * 2. Determine which row groups to read based on filter
-   * 3. Read only necessary row groups (parallel, cached)
-   * 4. Apply remaining filters, sort, limit
+   * Uses ParquetReader for actual data reading when available.
+   * Falls back to legacy metadata-based approach otherwise.
    *
    * @param ns - Namespace to query
    * @param filter - MongoDB-style filter
@@ -255,6 +330,37 @@ export class QueryExecutor {
     }
 
     try {
+      const path = `data/${ns}/data.parquet`
+
+      // Use ParquetReader when available (real implementation)
+      if (this.parquetReader && this.storageAdapter) {
+        // Read metadata for stats
+        const metadata = await this.parquetReader.readMetadata(path)
+        stats.rowGroupsScanned = metadata.rowGroups.length
+
+        // Read all data using ParquetReader
+        let results = await this.parquetReader.read<T>(path)
+        stats.rowsScanned = results.length
+
+        // Apply MongoDB-style filter
+        results = this.applyFilter(results, filter)
+
+        // Post-process: sort, skip, limit, project
+        const processed = this.postProcess(results, options)
+
+        stats.rowsReturned = processed.items.length
+        stats.executionTimeMs = performance.now() - startTime
+
+        return {
+          items: processed.items,
+          total: processed.total,
+          nextCursor: processed.nextCursor,
+          hasMore: processed.hasMore,
+          stats,
+        }
+      }
+
+      // Legacy path: use metadata-based approach (placeholder implementation)
       // 1. Load Parquet metadata (cached)
       const metadata = await this.loadMetadata(ns)
 
