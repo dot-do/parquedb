@@ -310,9 +310,9 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
   private async loadWholeFile(path: string): Promise<Uint8Array> {
     this.totalReads++
 
-    // If r2.dev URL configured, use fetch() for edge caching
+    // Use edge cache via cdn.workers.do for better global performance
     if (this.r2DevUrl) {
-      const url = `${this.r2DevUrl}/${path}`
+      const url = `${this.r2DevUrl}/${path}?v=sharded-snappy`
       const response = await fetch(url, {
         cf: {
           cacheTtl: 3600,  // 1 hour edge cache
@@ -527,11 +527,22 @@ export class QueryExecutor {
         }
 
         // Read all data using ParquetReader (single whole-file read for small files)
-        let results = await this.parquetReader.read<T>(path)
-        stats.rowsScanned = results.length
+        // New optimized format: {$id, data} where data is JSON with entity properties
+        type DataRow = { $id: string; data: T }
+        const rows = await this.parquetReader.read<DataRow>(path)
+        stats.rowsScanned = rows.length
 
-        // Cache the data for subsequent requests (if under size limit)
-        // Note: We cache unconditionally here since we've already read it
+        // Unpack data column - parse JSON if string, use directly if object
+        let results = rows.map(row => {
+          // If data is a string (JSON), parse it
+          // If data is already an object (parsed by hyparquet), use directly
+          if (typeof row.data === 'string') {
+            return JSON.parse(row.data) as T
+          }
+          return (row.data ?? row) as T
+        })
+
+        // Cache the unpacked data for subsequent requests
         this.dataCache.set(path, results as unknown[])
 
         // Apply MongoDB-style filter
@@ -694,6 +705,21 @@ export class QueryExecutor {
    * @param predicate - Relationship predicate (e.g., 'requiredBy')
    * @returns Array of relationship edges
    */
+  /**
+   * Determine source namespace from entity ID format
+   * - SOC codes like "11-1011.00" -> occupations
+   * - Element IDs: 1.A.x -> abilities, 2.A/2.B -> skills, 2.C -> knowledge
+   */
+  private getSourceNamespace(fromId: string): string {
+    // SOC codes like "11-1011.00" are occupations
+    if (/^\d{2}-\d{4}\.\d{2}$/.test(fromId)) return 'occupations'
+    // Element IDs: 1.A.x = abilities, 2.A/2.B = skills, 2.C = knowledge
+    if (fromId.startsWith('1.A')) return 'abilities'
+    if (fromId.startsWith('2.A') || fromId.startsWith('2.B')) return 'skills'
+    if (fromId.startsWith('2.C')) return 'knowledge'
+    return 'other'
+  }
+
   async getRelationships(
     dataset: string,
     fromId: string,
@@ -711,34 +737,56 @@ export class QueryExecutor {
       return []
     }
 
-    type RelRecord = {
-      from_ns: string
+    // New optimized format: from_id (string) + data (JSON)
+    type RelRow = {
       from_id: string
-      predicate: string
-      to_ns: string
-      to_id: string
-      to_name: string
-      to_type: string
-      importance: number | null
-      level: number | null
+      data: {
+        to: string      // Target $id
+        ns: string      // Target namespace
+        name: string    // Target name
+        pred: string    // Predicate
+        rev: string     // Reverse predicate
+        importance?: number
+        level?: number
+      }
     }
 
     try {
-      const path = `${dataset}/rels.parquet`
+      // Determine source namespace and read sharded rels file
+      const sourceNs = this.getSourceNamespace(fromId)
+      const path = `${dataset}/rels/${sourceNs}.parquet`
 
-      // Check in-memory cache first
-      let allRels = this.dataCache.get(path) as RelRecord[] | undefined
+      // Check in-memory cache first (cache stores parsed data)
+      let allRels = this.dataCache.get(path) as RelRow[] | undefined
       if (!allRels) {
-        // Read and cache for subsequent requests
-        allRels = await this.parquetReader.read<RelRecord>(path)
+        // Read raw rows and parse JSON data column
+        type RawRelRow = { from_id: string; data: string | RelRow['data'] }
+        const rawRels = await this.parquetReader.read<RawRelRow>(path)
+
+        // Parse JSON data column if needed
+        allRels = rawRels.map(row => ({
+          from_id: row.from_id,
+          data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data,
+        }))
+
         this.dataCache.set(path, allRels as unknown[])
       }
 
-      // Filter by from_id and optionally predicate
-      return allRels.filter(rel =>
-        rel.from_id === fromId &&
-        (!predicate || rel.predicate === predicate)
-      )
+      // Filter by from_id and optionally predicate, then map to expected format
+      return allRels
+        .filter(rel =>
+          rel.from_id === fromId &&
+          (!predicate || rel.data.pred === predicate)
+        )
+        .map(rel => ({
+          to_ns: rel.data.ns,
+          to_id: rel.data.to.split('/').pop() || rel.data.to,
+          to_name: rel.data.name,
+          to_type: rel.data.ns.charAt(0).toUpperCase() + rel.data.ns.slice(1, -1), // occupations -> Occupation
+          predicate: rel.data.pred,
+          importance: rel.data.importance ?? null,
+          level: rel.data.level ?? null,
+        }))
     } catch {
       return []
     }

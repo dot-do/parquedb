@@ -563,6 +563,13 @@ const DATASETS = {
       requiredBy: 'requiredBy',
     },
   },
+  'onet-optimized': {
+    name: 'O*NET (Optimized)',
+    description: 'O*NET with optimized single-column format for fast lookups',
+    collections: ['occupations', 'skills', 'abilities', 'knowledge'],
+    source: 'https://www.onetcenter.org/database.html',
+    prefix: 'onet-optimized',
+  },
   unspsc: {
     name: 'UNSPSC',
     description: 'United Nations Standard Products and Services Code - Product taxonomy',
@@ -1124,6 +1131,19 @@ export default {
         const collectionId = entityMatch[2]!
         const entityId = decodeURIComponent(entityMatch[3]!)
 
+        // Check Cache API for cached data response (bypasses all data processing)
+        markTiming(timing, 'cache_check_start')
+        const cache = await caches.open('parquedb-responses')
+        const cacheKey = new Request(`https://parquedb/entity/${datasetId}/${collectionId}/${entityId}`)
+        const cachedResponse = await cache.match(cacheKey)
+        measureTiming(timing, 'cache_check', 'cache_check_start')
+
+        if (cachedResponse) {
+          // Return cached response with updated timing info
+          const cachedData = await cachedResponse.json() as { api: unknown; links: unknown; data: unknown; relationships: unknown }
+          return buildResponse(request, cachedData as Parameters<typeof buildResponse>[1], timing, worker.getStorageStats())
+        }
+
         // Construct the full $id (e.g., "knowledge/2.C.2.b")
         const fullId = `${collectionId}/${entityId}`
 
@@ -1185,7 +1205,8 @@ export default {
           relWithItems[pred] = itemsMap
         }
 
-        return buildResponse(request, {
+        // Build response data
+        const responseData = {
           api: {
             resource: 'entity',
             dataset: datasetId,
@@ -1207,7 +1228,16 @@ export default {
           relationships: Object.keys(relationships).length > 0
             ? (useArrays ? relationships : relWithItems)
             : undefined,
-        }, timing, worker.getStorageStats())
+        }
+
+        // Cache the response data for 1 hour (without user-specific info)
+        ctx.waitUntil(
+          cache.put(cacheKey, Response.json(responseData, {
+            headers: { 'Cache-Control': 'public, max-age=3600' }
+          }))
+        )
+
+        return buildResponse(request, responseData, timing, worker.getStorageStats())
       }
 
       // =======================================================================
