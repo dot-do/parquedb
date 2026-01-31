@@ -230,6 +230,16 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
   public primaryHits = 0
   public edgeHits = 0
   public totalReads = 0
+  public cacheHits = 0
+
+  // Whole-file cache: path -> Uint8Array (for small files)
+  private fileCache = new Map<string, Uint8Array>()
+
+  // Files being loaded (for deduplication)
+  private loadingFiles = new Map<string, Promise<Uint8Array>>()
+
+  // Max file size for whole-file caching (2MB)
+  private static readonly MAX_CACHE_SIZE = 2 * 1024 * 1024
 
   constructor(
     private cdnBucket: R2Bucket,      // CDN bucket (cdn) for reads
@@ -239,6 +249,65 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
   ) {}
 
   async read(path: string): Promise<Uint8Array> {
+    // Check if file is already cached
+    const cached = this.fileCache.get(path)
+    if (cached) {
+      this.cacheHits++
+      return cached
+    }
+
+    // Check if file is being loaded
+    const loading = this.loadingFiles.get(path)
+    if (loading) {
+      return loading
+    }
+
+    // Load and cache
+    const loadPromise = this.loadWholeFile(path)
+    this.loadingFiles.set(path, loadPromise)
+
+    try {
+      const data = await loadPromise
+      this.fileCache.set(path, data)
+      return data
+    } finally {
+      this.loadingFiles.delete(path)
+    }
+  }
+
+  async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    // Check if file is already cached - serve range from cache (no network!)
+    const cached = this.fileCache.get(path)
+    if (cached) {
+      this.cacheHits++
+      return cached.slice(start, end)
+    }
+
+    // Check if file is being loaded by another request
+    const loading = this.loadingFiles.get(path)
+    if (loading) {
+      const data = await loading
+      return data.slice(start, end)
+    }
+
+    // Load whole file in ONE request, cache it, return the range
+    // This converts N range requests into 1 whole-file request
+    const loadPromise = this.loadWholeFile(path)
+    this.loadingFiles.set(path, loadPromise)
+
+    try {
+      const data = await loadPromise
+      this.fileCache.set(path, data)
+      return data.slice(start, end)
+    } finally {
+      this.loadingFiles.delete(path)
+    }
+  }
+
+  /**
+   * Load entire file in one request
+   */
+  private async loadWholeFile(path: string): Promise<Uint8Array> {
     this.totalReads++
 
     // If r2.dev URL configured, use fetch() for edge caching
@@ -256,7 +325,7 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
       }
     }
 
-    // Try CDN bucket with prefix
+    // Try CDN bucket with prefix (whole file)
     const cdnPath = `${this.cdnPrefix}/${path}`
     const cdnObj = await this.cdnBucket.get(cdnPath)
     if (cdnObj) {
@@ -267,45 +336,6 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
     // Fall back to primary bucket
     this.primaryHits++
     const obj = await this.primaryBucket.get(path)
-    if (!obj) throw new Error(`Object not found: ${path}`)
-    return new Uint8Array(await obj.arrayBuffer())
-  }
-
-  async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
-    this.totalReads++
-    const rangeSize = end - start
-
-    // If r2.dev URL configured, use fetch() with Range header for edge caching
-    if (this.r2DevUrl) {
-      const url = `${this.r2DevUrl}/${path}`
-      const response = await fetch(url, {
-        headers: { 'Range': `bytes=${start}-${end - 1}` },
-        cf: {
-          cacheTtl: 3600,
-          cacheEverything: true,
-        },
-      })
-      if (response.ok || response.status === 206) {
-        this.edgeHits++
-        return new Uint8Array(await response.arrayBuffer())
-      }
-    }
-
-    // Try CDN bucket with prefix
-    const cdnPath = `${this.cdnPrefix}/${path}`
-    const cdnObj = await this.cdnBucket.get(cdnPath, {
-      range: { offset: start, length: rangeSize },
-    })
-    if (cdnObj) {
-      this.cdnHits++
-      return new Uint8Array(await cdnObj.arrayBuffer())
-    }
-
-    // Fall back to primary bucket
-    this.primaryHits++
-    const obj = await this.primaryBucket.get(path, {
-      range: { offset: start, length: rangeSize },
-    })
     if (!obj) throw new Error(`Object not found: ${path}`)
     return new Uint8Array(await obj.arrayBuffer())
   }
@@ -383,6 +413,15 @@ export class QueryExecutor {
   /** Cache of loaded bloom filters per namespace */
   private bloomCache = new Map<string, BloomFilter>()
 
+  /** Cache of parsed parquet data (for small files) */
+  private dataCache = new Map<string, unknown[]>()
+
+  /** Cache of file sizes for whole-file read decisions */
+  private fileSizeCache = new Map<string, number>()
+
+  /** Maximum file size for whole-file caching (2MB) */
+  private static readonly MAX_CACHE_SIZE = 2 * 1024 * 1024
+
   /** R2 storage adapter for ParquetReader */
   private storageAdapter: CdnR2StorageAdapter | null = null
 
@@ -413,14 +452,15 @@ export class QueryExecutor {
   /**
    * Get storage stats for debugging
    */
-  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean } {
+  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; cacheHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean } {
     if (!this.storageAdapter) {
-      return { cdnHits: 0, primaryHits: 0, edgeHits: 0, totalReads: 0, usingCdn: false, usingEdge: false }
+      return { cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false }
     }
     return {
       cdnHits: this.storageAdapter.cdnHits,
       primaryHits: this.storageAdapter.primaryHits,
       edgeHits: this.storageAdapter.edgeHits,
+      cacheHits: this.storageAdapter.cacheHits,
       totalReads: this.storageAdapter.totalReads,
       usingCdn: !!this.cdnBucket,
       usingEdge: !!this.r2DevUrl,
@@ -468,13 +508,31 @@ export class QueryExecutor {
 
       // Use ParquetReader when available (real implementation)
       if (this.parquetReader && this.storageAdapter) {
-        // Read metadata for stats
-        const metadata = await this.parquetReader.readMetadata(path)
-        stats.rowGroupsScanned = metadata.rowGroups.length
+        // Check in-memory cache first (avoids ALL I/O for repeated queries)
+        const cached = this.dataCache.get(path) as T[] | undefined
+        if (cached) {
+          stats.cacheHit = true
+          let results = this.applyFilter([...cached], filter)
+          const processed = this.postProcess(results, options)
+          stats.rowsScanned = cached.length
+          stats.rowsReturned = processed.items.length
+          stats.executionTimeMs = performance.now() - startTime
+          return {
+            items: processed.items,
+            total: processed.total,
+            nextCursor: processed.nextCursor,
+            hasMore: processed.hasMore,
+            stats,
+          }
+        }
 
-        // Read all data using ParquetReader
+        // Read all data using ParquetReader (single whole-file read for small files)
         let results = await this.parquetReader.read<T>(path)
         stats.rowsScanned = results.length
+
+        // Cache the data for subsequent requests (if under size limit)
+        // Note: We cache unconditionally here since we've already read it
+        this.dataCache.set(path, results as unknown[])
 
         // Apply MongoDB-style filter
         results = this.applyFilter(results, filter)
@@ -653,19 +711,28 @@ export class QueryExecutor {
       return []
     }
 
+    type RelRecord = {
+      from_ns: string
+      from_id: string
+      predicate: string
+      to_ns: string
+      to_id: string
+      to_name: string
+      to_type: string
+      importance: number | null
+      level: number | null
+    }
+
     try {
       const path = `${dataset}/rels.parquet`
-      const allRels = await this.parquetReader.read<{
-        from_ns: string
-        from_id: string
-        predicate: string
-        to_ns: string
-        to_id: string
-        to_name: string
-        to_type: string
-        importance: number | null
-        level: number | null
-      }>(path)
+
+      // Check in-memory cache first
+      let allRels = this.dataCache.get(path) as RelRecord[] | undefined
+      if (!allRels) {
+        // Read and cache for subsequent requests
+        allRels = await this.parquetReader.read<RelRecord>(path)
+        this.dataCache.set(path, allRels as unknown[])
+      }
 
       // Filter by from_id and optionally predicate
       return allRels.filter(rel =>

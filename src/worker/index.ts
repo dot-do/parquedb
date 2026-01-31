@@ -114,8 +114,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
   /**
    * Get storage statistics for debugging
    */
-  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean } {
-    return this.queryExecutor?.getStorageStats() || { cdnHits: 0, primaryHits: 0, edgeHits: 0, totalReads: 0, usingCdn: false, usingEdge: false }
+  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; cacheHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean } {
+    return this.queryExecutor?.getStorageStats() || { cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false }
   }
 
   /**
@@ -647,7 +647,7 @@ function buildResponse(
     relationships?: Record<string, unknown>
   },
   timing?: TimingContext | number,
-  storageStats?: { cdnHits: number; primaryHits: number; edgeHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean }
+  storageStats?: { cdnHits: number; primaryHits: number; edgeHits: number; cacheHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean }
 ): Response {
   const cf = (request.cf || {}) as CfProperties & { httpProtocol?: string }
 
@@ -695,8 +695,9 @@ function buildResponse(
       requestedAt,
       ...(latency !== undefined ? { latency: `${latency}ms` } : {}),
       ...(timingInfo && Object.keys(timingInfo).length > 0 ? { timing: timingInfo } : {}),
-      ...(storageStats?.totalReads ? {
+      ...(storageStats?.totalReads || storageStats?.cacheHits ? {
         storage: {
+          cacheHits: storageStats.cacheHits,
           edgeHits: storageStats.edgeHits,
           cdnHits: storageStats.cdnHits,
           primaryHits: storageStats.primaryHits,
@@ -1126,10 +1127,13 @@ export default {
         // Construct the full $id (e.g., "knowledge/2.C.2.b")
         const fullId = `${collectionId}/${entityId}`
 
-        // Read entity from data.parquet
-        markTiming(timing, 'entity_start')
-        const entityResult = await worker.find<EntityRecord>(datasetId, { $id: fullId }, { limit: 1 })
-        measureTiming(timing, 'entity', 'entity_start')
+        // PARALLEL: Fetch entity and relationships simultaneously (2 subrequests)
+        markTiming(timing, 'parallel_start')
+        const [entityResult, allRels] = await Promise.all([
+          worker.find<EntityRecord>(datasetId, { $id: fullId }, { limit: 1 }),
+          worker.getRelationships(datasetId, entityId),
+        ])
+        measureTiming(timing, 'parallel', 'parallel_start')
 
         if (entityResult.items.length === 0) {
           return buildErrorResponse(request, new Error(`Entity '${fullId}' not found in ${datasetId}`), 404, startTime)
@@ -1137,11 +1141,6 @@ export default {
 
         const entity = entityResult.items[0]
         const entityRaw = entity as unknown as Record<string, unknown>
-
-        // Read ALL relationships for this entity from rels.parquet
-        markTiming(timing, 'rels_start')
-        const allRels = await worker.getRelationships(datasetId, entityId)
-        measureTiming(timing, 'rels', 'rels_start')
 
         // Group relationships by predicate
         const relationships: Record<string, {
