@@ -513,11 +513,11 @@ export class QueryExecutor {
     }
 
     try {
-      // New 2-file architecture: {dataset}/data.parquet contains all nodes
       // Path format: either "{dataset}" or "{dataset}/{collection}"
-      // For both, we read from {dataset}/data.parquet
+      // For "{dataset}" we read from {dataset}/data.parquet
+      // For "{dataset}/{collection}" we read from {dataset}/{collection}.parquet
       const datasetId = ns.includes('/') ? ns.split('/')[0] : ns
-      const path = `${datasetId}/data.parquet`
+      const path = ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`
 
       // Use ParquetReader when available (real implementation)
       if (this.parquetReader && this.storageAdapter) {
@@ -540,8 +540,9 @@ export class QueryExecutor {
         }
 
         // Check for applicable secondary indexes (hash, sst, fts)
+        // Pass full ns path (e.g., 'onet-full/occupations') for index catalog lookup
         if (this.indexCache) {
-          const indexResult = await this.executeWithIndex<T>(datasetId, path, filter, options, stats, startTime)
+          const indexResult = await this.executeWithIndex<T>(ns, path, filter, options, stats, startTime)
           if (indexResult) {
             return indexResult
           }
@@ -1049,9 +1050,9 @@ export class QueryExecutor {
       return cached
     }
 
-    // Read from R2 - new 2-file architecture: {dataset}/data.parquet
+    // Read from R2 - supports both {dataset} and {dataset}/{collection} paths
     const datasetId = ns.includes('/') ? ns.split('/')[0] : ns
-    const path = `${datasetId}/data.parquet`
+    const path = ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`
 
     // Read footer to get metadata length
     const footer = await this.readPath.readParquetFooter(path)
@@ -1254,9 +1255,9 @@ export class QueryExecutor {
     rowGroup: RowGroupMetadata,
     metadata: ParquetMetadata
   ): Promise<{ records: EntityRecord[]; bytesRead: number } | null> {
-    // New 2-file architecture: {dataset}/data.parquet
+    // Supports both {dataset} and {dataset}/{collection} paths
     const datasetId = ns.includes('/') ? ns.split('/')[0] : ns
-    const path = `${datasetId}/data.parquet`
+    const path = ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`
 
     // Read row group bytes
     const data = await this.readPath.readRange(

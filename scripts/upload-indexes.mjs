@@ -61,19 +61,19 @@ function createR2Client() {
 // =============================================================================
 
 function findIndexFiles(dataset) {
-  const indexDir = join(LOCAL_DIR, dataset, 'indexes')
-  if (!existsSync(indexDir)) {
+  const datasetDir = join(LOCAL_DIR, dataset)
+  if (!existsSync(datasetDir)) {
     return []
   }
 
   const files = []
 
-  function walkDir(dir) {
+  function walkDir(dir, baseR2Path) {
     const entries = readdirSync(dir, { withFileTypes: true })
     for (const entry of entries) {
       const fullPath = join(dir, entry.name)
       if (entry.isDirectory()) {
-        walkDir(fullPath)
+        walkDir(fullPath, baseR2Path)
       } else {
         const stat = statSync(fullPath)
         const r2Key = relative(LOCAL_DIR, fullPath)
@@ -86,7 +86,18 @@ function findIndexFiles(dataset) {
     }
   }
 
-  walkDir(indexDir)
+  // Walk through all collection directories looking for indexes subdirectory
+  const entries = readdirSync(datasetDir, { withFileTypes: true })
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const collectionDir = join(datasetDir, entry.name)
+      const indexDir = join(collectionDir, 'indexes')
+      if (existsSync(indexDir)) {
+        walkDir(indexDir, `${dataset}/${entry.name}/indexes`)
+      }
+    }
+  }
+
   return files
 }
 

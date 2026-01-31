@@ -250,7 +250,7 @@ async function benchmarkQuery(
   // Warmup iterations
   for (let i = 0; i < config.warmupIterations; i++) {
     try {
-      await executor.find(query.dataset, query.filter, { limit: 100 })
+      await executor.find(`${query.dataset}/${query.collection}`, query.filter, { limit: 100 })
     } catch {
       // Ignore warmup errors
     }
@@ -260,7 +260,7 @@ async function benchmarkQuery(
   for (let i = 0; i < config.iterations; i++) {
     try {
       const start = performance.now()
-      indexedResult = await executor.find(query.dataset, query.filter, { limit: 100 })
+      indexedResult = await executor.find(`${query.dataset}/${query.collection}`, query.filter, { limit: 100 })
       indexedLatencies.push(performance.now() - start)
     } catch (error) {
       indexedError = (error as Error).message
@@ -273,7 +273,7 @@ async function benchmarkQuery(
     for (let i = 0; i < config.iterations; i++) {
       try {
         const start = performance.now()
-        scanResult = await executor.find(query.dataset, query.scanFilter, { limit: 100 })
+        scanResult = await executor.find(`${query.dataset}/${query.collection}`, query.scanFilter, { limit: 100 })
         scanLatencies.push(performance.now() - start)
       } catch (error) {
         scanError = (error as Error).message

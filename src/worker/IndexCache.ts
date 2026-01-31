@@ -338,7 +338,8 @@ export class IndexCache {
 
     // Check for indexed field conditions
     for (const [field, condition] of Object.entries(filter)) {
-      if (field.startsWith('$')) continue
+      // Skip logical operators ($and, $or, etc.) but allow $index_* indexed fields
+      if (field.startsWith('$') && !field.startsWith('$index_')) continue
 
       // Look for index on this field
       const indexEntry = catalog.find(entry => entry.field === field)
