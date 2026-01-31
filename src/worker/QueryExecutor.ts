@@ -23,6 +23,8 @@ import { ParquetReader } from '../parquet/reader'
 import { parquetQuery } from 'hyparquet'
 // Patched LZ4 decompressor (fixes match length extension + signed integer overflow bugs)
 import { compressors } from '../parquet/compressors'
+// Index cache for secondary index lookups
+import { IndexCache, createR2IndexStorageAdapter, type SelectedIndex } from './IndexCache'
 
 // =============================================================================
 // Types
@@ -433,6 +435,9 @@ export class QueryExecutor {
   /** ParquetReader instance */
   private parquetReader: ParquetReader | null = null
 
+  /** Index cache for secondary index lookups */
+  private indexCache: IndexCache | null = null
+
   /**
    * Create a QueryExecutor
    *
@@ -451,6 +456,9 @@ export class QueryExecutor {
         this.storageAdapter = new CdnR2StorageAdapter(bucket, bucket, '', r2DevUrl)
       }
       this.parquetReader = new ParquetReader({ storage: this.storageAdapter as unknown as StorageBackend })
+
+      // Initialize index cache for secondary index lookups
+      this.indexCache = new IndexCache(createR2IndexStorageAdapter(bucket as unknown as { get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>; head(key: string): Promise<{ size: number } | null> }))
     }
   }
 
@@ -528,6 +536,14 @@ export class QueryExecutor {
             nextCursor: processed.nextCursor,
             hasMore: processed.hasMore,
             stats,
+          }
+        }
+
+        // Check for applicable secondary indexes (hash, sst, fts)
+        if (this.indexCache) {
+          const indexResult = await this.executeWithIndex<T>(datasetId, path, filter, options, stats, startTime)
+          if (indexResult) {
+            return indexResult
           }
         }
 
@@ -649,6 +665,164 @@ export class QueryExecutor {
       }
       throw error
     }
+  }
+
+  // ===========================================================================
+  // Index-Based Query Execution
+  // ===========================================================================
+
+  /**
+   * Try to execute query using a secondary index
+   *
+   * @param datasetId - Dataset ID (e.g., 'imdb-1m')
+   * @param dataPath - Path to data.parquet file
+   * @param filter - MongoDB-style filter
+   * @param options - Query options
+   * @param stats - Query stats to update
+   * @param startTime - Query start time
+   * @returns Query result if index was used, null if no applicable index
+   */
+  private async executeWithIndex<T>(
+    datasetId: string,
+    dataPath: string,
+    filter: Filter,
+    options: FindOptions<T>,
+    stats: QueryStats,
+    startTime: number
+  ): Promise<FindResult<T> | null> {
+    if (!this.indexCache || !this.parquetReader) {
+      return null
+    }
+
+    try {
+      // Select the best index for this query
+      const selected = await this.indexCache.selectIndex(datasetId, filter as Record<string, unknown>)
+      if (!selected) {
+        return null
+      }
+
+      // Track index usage in stats
+      const extendedStats = stats as QueryStats & { indexUsed?: string; indexType?: string; indexLookupMs?: number }
+      extendedStats.indexUsed = selected.entry.name
+      extendedStats.indexType = selected.type
+
+      const indexLookupStart = performance.now()
+      let candidateDocIds: string[] = []
+
+      // Execute index lookup based on type
+      switch (selected.type) {
+        case 'hash': {
+          const result = await this.indexCache.executeHashLookup(
+            datasetId,
+            selected.entry,
+            selected.condition
+          )
+          candidateDocIds = result.docIds
+          break
+        }
+
+        case 'sst': {
+          const result = await this.indexCache.executeSSTLookup(
+            datasetId,
+            selected.entry,
+            selected.condition
+          )
+          candidateDocIds = result.docIds
+          break
+        }
+
+        case 'fts': {
+          const textCondition = selected.condition as { $search: string; $language?: string }
+          const ftsResults = await this.indexCache.executeFTSSearch(
+            datasetId,
+            selected.entry,
+            textCondition,
+            { limit: options.limit }
+          )
+          candidateDocIds = ftsResults.map(r => r.docId)
+          break
+        }
+      }
+
+      extendedStats.indexLookupMs = performance.now() - indexLookupStart
+
+      // If no matches from index, return empty result
+      if (candidateDocIds.length === 0) {
+        stats.rowsScanned = 0
+        stats.rowsReturned = 0
+        stats.executionTimeMs = performance.now() - startTime
+        return {
+          items: [],
+          hasMore: false,
+          stats,
+        }
+      }
+
+      // Read data.parquet and filter to candidate documents
+      type DataRow = { $id: string; data: T | string }
+      const rows = await this.parquetReader.read<DataRow>(dataPath)
+      stats.rowsScanned = rows.length
+
+      // Build candidate set for O(1) lookup
+      const candidateSet = new Set(candidateDocIds)
+
+      // Filter rows to candidates and unpack data
+      let results = rows
+        .filter(row => {
+          // Check both $id and extracted ID from data
+          if (candidateSet.has(row.$id)) return true
+          // Also check data.$id for nested structure
+          const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data
+          const dataId = (data as Record<string, unknown>)?.$id as string
+          if (dataId && candidateSet.has(dataId)) return true
+          return false
+        })
+        .map(row => {
+          if (typeof row.data === 'string') {
+            return JSON.parse(row.data) as T
+          }
+          return (row.data ?? row) as T
+        })
+
+      // Apply any remaining filter conditions (excluding the indexed field)
+      const remainingFilter = this.removeIndexedField(filter, selected.entry.field)
+      if (Object.keys(remainingFilter).length > 0) {
+        results = this.applyFilter(results, remainingFilter)
+      }
+
+      // Post-process: sort, skip, limit, project
+      const processed = this.postProcess(results, options)
+
+      stats.rowsReturned = processed.items.length
+      stats.executionTimeMs = performance.now() - startTime
+
+      return {
+        items: processed.items,
+        total: processed.total,
+        nextCursor: processed.nextCursor,
+        hasMore: processed.hasMore,
+        stats,
+      }
+    } catch (error) {
+      // Index execution failed, fall back to full scan
+      console.error('Index execution failed, falling back to full scan:', error)
+      return null
+    }
+  }
+
+  /**
+   * Remove the indexed field from filter (already satisfied by index lookup)
+   */
+  private removeIndexedField(filter: Filter, field: string): Filter {
+    const result: Filter = {}
+
+    for (const [key, value] of Object.entries(filter)) {
+      if (key === field) continue
+      if (key === '$text') continue // FTS already applied
+      (result as Record<string, unknown>)[key] = value
+    }
+
+    return result
   }
 
   /**

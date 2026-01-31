@@ -14,6 +14,9 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import pluralize from 'pluralize'
 import type { Env } from '../types/worker'
+import { handleBenchmarkRequest } from './benchmark'
+import { handleDatasetBenchmarkRequest } from './benchmark-datasets'
+import { handleIndexedBenchmarkRequest } from './benchmark-indexed'
 import type { Filter } from '../types/filter'
 import type {
   FindOptions,
@@ -828,8 +831,35 @@ export default {
             imdb: `${baseUrl}/datasets/imdb`,
             onet: `${baseUrl}/datasets/onet`,
             health: `${baseUrl}/health`,
+            benchmark: `${baseUrl}/benchmark`,
+            benchmarkDatasets: `${baseUrl}/benchmark-datasets`,
+            benchmarkIndexed: `${baseUrl}/benchmark-indexed`,
           },
         }, startTime)
+      }
+
+      // =======================================================================
+      // Benchmark - Real R2 I/O Performance Tests
+      // =======================================================================
+      if (path === '/benchmark') {
+        // Cast to any to avoid type incompatibility between different R2Bucket definitions
+        return handleBenchmarkRequest(request, env.BUCKET as any)
+      }
+
+      // =======================================================================
+      // Benchmark Datasets - Real Dataset I/O Performance Tests
+      // =======================================================================
+      if (path === '/benchmark-datasets') {
+        // Test real dataset files from data-v3 uploaded to R2
+        return handleDatasetBenchmarkRequest(request, env.BUCKET as any)
+      }
+
+      // =======================================================================
+      // Benchmark Indexed - Secondary Index Performance Tests
+      // =======================================================================
+      if (path === '/benchmark-indexed') {
+        // Compare indexed vs scan query performance across real datasets
+        return handleIndexedBenchmarkRequest(request, env.BUCKET as any)
       }
 
       // =======================================================================
