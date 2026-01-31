@@ -572,9 +572,24 @@ function buildResponse(
     items?: unknown[]
     stats?: Record<string, unknown>
     relationships?: Record<string, unknown>
-  }
+  },
+  startTime?: number
 ): Response {
-  const cf = (request.cf || {}) as CfProperties
+  const cf = (request.cf || {}) as CfProperties & { httpProtocol?: string }
+
+  // Calculate latency
+  const latency = startTime ? Math.round(performance.now() - startTime) : undefined
+
+  // Format timestamp in user's timezone
+  const now = new Date()
+  const requestedAt = cf.timezone
+    ? now.toLocaleString('en-US', { timeZone: cf.timezone, hour12: false }).replace(',', '')
+    : now.toISOString()
+
+  // Get IP and ray from headers
+  const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0]
+  const rayId = request.headers.get('cf-ray')?.split('-')[0]
+  const ray = rayId && cf.colo ? `${rayId}-${cf.colo}` : rayId
 
   const response = {
     api: data.api,
@@ -584,18 +599,15 @@ function buildResponse(
     ...(data.items !== undefined ? { items: data.items } : {}),
     ...(data.stats !== undefined ? { stats: data.stats } : {}),
     user: {
+      ip,
+      ray,
       colo: cf.colo,
       country: cf.country,
       city: cf.city,
       region: cf.region,
       timezone: cf.timezone,
-      coordinates: cf.latitude && cf.longitude ? {
-        lat: parseFloat(cf.latitude),
-        lng: parseFloat(cf.longitude),
-      } : undefined,
-      asn: cf.asn,
-      asOrganization: cf.asOrganization,
-      requestedAt: new Date().toISOString(),
+      requestedAt,
+      ...(latency !== undefined ? { latency: `${latency}ms` } : {}),
     },
   }
 
@@ -610,9 +622,24 @@ function buildResponse(
 function buildErrorResponse(
   request: Request,
   error: Error,
-  status: number = 500
+  status: number = 500,
+  startTime?: number
 ): Response {
   const cf = (request.cf || {}) as CfProperties
+
+  // Calculate latency
+  const latency = startTime ? Math.round(performance.now() - startTime) : undefined
+
+  // Format timestamp in user's timezone
+  const now = new Date()
+  const requestedAt = cf.timezone
+    ? now.toLocaleString('en-US', { timeZone: cf.timezone, hour12: false }).replace(',', '')
+    : now.toISOString()
+
+  // Get IP and ray from headers
+  const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0]
+  const rayId = request.headers.get('cf-ray')?.split('-')[0]
+  const ray = rayId && cf.colo ? `${rayId}-${cf.colo}` : rayId
 
   return Response.json({
     api: {
@@ -625,9 +652,15 @@ function buildErrorResponse(
       datasets: '/datasets',
     },
     user: {
+      ip,
+      ray,
       colo: cf.colo,
       country: cf.country,
-      requestedAt: new Date().toISOString(),
+      city: cf.city,
+      region: cf.region,
+      timezone: cf.timezone,
+      requestedAt,
+      ...(latency !== undefined ? { latency: `${latency}ms` } : {}),
     },
   }, {
     status,
@@ -647,6 +680,7 @@ export default {
     env: Env,
     ctx: ExecutionContext
   ): Promise<Response> {
+    const startTime = performance.now()
     const url = new URL(request.url)
     const path = url.pathname
     const baseUrl = `${url.protocol}//${url.host}`
@@ -684,7 +718,7 @@ export default {
             onet: `${baseUrl}/datasets/onet`,
             health: `${baseUrl}/health`,
           },
-        })
+        }, startTime)
       }
 
       // =======================================================================
@@ -702,7 +736,7 @@ export default {
             home: baseUrl,
             datasets: `${baseUrl}/datasets`,
           },
-        })
+        }, startTime)
       }
 
       // =======================================================================
@@ -760,7 +794,7 @@ export default {
             ...datasetLinks,
           },
           items: datasetList,
-        })
+        }, startTime)
       }
 
       // =======================================================================
@@ -772,7 +806,7 @@ export default {
         const dataset = DATASETS[datasetId as keyof typeof DATASETS]
 
         if (!dataset) {
-          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404)
+          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404, startTime)
         }
 
         const collectionLinks: Record<string, string> = {}
@@ -809,7 +843,7 @@ export default {
           data: {
             collections: collectionsData,
           },
-        })
+        }, startTime)
       }
 
       // =======================================================================
@@ -822,7 +856,7 @@ export default {
         const dataset = DATASETS[datasetId as keyof typeof DATASETS]
 
         if (!dataset) {
-          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404)
+          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404, startTime)
         }
 
         // Map dataset/collection to namespace using prefix
@@ -912,6 +946,37 @@ export default {
           }
         }
 
+        // Build pagination links with different limits
+        const currentLimit = options.limit || 20
+        const currentSkip = options.skip || 0
+        const basePath = `${baseUrl}${path}`
+        const useArrays = url.searchParams.has('arrays')
+        const arrayParam = useArrays ? '&arrays' : ''
+
+        const paginationLinks: Record<string, string> = {}
+
+        // Add limit option links
+        const limitOptions = [20, 50, 100, 500, 1000]
+        for (const limit of limitOptions) {
+          if (limit !== currentLimit) {
+            paginationLinks[`limit${limit}`] = `${basePath}?limit=${limit}${arrayParam}`
+          }
+        }
+
+        // Add next/prev links if applicable
+        if (result.hasMore) {
+          const nextCursor = (result.stats as unknown as Record<string, unknown>)?.nextCursor
+          if (nextCursor) {
+            paginationLinks.next = `${basePath}?cursor=${nextCursor}&limit=${currentLimit}${arrayParam}`
+          } else {
+            paginationLinks.next = `${basePath}?skip=${currentSkip + currentLimit}&limit=${currentLimit}${arrayParam}`
+          }
+        }
+        if (currentSkip > 0) {
+          const prevSkip = Math.max(0, currentSkip - currentLimit)
+          paginationLinks.prev = `${basePath}?skip=${prevSkip}&limit=${currentLimit}${arrayParam}`
+        }
+
         return buildResponse(request, {
           api: {
             resource: 'collection',
@@ -927,12 +992,12 @@ export default {
             self: `${baseUrl}${path}${url.search}`,
             dataset: `${baseUrl}/datasets/${datasetId}`,
             home: baseUrl,
-            ...(result.hasMore ? { next: `${baseUrl}${path}?cursor=${(result.stats as unknown as Record<string, unknown>)?.nextCursor || ''}&limit=${options.limit}` } : {}),
+            ...paginationLinks,
             ...itemLinks,
           },
           items: enrichedItems,
           stats: result.stats as unknown as Record<string, unknown>,
-        })
+        }, startTime)
       }
 
       // =======================================================================
@@ -946,7 +1011,7 @@ export default {
         const dataset = DATASETS[datasetId as keyof typeof DATASETS]
 
         if (!dataset) {
-          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404)
+          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404, startTime)
         }
 
         // Use prefix for R2 path
@@ -955,7 +1020,7 @@ export default {
         const entity = await worker.get(ns, entityId) as EntityRecord | null
 
         if (!entity) {
-          return buildErrorResponse(request, new Error(`Entity '${entityId}' not found in ${ns}`), 404)
+          return buildErrorResponse(request, new Error(`Entity '${entityId}' not found in ${ns}`), 404, startTime)
         }
 
         const entityRaw = entity as unknown as Record<string, unknown>
@@ -1138,7 +1203,7 @@ export default {
           relationships: Object.keys(relationships).length > 0
             ? (useArrays ? relationships : relWithItems)
             : undefined,
-        })
+        }, startTime)
       }
 
       // =======================================================================
@@ -1153,7 +1218,7 @@ export default {
         const dataset = DATASETS[datasetId as keyof typeof DATASETS]
 
         if (!dataset) {
-          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404)
+          return buildErrorResponse(request, new Error(`Dataset '${datasetId}' not found`), 404, startTime)
         }
 
         // Use prefix for R2 path
@@ -1162,7 +1227,7 @@ export default {
         const entity = await worker.get(ns, entityId) as EntityRecord | null
 
         if (!entity) {
-          return buildErrorResponse(request, new Error(`Entity '${entityId}' not found`), 404)
+          return buildErrorResponse(request, new Error(`Entity '${entityId}' not found`), 404, startTime)
         }
 
         const entityRaw = entity as unknown as Record<string, unknown>
@@ -1225,6 +1290,44 @@ export default {
           // Sort by importance (descending)
           items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
 
+          // Apply pagination - default limit 50
+          const limit = parseInt(url.searchParams.get('limit') || '50', 10)
+          const skip = parseInt(url.searchParams.get('skip') || '0', 10)
+          const totalCount = items.length
+          const paginatedItems = items.slice(skip, skip + limit)
+
+          // Build pagination links
+          const basePath = `${baseUrl}${path}`
+          const arrayParam = useArrays ? '&arrays' : ''
+          const paginationLinks: Record<string, string> = {}
+
+          // Add limit option links
+          const limitOptions = [20, 50, 100, 500, 1000]
+          for (const limitOpt of limitOptions) {
+            if (limitOpt !== limit) {
+              paginationLinks[`limit${limitOpt}`] = `${basePath}?limit=${limitOpt}${arrayParam}`
+            }
+          }
+
+          // Add next/prev links
+          if (skip + limit < totalCount) {
+            paginationLinks.next = `${basePath}?skip=${skip + limit}&limit=${limit}${arrayParam}`
+          }
+          if (skip > 0) {
+            const prevSkip = Math.max(0, skip - limit)
+            paginationLinks.prev = `${basePath}?skip=${prevSkip}&limit=${limit}${arrayParam}`
+          }
+
+          // Build paginated itemsMap
+          const paginatedItemsMap: Record<string, string> = {
+            $count: String(totalCount),
+            ...(skip + limit < totalCount ? { $next: paginationLinks.next } : {}),
+            ...(skip > 0 ? { $prev: paginationLinks.prev } : {}),
+          }
+          for (const item of paginatedItems) {
+            paginatedItemsMap[item.name] = item.$id
+          }
+
           return buildResponse(request, {
             api: {
               resource: 'relationship',
@@ -1232,7 +1335,11 @@ export default {
               collection: collectionId,
               entityId,
               predicate: 'requiredBy',
-              count: items.length,
+              count: totalCount,
+              limit,
+              skip,
+              returned: paginatedItems.length,
+              hasMore: skip + limit < totalCount,
             },
             links: {
               self: `${baseUrl}${path}`,
@@ -1240,10 +1347,11 @@ export default {
               collection: `${baseUrl}/datasets/${datasetId}/${collectionId}`,
               dataset: `${baseUrl}/datasets/${datasetId}`,
               home: baseUrl,
+              ...paginationLinks,
             },
-            data: useArrays ? items : itemsMap,
-            ...(useArrays ? {} : { items }),
-          })
+            data: useArrays ? paginatedItems : paginatedItemsMap,
+            ...(useArrays ? {} : { items: paginatedItems }),
+          }, startTime)
         }
 
         // Get the relationship field (may be JSON-encoded)
@@ -1254,7 +1362,7 @@ export default {
         const rawScores = entityRaw[scoresKey]
 
         if (!rawRelField) {
-          return buildErrorResponse(request, new Error(`Relationship '${predicate}' not found on entity`), 404)
+          return buildErrorResponse(request, new Error(`Relationship '${predicate}' not found on entity`), 404, startTime)
         }
 
         // Parse JSON-encoded relationship
@@ -1268,7 +1376,7 @@ export default {
           }
         } catch (e) {
           console.error('Parse error:', e)
-          return buildErrorResponse(request, new Error(`Invalid relationship data for '${predicate}'`), 500)
+          return buildErrorResponse(request, new Error(`Invalid relationship data for '${predicate}'`), 500, startTime)
         }
 
         const count = relObj.$count as number | undefined
@@ -1301,6 +1409,44 @@ export default {
         // Sort by importance (descending) for better UX
         items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
 
+        // Apply pagination - default limit 50
+        const limit = parseInt(url.searchParams.get('limit') || '50', 10)
+        const skip = parseInt(url.searchParams.get('skip') || '0', 10)
+        const totalCount = count || items.length
+        const paginatedItems = items.slice(skip, skip + limit)
+
+        // Build pagination links
+        const basePath = `${baseUrl}${path}`
+        const arrayParam = useArrays ? '&arrays' : ''
+        const paginationLinks: Record<string, string> = {}
+
+        // Add limit option links
+        const limitOptions = [20, 50, 100, 500, 1000]
+        for (const limitOpt of limitOptions) {
+          if (limitOpt !== limit) {
+            paginationLinks[`limit${limitOpt}`] = `${basePath}?limit=${limitOpt}${arrayParam}`
+          }
+        }
+
+        // Add next/prev links
+        if (skip + limit < totalCount) {
+          paginationLinks.next = `${basePath}?skip=${skip + limit}&limit=${limit}${arrayParam}`
+        }
+        if (skip > 0) {
+          const prevSkip = Math.max(0, skip - limit)
+          paginationLinks.prev = `${basePath}?skip=${prevSkip}&limit=${limit}${arrayParam}`
+        }
+
+        // Build paginated itemsMap with navigation
+        const paginatedItemsMap: Record<string, string> = {
+          $count: String(totalCount),
+          ...(skip + limit < totalCount ? { $next: paginationLinks.next } : {}),
+          ...(skip > 0 ? { $prev: paginationLinks.prev } : {}),
+        }
+        for (const item of paginatedItems) {
+          paginatedItemsMap[item.name] = item.$id
+        }
+
         return buildResponse(request, {
           api: {
             resource: 'relationship',
@@ -1308,7 +1454,11 @@ export default {
             collection: collectionId,
             entityId,
             predicate,
-            count: count || items.length,
+            count: totalCount,
+            limit,
+            skip,
+            returned: paginatedItems.length,
+            hasMore: skip + limit < totalCount,
           },
           links: {
             self: `${baseUrl}${path}`,
@@ -1316,12 +1466,13 @@ export default {
             collection: `${baseUrl}/datasets/${datasetId}/${collectionId}`,
             dataset: `${baseUrl}/datasets/${datasetId}`,
             home: baseUrl,
+            ...paginationLinks,
           },
           // Return {name: $id} object by default, or array with ?arrays
-          data: useArrays ? items : itemsMap,
+          data: useArrays ? paginatedItems : paginatedItemsMap,
           // Include full items array for detail when using arrays format
-          ...(useArrays ? {} : { items }),
-        })
+          ...(useArrays ? {} : { items: paginatedItems }),
+        }, startTime)
       }
 
       // =======================================================================
@@ -1337,7 +1488,7 @@ export default {
             if (id) {
               const entity = await worker.get(ns, id)
               if (!entity) {
-                return buildErrorResponse(request, new Error(`Entity not found`), 404)
+                return buildErrorResponse(request, new Error(`Entity not found`), 404, startTime)
               }
               return buildResponse(request, {
                 api: { resource: 'entity', namespace: ns, id },
@@ -1347,7 +1498,7 @@ export default {
                   home: baseUrl,
                 },
                 data: entity,
-              })
+              }, startTime)
             } else {
               const filter = parseQueryFilter(url.searchParams)
               const options = parseQueryOptions(url.searchParams)
@@ -1360,7 +1511,7 @@ export default {
                 },
                 items: result.items,
                 stats: result.stats as unknown as Record<string, unknown>,
-              })
+              }, startTime)
             }
           }
 
@@ -1372,7 +1523,7 @@ export default {
 
           case 'PATCH': {
             if (!id) {
-              return buildErrorResponse(request, new Error('ID required for update'), 400)
+              return buildErrorResponse(request, new Error('ID required for update'), 400, startTime)
             }
             const updateData = (await request.json()) as Update
             const result = await worker.update(ns, id, updateData)
@@ -1381,25 +1532,25 @@ export default {
 
           case 'DELETE': {
             if (!id) {
-              return buildErrorResponse(request, new Error('ID required for delete'), 400)
+              return buildErrorResponse(request, new Error('ID required for delete'), 400, startTime)
             }
             const result = await worker.delete(ns, id)
             return Response.json(result)
           }
 
           default:
-            return buildErrorResponse(request, new Error('Method not allowed'), 405)
+            return buildErrorResponse(request, new Error('Method not allowed'), 405, startTime)
         }
       }
 
       // =======================================================================
       // 404 - Not Found
       // =======================================================================
-      return buildErrorResponse(request, new Error(`Route '${path}' not found`), 404)
+      return buildErrorResponse(request, new Error(`Route '${path}' not found`), 404, startTime)
 
     } catch (error) {
       console.error('ParqueDB error:', error)
-      return buildErrorResponse(request, error as Error, 500)
+      return buildErrorResponse(request, error as Error, 500, startTime)
     }
   },
 }
