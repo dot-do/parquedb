@@ -11,7 +11,8 @@
 
 import type { UpdateInput } from '../types/update'
 import type { Filter } from '../types/filter'
-import { deepEqual, compareValues } from '../utils'
+import { deepEqual, compareValues, createSafeRegex } from '../utils'
+import { matchesFilter as filterMatchesFilter } from './filter'
 
 // =============================================================================
 // Main Update Function
@@ -559,160 +560,9 @@ export function unsetField<T>(obj: T, path: string): T {
 // Filter Matching (for $pull)
 // =============================================================================
 
-/**
- * Check if a value matches a filter
- * Used for $pull operator with filter conditions
- */
-function matchesFilter(value: unknown, filter: Filter): boolean {
-  if (value === null || value === undefined) {
-    return false
-  }
-
-  // Handle primitives - check if filter is looking for equality
-  if (typeof value !== 'object') {
-    // For primitives, we check against simple operators
-    for (const [op, opValue] of Object.entries(filter)) {
-      switch (op) {
-        case '$eq':
-          if (!deepEqual(value, opValue)) return false
-          break
-        case '$ne':
-          if (deepEqual(value, opValue)) return false
-          break
-        case '$gt':
-          if (compareValues(value, opValue) <= 0) return false
-          break
-        case '$gte':
-          if (compareValues(value, opValue) < 0) return false
-          break
-        case '$lt':
-          if (compareValues(value, opValue) >= 0) return false
-          break
-        case '$lte':
-          if (compareValues(value, opValue) > 0) return false
-          break
-        case '$in':
-          if (!Array.isArray(opValue)) return false
-          if (!opValue.some((v) => deepEqual(value, v))) return false
-          break
-        case '$nin':
-          if (!Array.isArray(opValue)) return false
-          if (opValue.some((v) => deepEqual(value, v))) return false
-          break
-        default:
-          // Unknown operator for primitives
-          break
-      }
-    }
-    return true
-  }
-
-  const obj = value as Record<string, unknown>
-
-  // Handle logical operators
-  if (filter.$and) {
-    return filter.$and.every((subFilter) => matchesFilter(value, subFilter))
-  }
-
-  if (filter.$or) {
-    return filter.$or.some((subFilter) => matchesFilter(value, subFilter))
-  }
-
-  if (filter.$not) {
-    return !matchesFilter(value, filter.$not)
-  }
-
-  if (filter.$nor) {
-    return !filter.$nor.some((subFilter) => matchesFilter(value, subFilter))
-  }
-
-  // Check field conditions
-  for (const [field, condition] of Object.entries(filter)) {
-    if (field.startsWith('$')) continue // Skip operators (already handled)
-
-    const fieldValue = getField(obj, field)
-
-    // Handle operator objects
-    if (
-      typeof condition === 'object' &&
-      condition !== null &&
-      !Array.isArray(condition) &&
-      !(condition instanceof Date)
-    ) {
-      const ops = condition as Record<string, unknown>
-      for (const [op, opValue] of Object.entries(ops)) {
-        switch (op) {
-          case '$eq':
-            if (!deepEqual(fieldValue, opValue)) return false
-            break
-          case '$ne':
-            if (deepEqual(fieldValue, opValue)) return false
-            break
-          case '$gt':
-            if (
-              fieldValue === null ||
-              fieldValue === undefined ||
-              compareValues(fieldValue, opValue) <= 0
-            )
-              return false
-            break
-          case '$gte':
-            if (
-              fieldValue === null ||
-              fieldValue === undefined ||
-              compareValues(fieldValue, opValue) < 0
-            )
-              return false
-            break
-          case '$lt':
-            if (
-              fieldValue === null ||
-              fieldValue === undefined ||
-              compareValues(fieldValue, opValue) >= 0
-            )
-              return false
-            break
-          case '$lte':
-            if (
-              fieldValue === null ||
-              fieldValue === undefined ||
-              compareValues(fieldValue, opValue) > 0
-            )
-              return false
-            break
-          case '$in':
-            if (!Array.isArray(opValue)) return false
-            if (!opValue.some((v) => deepEqual(fieldValue, v))) return false
-            break
-          case '$nin':
-            if (!Array.isArray(opValue)) return false
-            if (opValue.some((v) => deepEqual(fieldValue, v))) return false
-            break
-          case '$exists':
-            if (opValue === true && fieldValue === undefined) return false
-            if (opValue === false && fieldValue !== undefined) return false
-            break
-          case '$regex': {
-            if (typeof fieldValue !== 'string') return false
-            const pattern =
-              opValue instanceof RegExp
-                ? opValue
-                : new RegExp(opValue as string, (ops.$options as string) || '')
-            if (!pattern.test(fieldValue)) return false
-            break
-          }
-          default:
-            break
-        }
-      }
-    } else {
-      // Direct equality comparison
-      if (!deepEqual(fieldValue, condition)) return false
-    }
-  }
-
-  return true
-}
+// matchesFilter is imported from ./filter and re-exported below
+// The canonical implementation handles both primitives and objects
+const matchesFilter = filterMatchesFilter
 
 // =============================================================================
 // Validation

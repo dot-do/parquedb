@@ -13,14 +13,16 @@ import type {
   WriteResult,
   RmdirOptions,
 } from '../types/storage'
+import { validateRange, InvalidRangeError } from './validation'
 
 /**
  * Error thrown when a file is not found
  */
 export class FileNotFoundError extends Error {
+  override readonly name = 'FileNotFoundError'
   constructor(path: string) {
     super(`File not found: ${path}`)
-    this.name = 'FileNotFoundError'
+    Object.setPrototypeOf(this, FileNotFoundError.prototype)
   }
 }
 
@@ -28,9 +30,10 @@ export class FileNotFoundError extends Error {
  * Error thrown when a conditional write fails due to version mismatch
  */
 export class VersionMismatchError extends Error {
+  override readonly name = 'VersionMismatchError'
   constructor(path: string, expected: string | null, actual: string | null) {
     super(`Version mismatch for ${path}: expected ${expected}, got ${actual}`)
-    this.name = 'VersionMismatchError'
+    Object.setPrototypeOf(this, VersionMismatchError.prototype)
   }
 }
 
@@ -38,9 +41,10 @@ export class VersionMismatchError extends Error {
  * Error thrown when a file already exists (for ifNoneMatch: '*')
  */
 export class FileExistsError extends Error {
+  override readonly name = 'FileExistsError'
   constructor(path: string) {
     super(`File already exists: ${path}`)
-    this.name = 'FileExistsError'
+    Object.setPrototypeOf(this, FileExistsError.prototype)
   }
 }
 
@@ -48,9 +52,10 @@ export class FileExistsError extends Error {
  * Error thrown when directory is not empty
  */
 export class DirectoryNotEmptyError extends Error {
+  override readonly name = 'DirectoryNotEmptyError'
   constructor(path: string) {
     super(`Directory not empty: ${path}`)
-    this.name = 'DirectoryNotEmptyError'
+    Object.setPrototypeOf(this, DirectoryNotEmptyError.prototype)
   }
 }
 
@@ -58,9 +63,10 @@ export class DirectoryNotEmptyError extends Error {
  * Error thrown when a directory is not found
  */
 export class DirectoryNotFoundError extends Error {
+  override readonly name = 'DirectoryNotFoundError'
   constructor(path: string) {
     super(`Directory not found: ${path}`)
-    this.name = 'DirectoryNotFoundError'
+    Object.setPrototypeOf(this, DirectoryNotFoundError.prototype)
   }
 }
 
@@ -77,7 +83,7 @@ function generateEtag(data: Uint8Array): string {
   // Simple FNV-1a hash
   let hash = 2166136261
   for (let i = 0; i < data.length; i++) {
-    hash ^= data[i]
+    hash ^= data[i]!
     hash = (hash * 16777619) >>> 0
   }
   // Include timestamp to ensure different etags even for same content
@@ -138,6 +144,9 @@ export class MemoryBackend implements StorageBackend {
    * Read byte range from file
    */
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    // Validate range parameters
+    validateRange(start, end)
+
     path = this.normalizePath(path)
     const entry = this.files.get(path)
     if (!entry) {

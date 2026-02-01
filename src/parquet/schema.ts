@@ -66,7 +66,7 @@ export function inferParquetType(parquedbType: string): ParquetFieldSchema {
   // Handle parametric types
   if (baseType.startsWith('decimal')) {
     const match = baseType.match(/decimal\((\d+),(\d+)\)/)
-    if (match) {
+    if (match && match[1] && match[2]) {
       return {
         type: 'DECIMAL',
         precision: parseInt(match[1], 10),

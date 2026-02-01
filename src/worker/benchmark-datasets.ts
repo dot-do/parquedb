@@ -515,8 +515,8 @@ export async function runDatasetBenchmark(
       }
 
       const metrics: QueryMetrics = {
-        medianMs: validLatencies[Math.floor(validLatencies.length / 2)],
-        p95Ms: validLatencies[Math.floor(validLatencies.length * 0.95)] || validLatencies[validLatencies.length - 1],
+        medianMs: validLatencies[Math.floor(validLatencies.length / 2)] ?? 0,
+        p95Ms: validLatencies[Math.floor(validLatencies.length * 0.95)] ?? validLatencies[validLatencies.length - 1] ?? 0,
         minMs: Math.min(...validLatencies),
         maxMs: Math.max(...validLatencies),
         bytesRead: lastBytesRead,

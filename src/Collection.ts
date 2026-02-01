@@ -25,22 +25,13 @@ import type {
   SortDirection,
 } from './types'
 import { normalizeSortDirection } from './types'
-import { deepClone, getNestedValue, compareValues, getRandomBase36 } from './utils'
+import { deepClone, getNestedValue, compareValues, generateId, getValueType } from './utils'
+import { matchesFilter as canonicalMatchesFilter } from './query/filter'
+import { QueryBuilder } from './query/builder'
+import { executeAggregation, type AggregationStage } from './aggregation'
 
-/** Aggregation pipeline stage */
-export type AggregationStage =
-  | { $match: Filter }
-  | { $group: { _id: unknown; [key: string]: unknown } }
-  | { $sort: Record<string, 1 | -1> }
-  | { $limit: number }
-  | { $skip: number }
-  | { $project: Record<string, 0 | 1 | boolean | unknown> }
-  | { $unwind: string | { path: string; preserveNullAndEmptyArrays?: boolean } }
-  | { $lookup: { from: string; localField: string; foreignField: string; as: string } }
-  | { $count: string }
-  | { $addFields: Record<string, unknown> }
-  | { $set: Record<string, unknown> }
-  | { $unset: string | string[] }
+// Re-export AggregationStage for backwards compatibility
+export type { AggregationStage } from './aggregation'
 
 // In-memory storage for entities (per namespace)
 const globalStorage = new Map<string, Map<string, Entity<unknown>>>()
@@ -158,14 +149,7 @@ export function clearEventLog(): void {
   eventCounter = 0
 }
 
-/**
- * Generate a unique ID
- */
-function generateId(): string {
-  return `${Date.now().toString(36)}-${getRandomBase36(7)}`
-}
-
-// getNestedValue is imported from ./utils
+// generateId and getNestedValue are imported from ./utils
 
 /**
  * Set value at a nested path using dot notation
@@ -207,174 +191,11 @@ function deleteNestedValue(obj: Record<string, unknown>, path: string): void {
 
 /**
  * Evaluate a filter against an entity
+ * Uses the canonical matchesFilter from query/filter.ts
  */
 function evaluateFilter(entity: Entity<unknown>, filter: Filter | null | undefined): boolean {
   if (!filter || Object.keys(filter).length === 0) return true
-
-  // Handle logical operators
-  if ('$and' in filter && filter.$and) {
-    return filter.$and.every(f => evaluateFilter(entity, f))
-  }
-
-  if ('$or' in filter && filter.$or) {
-    return filter.$or.some(f => evaluateFilter(entity, f))
-  }
-
-  if ('$not' in filter && filter.$not) {
-    return !evaluateFilter(entity, filter.$not)
-  }
-
-  if ('$nor' in filter && filter.$nor) {
-    return !filter.$nor.some(f => evaluateFilter(entity, f))
-  }
-
-  // Handle field filters
-  for (const [field, condition] of Object.entries(filter)) {
-    // Skip logical operators
-    if (field.startsWith('$')) continue
-
-    const value = getNestedValue(entity as Record<string, unknown>, field)
-
-    if (!evaluateFieldCondition(value, condition)) {
-      return false
-    }
-  }
-
-  return true
-}
-
-/**
- * Evaluate a field condition
- */
-function evaluateFieldCondition(value: unknown, condition: unknown): boolean {
-  // Direct equality
-  if (condition === null) {
-    return value === null || value === undefined
-  }
-
-  if (typeof condition !== 'object' || condition === null) {
-    return value === condition
-  }
-
-  const condObj = condition as Record<string, unknown>
-
-  // Handle operators
-  if ('$eq' in condObj) {
-    return value === condObj.$eq
-  }
-
-  if ('$ne' in condObj) {
-    return value !== condObj.$ne
-  }
-
-  if ('$gt' in condObj) {
-    if (value === null || value === undefined) return false
-    if (condObj.$gt instanceof Date) {
-      return value instanceof Date ? value > condObj.$gt : new Date(value as string) > condObj.$gt
-    }
-    return (value as number) > (condObj.$gt as number)
-  }
-
-  if ('$gte' in condObj) {
-    if (value === null || value === undefined) return false
-    if (condObj.$gte instanceof Date) {
-      return value instanceof Date ? value >= condObj.$gte : new Date(value as string) >= condObj.$gte
-    }
-    return (value as number) >= (condObj.$gte as number)
-  }
-
-  if ('$lt' in condObj) {
-    if (value === null || value === undefined) return false
-    if (condObj.$lt instanceof Date) {
-      return value instanceof Date ? value < condObj.$lt : new Date(value as string) < condObj.$lt
-    }
-    return (value as number) < (condObj.$lt as number)
-  }
-
-  if ('$lte' in condObj) {
-    if (value === null || value === undefined) return false
-    if (condObj.$lte instanceof Date) {
-      return value instanceof Date ? value <= condObj.$lte : new Date(value as string) <= condObj.$lte
-    }
-    return (value as number) <= (condObj.$lte as number)
-  }
-
-  if ('$in' in condObj) {
-    const arr = condObj.$in as unknown[]
-    return arr.includes(value)
-  }
-
-  if ('$nin' in condObj) {
-    const arr = condObj.$nin as unknown[]
-    return !arr.includes(value)
-  }
-
-  if ('$regex' in condObj) {
-    if (typeof value !== 'string') return false
-    let regex: RegExp
-    if (condObj.$regex instanceof RegExp) {
-      regex = condObj.$regex
-    } else {
-      const options = (condObj.$options as string) || ''
-      regex = new RegExp(condObj.$regex as string, options)
-    }
-    return regex.test(value)
-  }
-
-  if ('$exists' in condObj) {
-    const exists = value !== undefined
-    return condObj.$exists ? exists : !exists
-  }
-
-  if ('$size' in condObj) {
-    if (!Array.isArray(value)) return false
-    return value.length === condObj.$size
-  }
-
-  if ('$all' in condObj) {
-    if (!Array.isArray(value)) return false
-    const required = condObj.$all as unknown[]
-    return required.every(item => value.includes(item))
-  }
-
-  if ('$elemMatch' in condObj) {
-    if (!Array.isArray(value)) return false
-    return value.some(item => evaluateFilter(item as Entity<unknown>, condObj.$elemMatch as Filter))
-  }
-
-  if ('$type' in condObj) {
-    const expectedType = condObj.$type as string
-    const actualType = getTypeOf(value)
-    return actualType === expectedType
-  }
-
-  // Check for combined operators (e.g., { $gte: 0, $lt: 100 })
-  let allPassed = true
-  for (const op of Object.keys(condObj)) {
-    if (op.startsWith('$')) {
-      const singleCondition = { [op]: condObj[op] }
-      if (!evaluateFieldCondition(value, singleCondition)) {
-        allPassed = false
-        break
-      }
-    }
-  }
-  if (Object.keys(condObj).some(k => k.startsWith('$'))) {
-    return allPassed
-  }
-
-  // Direct equality for non-operator objects
-  return JSON.stringify(value) === JSON.stringify(condition)
-}
-
-/**
- * Get the type of a value
- */
-function getTypeOf(value: unknown): string {
-  if (value === null) return 'null'
-  if (Array.isArray(value)) return 'array'
-  if (value instanceof Date) return 'date'
-  return typeof value
+  return canonicalMatchesFilter(entity, filter)
 }
 
 /**
@@ -1309,149 +1130,32 @@ export class Collection<T = Record<string, unknown>> {
       data = data.filter(e => !(e as Record<string, unknown>).deletedAt)
     }
 
-    // Process each stage
-    for (const stage of pipeline) {
-      if ('$match' in stage) {
-        data = data.filter(e => evaluateFilter(e as Entity<unknown>, stage.$match))
-      } else if ('$sort' in stage) {
-        const sortEntries = Object.entries(stage.$sort)
-        data.sort((a, b) => {
-          for (const [field, direction] of sortEntries) {
-            const aValue = getNestedValue(a as Record<string, unknown>, field)
-            const bValue = getNestedValue(b as Record<string, unknown>, field)
-            const cmp = compareValuesWithDirection(aValue, bValue, direction)
-            if (cmp !== 0) return cmp
-          }
-          return 0
-        })
-      } else if ('$limit' in stage) {
-        data = data.slice(0, stage.$limit)
-      } else if ('$skip' in stage) {
-        data = data.slice(stage.$skip)
-      } else if ('$project' in stage) {
-        data = data.map(item => {
-          const result: Record<string, unknown> = {}
-          const projection = stage.$project
-          const isInclusion = Object.values(projection).some(v => v === 1 || v === true)
+    // Execute aggregation pipeline using the executor
+    return executeAggregation<R>(data, pipeline, options)
+  }
 
-          if (isInclusion) {
-            for (const [key, value] of Object.entries(projection)) {
-              if (value === 1 || value === true) {
-                result[key] = (item as Record<string, unknown>)[key]
-              }
-            }
-          } else {
-            for (const [key, value] of Object.entries(item as Record<string, unknown>)) {
-              if (!(key in projection) || projection[key] !== 0) {
-                result[key] = value
-              }
-            }
-          }
-          return result
-        })
-      } else if ('$count' in stage) {
-        return [{ [stage.$count]: data.length }] as R[]
-      } else if ('$group' in stage) {
-        const groupSpec = stage.$group
-        const groups = new Map<string, unknown[]>()
-
-        for (const item of data) {
-          let groupKey: unknown
-          if (groupSpec._id === null) {
-            groupKey = null
-          } else if (typeof groupSpec._id === 'string' && groupSpec._id.startsWith('$')) {
-            groupKey = getNestedValue(item as Record<string, unknown>, groupSpec._id.slice(1))
-          } else {
-            groupKey = groupSpec._id
-          }
-
-          const keyStr = JSON.stringify(groupKey)
-          if (!groups.has(keyStr)) {
-            groups.set(keyStr, [])
-          }
-          groups.get(keyStr)!.push(item)
-        }
-
-        data = Array.from(groups.entries()).map(([keyStr, items]) => {
-          const result: Record<string, unknown> = { _id: JSON.parse(keyStr) }
-
-          for (const [field, spec] of Object.entries(groupSpec)) {
-            if (field === '_id') continue
-
-            if (spec && typeof spec === 'object') {
-              const specObj = spec as Record<string, unknown>
-              if ('$sum' in specObj) {
-                if (specObj.$sum === 1) {
-                  result[field] = items.length
-                } else if (typeof specObj.$sum === 'string' && specObj.$sum.startsWith('$')) {
-                  result[field] = items.reduce((sum: number, item) => {
-                    const val = getNestedValue(item as Record<string, unknown>, (specObj.$sum as string).slice(1))
-                    return sum + (typeof val === 'number' ? val : 0)
-                  }, 0)
-                }
-              } else if ('$avg' in specObj && typeof specObj.$avg === 'string' && specObj.$avg.startsWith('$')) {
-                const sum = items.reduce((s: number, item) => {
-                  const val = getNestedValue(item as Record<string, unknown>, (specObj.$avg as string).slice(1))
-                  return s + (typeof val === 'number' ? val : 0)
-                }, 0)
-                result[field] = items.length > 0 ? sum / items.length : 0
-              } else if ('$max' in specObj && typeof specObj.$max === 'string' && specObj.$max.startsWith('$')) {
-                result[field] = items.reduce((max: number | null, item) => {
-                  const val = getNestedValue(item as Record<string, unknown>, (specObj.$max as string).slice(1))
-                  return typeof val === 'number' && (max === null || val > max) ? val : max
-                }, null as number | null)
-              } else if ('$min' in specObj && typeof specObj.$min === 'string' && specObj.$min.startsWith('$')) {
-                result[field] = items.reduce((min: number | null, item) => {
-                  const val = getNestedValue(item as Record<string, unknown>, (specObj.$min as string).slice(1))
-                  return typeof val === 'number' && (min === null || val < min) ? val : min
-                }, null as number | null)
-              }
-            }
-          }
-
-          return result
-        })
-      } else if ('$unwind' in stage) {
-        const path = typeof stage.$unwind === 'string' ? stage.$unwind : stage.$unwind.path
-        const preserveNull = typeof stage.$unwind === 'object' ? stage.$unwind.preserveNullAndEmptyArrays : false
-        const fieldPath = path.startsWith('$') ? path.slice(1) : path
-
-        const newData: unknown[] = []
-        for (const item of data) {
-          const arr = getNestedValue(item as Record<string, unknown>, fieldPath)
-          if (Array.isArray(arr) && arr.length > 0) {
-            for (const elem of arr) {
-              const newItem = { ...(item as Record<string, unknown>) }
-              setNestedValue(newItem, fieldPath, elem)
-              newData.push(newItem)
-            }
-          } else if (preserveNull) {
-            newData.push(item)
-          }
-        }
-        data = newData
-      } else if ('$addFields' in stage || '$set' in stage) {
-        const fields = '$addFields' in stage ? stage.$addFields : stage.$set
-        data = data.map(item => {
-          const result = { ...(item as Record<string, unknown>) }
-          for (const [key, value] of Object.entries(fields)) {
-            result[key] = value
-          }
-          return result
-        })
-      } else if ('$unset' in stage) {
-        const fields = Array.isArray(stage.$unset) ? stage.$unset : [stage.$unset]
-        data = data.map(item => {
-          const result = { ...(item as Record<string, unknown>) }
-          for (const field of fields) {
-            delete result[field]
-          }
-          return result
-        })
-      }
-    }
-
-    return data as R[]
+  /**
+   * Create a fluent query builder for this collection
+   *
+   * @returns A new QueryBuilder instance bound to this collection
+   *
+   * @example
+   * const results = await db.Posts.builder()
+   *   .where('status', 'eq', 'published')
+   *   .andWhere('score', 'gte', 80)
+   *   .orderBy('createdAt', 'desc')
+   *   .limit(10)
+   *   .find()
+   *
+   * @example
+   * const { filter, options } = db.Posts.builder()
+   *   .where('category', 'in', ['tech', 'science'])
+   *   .orderBy('views', 'desc')
+   *   .select(['title', 'author'])
+   *   .build()
+   */
+  builder(): QueryBuilder<T> {
+    return new QueryBuilder<T>(this)
   }
 }
 

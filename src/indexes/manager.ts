@@ -5,7 +5,10 @@
  * lookups, and maintenance.
  */
 
-import type { StorageBackend, StoragePaths } from '../types/storage'
+import type { StorageBackend } from '../types/storage'
+import { IndexCatalogError } from './errors'
+import { logger } from '../utils/logger'
+import { safeJsonParse, isRecord } from '../utils/json-validation'
 import type { Filter } from '../types/filter'
 import type {
   IndexDefinition,
@@ -48,24 +51,46 @@ export class IndexManager {
 
   /**
    * Load all index metadata from storage
+   *
+   * Error handling:
+   * - Catalog doesn't exist: Expected, continue with empty catalog
+   * - Catalog exists but is corrupted: Log warning, continue with empty catalog
+   * - Storage read errors: Re-throw to caller
    */
   async load(): Promise<void> {
     if (this.loaded) return
 
+    const catalogPath = this.getCatalogPath()
+    const exists = await this.storage.exists(catalogPath)
+
+    if (!exists) {
+      // No catalog exists yet - this is expected for new databases
+      this.loaded = true
+      return
+    }
+
     try {
-      // Load index catalog
-      const catalogPath = this.getCatalogPath()
-      const exists = await this.storage.exists(catalogPath)
-
-      if (exists) {
-        const data = await this.storage.read(catalogPath)
-        const catalog = JSON.parse(new TextDecoder().decode(data)) as IndexCatalog
-        this.loadCatalog(catalog)
+      const data = await this.storage.read(catalogPath)
+      const result = safeJsonParse(new TextDecoder().decode(data))
+      if (!result.ok || !isRecord(result.value)) {
+        logger.warn(
+          `Index catalog corrupted at ${catalogPath}, starting fresh`,
+          new IndexCatalogError(catalogPath, new Error('Invalid JSON or not an object'))
+        )
+        this.loaded = true
+        return
       }
-
+      const catalog = result.value as unknown as IndexCatalog
+      this.loadCatalog(catalog)
       this.loaded = true
     } catch (error: unknown) {
-      // No catalog exists yet, that's fine
+      // Catalog exists but failed to read - likely corrupted
+      // Log warning but continue with empty catalog (self-healing behavior)
+      const cause = error instanceof Error ? error : new Error(String(error))
+      logger.warn(
+        `Index catalog corrupted at ${catalogPath}, starting fresh`,
+        new IndexCatalogError(catalogPath, cause)
+      )
       this.loaded = true
     }
   }

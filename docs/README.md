@@ -110,10 +110,24 @@ const post = await db.Posts.create({
 
 ## Documentation
 
+### Guides
+
 - [Getting Started](./getting-started.md) - Installation and basic usage
-- [Schema Definition](./schema.md) - Defining types, fields, and relationships
-- [Storage Backends](./storage-backends.md) - MemoryBackend, FsBackend, R2Backend, and more
-- [Cloudflare Workers](./workers.md) - CQRS architecture and RPC client usage
+- [Schema Definition](./schemas.md) - Defining types, fields, and relationships
+- [Queries](./queries.md) - Query operators and patterns
+- [Updates](./updates.md) - Update operators
+
+### Deployment
+
+- [Cloudflare Workers](./deployment/cloudflare-workers.md) - Deploy to Cloudflare with R2 and Durable Objects
+- [Node.js Standalone](./deployment/node-standalone.md) - Deploy as a Node.js server
+- [R2 Setup](./deployment/r2-setup.md) - Configure R2 storage
+- [Configuration Reference](./deployment/configuration.md) - All configuration options
+
+### API Reference
+
+- [ParqueDB API](./api/parquedb.md) - Main database class
+- [Collection API](./api/collection.md) - Collection operations
 
 ## Core Concepts
 

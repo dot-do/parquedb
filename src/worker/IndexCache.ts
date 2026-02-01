@@ -23,6 +23,8 @@ import { SSTIndex } from '../indexes/secondary/sst'
 import { InvertedIndex } from '../indexes/fts/inverted-index'
 import { FTSIndex } from '../indexes/fts/search'
 import { logger } from '../utils/logger'
+import { isErr } from '../types/result'
+import { safeJsonParse, isRecord, isArray } from '../utils/json-validation'
 
 // =============================================================================
 // Types
@@ -190,10 +192,10 @@ function murmurHash3(key: Uint8Array, seed: number): number {
   // Process 4-byte blocks
   for (let i = 0; i < numBlocks; i++) {
     let k =
-      key[i * 4] |
-      (key[i * 4 + 1] << 8) |
-      (key[i * 4 + 2] << 16) |
-      (key[i * 4 + 3] << 24)
+      key[i * 4]! |
+      (key[i * 4 + 1]! << 8) |
+      (key[i * 4 + 2]! << 16) |
+      (key[i * 4 + 3]! << 24)
 
     k = Math.imul(k, c1)
     k = (k << r1) | (k >>> (32 - r1))
@@ -208,13 +210,13 @@ function murmurHash3(key: Uint8Array, seed: number): number {
   const tail = len - numBlocks * 4
   let k1 = 0
   if (tail >= 3) {
-    k1 ^= key[numBlocks * 4 + 2] << 16
+    k1 ^= key[numBlocks * 4 + 2]! << 16
   }
   if (tail >= 2) {
-    k1 ^= key[numBlocks * 4 + 1] << 8
+    k1 ^= key[numBlocks * 4 + 1]! << 8
   }
   if (tail >= 1) {
-    k1 ^= key[numBlocks * 4]
+    k1 ^= key[numBlocks * 4]!
     k1 = Math.imul(k1, c1)
     k1 = (k1 << r1) | (k1 >>> (32 - r1))
     k1 = Math.imul(k1, c2)
@@ -284,7 +286,7 @@ class BloomFilter {
       this.bits = data.slice(16, 16 + valueFilterSize)
     } else {
       // Fallback to old simple format: [numHashes (1 byte)][numBits (4 bytes LE)][bits...]
-      this.numHashes = data[0]
+      this.numHashes = data[0] ?? 0
       this.numBits = view.getUint32(1, true) // little endian
       this.bits = data.slice(5)
     }
@@ -301,7 +303,8 @@ class BloomFilter {
     for (const hash of hashes) {
       const byteIndex = Math.floor(hash / 8)
       const bitOffset = hash % 8
-      if ((this.bits[byteIndex] & (1 << bitOffset)) === 0) {
+      const byte = this.bits[byteIndex]
+      if (byte === undefined || (byte & (1 << bitOffset)) === 0) {
         return false
       }
     }
@@ -385,7 +388,12 @@ export class IndexCache {
       }
 
       const data = await this.storage.read(catalogPath)
-      const catalog = JSON.parse(new TextDecoder().decode(data)) as IndexCatalog
+      const result = safeJsonParse(new TextDecoder().decode(data))
+      if (!result.ok || !isRecord(result.value)) {
+        logger.warn(`Invalid index catalog JSON at ${catalogPath}`)
+        return []
+      }
+      const catalog = result.value as unknown as IndexCatalog
 
       // Validate version (support version 1, 2, and 3)
       if (catalog.version < 1 || catalog.version > 3) {
@@ -448,7 +456,11 @@ export class IndexCache {
     // Load from storage
     const fullPath = `${dataset}/${manifestPath}`
     const data = await this.storage.read(fullPath)
-    const manifest = JSON.parse(new TextDecoder().decode(data)) as ShardedIndexManifest
+    const result = safeJsonParse(new TextDecoder().decode(data))
+    if (!result.ok || !isRecord(result.value)) {
+      throw new Error(`Invalid manifest JSON at ${fullPath}`)
+    }
+    const manifest = result.value as unknown as ShardedIndexManifest
 
     // Validate version
     if (manifest.version < 1 || manifest.version > 3) {
@@ -511,8 +523,11 @@ export class IndexCache {
     }
 
     // Fall back to JSON format for non-compact shards
-    const json = JSON.parse(new TextDecoder().decode(data)) as CompactShardEntry[]
-    return json
+    const result = safeJsonParse(new TextDecoder().decode(data))
+    if (!result.ok || !isArray(result.value)) {
+      throw new Error(`Invalid shard JSON at ${shardPath}`)
+    }
+    return result.value as CompactShardEntry[]
   }
 
   /**
@@ -570,7 +585,13 @@ export class IndexCache {
     }
 
     const index = new HashIndex(memoryStorage as unknown as import('../types/storage').StorageBackend, entry.name, definition)
-    await index.load()
+    const loadResult = await index.load()
+
+    // Log if index load failed (corrupted data), but continue with empty index
+    // The index is still usable, just empty
+    if (isErr(loadResult)) {
+      logger.warn(`Hash index ${entry.name} load returned error (using empty index): ${loadResult.error.message}`)
+    }
 
     // Cache the loaded index
     this.cacheIndex(cacheKey, {
@@ -612,7 +633,13 @@ export class IndexCache {
     }
 
     const index = new SSTIndex(memoryStorage as unknown as import('../types/storage').StorageBackend, entry.name, definition)
-    await index.load()
+    const loadResult = await index.load()
+
+    // Log if index load failed (corrupted data), but continue with empty index
+    // The index is still usable, just empty
+    if (isErr(loadResult)) {
+      logger.warn(`SST index ${entry.name} load returned error (using empty index): ${loadResult.error.message}`)
+    }
 
     // Cache the loaded index
     this.cacheIndex(cacheKey, {
@@ -1278,7 +1305,7 @@ function readCompactShard(buffer: Uint8Array): CompactShardEntry[] {
     throw new Error(`Unsupported compact shard version: ${version}, expected 3`)
   }
 
-  const flags = buffer[offset++]
+  const flags = buffer[offset++]!
   const hasKeyHash = (flags & 0x01) !== 0
 
   const entryCount = view.getUint32(offset, false) // big endian
@@ -1301,7 +1328,7 @@ function readCompactShard(buffer: Uint8Array): CompactShardEntry[] {
     let rowOffset = 0
     let shift = 0
     while (true) {
-      const byte = buffer[offset++]
+      const byte = buffer[offset++]!
       rowOffset |= (byte & 0x7f) << shift
       if ((byte & 0x80) === 0) break
       shift += 7
@@ -1311,7 +1338,7 @@ function readCompactShard(buffer: Uint8Array): CompactShardEntry[] {
     }
 
     // Read docId length and string
-    const docIdLen = buffer[offset++]
+    const docIdLen = buffer[offset++]!
     const docId = decoder.decode(buffer.subarray(offset, offset + docIdLen))
     offset += docIdLen
 

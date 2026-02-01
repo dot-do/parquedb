@@ -137,3 +137,74 @@ export function getRandom48Bit(): number {
 export function getUUID(): string {
   return crypto.randomUUID()
 }
+
+/**
+ * Crockford's Base32 encoding alphabet (excludes I, L, O, U)
+ */
+const ULID_ENCODING = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+/**
+ * Generate a ULID (Universally Unique Lexicographically Sortable Identifier)
+ *
+ * ULIDs are 26 characters long and consist of:
+ * - 10 characters for timestamp (48-bit millisecond precision)
+ * - 16 characters for randomness (80-bit cryptographically secure random)
+ *
+ * This implementation is race-condition-free because:
+ * - Each call generates fresh 80-bit cryptographic randomness
+ * - No shared mutable state between calls
+ * - Works reliably across Node.js, browsers, and Cloudflare Workers
+ *
+ * Note: This does not implement monotonic ULID (incrementing random part within
+ * same millisecond) to avoid race conditions. The 80-bit random component provides
+ * sufficient collision resistance (1 in 2^80 chance of collision within same ms).
+ *
+ * @returns ULID string (e.g., "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+ */
+export function generateULID(): string {
+  const now = Date.now()
+
+  // Encode timestamp (48-bit, 10 characters in Crockford Base32)
+  let time = ''
+  let timestamp = now
+  for (let i = 0; i < 10; i++) {
+    time = ULID_ENCODING[timestamp % 32] + time
+    timestamp = Math.floor(timestamp / 32)
+  }
+
+  // Generate 80-bit random component (10 bytes = 80 bits)
+  // Use 16 characters in Crockford Base32 (5 bits each = 80 bits total)
+  const randomBytes = getRandomBytes(10)
+  let random = ''
+
+  // Convert 10 bytes to 16 Base32 characters
+  // Each byte provides 8 bits, we need 5 bits per character
+  // Pack bytes and extract 5-bit groups
+  let bitBuffer = 0
+  let bitsInBuffer = 0
+  let byteIndex = 0
+
+  for (let i = 0; i < 16; i++) {
+    while (bitsInBuffer < 5 && byteIndex < randomBytes.length) {
+      bitBuffer = (bitBuffer << 8) | randomBytes[byteIndex]!
+      bitsInBuffer += 8
+      byteIndex++
+    }
+    bitsInBuffer -= 5
+    random += ULID_ENCODING[(bitBuffer >> bitsInBuffer) & 0x1f]
+  }
+
+  return time + random
+}
+
+/**
+ * Generate a lowercase ULID
+ *
+ * Same as generateULID() but returns lowercase for consistency with
+ * common ID conventions.
+ *
+ * @returns Lowercase ULID string
+ */
+export function generateId(): string {
+  return generateULID().toLowerCase()
+}

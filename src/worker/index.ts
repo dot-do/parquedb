@@ -1263,8 +1263,8 @@ export default {
               items: [],
             }
           }
-          relationships[rel.predicate].count++
-          relationships[rel.predicate].items.push({
+          relationships[rel.predicate]!.count++
+          relationships[rel.predicate]!.items.push({
             name: rel.to_name,
             href: `${baseUrl}/datasets/${datasetId}/${rel.to_ns}/${encodeURIComponent(rel.to_id)}`,
             ...(rel.importance ? { importance: rel.importance } : {}),
@@ -1274,7 +1274,7 @@ export default {
 
         // Sort items by importance (descending) within each predicate
         for (const pred of Object.keys(relationships)) {
-          relationships[pred].items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
+          relationships[pred]!.items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
         }
 
         // Build response

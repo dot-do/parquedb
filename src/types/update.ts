@@ -2,7 +2,8 @@
  * MongoDB-style update operators for ParqueDB
  */
 
-import type { EntityId, Filter } from './index'
+import type { EntityId } from './entity'
+import type { Filter } from './filter'
 
 // =============================================================================
 // Field Update Operators

@@ -594,6 +594,42 @@ describe('StorageBackend Interface', () => {
           backend.readRange('test/nonexistent-range.txt', 0, 10)
         ).rejects.toThrow(FileNotFoundError)
       })
+
+      it('should throw for negative start position', async () => {
+        const path = 'test/range-validation.txt'
+        await backend.write(path, textToBytes('test content'))
+
+        await expect(
+          backend.readRange(path, -1, 10)
+        ).rejects.toThrow()
+      })
+
+      it('should throw with descriptive message for negative start', async () => {
+        const path = 'test/range-validation.txt'
+        await backend.write(path, textToBytes('test content'))
+
+        await expect(
+          backend.readRange(path, -5, 10)
+        ).rejects.toThrow(/start.*-5.*non-negative|start.*negative/i)
+      })
+
+      it('should throw when end is less than start', async () => {
+        const path = 'test/range-validation.txt'
+        await backend.write(path, textToBytes('test content'))
+
+        await expect(
+          backend.readRange(path, 10, 5)
+        ).rejects.toThrow()
+      })
+
+      it('should throw with descriptive message when end < start', async () => {
+        const path = 'test/range-validation.txt'
+        await backend.write(path, textToBytes('test content'))
+
+        await expect(
+          backend.readRange(path, 20, 10)
+        ).rejects.toThrow(/end.*10.*>=.*start.*20|end.*start/i)
+      })
     })
 
     describe('edge cases', () => {

@@ -21,18 +21,14 @@ import type {
   DeleteResult,
 } from '../types'
 import type { RpcTargetMarker, RpcPromiseMarker } from '../types/integrations'
-import { createRpcPromise } from './rpc-promise'
+import { createRpcPromise, type RpcService } from './rpc-promise'
+
+// Re-export RpcService for backwards compatibility
+export type { RpcService }
 
 // =============================================================================
 // Types
 // =============================================================================
-
-/**
- * Service interface for RPC communication
- */
-export interface RpcService {
-  fetch(path: string, options?: { method?: string; body?: string; headers?: Record<string, string> }): Promise<Response>
-}
 
 /**
  * Create input for collection operations

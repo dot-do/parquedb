@@ -18,9 +18,10 @@ import { DEFAULT_CACHE_CONFIG } from './CacheStrategy'
  * Error thrown when a requested object is not found in R2
  */
 export class NotFoundError extends Error {
+  override readonly name = 'NotFoundError'
   constructor(public readonly path: string) {
     super(`Object not found: ${path}`)
-    this.name = 'NotFoundError'
+    Object.setPrototypeOf(this, NotFoundError.prototype)
   }
 }
 
@@ -28,6 +29,7 @@ export class NotFoundError extends Error {
  * Error thrown when a read operation fails
  */
 export class ReadError extends Error {
+  override readonly name = 'ReadError'
   public readonly path: string
   public override readonly cause?: Error
 
@@ -37,7 +39,7 @@ export class ReadError extends Error {
     cause?: Error
   ) {
     super(message)
-    this.name = 'ReadError'
+    Object.setPrototypeOf(this, ReadError.prototype)
     this.path = path
     this.cause = cause
   }

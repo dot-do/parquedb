@@ -7,6 +7,7 @@
 import type { ExpectationResult } from 'vitest'
 import type { Entity, EntityId, EntityRef, AuditFields, Filter } from '../src/types'
 import { isFieldOperator } from '../src/types/filter'
+import { createSafeRegex } from '../src/utils/safe-regex'
 
 // =============================================================================
 // Type Guards
@@ -143,7 +144,7 @@ function matchesOperator(value: unknown, operator: Record<string, unknown>): boo
         if (opValue === false && value !== undefined) return false
         break
       case '$regex': {
-        const regex = opValue instanceof RegExp ? opValue : new RegExp(opValue as string, operator.$options as string)
+        const regex = createSafeRegex(opValue as string | RegExp, operator.$options as string)
         if (typeof value !== 'string' || !regex.test(value)) return false
         break
       }

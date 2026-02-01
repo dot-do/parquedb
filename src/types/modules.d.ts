@@ -59,3 +59,23 @@ declare module 'hyparquet-compressors/src/gzip.js' {
    */
   export function gunzip(input: Uint8Array, output?: Uint8Array): Uint8Array
 }
+
+/**
+ * bson - MongoDB BSON serialization library (optional dependency)
+ * @see https://github.com/mongodb/js-bson
+ */
+declare module 'bson' {
+  /**
+   * Deserialize a BSON buffer to a JavaScript object
+   * @param buffer - BSON buffer
+   * @returns Deserialized JavaScript object
+   */
+  export function deserialize(buffer: Buffer | Uint8Array): Record<string, unknown>
+
+  /**
+   * Serialize a JavaScript object to BSON buffer
+   * @param object - JavaScript object
+   * @returns BSON buffer
+   */
+  export function serialize(object: Record<string, unknown>): Buffer
+}

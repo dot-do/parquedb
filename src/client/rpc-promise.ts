@@ -9,7 +9,13 @@
  */
 
 import type { RpcPromiseMarker } from '../types/integrations'
-import type { RpcService } from './collection'
+
+/**
+ * Service interface for RPC communication
+ */
+export interface RpcService {
+  fetch(path: string, options?: { method?: string; body?: string; headers?: Record<string, string> }): Promise<Response>
+}
 
 // =============================================================================
 // Types
@@ -607,8 +613,9 @@ export class RpcError extends Error {
     public readonly chain: RpcPromiseChain
   ) {
     super(message)
-    this.name = 'RpcError'
+    Object.setPrototypeOf(this, RpcError.prototype)
   }
+  override readonly name = 'RpcError'
 }
 
 // =============================================================================

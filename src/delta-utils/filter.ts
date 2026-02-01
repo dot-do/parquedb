@@ -12,6 +12,8 @@
  * - Parquet zone map integration for predicate pushdown
  */
 
+import { createSafeRegex } from '../utils/safe-regex'
+
 // =============================================================================
 // FILTER TYPES
 // =============================================================================
@@ -183,7 +185,7 @@ function matchesComparisonOperators<T>(
         break
       case '$regex': {
         if (typeof docValue !== 'string') return false
-        const regex = opValue instanceof RegExp ? opValue : new RegExp(opValue as string)
+        const regex = createSafeRegex(opValue as string | RegExp)
         if (!regex.test(docValue)) return false
         break
       }

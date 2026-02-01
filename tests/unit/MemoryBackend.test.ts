@@ -13,6 +13,7 @@ import {
   FileExistsError,
   DirectoryNotEmptyError,
 } from '../../src/storage/MemoryBackend'
+import { InvalidRangeError } from '../../src/storage/validation'
 
 // Helper to create test data
 function createTestData(content: string): Uint8Array {
@@ -301,6 +302,39 @@ describe('MemoryBackend', () => {
     it('should return empty array when start is beyond file size', async () => {
       const result = await backend.readRange('numbers.txt', 100, 200)
       expect(result.length).toBe(0)
+    })
+
+    it('should throw InvalidRangeError for negative start', async () => {
+      await expect(backend.readRange('numbers.txt', -1, 5)).rejects.toThrow(InvalidRangeError)
+    })
+
+    it('should throw InvalidRangeError when end < start', async () => {
+      await expect(backend.readRange('numbers.txt', 10, 5)).rejects.toThrow(InvalidRangeError)
+    })
+
+    it('should include start value in error message for negative start', async () => {
+      try {
+        await backend.readRange('numbers.txt', -5, 10)
+        expect.fail('Should have thrown InvalidRangeError')
+      } catch (error) {
+        expect(error).toBeInstanceOf(InvalidRangeError)
+        expect((error as InvalidRangeError).message).toContain('-5')
+        expect((error as InvalidRangeError).start).toBe(-5)
+        expect((error as InvalidRangeError).end).toBe(10)
+      }
+    })
+
+    it('should include both values in error message when end < start', async () => {
+      try {
+        await backend.readRange('numbers.txt', 20, 10)
+        expect.fail('Should have thrown InvalidRangeError')
+      } catch (error) {
+        expect(error).toBeInstanceOf(InvalidRangeError)
+        expect((error as InvalidRangeError).message).toContain('20')
+        expect((error as InvalidRangeError).message).toContain('10')
+        expect((error as InvalidRangeError).start).toBe(20)
+        expect((error as InvalidRangeError).end).toBe(10)
+      }
     })
   })
 

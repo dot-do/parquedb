@@ -130,7 +130,7 @@ export function bloomFilterMightContain(filter: BloomFilter, value: unknown): bo
       return true // Out of bounds, assume might contain
     }
 
-    if ((filter.bits[byteIndex] & (1 << bitIndex)) === 0) {
+    if ((filter.bits[byteIndex]! & (1 << bitIndex)) === 0) {
       return false // Bit not set, definitely not present
     }
   }
@@ -184,7 +184,7 @@ export function bloomFilterAdd(filter: BloomFilter, value: unknown): void {
     const bitIndex = hash % 8
 
     if (byteIndex < filter.bits.length) {
-      filter.bits[byteIndex] |= 1 << bitIndex
+      filter.bits[byteIndex]! |= 1 << bitIndex
     }
   }
 }
@@ -204,7 +204,7 @@ export function bloomFilterMerge(a: BloomFilter, b: BloomFilter): BloomFilter {
 
   const merged = new Uint8Array(a.bits.length)
   for (let i = 0; i < a.bits.length; i++) {
-    merged[i] = a.bits[i] | b.bits[i]
+    merged[i] = a.bits[i]! | b.bits[i]!
   }
 
   return {
@@ -224,7 +224,7 @@ export function bloomFilterEstimateCount(filter: BloomFilter): number {
   // Count set bits
   let setBits = 0
   for (let i = 0; i < filter.bits.length; i++) {
-    setBits += popcount(filter.bits[i])
+    setBits += popcount(filter.bits[i] ?? 0)
   }
 
   // Estimate using formula: n = -m * ln(1 - X/m) / k
@@ -557,7 +557,7 @@ function simpleHash(data: Uint8Array, seed: number): number {
   let hash = seed
 
   for (let i = 0; i < data.length; i++) {
-    hash ^= data[i]
+    hash ^= data[i]!
     hash = Math.imul(hash, 0x01000193)
   }
 

@@ -10,6 +10,7 @@
 
 import type { Event } from '../types/entity'
 import type { EventBatch, EventSegment, EventManifest } from './types'
+import { tryParseJson, logger } from '../utils'
 
 // =============================================================================
 // Types
@@ -250,7 +251,13 @@ export class SegmentWriter {
   private deserializeBatch(data: Uint8Array, segment: EventSegment): EventBatch {
     const json = new TextDecoder().decode(data)
     const lines = json.split('\n').filter(line => line.trim())
-    const events: Event[] = lines.map(line => JSON.parse(line))
+    const events: Event[] = lines
+      .map(line => tryParseJson<Event>(line))
+      .filter((e): e is Event => e !== undefined)
+
+    if (events.length < lines.length) {
+      logger.warn(`Skipped ${lines.length - events.length} malformed event lines during batch deserialization`)
+    }
 
     return {
       events,
@@ -267,7 +274,13 @@ export class SegmentWriter {
   private deserializeBatchWithoutMeta(data: Uint8Array): EventBatch {
     const json = new TextDecoder().decode(data)
     const lines = json.split('\n').filter(line => line.trim())
-    const events: Event[] = lines.map(line => JSON.parse(line))
+    const events: Event[] = lines
+      .map(line => tryParseJson<Event>(line))
+      .filter((e): e is Event => e !== undefined)
+
+    if (events.length < lines.length) {
+      logger.warn(`Skipped ${lines.length - events.length} malformed event lines during batch deserialization`)
+    }
 
     let minTs = Infinity
     let maxTs = -Infinity

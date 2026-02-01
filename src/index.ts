@@ -97,6 +97,78 @@ export {
   applyUpdate,
 } from './query/update'
 
+export {
+  QueryBuilder,
+  type ComparisonOp,
+  type StringOp,
+  type ExistenceOp,
+  type QueryOp,
+} from './query/builder'
+
+// =============================================================================
+// Aggregation Framework
+// =============================================================================
+
+export {
+  // Executor
+  executeAggregation,
+  AggregationExecutor,
+  // Types
+  type AggregationStage,
+  type AggregationOptions,
+  type AggregationExplain,
+  // Stage types
+  type MatchStage,
+  type GroupStage,
+  type GroupSpec,
+  type SortStage,
+  type SortOrder,
+  type LimitStage,
+  type SkipStage,
+  type ProjectStage,
+  type ProjectionValue,
+  type UnwindStage,
+  type UnwindOptions,
+  type LookupStage,
+  type LookupOptions,
+  type CountStage,
+  type AddFieldsStage,
+  type SetStage,
+  type UnsetStage,
+  type ReplaceRootStage,
+  type FacetStage,
+  type BucketStage,
+  type SampleStage,
+  // Accumulator types
+  type Accumulator,
+  type SumAccumulator,
+  type AvgAccumulator,
+  type MinAccumulator,
+  type MaxAccumulator,
+  type CountAccumulator,
+  type FirstAccumulator,
+  type LastAccumulator,
+  type PushAccumulator,
+  type AddToSetAccumulator,
+  // Type guards
+  isMatchStage,
+  isGroupStage,
+  isSortStage,
+  isLimitStage,
+  isSkipStage,
+  isProjectStage,
+  isUnwindStage,
+  isLookupStage,
+  isCountStage,
+  isAddFieldsStage,
+  isSetStage,
+  isUnsetStage,
+  isReplaceRootStage,
+  isFacetStage,
+  isBucketStage,
+  isSampleStage,
+} from './aggregation'
+
 // =============================================================================
 // Indexes
 // =============================================================================
@@ -206,6 +278,65 @@ export {
   type OperationMetrics,
   type AggregatedMetrics,
 } from './observability'
+
+// =============================================================================
+// Migration Utilities
+// =============================================================================
+
+export {
+  // JSON import
+  importFromJson,
+  importFromJsonl,
+  // CSV import
+  importFromCsv,
+  // MongoDB import
+  importFromMongodb,
+  importFromBson,
+  // Utilities
+  inferType,
+  parseCsvLine,
+  convertBsonValue,
+  // Types
+  type MigrationOptions,
+  type JsonImportOptions,
+  type CsvImportOptions,
+  type BsonImportOptions,
+  type MigrationResult,
+  type MigrationError,
+} from './migration'
+
+// =============================================================================
+// Mutation Layer
+// =============================================================================
+
+export {
+  // Main Executor
+  MutationExecutor,
+  VersionConflictError,
+  // Types
+  type MutationContext as MutationLayerContext,
+  type CreateResult as MutationCreateResult,
+  type UpdateResult as MutationLayerUpdateResult,
+  type DeleteResult as MutationLayerDeleteResult,
+  type MutationEvent,
+  type MutationError,
+  type MutationErrorCode,
+  MutationErrorCodes,
+  MutationOperationError,
+  type MutationHooks,
+  type MutationExecutorConfig,
+  type EntityStore,
+  // Operations
+  executeCreate,
+  executeUpdate,
+  executeDelete,
+  // Operators
+  applyOperators,
+  getField,
+  setField,
+  unsetField,
+  validateUpdateOperators,
+} from './mutation'
 
 // =============================================================================
 // Version

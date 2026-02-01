@@ -29,6 +29,9 @@ import { IndexCache, createR2IndexStorageAdapter, type SelectedIndex } from './I
 import { MAX_CACHE_SIZE } from '../constants'
 // Logger
 import { logger } from '../utils/logger'
+import { stringToBase64 } from '../utils/base64'
+import { createSafeRegex } from '../utils/safe-regex'
+import { tryParseJson, isRecord } from '../utils/json-validation'
 
 // =============================================================================
 // Types
@@ -595,7 +598,8 @@ export class QueryExecutor {
         // Unpack data column - parse JSON if string, use directly if object
         let results = rows.map(row => {
           if (typeof row.data === 'string') {
-            return JSON.parse(row.data) as T
+            const parsed = tryParseJson<T>(row.data)
+            return parsed ?? (row as unknown as T)
           }
           return (row.data ?? row) as T
         })
@@ -814,6 +818,7 @@ export class QueryExecutor {
           if (rgIndex < 0 || rgIndex >= metadata.rowGroups.length) continue
           const rg = metadata.rowGroups[rgIndex]
           const rowStart = rowGroupOffsets[rgIndex]
+          if (rowStart === undefined || rg === undefined) continue
           const rowEnd = rowStart + Number(rg.numRows)
 
           // Try to merge with previous range if adjacent
@@ -860,14 +865,15 @@ export class QueryExecutor {
           // Check both $id and extracted ID from data
           if (candidateSet.has(row.$id)) return true
           // Also check data.$id for nested structure
-          const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data
-          const dataId = (data as Record<string, unknown>)?.$id as string
+          const data = typeof row.data === 'string' ? tryParseJson(row.data) : row.data
+          const dataId = (data && isRecord(data)) ? (data as Record<string, unknown>).$id as string : undefined
           if (dataId && candidateSet.has(dataId)) return true
           return false
         })
         .map(row => {
           if (typeof row.data === 'string') {
-            return JSON.parse(row.data) as T
+            const parsed = tryParseJson<T>(row.data)
+            return parsed ?? (row as unknown as T)
           }
           return (row.data ?? row) as T
         })
@@ -892,8 +898,24 @@ export class QueryExecutor {
         stats,
       }
     } catch (error: unknown) {
-      // Index execution failed, fall back to full scan
-      logger.warn('Index execution failed, falling back to full scan', error)
+      // Index execution failed - log with context and fall back to full scan
+      // This is an expected failure mode (e.g., corrupted index, network issues)
+      // so we log at warn level and allow the query to proceed via full scan
+      const cause = error instanceof Error ? error : new Error(String(error))
+      logger.warn(`Index execution failed for ${datasetId}, falling back to full scan: ${cause.message}`, {
+        datasetId,
+        filter,
+        error: cause,
+      })
+
+      // Record that we attempted index usage but had to fall back
+      const extendedStats = stats as QueryStats & {
+        indexFallback?: boolean
+        indexError?: string
+      }
+      extendedStats.indexFallback = true
+      extendedStats.indexError = cause.message
+
       return null
     }
   }
@@ -1044,16 +1066,22 @@ export class QueryExecutor {
         const rawRels = await this.parquetReader.read<RawRelRow>(path)
 
         // Parse JSON data column if needed
-        allRels = rawRels.map(row => ({
-          from_id: row.from_id,
-          data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data,
-        }))
+        allRels = rawRels.map(row => {
+          if (typeof row.data === 'string') {
+            const parsed = tryParseJson<RelRow['data']>(row.data)
+            return {
+              from_id: row.from_id,
+              data: parsed ?? { to: '', ns: '', name: '', pred: '', rev: '' },
+            }
+          }
+          return row as RelRow
+        })
 
         this.dataCache.set(path, allRels as unknown[])
       }
 
       // Filter by from_id and optionally predicate, then map to expected format
-      return allRels
+      return allRels!
         .filter(rel =>
           rel.from_id === fromId &&
           (!predicate || rel.data.pred === predicate)
@@ -1451,7 +1479,7 @@ export class QueryExecutor {
 
     // Handle string operators
     if ('$regex' in operator) {
-      const regex = new RegExp(operator.$regex as string, operator.$options)
+      const regex = createSafeRegex(operator.$regex as string, operator.$options)
       return regex.test(value as string)
     }
     if ('$startsWith' in operator) {
@@ -1615,7 +1643,8 @@ export class QueryExecutor {
       }
     }
 
-    return Buffer.from(JSON.stringify(cursorData)).toString('base64')
+    // Base64 encode the cursor (Worker-safe)
+    return stringToBase64(JSON.stringify(cursorData))
   }
 
   // ===========================================================================

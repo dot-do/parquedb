@@ -251,7 +251,7 @@ export class ParquetWriter {
     for (const row of rows) {
       for (const colName of Object.keys(schema)) {
         const value = row[colName]
-        columns[colName].push(value ?? null)
+        columns[colName]!.push(value ?? null)
       }
     }
 
@@ -446,13 +446,15 @@ export class ParquetWriter {
       // Convert to rows
       const resultObj = result ?? {}
       const columnNames = Object.keys(resultObj)
-      const numRows = columnNames.length > 0 ? resultObj[columnNames[0]]?.length ?? 0 : 0
+      const firstCol = columnNames[0]
+      const numRows = firstCol ? (resultObj[firstCol]?.length ?? 0) : 0
       const rows: Record<string, unknown>[] = []
 
       for (let i = 0; i < numRows; i++) {
         const row: Record<string, unknown> = {}
         for (const colName of columnNames) {
-          row[colName] = resultObj[colName][i]
+          const col = resultObj[colName]
+          row[colName] = col ? col[i] : undefined
         }
         rows.push(row)
       }
@@ -487,15 +489,17 @@ export class ParquetWriter {
 
       // Convert columns to rows
       const columnNames = Object.keys(parsed.columns || {})
-      const numRows = columnNames.length > 0
-        ? (parsed.columns[columnNames[0]]?.length ?? 0)
+      const firstCol = columnNames[0]
+      const numRows = firstCol
+        ? (parsed.columns[firstCol]?.length ?? 0)
         : 0
 
       const rows: Record<string, unknown>[] = []
       for (let i = 0; i < numRows; i++) {
         const row: Record<string, unknown> = {}
         for (const colName of columnNames) {
-          row[colName] = parsed.columns[colName][i]
+          const col = parsed.columns[colName]
+          row[colName] = col ? col[i] : undefined
         }
         rows.push(row)
       }

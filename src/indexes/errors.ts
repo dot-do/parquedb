@@ -8,7 +8,7 @@
  * Error thrown when a unique constraint is violated
  */
 export class UniqueConstraintError extends Error {
-  readonly name = 'UniqueConstraintError'
+  override readonly name = 'UniqueConstraintError'
 
   constructor(
     /** Name of the index */
@@ -28,7 +28,7 @@ export class UniqueConstraintError extends Error {
  * Error thrown when an index is not found
  */
 export class IndexNotFoundError extends Error {
-  readonly name = 'IndexNotFoundError'
+  override readonly name = 'IndexNotFoundError'
 
   constructor(
     /** Name of the index */
@@ -45,15 +45,51 @@ export class IndexNotFoundError extends Error {
  * Error thrown when an index build fails
  */
 export class IndexBuildError extends Error {
-  readonly name = 'IndexBuildError'
+  override readonly name = 'IndexBuildError'
 
   constructor(
     /** Name of the index */
     public readonly indexName: string,
     /** Original error that caused the build to fail */
-    public readonly cause: Error
+    public override readonly cause: Error
   ) {
     super(`Failed to build index "${indexName}": ${cause.message}`)
     Object.setPrototypeOf(this, IndexBuildError.prototype)
+  }
+}
+
+/**
+ * Error thrown when an index fails to load from storage
+ */
+export class IndexLoadError extends Error {
+  override readonly name = 'IndexLoadError'
+
+  constructor(
+    /** Name of the index */
+    public readonly indexName: string,
+    /** Path where index was expected */
+    public readonly path: string,
+    /** Original error that caused the load to fail */
+    public override readonly cause: Error
+  ) {
+    super(`Failed to load index "${indexName}" from "${path}": ${cause.message}`)
+    Object.setPrototypeOf(this, IndexLoadError.prototype)
+  }
+}
+
+/**
+ * Error thrown when an index catalog fails to parse
+ */
+export class IndexCatalogError extends Error {
+  override readonly name = 'IndexCatalogError'
+
+  constructor(
+    /** Path where catalog was expected */
+    public readonly path: string,
+    /** Original error that caused the parse to fail */
+    public override readonly cause: Error
+  ) {
+    super(`Failed to parse index catalog at "${path}": ${cause.message}`)
+    Object.setPrototypeOf(this, IndexCatalogError.prototype)
   }
 }

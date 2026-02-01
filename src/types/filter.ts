@@ -293,7 +293,7 @@ export interface Filter {
 export function isComparisonOperator(value: unknown): value is ComparisonOperator {
   if (typeof value !== 'object' || value === null) return false
   const keys = Object.keys(value)
-  return keys.length === 1 && ['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin'].includes(keys[0])
+  return keys.length === 1 && keys[0] !== undefined && ['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin'].includes(keys[0])
 }
 
 /** Check if value is a string operator */
@@ -307,14 +307,14 @@ export function isStringOperator(value: unknown): value is StringOperator {
 export function isArrayOperator(value: unknown): value is ArrayOperator {
   if (typeof value !== 'object' || value === null) return false
   const keys = Object.keys(value)
-  return keys.length === 1 && ['$all', '$elemMatch', '$size'].includes(keys[0])
+  return keys.length === 1 && keys[0] !== undefined && ['$all', '$elemMatch', '$size'].includes(keys[0])
 }
 
 /** Check if value is an existence operator */
 export function isExistenceOperator(value: unknown): value is ExistenceOperator {
   if (typeof value !== 'object' || value === null) return false
   const keys = Object.keys(value)
-  return keys.length === 1 && ['$exists', '$type'].includes(keys[0])
+  return keys.length === 1 && keys[0] !== undefined && ['$exists', '$type'].includes(keys[0])
 }
 
 /** Check if value is any field operator (not a plain value) */

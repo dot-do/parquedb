@@ -19,6 +19,7 @@
  * This indicates another writer has modified the file since we read it.
  */
 export class VersionMismatchError extends Error {
+  override readonly name = 'VersionMismatchError'
   readonly path: string
   readonly expectedVersion: string | null
   readonly actualVersion: string | null
@@ -31,7 +32,7 @@ export class VersionMismatchError extends Error {
     super(
       `Version mismatch for ${path}: expected ${expectedVersion ?? 'null (create)'}, got ${actualVersion ?? 'null (not found)'}`
     )
-    this.name = 'VersionMismatchError'
+    Object.setPrototypeOf(this, VersionMismatchError.prototype)
     this.path = path
     this.expectedVersion = expectedVersion
     this.actualVersion = actualVersion

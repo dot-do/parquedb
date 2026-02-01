@@ -6,7 +6,7 @@
  */
 
 import type { Filter } from '../types/filter'
-import { deepEqual, compareValues, getNestedValue, getValueType } from '../utils'
+import { deepEqual, compareValues, getNestedValue, getValueType, createSafeRegex } from '../utils'
 
 // =============================================================================
 // Main Filter Evaluation
@@ -26,6 +26,50 @@ export function matchesFilter(row: unknown, filter: Filter): boolean {
 
   if (row === null || row === undefined) {
     return false
+  }
+
+  // Handle primitives - treat filter as direct operators against the value
+  // This is used by $pull operator when filtering primitive values in arrays
+  if (typeof row !== 'object') {
+    // For primitives, interpret the filter as operators against the value directly
+    for (const [op, opValue] of Object.entries(filter)) {
+      if (!op.startsWith('$')) {
+        // Non-operator field - primitives don't have fields, so no match
+        return false
+      }
+      switch (op) {
+        case '$eq':
+          if (!deepEqual(row, opValue)) return false
+          break
+        case '$ne':
+          if (deepEqual(row, opValue)) return false
+          break
+        case '$gt':
+          if (compareValues(row, opValue) <= 0) return false
+          break
+        case '$gte':
+          if (compareValues(row, opValue) < 0) return false
+          break
+        case '$lt':
+          if (compareValues(row, opValue) >= 0) return false
+          break
+        case '$lte':
+          if (compareValues(row, opValue) > 0) return false
+          break
+        case '$in':
+          if (!Array.isArray(opValue)) return false
+          if (!opValue.some(v => deepEqual(row, v))) return false
+          break
+        case '$nin':
+          if (!Array.isArray(opValue)) return false
+          if (opValue.some(v => deepEqual(row, v))) return false
+          break
+        default:
+          // Unknown operator for primitives - ignore
+          break
+      }
+    }
+    return true
   }
 
   const obj = row as Record<string, unknown>
@@ -183,9 +227,9 @@ function evaluateOperators(value: unknown, operators: Record<string, unknown>): 
 
       case '$regex': {
         if (typeof value !== 'string') return false
-        const pattern = opValue instanceof RegExp
-          ? opValue
-          : new RegExp(opValue as string, (operators.$options as string) || '')
+        // Only pass flags if $options is explicitly provided, otherwise let RegExp keep its own flags
+        const flags = operators.$options !== undefined ? (operators.$options as string) : undefined
+        const pattern = createSafeRegex(opValue as string | RegExp, flags)
         if (!pattern.test(value)) return false
         break
       }

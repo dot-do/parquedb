@@ -26,15 +26,17 @@ import {
   FileExistsError,
   DirectoryNotEmptyError,
 } from './MemoryBackend'
+import { validateRange } from './validation'
 import { getRandomBase36 } from '../utils'
 
 /**
  * Error thrown when a path traversal attempt is detected
  */
 export class PathTraversalError extends Error {
+  override readonly name = 'PathTraversalError'
   constructor(path: string) {
     super(`Path traversal attempt detected: ${path}`)
-    this.name = 'PathTraversalError'
+    Object.setPrototypeOf(this, PathTraversalError.prototype)
   }
 }
 
@@ -122,12 +124,8 @@ export class FsBackend implements StorageBackend {
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
-    if (start < 0) {
-      throw new RangeError('Start position cannot be negative')
-    }
-    if (start > end) {
-      throw new RangeError('Start position cannot be greater than end position')
-    }
+    // Validate range parameters using shared validation
+    validateRange(start, end)
 
     const fullPath = this.resolvePath(path)
 

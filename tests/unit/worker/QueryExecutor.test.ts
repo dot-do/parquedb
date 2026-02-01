@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Filter, FieldFilter, FieldOperator } from '@/types/filter'
 import type { FindOptions, SortSpec, Projection } from '@/types/options'
+import { createSafeRegex } from '@/utils/safe-regex'
 
 // =============================================================================
 // Mock Types (matching QueryExecutor internals)
@@ -266,7 +267,7 @@ function matchesCondition(value: unknown, condition: FieldFilter): boolean {
   if ('$nin' in operator) return !(operator.$nin as unknown[]).includes(value)
 
   if ('$regex' in operator) {
-    const regex = new RegExp(operator.$regex as string, operator.$options)
+    const regex = createSafeRegex(operator.$regex as string, operator.$options)
     return regex.test(value as string)
   }
   if ('$startsWith' in operator) {

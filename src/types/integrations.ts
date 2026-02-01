@@ -215,15 +215,16 @@ export function fromIceType(
             name: `idx_${name}_${i}`,
             fields: indexDef.map((f: string) => ({ field: f })),
           })
-        } else if (typeof indexDef === 'object') {
+        } else if (typeof indexDef === 'object' && indexDef !== null) {
+          const def = indexDef as { name?: string; fields?: unknown[]; unique?: boolean; sparse?: boolean }
           const idx: import('./schema').IndexDefinition = {
-            name: indexDef.name || `idx_${name}_${i}`,
-            fields: (indexDef.fields || []).map((f: any) =>
-              typeof f === 'string' ? { field: f } : f
+            name: def.name || `idx_${name}_${i}`,
+            fields: (def.fields || []).map((f: unknown) =>
+              typeof f === 'string' ? { field: f } : f as { field: string }
             ),
           }
-          if (indexDef.unique) idx.unique = true
-          if (indexDef.sparse) idx.sparse = true
+          if (def.unique) idx.unique = true
+          if (def.sparse) idx.sparse = true
           typeDef.$indexes.push(idx)
         }
       }
@@ -331,12 +332,15 @@ export function fromIceType(
           const ftsObj = ftsEntry as { field: string; language?: string; weight?: number }
           const existing = typeDef[ftsObj.field]
           const type = typeof existing === 'string' ? existing :
-                       typeof existing === 'object' && existing !== null ? (existing as { type?: string }).type : 'text'
-          typeDef[ftsObj.field] = {
+                       typeof existing === 'object' && existing !== null ? (existing as { type?: string }).type || 'text' : 'text'
+          const ftsFieldDef: import('./schema').FieldDefinition = {
             type,
             index: 'fts',
-            ftsOptions: { language: ftsObj.language, weight: ftsObj.weight },
           }
+          if (ftsObj.language || ftsObj.weight) {
+            ftsFieldDef.ftsOptions = { language: ftsObj.language, weight: ftsObj.weight }
+          }
+          typeDef[ftsObj.field] = ftsFieldDef
         }
       }
     } else if (directives.fts && directives.fts.length > 0) {
@@ -364,8 +368,8 @@ export function fromIceType(
         }
 
         // Handle metric type
-        if (vec.metric) {
-          vecDef.metric = vec.metric
+        if (vec.metric && ['cosine', 'euclidean', 'dotProduct'].includes(vec.metric)) {
+          vecDef.metric = vec.metric as 'cosine' | 'euclidean' | 'dotProduct'
         }
 
         typeDef[vec.field] = vecDef

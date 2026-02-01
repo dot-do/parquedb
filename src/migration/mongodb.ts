@@ -1,0 +1,464 @@
+/**
+ * MongoDB BSON import utilities for ParqueDB
+ *
+ * Supports importing from:
+ * - MongoDB Extended JSON (mongoexport output)
+ * - BSON dump files (mongodump output)
+ */
+
+import type { ParqueDB } from '../ParqueDB'
+import type { CreateInput, EntityId } from '../types/entity'
+import type { BsonImportOptions, MigrationResult, MigrationError } from './types'
+import { fileExists, convertBsonValue, generateName } from './utils'
+
+/**
+ * Default BSON import options
+ */
+const DEFAULT_OPTIONS: Required<Omit<BsonImportOptions, 'onProgress' | 'transform' | 'entityType' | 'idField' | 'nameField'>> = {
+  batchSize: 1000,
+  skipValidation: false,
+  actor: 'system/migration',
+  preserveMongoId: false,
+  convertObjectIds: true,
+  convertDates: true,
+}
+
+/**
+ * Import documents from a MongoDB Extended JSON file
+ *
+ * This handles the output of `mongoexport --jsonArray` or JSONL format.
+ *
+ * @param db - ParqueDB instance
+ * @param ns - Namespace to import into
+ * @param path - Path to JSON/JSONL file
+ * @param options - Import options
+ * @returns Migration result
+ *
+ * @example
+ * // Import from mongoexport --jsonArray output
+ * const result = await importFromMongodb(db, 'users', './users.json')
+ *
+ * @example
+ * // Import with custom options
+ * const result = await importFromMongodb(db, 'products', './products.json', {
+ *   idField: 'sku',
+ *   nameField: 'title',
+ *   preserveMongoId: true,
+ *   transform: (doc) => ({
+ *     ...doc,
+ *     $type: 'Product',
+ *   }),
+ * })
+ */
+export async function importFromMongodb(
+  db: ParqueDB,
+  ns: string,
+  path: string,
+  options?: BsonImportOptions
+): Promise<MigrationResult> {
+  const startTime = Date.now()
+  const opts = { ...DEFAULT_OPTIONS, ...options }
+  const errors: MigrationError[] = []
+  let imported = 0
+  let skipped = 0
+  let failed = 0
+
+  // Check if file exists
+  if (!await fileExists(path)) {
+    throw new Error(`File not found: ${path}`)
+  }
+
+  // Read file content to determine format
+  const fs = await import('fs/promises')
+  const content = await fs.readFile(path, 'utf-8')
+  const trimmed = content.trim()
+
+  // Determine format (JSON array or JSONL)
+  const isJsonArray = trimmed.startsWith('[')
+
+  let documents: unknown[]
+
+  if (isJsonArray) {
+    // Parse as JSON array
+    try {
+      documents = JSON.parse(trimmed)
+    } catch (err) {
+      throw new Error(`Invalid JSON in file ${path}: ${(err as Error).message}`)
+    }
+  } else {
+    // Parse as JSONL
+    documents = []
+    const lines = trimmed.split('\n')
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!.trim()
+      if (!line) continue
+
+      try {
+        documents.push(JSON.parse(line))
+      } catch (err) {
+        errors.push({
+          index: i + 1,
+          message: `Invalid JSON at line ${i + 1}: ${(err as Error).message}`,
+          document: line,
+        })
+        failed++
+      }
+    }
+  }
+
+  // Get collection
+  const collection = db.collection(ns)
+
+  // Process documents in batches
+  const batch: CreateInput<Record<string, unknown>>[] = []
+
+  for (let i = 0; i < documents.length; i++) {
+    let doc = documents[i] as Record<string, unknown>
+
+    // Convert BSON extended JSON values
+    if (opts.convertObjectIds || opts.convertDates) {
+      doc = convertBsonDocument(doc, opts)
+    }
+
+    // Apply transform
+    if (opts.transform) {
+      try {
+        doc = opts.transform(doc) as Record<string, unknown>
+      } catch (err) {
+        errors.push({
+          index: i,
+          message: `Transform failed: ${(err as Error).message}`,
+          document: documents[i],
+        })
+        failed++
+        continue
+      }
+    }
+
+    // Skip null/undefined documents
+    if (doc == null) {
+      skipped++
+      continue
+    }
+
+    // Prepare document for import
+    const createInput = prepareMongoDocument(doc, ns, opts)
+    batch.push(createInput)
+
+    // Process batch when full
+    if (batch.length >= opts.batchSize) {
+      const batchResult = await processBatch(collection, batch, opts, errors, i - batch.length + 1)
+      imported += batchResult.imported
+      failed += batchResult.failed
+      batch.length = 0
+
+      // Report progress
+      if (opts.onProgress) {
+        opts.onProgress(imported + skipped + failed)
+      }
+    }
+  }
+
+  // Process remaining batch
+  if (batch.length > 0) {
+    const batchResult = await processBatch(collection, batch, opts, errors, documents.length - batch.length)
+    imported += batchResult.imported
+    failed += batchResult.failed
+
+    // Report final progress
+    if (opts.onProgress) {
+      opts.onProgress(imported + skipped + failed)
+    }
+  }
+
+  return {
+    imported,
+    skipped,
+    failed,
+    errors,
+    duration: Date.now() - startTime,
+  }
+}
+
+/**
+ * Import documents from a MongoDB BSON dump file
+ *
+ * This handles the output of `mongodump` (binary BSON format).
+ * Note: This requires the 'bson' npm package to be installed.
+ *
+ * @param db - ParqueDB instance
+ * @param ns - Namespace to import into
+ * @param path - Path to BSON file
+ * @param options - Import options
+ * @returns Migration result
+ */
+export async function importFromBson(
+  db: ParqueDB,
+  ns: string,
+  path: string,
+  options?: BsonImportOptions
+): Promise<MigrationResult> {
+  const startTime = Date.now()
+  const opts = { ...DEFAULT_OPTIONS, ...options }
+  const errors: MigrationError[] = []
+  let imported = 0
+  let skipped = 0
+  let failed = 0
+
+  // Check if file exists
+  if (!await fileExists(path)) {
+    throw new Error(`File not found: ${path}`)
+  }
+
+  // Try to import the bson package
+  interface BsonModule { deserialize: (buffer: Buffer | Uint8Array) => Record<string, unknown> }
+  let BSON: BsonModule
+  try {
+    // Dynamic import - bson is an optional dependency
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    BSON = await (Function('return import("bson")')()) as BsonModule
+  } catch {
+    throw new Error(
+      'BSON import requires the "bson" package. Please install it: npm install bson'
+    )
+  }
+
+  // Read the BSON file
+  const fs = await import('fs/promises')
+  const buffer = await fs.readFile(path)
+
+  // Get collection
+  const collection = db.collection(ns)
+
+  // Parse BSON documents
+  const batch: CreateInput<Record<string, unknown>>[] = []
+  let offset = 0
+  let docIndex = 0
+
+  while (offset < buffer.length) {
+    // Read document size (first 4 bytes, little-endian)
+    if (offset + 4 > buffer.length) break
+
+    const docSize = buffer.readInt32LE(offset)
+    if (docSize <= 0 || offset + docSize > buffer.length) {
+      errors.push({
+        index: docIndex,
+        message: `Invalid BSON document size at offset ${offset}`,
+      })
+      break
+    }
+
+    // Extract document bytes
+    const docBuffer = buffer.subarray(offset, offset + docSize)
+
+    try {
+      // Deserialize BSON document
+      let doc = BSON.deserialize(docBuffer) as Record<string, unknown>
+
+      // Convert BSON values
+      if (opts.convertObjectIds || opts.convertDates) {
+        doc = convertBsonDocument(doc, opts)
+      }
+
+      // Apply transform
+      if (opts.transform) {
+        doc = opts.transform(doc) as Record<string, unknown>
+      }
+
+      // Skip null/undefined documents
+      if (doc == null) {
+        skipped++
+      } else {
+        // Prepare document for import
+        const createInput = prepareMongoDocument(doc, ns, opts)
+        batch.push(createInput)
+
+        // Process batch when full
+        if (batch.length >= opts.batchSize) {
+          const batchResult = await processBatch(collection, batch, opts, errors, docIndex - batch.length + 1)
+          imported += batchResult.imported
+          failed += batchResult.failed
+          batch.length = 0
+
+          // Report progress
+          if (opts.onProgress) {
+            opts.onProgress(imported + skipped + failed)
+          }
+        }
+      }
+    } catch (err) {
+      errors.push({
+        index: docIndex,
+        message: `Failed to parse BSON document at offset ${offset}: ${(err as Error).message}`,
+      })
+      failed++
+    }
+
+    offset += docSize
+    docIndex++
+  }
+
+  // Process remaining batch
+  if (batch.length > 0) {
+    const batchResult = await processBatch(collection, batch, opts, errors, docIndex - batch.length)
+    imported += batchResult.imported
+    failed += batchResult.failed
+
+    // Report final progress
+    if (opts.onProgress) {
+      opts.onProgress(imported + skipped + failed)
+    }
+  }
+
+  return {
+    imported,
+    skipped,
+    failed,
+    errors,
+    duration: Date.now() - startTime,
+  }
+}
+
+/**
+ * Convert a MongoDB BSON document to a ParqueDB-compatible document
+ */
+function convertBsonDocument(
+  doc: Record<string, unknown>,
+  opts: { convertObjectIds: boolean; convertDates: boolean }
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+
+  for (const [key, value] of Object.entries(doc)) {
+    if (value === null || value === undefined) {
+      result[key] = value
+      continue
+    }
+
+    if (Array.isArray(value)) {
+      result[key] = value.map(item => {
+        if (typeof item === 'object' && item !== null) {
+          return convertBsonDocument(item as Record<string, unknown>, opts)
+        }
+        return convertBsonValue(item)
+      })
+      continue
+    }
+
+    if (typeof value === 'object') {
+      const obj = value as Record<string, unknown>
+
+      // Handle ObjectId
+      if (opts.convertObjectIds && '$oid' in obj) {
+        result[key] = obj.$oid
+        continue
+      }
+
+      // Handle Date
+      if (opts.convertDates && '$date' in obj) {
+        result[key] = convertBsonValue(obj)
+        continue
+      }
+
+      // Handle other BSON types
+      if ('$numberLong' in obj || '$numberDecimal' in obj ||
+          '$numberInt' in obj || '$numberDouble' in obj) {
+        result[key] = convertBsonValue(obj)
+        continue
+      }
+
+      // Recursive conversion for nested objects
+      result[key] = convertBsonDocument(obj, opts)
+      continue
+    }
+
+    result[key] = value
+  }
+
+  return result
+}
+
+/**
+ * Prepare a MongoDB document for import
+ */
+function prepareMongoDocument(
+  doc: Record<string, unknown>,
+  ns: string,
+  opts: BsonImportOptions
+): CreateInput<Record<string, unknown>> {
+  // Determine $type
+  const $type = doc.$type as string
+    || opts.entityType
+    || capitalizeNamespace(ns)
+
+  // Determine name
+  let name: string
+
+  if (opts.nameField && doc[opts.nameField]) {
+    name = String(doc[opts.nameField])
+  } else {
+    name = generateName(doc, $type)
+  }
+
+  // Handle _id field
+  const result: Record<string, unknown> = { ...doc }
+
+  if (!opts.preserveMongoId && '_id' in result) {
+    // Optionally use _id as the original MongoDB ID
+    if (!result.mongoId) {
+      result.mongoId = result._id
+    }
+    delete result._id
+  }
+
+  return {
+    ...result,
+    $type,
+    name,
+  }
+}
+
+/**
+ * Process a batch of documents
+ */
+async function processBatch(
+  collection: ReturnType<ParqueDB['collection']>,
+  batch: CreateInput<Record<string, unknown>>[],
+  opts: { skipValidation: boolean; actor: string },
+  errors: MigrationError[],
+  startIndex: number
+): Promise<{ imported: number; failed: number }> {
+  let imported = 0
+  let failed = 0
+
+  for (let i = 0; i < batch.length; i++) {
+    const doc = batch[i]!
+    try {
+      await collection.create(doc, {
+        skipValidation: opts.skipValidation,
+        actor: opts.actor as EntityId,
+      })
+      imported++
+    } catch (err) {
+      errors.push({
+        index: startIndex + i,
+        message: (err as Error).message,
+        document: doc,
+      })
+      failed++
+    }
+  }
+
+  return { imported, failed }
+}
+
+/**
+ * Capitalize a namespace for use as entity type
+ */
+function capitalizeNamespace(ns: string): string {
+  return ns
+    .split(/[-_]/)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join('')
+    .replace(/s$/, '')
+}

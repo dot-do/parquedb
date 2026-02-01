@@ -311,9 +311,9 @@ export async function runR2Benchmark(
       v1Times.sort((a, b) => a - b)
       v3Times.sort((a, b) => a - b)
 
-      const v1Median = v1Times[Math.floor(v1Times.length / 2)]
-      const v3Median = v3Times[Math.floor(v3Times.length / 2)]
-      const speedup = v1Median / v3Median
+      const v1Median = v1Times[Math.floor(v1Times.length / 2)] ?? 0
+      const v3Median = v3Times[Math.floor(v3Times.length / 2)] ?? 1
+      const speedup = v3Median > 0 ? v1Median / v3Median : 1
       const bytesReduction = ((v1Bytes - v3Bytes) / v1Bytes * 100).toFixed(0)
 
       allSpeedups.push(speedup)
@@ -327,13 +327,13 @@ export async function runR2Benchmark(
         name: query.name,
         v1: {
           median: Math.round(v1Median),
-          p95: Math.round(v1Times[Math.floor(v1Times.length * 0.95)]),
+          p95: Math.round(v1Times[Math.floor(v1Times.length * 0.95)] ?? 0),
           rows: v1Rows,
           bytesRead: v1Bytes,
         },
         v3: {
           median: Math.round(v3Median),
-          p95: Math.round(v3Times[Math.floor(v3Times.length * 0.95)]),
+          p95: Math.round(v3Times[Math.floor(v3Times.length * 0.95)] ?? 0),
           rows: v3Rows,
           bytesRead: v3Bytes,
         },

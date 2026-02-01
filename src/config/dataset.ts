@@ -10,6 +10,7 @@
 
 import type { DatasetConfig, CompactionConfig, TimeTravelOptions } from '../events/types'
 import { DEFAULT_DATASET_CONFIG } from '../events/types'
+import { safeJsonParse, isRecord, logger } from '../utils'
 
 // =============================================================================
 // Types
@@ -115,7 +116,13 @@ export class DatasetConfigManager {
 
     if (data) {
       const json = new TextDecoder().decode(data)
-      this.config = JSON.parse(json) as DatasetConfigFile
+      const result = safeJsonParse(json)
+      if (result.ok && isRecord(result.value)) {
+        this.config = result.value as unknown as DatasetConfigFile
+      } else {
+        logger.warn(`Invalid config at ${path}, using defaults`)
+        this.config = this.createDefaultConfig()
+      }
     } else {
       this.config = this.createDefaultConfig()
     }
@@ -292,13 +299,12 @@ export async function isEventsEnabled(
     return DEFAULT_DATASET_CONFIG.events ?? false
   }
 
-  try {
-    const json = new TextDecoder().decode(data)
-    const config = JSON.parse(json) as DatasetConfigFile
-    return config.events ?? false
-  } catch {
-    return DEFAULT_DATASET_CONFIG.events ?? false
+  const json = new TextDecoder().decode(data)
+  const result = safeJsonParse(json)
+  if (result.ok && isRecord(result.value)) {
+    return (result.value as unknown as DatasetConfigFile).events ?? false
   }
+  return DEFAULT_DATASET_CONFIG.events ?? false
 }
 
 /**

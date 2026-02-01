@@ -32,14 +32,16 @@ import type {
   WriteResult,
   RmdirOptions,
 } from '../types/storage'
+import { validateRange } from './validation'
 
 /**
  * Error thrown when a file is not found
  */
 export class DOSqliteNotFoundError extends Error {
+  override readonly name = 'DOSqliteNotFoundError'
   constructor(public readonly path: string) {
     super(`File not found: ${path}`)
-    this.name = 'DOSqliteNotFoundError'
+    Object.setPrototypeOf(this, DOSqliteNotFoundError.prototype)
   }
 }
 
@@ -47,13 +49,14 @@ export class DOSqliteNotFoundError extends Error {
  * Error thrown when a conditional write fails due to ETag mismatch
  */
 export class DOSqliteETagMismatchError extends Error {
+  override readonly name = 'DOSqliteETagMismatchError'
   constructor(
     public readonly path: string,
     public readonly expectedEtag: string | null,
     public readonly actualEtag: string | null
   ) {
     super(`ETag mismatch for ${path}: expected ${expectedEtag}, got ${actualEtag}`)
-    this.name = 'DOSqliteETagMismatchError'
+    Object.setPrototypeOf(this, DOSqliteETagMismatchError.prototype)
   }
 }
 
@@ -61,9 +64,10 @@ export class DOSqliteETagMismatchError extends Error {
  * Error thrown when file already exists (for ifNoneMatch: '*')
  */
 export class DOSqliteFileExistsError extends Error {
+  override readonly name = 'DOSqliteFileExistsError'
   constructor(public readonly path: string) {
     super(`File already exists: ${path}`)
-    this.name = 'DOSqliteFileExistsError'
+    Object.setPrototypeOf(this, DOSqliteFileExistsError.prototype)
   }
 }
 
@@ -115,7 +119,7 @@ function generateEtag(data: Uint8Array): string {
   // Simple FNV-1a hash
   let hash = 2166136261
   for (let i = 0; i < data.length; i++) {
-    hash ^= data[i]
+    hash ^= data[i]!
     hash = (hash * 16777619) >>> 0
   }
   // Include timestamp to ensure different etags even for same content
@@ -217,13 +221,8 @@ export class DOSqliteBackend implements StorageBackend {
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
-    // Validate range parameters
-    if (start < 0) {
-      throw new Error(`Invalid range: start (${start}) must be non-negative`)
-    }
-    if (end < start) {
-      throw new Error(`Invalid range: end (${end}) must be >= start (${start})`)
-    }
+    // Validate range parameters using shared validation
+    validateRange(start, end)
 
     this.ensureSchema()
     const key = this.withPrefix(path)
@@ -315,7 +314,8 @@ export class DOSqliteBackend implements StorageBackend {
     if (options?.limit !== undefined && files.length > options.limit) {
       hasMore = true
       files = files.slice(0, options.limit)
-      cursor = this.withPrefix(files[files.length - 1])
+      const lastFile = files[files.length - 1]
+      cursor = lastFile ? this.withPrefix(lastFile) : undefined
     }
 
     // Handle delimiter for directory-style listing

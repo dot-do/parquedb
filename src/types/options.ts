@@ -2,7 +2,8 @@
  * Query and operation options for ParqueDB
  */
 
-import type { EntityId, Entity, Filter } from './index'
+import type { EntityId, Entity } from './entity'
+import type { Filter } from './filter'
 
 // =============================================================================
 // Sort Options

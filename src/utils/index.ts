@@ -28,4 +28,49 @@ export {
   getRandomBase32,
   getRandom48Bit,
   getUUID,
+  generateULID,
+  generateId,
 } from './random'
+
+export {
+  type SafeRegexOptions,
+  UnsafeRegexError,
+  validateRegexPattern,
+  createSafeRegex,
+  isRegexSafe,
+} from './safe-regex'
+
+export {
+  encodeBase64,
+  decodeBase64,
+  stringToBase64,
+  base64ToString,
+} from './base64'
+
+export {
+  // Type guards
+  isRecord,
+  isArray,
+  isString,
+  isNumber,
+  isBoolean,
+  // Error types
+  JsonParseError,
+  JsonValidationError,
+  // Safe parsing (Result-based)
+  safeJsonParse,
+  parseJsonRecord,
+  parseJsonArray,
+  // Throwing variants
+  parseRecordOrThrow,
+  parseArrayOrThrow,
+  // Schema validation
+  type JsonSchema,
+  validateSchema,
+  parseWithSchema,
+  // Convenience functions
+  parseStoredData,
+  parseStoredArray,
+  tryParseJson,
+  parseWithGuard,
+} from './json-validation'

@@ -15,8 +15,10 @@ import type {
   IndexLookupResult,
   HashIndexEntry,
 } from '../types'
+import type { Result } from '../../types/result'
+import { Ok, Err } from '../../types/result'
 import { encodeKey, decodeKey, hashKey, encodeCompositeKey } from './key-encoder'
-import { UniqueConstraintError } from '../errors'
+import { UniqueConstraintError, IndexLoadError } from '../errors'
 import {
   FORMAT_VERSION_1,
   FORMAT_VERSION_2,
@@ -57,28 +59,41 @@ export class HashIndex {
 
   /**
    * Load the index from storage
+   *
+   * Returns a Result indicating success or failure:
+   * - Ok(void): Index loaded successfully (or didn't exist)
+   * - Err(IndexLoadError): Index exists but failed to load (corrupted/invalid)
+   *
+   * The index is always marked as loaded after this call, with empty data
+   * if loading failed. Callers can check the Result to decide whether to
+   * rebuild the index.
    */
-  async load(): Promise<void> {
-    if (this.loaded) return
+  async load(): Promise<Result<void, IndexLoadError>> {
+    if (this.loaded) return Ok(undefined)
 
     const path = this.getIndexPath()
     const exists = await this.storage.exists(path)
 
     if (!exists) {
       this.loaded = true
-      return
+      return Ok(undefined)
     }
 
     try {
       const data = await this.storage.read(path)
       await this.deserialize(data)
       this.loaded = true
+      return Ok(undefined)
     } catch (error: unknown) {
-      // Index file corrupted or invalid, start fresh
-      logger.warn(`Hash index load failed for ${path}, starting fresh`, error)
+      // Index file corrupted or invalid - clear and start fresh
+      // but return error so caller knows loading failed
+      const cause = error instanceof Error ? error : new Error(String(error))
+      const loadError = new IndexLoadError(this.definition.name, path, cause)
+      logger.warn(`Hash index load failed for ${path}, starting fresh`, loadError)
       this.buckets.clear()
       this.entryCount = 0
       this.loaded = true
+      return Err(loadError)
     }
   }
 

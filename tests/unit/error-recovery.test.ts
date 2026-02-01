@@ -1101,3 +1101,917 @@ describe('Edge Cases', () => {
     expect(index.lookup(true).docIds).not.toContain('doc2')
   })
 })
+
+// =============================================================================
+// Partial Write Failure Tests
+// =============================================================================
+
+/**
+ * Backend that fails after writing partial data
+ */
+class PartialWriteBackend extends MemoryBackend {
+  private writeCallCount = 0
+  private failAfterBytes: number = 0
+  private failOnWriteNumber: number = 0
+  private currentWriteData: Uint8Array | null = null
+
+  /**
+   * Configure to fail after writing a certain number of bytes
+   */
+  failAfterBytesWritten(bytes: number): void {
+    this.failAfterBytes = bytes
+  }
+
+  /**
+   * Configure to fail on the Nth write call
+   */
+  failOnWrite(writeNumber: number): void {
+    this.failOnWriteNumber = writeNumber
+  }
+
+  /**
+   * Get the partial data that was written before failure
+   */
+  getPartialData(): Uint8Array | null {
+    return this.currentWriteData
+  }
+
+  resetFailures(): void {
+    this.writeCallCount = 0
+    this.failAfterBytes = 0
+    this.failOnWriteNumber = 0
+    this.currentWriteData = null
+  }
+
+  override async write(path: string, data: Uint8Array): Promise<{ etag: string; size: number }> {
+    this.writeCallCount++
+
+    // Fail on Nth write
+    if (this.failOnWriteNumber > 0 && this.writeCallCount === this.failOnWriteNumber) {
+      throw new Error('Simulated write failure')
+    }
+
+    // Fail after partial data written
+    if (this.failAfterBytes > 0 && data.length > this.failAfterBytes) {
+      // Simulate partial write - store what would have been written
+      this.currentWriteData = data.slice(0, this.failAfterBytes)
+      // Actually write partial data to simulate corruption
+      await super.write(path, this.currentWriteData)
+      throw new Error('Connection reset during write')
+    }
+
+    return super.write(path, data)
+  }
+}
+
+describe('Partial Write Failures', () => {
+  let storage: PartialWriteBackend
+  let definition: IndexDefinition
+
+  beforeEach(() => {
+    storage = new PartialWriteBackend()
+    definition = {
+      name: 'idx_test',
+      type: 'hash',
+      fields: [{ path: 'status' }],
+    }
+  })
+
+  describe('Index Save with Partial Write', () => {
+    it('should fail gracefully when write is interrupted', async () => {
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+
+      // Add several entries to create substantial data
+      for (let i = 0; i < 100; i++) {
+        index.insert(`status_${i}`, `doc_${i}`, 0, i)
+      }
+
+      // Configure to fail after writing only the header
+      storage.failAfterBytesWritten(5) // Just version + entry count
+
+      // Save should throw
+      await expect(index.save()).rejects.toThrow('Connection reset during write')
+
+      // Reset failures
+      storage.resetFailures()
+
+      // The file now contains corrupt partial data
+      // Loading a new index should recover gracefully
+      const recovered = new HashIndex(storage, 'test', definition)
+      await recovered.load()
+
+      // Should recover as empty (corrupt data detected)
+      expect(recovered.ready).toBe(true)
+    })
+
+    it('should detect and handle truncated index file from partial write', async () => {
+      // Manually create a file with partial data (header only)
+      const partialData = new Uint8Array(5)
+      partialData[0] = FORMAT_VERSION_1
+      const view = new DataView(partialData.buffer)
+      view.setUint32(1, 50, false) // Claims 50 entries but has no data
+
+      await storage.write('indexes/secondary/test.idx_test.idx.parquet', partialData)
+
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+
+      // Should recover gracefully - entries would fail to deserialize
+      expect(index.ready).toBe(true)
+    })
+
+    it('should handle interrupted multi-file write operations', async () => {
+      const index1 = new HashIndex(storage, 'ns1', definition)
+      const index2 = new HashIndex(storage, 'ns2', definition)
+
+      await index1.load()
+      await index2.load()
+
+      index1.insert('active', 'doc1', 0, 0)
+      index2.insert('pending', 'doc2', 0, 0)
+
+      // First save succeeds
+      await index1.save()
+
+      // Reset and configure to fail on next write (which will be write #1 after reset)
+      storage.resetFailures()
+      storage.failOnWrite(1)
+
+      // Second save fails
+      await expect(index2.save()).rejects.toThrow('Simulated write failure')
+
+      // First index should still be intact
+      const loaded1 = new HashIndex(storage, 'ns1', definition)
+      await loaded1.load()
+      expect(loaded1.size).toBe(1)
+      expect(loaded1.lookup('active').docIds).toContain('doc1')
+    })
+  })
+
+  describe('Transaction-like Recovery', () => {
+    it('should maintain consistency after partial failure', async () => {
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+
+      // Add initial data
+      index.insert('active', 'doc1', 0, 0)
+      index.insert('pending', 'doc2', 0, 1)
+      await index.save()
+
+      // Verify initial state
+      const initial = new HashIndex(storage, 'test', definition)
+      await initial.load()
+      expect(initial.size).toBe(2)
+
+      // Now make more changes and fail during save
+      const modified = new HashIndex(storage, 'test', definition)
+      await modified.load()
+      modified.insert('active', 'doc3', 0, 2)
+      modified.insert('active', 'doc4', 0, 3)
+      modified.insert('active', 'doc5', 0, 4)
+
+      storage.failAfterBytesWritten(10)
+
+      try {
+        await modified.save()
+      } catch {
+        // Expected to fail
+      }
+
+      storage.resetFailures()
+
+      // The file is now corrupted, but we should still have the original data
+      // in our in-memory copy before the save attempt
+      expect(modified.size).toBe(5)
+      expect(modified.lookup('active').docIds).toContain('doc3')
+    })
+  })
+})
+
+// =============================================================================
+// Network Timeout Recovery Tests
+// =============================================================================
+
+/**
+ * Backend that simulates network timeouts with configurable retry behavior
+ */
+class TimeoutBackend extends MemoryBackend {
+  private readTimeouts: Map<string, number> = new Map()
+  private writeTimeouts: Map<string, number> = new Map()
+  private currentAttempts: Map<string, number> = new Map()
+  private timeoutDelay: number = 100
+
+  /**
+   * Configure a file to timeout N times before succeeding
+   */
+  setReadTimeouts(path: string, timeoutCount: number): void {
+    this.readTimeouts.set(path, timeoutCount)
+    this.currentAttempts.set(`read:${path}`, 0)
+  }
+
+  setWriteTimeouts(path: string, timeoutCount: number): void {
+    this.writeTimeouts.set(path, timeoutCount)
+    this.currentAttempts.set(`write:${path}`, 0)
+  }
+
+  setTimeoutDelay(ms: number): void {
+    this.timeoutDelay = ms
+  }
+
+  clearTimeouts(): void {
+    this.readTimeouts.clear()
+    this.writeTimeouts.clear()
+    this.currentAttempts.clear()
+  }
+
+  override async read(path: string): Promise<Uint8Array> {
+    const normalizedPath = this.normalizePath(path)
+    const attemptKey = `read:${normalizedPath}`
+    const attempts = this.currentAttempts.get(attemptKey) || 0
+    const maxTimeouts = this.readTimeouts.get(normalizedPath) || 0
+
+    if (attempts < maxTimeouts) {
+      this.currentAttempts.set(attemptKey, attempts + 1)
+      await new Promise(resolve => setTimeout(resolve, this.timeoutDelay))
+      throw new Error('Network timeout')
+    }
+
+    return super.read(path)
+  }
+
+  override async write(path: string, data: Uint8Array): Promise<{ etag: string; size: number }> {
+    const normalizedPath = this.normalizePath(path)
+    const attemptKey = `write:${normalizedPath}`
+    const attempts = this.currentAttempts.get(attemptKey) || 0
+    const maxTimeouts = this.writeTimeouts.get(normalizedPath) || 0
+
+    if (attempts < maxTimeouts) {
+      this.currentAttempts.set(attemptKey, attempts + 1)
+      await new Promise(resolve => setTimeout(resolve, this.timeoutDelay))
+      throw new Error('Network timeout')
+    }
+
+    return super.write(path, data)
+  }
+
+  private normalizePath(path: string): string {
+    return path.startsWith('/') ? path.slice(1) : path
+  }
+}
+
+describe('Network Timeout Recovery', () => {
+  let storage: TimeoutBackend
+  let definition: IndexDefinition
+
+  beforeEach(() => {
+    storage = new TimeoutBackend()
+    storage.setTimeoutDelay(10) // Fast timeouts for tests
+    definition = {
+      name: 'idx_test',
+      type: 'hash',
+      fields: [{ path: 'status' }],
+    }
+  })
+
+  describe('Read Timeout Handling', () => {
+    it('should throw on read timeout', async () => {
+      // Pre-populate with data
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      index.insert('active', 'doc1', 0, 0)
+      await index.save()
+
+      // Configure timeout on first read
+      storage.setReadTimeouts('indexes/secondary/test.idx_test.idx.parquet', 1)
+
+      const newIndex = new HashIndex(storage, 'test', definition)
+      // Load should handle the timeout gracefully
+      await newIndex.load()
+
+      // Index recovers as empty due to read failure
+      expect(newIndex.ready).toBe(true)
+    })
+
+    it('should recover after transient timeout', async () => {
+      // Pre-populate with data
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      index.insert('active', 'doc1', 0, 0)
+      await index.save()
+
+      // Configure timeout that clears after first failure
+      storage.setReadTimeouts('indexes/secondary/test.idx_test.idx.parquet', 1)
+
+      // First load fails
+      const newIndex1 = new HashIndex(storage, 'test', definition)
+      await newIndex1.load()
+      expect(newIndex1.size).toBe(0) // Failed to load
+
+      // Second attempt should succeed (timeout exhausted)
+      const newIndex2 = new HashIndex(storage, 'test', definition)
+      await newIndex2.load()
+      expect(newIndex2.size).toBe(1) // Successfully loaded
+      expect(newIndex2.lookup('active').docIds).toContain('doc1')
+    })
+  })
+
+  describe('Write Timeout Handling', () => {
+    it('should throw on write timeout', async () => {
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      index.insert('active', 'doc1', 0, 0)
+
+      // Configure timeout on write
+      storage.setWriteTimeouts('indexes/secondary/test.idx_test.idx.parquet', 1)
+
+      await expect(index.save()).rejects.toThrow('Network timeout')
+    })
+
+    it('should allow retry after timeout clears', async () => {
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      index.insert('active', 'doc1', 0, 0)
+
+      // Configure single timeout
+      storage.setWriteTimeouts('indexes/secondary/test.idx_test.idx.parquet', 1)
+
+      // First save fails
+      await expect(index.save()).rejects.toThrow('Network timeout')
+
+      // Second save succeeds
+      await index.save()
+
+      // Verify data persisted
+      const loaded = new HashIndex(storage, 'test', definition)
+      await loaded.load()
+      expect(loaded.size).toBe(1)
+    })
+  })
+
+  describe('Timeout with Concurrent Operations', () => {
+    it('should isolate timeouts between different files', async () => {
+      const index1 = new HashIndex(storage, 'ns1', definition)
+      const index2 = new HashIndex(storage, 'ns2', definition)
+
+      await index1.load()
+      await index2.load()
+
+      index1.insert('active', 'doc1', 0, 0)
+      index2.insert('pending', 'doc2', 0, 0)
+
+      // Only ns1 times out
+      storage.setWriteTimeouts('indexes/secondary/ns1.idx_test.idx.parquet', 3)
+
+      // ns1 fails
+      await expect(index1.save()).rejects.toThrow('Network timeout')
+
+      // ns2 succeeds
+      await index2.save()
+
+      // Verify ns2 persisted
+      const loaded2 = new HashIndex(storage, 'ns2', definition)
+      await loaded2.load()
+      expect(loaded2.size).toBe(1)
+    })
+  })
+})
+
+// =============================================================================
+// Corrupted File Handling Tests (Extended)
+// =============================================================================
+
+describe('Corrupted File Handling (Extended)', () => {
+  let storage: MemoryBackend
+  let definition: IndexDefinition
+
+  beforeEach(() => {
+    storage = new MemoryBackend()
+    definition = {
+      name: 'idx_test',
+      type: 'hash',
+      fields: [{ path: 'status' }],
+    }
+  })
+
+  describe('Bit-flip Corruption', () => {
+    it('should handle single bit flip in version byte', async () => {
+      // Create valid index
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      index.insert('active', 'doc1', 0, 0)
+      await index.save()
+
+      // Read and corrupt version byte
+      const data = await storage.read('indexes/secondary/test.idx_test.idx.parquet')
+      const corrupted = new Uint8Array(data)
+      corrupted[0] = corrupted[0]! ^ 0x80 // Flip high bit
+      await storage.write('indexes/secondary/test.idx_test.idx.parquet', corrupted)
+
+      // Load should recover gracefully
+      const loaded = new HashIndex(storage, 'test', definition)
+      await loaded.load()
+      expect(loaded.ready).toBe(true)
+    })
+
+    it('should handle bit flip in entry count', async () => {
+      // Create valid index
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      index.insert('active', 'doc1', 0, 0)
+      await index.save()
+
+      // Read and corrupt entry count
+      const data = await storage.read('indexes/secondary/test.idx_test.idx.parquet')
+      const corrupted = new Uint8Array(data)
+      const view = new DataView(corrupted.buffer)
+      const originalCount = view.getUint32(1, false)
+      view.setUint32(1, originalCount * 100, false) // Inflate count massively
+      await storage.write('indexes/secondary/test.idx_test.idx.parquet', corrupted)
+
+      // Load should recover
+      const loaded = new HashIndex(storage, 'test', definition)
+      await loaded.load()
+      expect(loaded.ready).toBe(true)
+    })
+  })
+
+  describe('Checksum Validation', () => {
+    it('should detect when entry data is corrupted', async () => {
+      // Create valid index with multiple entries
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      for (let i = 0; i < 10; i++) {
+        index.insert(`status_${i}`, `doc_${i}`, 0, i)
+      }
+      await index.save()
+
+      // Corrupt some bytes in the middle
+      const data = await storage.read('indexes/secondary/test.idx_test.idx.parquet')
+      const corrupted = new Uint8Array(data)
+      // Corrupt bytes in the entry data area
+      for (let i = 20; i < Math.min(30, corrupted.length); i++) {
+        corrupted[i] = (corrupted[i]! + 1) % 256
+      }
+      await storage.write('indexes/secondary/test.idx_test.idx.parquet', corrupted)
+
+      // Load should recover (possibly with data loss)
+      const loaded = new HashIndex(storage, 'test', definition)
+      await loaded.load()
+      expect(loaded.ready).toBe(true)
+    })
+  })
+
+  describe('Invalid UTF-8 in Document IDs', () => {
+    it('should handle corrupted docId bytes', async () => {
+      // Create valid index
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      index.insert('active', 'valid_doc_id', 0, 0)
+      await index.save()
+
+      // Read data and locate docId, then corrupt it
+      const data = await storage.read('indexes/secondary/test.idx_test.idx.parquet')
+      const corrupted = new Uint8Array(data)
+
+      // Find and replace valid UTF-8 with invalid sequence
+      // This is tricky - we're simulating what happens if bytes are corrupted
+      // during transmission
+      for (let i = 10; i < Math.min(corrupted.length, 30); i++) {
+        // Insert invalid UTF-8 continuation byte without start byte
+        if (corrupted[i] === 0x5F) { // underscore
+          corrupted[i] = 0x80 // Invalid continuation byte
+          break
+        }
+      }
+      await storage.write('indexes/secondary/test.idx_test.idx.parquet', corrupted)
+
+      // Load should handle invalid UTF-8
+      const loaded = new HashIndex(storage, 'test', definition)
+      await loaded.load()
+      expect(loaded.ready).toBe(true)
+    })
+  })
+
+  describe('File System Artifacts', () => {
+    it('should handle file with null bytes appended', async () => {
+      // Create valid index
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      index.insert('active', 'doc1', 0, 0)
+      await index.save()
+
+      // Append null bytes (simulating filesystem issues)
+      const data = await storage.read('indexes/secondary/test.idx_test.idx.parquet')
+      const padded = new Uint8Array(data.length + 100)
+      padded.set(data)
+      // Rest is zeros
+      await storage.write('indexes/secondary/test.idx_test.idx.parquet', padded)
+
+      // Load should handle extra bytes
+      const loaded = new HashIndex(storage, 'test', definition)
+      await loaded.load()
+      expect(loaded.ready).toBe(true)
+      // Should still have the entry
+      expect(loaded.lookup('active').docIds).toContain('doc1')
+    })
+
+    it('should handle file with garbage appended', async () => {
+      // Create valid index
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      index.insert('active', 'doc1', 0, 0)
+      await index.save()
+
+      // Append random garbage
+      const data = await storage.read('indexes/secondary/test.idx_test.idx.parquet')
+      const extended = new Uint8Array(data.length + 50)
+      extended.set(data)
+      for (let i = data.length; i < extended.length; i++) {
+        extended[i] = Math.floor(Math.random() * 256)
+      }
+      await storage.write('indexes/secondary/test.idx_test.idx.parquet', extended)
+
+      // Load should handle garbage at end
+      const loaded = new HashIndex(storage, 'test', definition)
+      await loaded.load()
+      expect(loaded.ready).toBe(true)
+      expect(loaded.lookup('active').docIds).toContain('doc1')
+    })
+  })
+})
+
+// =============================================================================
+// Storage Backend Failures Mid-Operation Tests
+// =============================================================================
+
+/**
+ * Backend that can fail at specific operation points
+ */
+class MidOperationFailingBackend extends MemoryBackend {
+  private operationCount = 0
+  private failAtOperation: number = 0
+  private failAfterSuccessfulOps: number = 0
+  private errorType: 'read' | 'write' | 'exists' | 'all' = 'all'
+
+  /**
+   * Configure to fail after N successful operations
+   */
+  failAfterOperations(count: number, errorType: 'read' | 'write' | 'exists' | 'all' = 'all'): void {
+    this.failAfterSuccessfulOps = count
+    this.errorType = errorType
+    this.operationCount = 0
+  }
+
+  /**
+   * Configure to fail at exactly the Nth operation
+   */
+  failAtOperationNumber(n: number): void {
+    this.failAtOperation = n
+    this.operationCount = 0
+  }
+
+  resetFailureConfig(): void {
+    this.operationCount = 0
+    this.failAtOperation = 0
+    this.failAfterSuccessfulOps = 0
+    this.errorType = 'all'
+  }
+
+  private checkFailure(opType: 'read' | 'write' | 'exists'): void {
+    this.operationCount++
+
+    if (this.failAtOperation > 0 && this.operationCount === this.failAtOperation) {
+      throw new Error('Storage backend failure at operation ' + this.operationCount)
+    }
+
+    if (this.failAfterSuccessfulOps > 0 &&
+        this.operationCount > this.failAfterSuccessfulOps &&
+        (this.errorType === 'all' || this.errorType === opType)) {
+      throw new Error('Storage backend became unavailable')
+    }
+  }
+
+  override async read(path: string): Promise<Uint8Array> {
+    this.checkFailure('read')
+    return super.read(path)
+  }
+
+  override async write(path: string, data: Uint8Array): Promise<{ etag: string; size: number }> {
+    this.checkFailure('write')
+    return super.write(path, data)
+  }
+
+  override async exists(path: string): Promise<boolean> {
+    this.checkFailure('exists')
+    return super.exists(path)
+  }
+}
+
+describe('Storage Backend Failures Mid-Operation', () => {
+  let storage: MidOperationFailingBackend
+  let definition: IndexDefinition
+
+  beforeEach(() => {
+    storage = new MidOperationFailingBackend()
+    definition = {
+      name: 'idx_test',
+      type: 'hash',
+      fields: [{ path: 'status' }],
+    }
+  })
+
+  describe('Failure During Index Load Sequence', () => {
+    it('should handle failure after exists check succeeds', async () => {
+      // Pre-create index file
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      index.insert('active', 'doc1', 0, 0)
+      await index.save()
+
+      // Fail after exists check (operation 1) but before read (operation 2)
+      storage.failAfterOperations(1, 'read')
+
+      const newIndex = new HashIndex(storage, 'test', definition)
+      await newIndex.load()
+
+      // Should recover gracefully
+      expect(newIndex.ready).toBe(true)
+      expect(newIndex.size).toBe(0) // Couldn't read data
+    })
+
+    it('should handle failure mid-read of large index', async () => {
+      // Create large index
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      for (let i = 0; i < 1000; i++) {
+        index.insert(`status_${i % 10}`, `doc_${i}`, Math.floor(i / 100), i % 100)
+      }
+      await index.save()
+      storage.resetFailureConfig()
+
+      // This simulates the backend becoming unavailable after the first few operations
+      storage.failAfterOperations(2)
+
+      const newIndex = new HashIndex(storage, 'test', definition)
+
+      // Since exists and read are only 2 ops, this should work if failure is at op 3+
+      // But with failAfterOperations(2), op 3 fails
+      // However, load only does exists()+read(), so it should succeed
+      // Let's actually make it fail during read
+      storage.resetFailureConfig()
+      storage.failAtOperationNumber(2) // Fail on the read (after exists)
+
+      await newIndex.load()
+      expect(newIndex.ready).toBe(true)
+    })
+  })
+
+  describe('Failure During Batch Operations', () => {
+    it('should handle backend failure during multiple index saves', async () => {
+      const indices: HashIndex[] = []
+
+      // Create and populate multiple indexes
+      for (let i = 0; i < 5; i++) {
+        const idx = new HashIndex(storage, `ns${i}`, definition)
+        await idx.load()
+        idx.insert('active', `doc_${i}`, 0, 0)
+        indices.push(idx)
+      }
+
+      // Fail after 3rd write operation
+      storage.resetFailureConfig()
+      storage.failAfterOperations(3, 'write')
+
+      // Try to save all
+      const results: boolean[] = []
+      for (const idx of indices) {
+        try {
+          await idx.save()
+          results.push(true)
+        } catch {
+          results.push(false)
+        }
+      }
+
+      // First 3 should succeed, rest should fail
+      expect(results.slice(0, 3)).toEqual([true, true, true])
+      expect(results.slice(3).every(r => r === false)).toBe(true)
+    })
+  })
+
+  describe('Intermittent Failures', () => {
+    it('should handle sporadic backend availability', async () => {
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      index.insert('active', 'doc1', 0, 0)
+      await index.save()
+
+      // Simulate intermittent failures by resetting between operations
+      storage.resetFailureConfig()
+      const newIndex = new HashIndex(storage, 'test', definition)
+
+      // First load attempt - backend available
+      await newIndex.load()
+      expect(newIndex.size).toBe(1)
+
+      // Add more data
+      newIndex.insert('pending', 'doc2', 0, 1)
+
+      // Save - backend becomes unavailable (fail on first operation)
+      storage.resetFailureConfig()
+      storage.failAtOperationNumber(1) // Fail on the very first operation (write)
+      await expect(newIndex.save()).rejects.toThrow()
+
+      // Backend recovers
+      storage.resetFailureConfig()
+
+      // Retry save
+      await newIndex.save()
+
+      // Verify
+      const verified = new HashIndex(storage, 'test', definition)
+      await verified.load()
+      expect(verified.size).toBe(2)
+    })
+  })
+
+  describe('Recovery State Verification', () => {
+    it('should maintain index integrity after partial operation failure', async () => {
+      // Create initial state
+      const index = new HashIndex(storage, 'test', definition)
+      await index.load()
+      for (let i = 0; i < 100; i++) {
+        index.insert(`status_${i % 5}`, `doc_${i}`, 0, i)
+      }
+      await index.save()
+
+      // Verify initial state
+      const initial = new HashIndex(storage, 'test', definition)
+      await initial.load()
+      expect(initial.size).toBe(100)
+
+      // Attempt modification that fails during save
+      const modified = new HashIndex(storage, 'test', definition)
+      await modified.load()
+
+      for (let i = 100; i < 200; i++) {
+        modified.insert(`status_${i % 5}`, `doc_${i}`, 1, i - 100)
+      }
+      expect(modified.size).toBe(200)
+
+      // Fail during save
+      storage.resetFailureConfig()
+      storage.failAfterOperations(1, 'write')
+
+      try {
+        await modified.save()
+      } catch {
+        // Expected
+      }
+
+      // In-memory state is still intact
+      expect(modified.size).toBe(200)
+
+      // But persisted state should still be original (if write failed before completing)
+      storage.resetFailureConfig()
+      const persisted = new HashIndex(storage, 'test', definition)
+      await persisted.load()
+
+      // This could be 100 or 200 depending on whether partial write succeeded
+      // Key is that it's in a valid state
+      expect(persisted.ready).toBe(true)
+      expect(typeof persisted.size).toBe('number')
+    })
+
+    it('should not lose existing data when new write fails', async () => {
+      // Create and save initial data
+      const initial = new HashIndex(storage, 'test', definition)
+      await initial.load()
+      initial.insert('stable', 'preserved_doc', 0, 0)
+      await initial.save()
+
+      // Load in new index, add data, fail save
+      const attempt = new HashIndex(storage, 'test', definition)
+      await attempt.load()
+      expect(attempt.lookup('stable').docIds).toContain('preserved_doc')
+
+      attempt.insert('volatile', 'lost_doc', 0, 1)
+
+      storage.resetFailureConfig()
+      storage.failAfterOperations(0, 'write') // Fail immediately on write
+
+      try {
+        await attempt.save()
+      } catch {
+        // Expected
+      }
+
+      // Original data should still be loadable
+      storage.resetFailureConfig()
+      const recovery = new HashIndex(storage, 'test', definition)
+      await recovery.load()
+
+      // The preserved doc should still exist
+      expect(recovery.lookup('stable').docIds).toContain('preserved_doc')
+    })
+  })
+})
+
+// =============================================================================
+// SST Index Error Recovery Tests
+// =============================================================================
+
+describe('SST Index Error Recovery', () => {
+  let storage: FailingBackend
+  let definition: IndexDefinition
+
+  beforeEach(() => {
+    storage = new FailingBackend()
+    definition = {
+      name: 'idx_sorted',
+      type: 'sst',
+      fields: [{ path: 'score' }],
+    }
+  })
+
+  describe('Load Failures', () => {
+    it('should recover from read failure', async () => {
+      // Pre-populate with data
+      const index = new SSTIndex(storage, 'test', definition)
+      await index.load()
+      index.insert(10, 'doc1', 0, 0)
+      index.insert(20, 'doc2', 0, 1)
+      await index.save()
+
+      // Inject read failure
+      storage.failReadFor(
+        'indexes/secondary/test.idx_sorted.idx.parquet',
+        new Error('Disk read error')
+      )
+
+      const newIndex = new SSTIndex(storage, 'test', definition)
+      await newIndex.load()
+
+      // Should recover as empty
+      expect(newIndex.ready).toBe(true)
+      expect(newIndex.size).toBe(0)
+    })
+
+    it('should handle corrupted sorted order', async () => {
+      // Create SST index with sorted data
+      const index = new SSTIndex(storage, 'test', definition)
+      await index.load()
+      for (let i = 0; i < 50; i++) {
+        index.insert(i, `doc_${i}`, 0, i)
+      }
+      await index.save()
+
+      // Read and corrupt some key bytes to break sort order
+      const data = await storage.read('indexes/secondary/test.idx_sorted.idx.parquet')
+      const corrupted = new Uint8Array(data)
+      // Corrupt some bytes in entry area
+      if (corrupted.length > 50) {
+        corrupted[30] = 0xFF
+        corrupted[40] = 0x00
+      }
+      await storage.write('indexes/secondary/test.idx_sorted.idx.parquet', corrupted)
+
+      // Load should handle
+      const loaded = new SSTIndex(storage, 'test', definition)
+      await loaded.load()
+      expect(loaded.ready).toBe(true)
+    })
+  })
+
+  describe('Write Failures', () => {
+    it('should propagate write error', async () => {
+      const index = new SSTIndex(storage, 'test', definition)
+      await index.load()
+      index.insert(10, 'doc1', 0, 0)
+
+      storage.failWriteFor(
+        'indexes/secondary/test.idx_sorted.idx.parquet',
+        new Error('Write quota exceeded')
+      )
+
+      await expect(index.save()).rejects.toThrow('Write quota exceeded')
+    })
+  })
+
+  describe('Range Query on Corrupted Data', () => {
+    it('should handle range query after partial recovery', async () => {
+      const index = new SSTIndex(storage, 'test', definition)
+      await index.load()
+
+      // Add data
+      for (let i = 0; i < 100; i++) {
+        index.insert(i, `doc_${i}`, 0, i)
+      }
+
+      // Range query should work on in-memory data
+      const result = index.range({ $gte: 25, $lt: 75 })
+      expect(result.docIds.length).toBe(50)
+    })
+  })
+})

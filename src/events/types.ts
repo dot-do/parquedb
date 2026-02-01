@@ -205,3 +205,86 @@ export interface ReplayResult<T = Variant> {
   /** Whether the entity existed at the requested timestamp */
   existed: boolean
 }
+
+// =============================================================================
+// Snapshot Types
+// =============================================================================
+
+/**
+ * A snapshot of entity state at a point in time.
+ * Used to speed up event replay by starting from a known state.
+ */
+export interface SnapshotRecord {
+  /** Target this snapshot is for (ns:id) */
+  target: string
+  /** Timestamp when snapshot was taken */
+  ts: number
+  /** State at snapshot time (Variant) */
+  state: Variant | null
+  /** Number of events that were replayed to create this snapshot */
+  eventCount: number
+  /** Event ID of the last event included in this snapshot */
+  lastEventId: string
+  /** When this snapshot was created */
+  createdAt: number
+}
+
+/**
+ * Manifest for tracking snapshots per entity
+ */
+export interface SnapshotManifest {
+  /** Manifest version */
+  version: 1
+  /** Target this manifest is for (ns:id) */
+  target: string
+  /** List of snapshots (newest first) */
+  snapshots: SnapshotRecord[]
+  /** Maximum number of snapshots to retain */
+  maxSnapshots: number
+  /** When manifest was last updated */
+  updatedAt: number
+}
+
+// =============================================================================
+// Event Versioning Types
+// =============================================================================
+
+/**
+ * Metadata for event schema versioning
+ */
+export interface EventVersionMetadata {
+  /** Schema version when this event was created */
+  schemaVersion: number
+  /** If event was upgraded, the original version */
+  upgradedFrom?: number
+}
+
+/**
+ * Configuration for event versioning and schema evolution
+ */
+export interface EventVersioningConfig {
+  /** Current event schema version */
+  currentVersion: number
+  /** Minimum supported version for reading */
+  minVersion?: number
+  /** Whether to fail on unknown/unsupported versions */
+  strict?: boolean
+}
+
+// =============================================================================
+// Event Sourcing Configuration
+// =============================================================================
+
+/**
+ * Configuration for event sourcing mode
+ */
+export interface EventSourcingConfig {
+  /** Enable snapshot creation during replay (default: true) */
+  enableSnapshots?: boolean
+  /** Number of events before creating a snapshot (default: 100) */
+  snapshotThreshold?: number
+  /** Maximum snapshots to retain per entity (default: 3) */
+  maxSnapshotsPerEntity?: number
+  /** Event versioning configuration */
+  versioning?: EventVersioningConfig
+}

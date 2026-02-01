@@ -53,6 +53,15 @@ export {
   DirectoryNotEmptyError,
 } from './MemoryBackend'
 
+// Shared validation utilities
+export {
+  validateRange,
+  validatePath,
+  validatePartNumber,
+  validateData,
+  InvalidRangeError,
+} from './validation'
+
 // FsBackend - Node.js filesystem
 export { FsBackend, PathTraversalError } from './FsBackend'
 

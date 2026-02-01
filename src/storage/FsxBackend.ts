@@ -20,6 +20,7 @@ import type {
   RmdirOptions,
 } from '../types/storage'
 import type { Fsx, FsxStorageTier, FsxError } from './types/fsx'
+import { validateRange } from './validation'
 
 /**
  * Options for FsxBackend
@@ -80,12 +81,8 @@ export class FsxBackend implements StorageBackend {
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
-    if (start < 0) {
-      throw new Error('Invalid range: start cannot be negative')
-    }
-    if (start > end) {
-      throw new Error('Invalid range: start cannot be greater than end')
-    }
+    // Validate range parameters using shared validation
+    validateRange(start, end)
     const fullPath = this.resolvePath(path)
     return this.fsx.readRange(fullPath, start, end)
   }

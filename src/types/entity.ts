@@ -274,10 +274,10 @@ export function parseRelTarget(target: string): {
   if (parts.length < 4) throw new Error(`Invalid relationship target: ${target}`)
   // Format: from_ns:from_id:predicate:to_ns:to_id
   // e.g., "users:u1:authored:posts:p5"
-  const fromNs = parts[0]
-  const fromId = parts[1]
-  const predicate = parts[2]
-  const toNs = parts[3]
+  const fromNs = parts[0]!
+  const fromId = parts[1]!
+  const predicate = parts[2]!
+  const toNs = parts[3]!
   const toId = parts.slice(4).join(':') // Handle ids with colons
   return {
     from: `${fromNs}:${fromId}`,

@@ -274,7 +274,7 @@ export function validateRelationshipTargets(schema: Schema): ValidationResult {
         // For exact mode, check that reverse field exists on target
         if (rel.mode === 'exact' && rel.reverse) {
           const targetDef = schema[targetType]
-          if (!targetDef[rel.reverse]) {
+          if (!targetDef || !targetDef[rel.reverse]) {
             errors.push({
               path: `${typeName}.${fieldName}`,
               message: `Reverse field '${rel.reverse}' does not exist on type '${targetType}'`,
@@ -306,7 +306,7 @@ export function validateRelationshipTargets(schema: Schema): ValidationResult {
         // For exact mode, check that source field exists on source type
         if (rel.mode === 'exact' && rel.fromField) {
           const sourceDef = schema[sourceType]
-          if (!sourceDef[rel.fromField]) {
+          if (!sourceDef || !sourceDef[rel.fromField]) {
             errors.push({
               path: `${typeName}.${fieldName}`,
               message: `Source field '${rel.fromField}' does not exist on type '${sourceType}'`,
@@ -694,7 +694,7 @@ function validateScalarType(path: string, value: unknown, type: string): Validat
         }
         // Extract enum values and check
         const enumMatch = type.match(/^enum\((.+)\)$/)
-        if (enumMatch) {
+        if (enumMatch && enumMatch[1]) {
           const allowedValues = enumMatch[1].split(',').map(v => v.trim())
           if (!allowedValues.includes(value)) {
             return { path, message: `Value '${value}' not in enum (${allowedValues.join(', ')})`, code: 'INVALID_ENUM' }
@@ -723,7 +723,7 @@ export function isValidFieldType(value: string): boolean {
 
   // Remove default value if present
   const defaultMatch = type.match(/^(.+?)\s*=\s*(.+)$/)
-  if (defaultMatch) {
+  if (defaultMatch && defaultMatch[1]) {
     type = defaultMatch[1].trim()
   }
 
@@ -769,7 +769,7 @@ export function isValidFieldType(value: string): boolean {
     if (type.startsWith(`${prefix}(`)) {
       // Validate parametric syntax
       const match = type.match(new RegExp(`^${prefix}\\((.+)\\)$`))
-      if (!match) return false
+      if (!match || !match[1]) return false
 
       const params = match[1]
 
@@ -786,7 +786,7 @@ export function isValidFieldType(value: string): boolean {
           break
         case 'enum':
           // At least one value
-          if (!params || params.trim().length === 0) return false
+          if (params.trim().length === 0) return false
           break
       }
 
@@ -952,7 +952,7 @@ export function inferSchema(
   for (const [fieldName, stats] of fieldStats) {
     // Determine the primary type
     const types = Array.from(stats.types).filter(t => t !== 'null')
-    let primaryType = types.length > 0 ? types[0] : 'json'
+    let primaryType: string = types.length > 0 && types[0] ? types[0] : 'json'
 
     // If multiple types, use json
     if (types.length > 1) {

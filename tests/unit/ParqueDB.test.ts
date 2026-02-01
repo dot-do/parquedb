@@ -1364,4 +1364,130 @@ describe('ParqueDB', () => {
       expect(users.items.length).toBeGreaterThan(0)
     })
   })
+
+  // ===========================================================================
+  // Test Suite: Dispose / Resource Cleanup
+  // ===========================================================================
+
+  describe('Dispose / Resource Cleanup', () => {
+    it('should have a dispose method', async () => {
+      const storage = await createRealStorage()
+      const db = new ParqueDB({ storage })
+      expect(typeof db.dispose).toBe('function')
+    })
+
+    it('should clear in-memory state after dispose', async () => {
+      const storage = await createRealStorage()
+      const db = new ParqueDB({ storage })
+
+      // Create some data
+      await db.create('posts', {
+        $type: 'Post',
+        name: 'Test Post',
+        title: 'Test Title',
+        content: 'Test Content',
+      })
+
+      // Verify data exists
+      const beforeDispose = await db.find('posts', {})
+      expect(beforeDispose.items.length).toBe(1)
+
+      // Dispose
+      db.dispose()
+
+      // After dispose, in-memory state should be cleared
+      // A new query should return empty results (since we cleared the cache)
+      const afterDispose = await db.find('posts', {})
+      expect(afterDispose.items.length).toBe(0)
+    })
+
+    it('should allow multiple disposes without error', async () => {
+      const storage = await createRealStorage()
+      const db = new ParqueDB({ storage })
+
+      await db.create('posts', {
+        $type: 'Post',
+        name: 'Test Post',
+        title: 'Test Title',
+        content: 'Test Content',
+      })
+
+      // Multiple disposes should not throw
+      expect(() => db.dispose()).not.toThrow()
+      expect(() => db.dispose()).not.toThrow()
+    })
+
+    it('should isolate state between different storage backends', async () => {
+      const storage1 = await createRealStorage()
+      const storage2 = await createRealStorage()
+
+      const db1 = new ParqueDB({ storage: storage1 })
+      const db2 = new ParqueDB({ storage: storage2 })
+
+      // Create data in db1
+      await db1.create('posts', {
+        $type: 'Post',
+        name: 'Post in DB1',
+        title: 'Title 1',
+        content: 'Content 1',
+      })
+
+      // Create data in db2
+      await db2.create('posts', {
+        $type: 'Post',
+        name: 'Post in DB2',
+        title: 'Title 2',
+        content: 'Content 2',
+      })
+
+      // Verify both have data
+      const db1Before = await db1.find('posts', {})
+      const db2Before = await db2.find('posts', {})
+      expect(db1Before.items.length).toBe(1)
+      expect(db2Before.items.length).toBe(1)
+
+      // Dispose db1
+      db1.dispose()
+
+      // db2 should still have its data
+      const db2After = await db2.find('posts', {})
+      expect(db2After.items.length).toBe(1)
+
+      // db1 should be cleared
+      const db1After = await db1.find('posts', {})
+      expect(db1After.items.length).toBe(0)
+
+      // Clean up
+      db2.dispose()
+    })
+
+    it('should share state between ParqueDB instances with same storage backend', async () => {
+      const storage = await createRealStorage()
+
+      const db1 = new ParqueDB({ storage })
+      const db2 = new ParqueDB({ storage })
+
+      // Create data via db1
+      await db1.create('posts', {
+        $type: 'Post',
+        name: 'Shared Post',
+        title: 'Shared Title',
+        content: 'Shared Content',
+      })
+
+      // db2 should see the same data (shared state)
+      const db2Results = await db2.find('posts', {})
+      expect(db2Results.items.length).toBe(1)
+      expect(db2Results.items[0].name).toBe('Shared Post')
+
+      // Disposing db1 affects db2 since they share the same storage backend
+      db1.dispose()
+
+      // Both should now show empty (shared state was cleared)
+      const db1After = await db1.find('posts', {})
+      const db2After = await db2.find('posts', {})
+      expect(db1After.items.length).toBe(0)
+      expect(db2After.items.length).toBe(0)
+    })
+  })
 })

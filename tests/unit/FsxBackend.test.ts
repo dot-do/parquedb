@@ -121,7 +121,7 @@ describe('FsxBackend', () => {
         const backend = new FsxBackend(minimalFsx)
 
         await expect(backend.readRange('data/test.parquet', 100, 50)).rejects.toThrow(
-          'Invalid range: start cannot be greater than end'
+          /Invalid range.*end.*must be >= start|end.*start/i
         )
       })
 
@@ -130,7 +130,7 @@ describe('FsxBackend', () => {
         const backend = new FsxBackend(minimalFsx)
 
         await expect(backend.readRange('data/test.parquet', -1, 10)).rejects.toThrow(
-          'Invalid range: start cannot be negative'
+          /Invalid range.*start.*must be non-negative|start.*negative/i
         )
       })
 

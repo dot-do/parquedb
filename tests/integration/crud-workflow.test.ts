@@ -2,255 +2,38 @@
  * CRUD Workflow E2E Tests
  *
  * Full database workflows testing complete user scenarios.
- * These tests simulate real-world usage patterns with real storage.
+ * These tests use real ParqueDB with MemoryBackend for fast, isolated testing.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { rm, mkdir } from 'node:fs/promises'
-import { FsBackend } from '../../src/storage/FsBackend'
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { ParqueDB, MemoryBackend } from '../../src'
 import {
-  createTestEntity,
   createUserInput,
   createPostInput,
-  createBlogSchema,
   generateTestId,
-  createEntityId,
 } from '../factories'
-import { USERS, POSTS, CATEGORIES, BLOG_SCHEMA, FILTERS } from '../fixtures'
-import type { Entity, EntityId, CreateInput, Filter } from '../../src/types'
-
-/**
- * SimpleDB - A simplified database implementation for testing
- * Uses real FsBackend for persistence
- */
-class SimpleDB {
-  private storage = new Map<string, Entity>()
-  private backend: FsBackend
-
-  constructor(backend: FsBackend) {
-    this.backend = backend
-  }
-
-  /**
-   * Create an entity
-   */
-  async create(namespace: string, input: CreateInput): Promise<Entity> {
-    const id = generateTestId()
-    const entityId = createEntityId(namespace, id)
-    const now = new Date()
-
-    const entity: Entity = {
-      $id: entityId,
-      $type: input.$type,
-      name: input.name,
-      createdAt: now,
-      createdBy: 'system/test' as EntityId,
-      updatedAt: now,
-      updatedBy: 'system/test' as EntityId,
-      version: 1,
-      ...input,
-    }
-
-    this.storage.set(entityId, entity)
-
-    // Persist to storage
-    const data = new TextEncoder().encode(JSON.stringify(entity))
-    await this.backend.write(`data/${namespace}/${id}.json`, data)
-
-    return entity
-  }
-
-  /**
-   * Get an entity by ID
-   */
-  async get(entityId: EntityId): Promise<Entity | null> {
-    // Try memory first
-    const cached = this.storage.get(entityId)
-    if (cached) return cached
-
-    // Try to load from storage
-    const [namespace, id] = entityId.split('/')
-    const path = `data/${namespace}/${id}.json`
-
-    if (await this.backend.exists(path)) {
-      const data = await this.backend.read(path)
-      const entity = JSON.parse(new TextDecoder().decode(data)) as Entity
-      // Restore Date objects
-      entity.createdAt = new Date(entity.createdAt)
-      entity.updatedAt = new Date(entity.updatedAt)
-      this.storage.set(entityId, entity)
-      return entity
-    }
-
-    return null
-  }
-
-  /**
-   * Find entities matching a filter
-   */
-  async find(namespace: string, filter?: Filter): Promise<Entity[]> {
-    const results: Entity[] = []
-
-    // Load all entities from storage for the namespace
-    const listResult = await this.backend.list(`data/${namespace}`)
-
-    for (const filePath of listResult.files) {
-      if (!filePath.endsWith('.json')) continue
-
-      const data = await this.backend.read(filePath)
-      const entity = JSON.parse(new TextDecoder().decode(data)) as Entity
-      entity.createdAt = new Date(entity.createdAt)
-      entity.updatedAt = new Date(entity.updatedAt)
-
-      if (entity.deletedAt) continue // Skip soft-deleted
-
-      if (!filter || this.matchesFilter(entity, filter)) {
-        results.push(entity)
-        this.storage.set(entity.$id, entity)
-      }
-    }
-
-    return results
-  }
-
-  /**
-   * Update an entity
-   */
-  async update(
-    entityId: EntityId,
-    update: Partial<Record<string, unknown>>
-  ): Promise<Entity | null> {
-    const entity = await this.get(entityId)
-    if (!entity) return null
-
-    const updated: Entity = {
-      ...entity,
-      ...update,
-      updatedAt: new Date(),
-      version: entity.version + 1,
-    }
-
-    this.storage.set(entityId, updated)
-
-    // Persist to storage
-    const [namespace, id] = entityId.split('/')
-    const data = new TextEncoder().encode(JSON.stringify(updated))
-    await this.backend.write(`data/${namespace}/${id}.json`, data)
-
-    return updated
-  }
-
-  /**
-   * Delete an entity (soft delete)
-   */
-  async delete(entityId: EntityId, hard = false): Promise<boolean> {
-    const entity = await this.get(entityId)
-    if (!entity) return false
-
-    const [namespace, id] = entityId.split('/')
-
-    if (hard) {
-      this.storage.delete(entityId)
-      await this.backend.delete(`data/${namespace}/${id}.json`)
-    } else {
-      entity.deletedAt = new Date()
-      entity.deletedBy = 'system/test' as EntityId
-      this.storage.set(entityId, entity)
-
-      const data = new TextEncoder().encode(JSON.stringify(entity))
-      await this.backend.write(`data/${namespace}/${id}.json`, data)
-    }
-
-    return true
-  }
-
-  /**
-   * Count entities matching filter
-   */
-  async count(namespace: string, filter?: Filter): Promise<number> {
-    const entities = await this.find(namespace, filter)
-    return entities.length
-  }
-
-  /**
-   * Check if entity exists
-   */
-  async exists(entityId: EntityId): Promise<boolean> {
-    const [namespace, id] = entityId.split('/')
-    return this.backend.exists(`data/${namespace}/${id}.json`)
-  }
-
-  /**
-   * Clear all data
-   */
-  async clear(): Promise<void> {
-    this.storage.clear()
-    await this.backend.deletePrefix('data/')
-  }
-
-  private matchesFilter(entity: Entity, filter: Filter): boolean {
-    for (const [key, value] of Object.entries(filter)) {
-      if (key.startsWith('$')) continue // Skip operators for now
-
-      const entityValue = (entity as Record<string, unknown>)[key]
-
-      if (typeof value === 'object' && value !== null) {
-        // Handle operators
-        for (const [op, opValue] of Object.entries(value)) {
-          switch (op) {
-            case '$eq':
-              if (entityValue !== opValue) return false
-              break
-            case '$ne':
-              if (entityValue === opValue) return false
-              break
-            case '$in':
-              if (!Array.isArray(opValue) || !opValue.includes(entityValue)) return false
-              break
-            case '$exists':
-              if (opValue && entityValue === undefined) return false
-              if (!opValue && entityValue !== undefined) return false
-              break
-          }
-        }
-      } else if (entityValue !== value) {
-        return false
-      }
-    }
-    return true
-  }
-}
+import type { Entity, EntityId, Filter } from '../../src/types'
 
 describe('CRUD Workflow E2E', () => {
-  let db: SimpleDB
-  let backend: FsBackend
-  let testDir: string
+  let db: ParqueDB
+  let backend: MemoryBackend
 
   beforeAll(async () => {
-    testDir = join(tmpdir(), `parquedb-crud-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
-    await mkdir(testDir, { recursive: true })
-    backend = new FsBackend(testDir)
-    db = new SimpleDB(backend)
+    backend = new MemoryBackend()
+    db = new ParqueDB({ storage: backend })
   })
 
   afterAll(async () => {
-    try {
-      await rm(testDir, { recursive: true, force: true })
-    } catch {
-      // Ignore cleanup errors
+    // Dispose of ParqueDB instance
+    if (db && typeof (db as unknown as { dispose?: () => void }).dispose === 'function') {
+      (db as unknown as { dispose: () => void }).dispose()
     }
   })
 
   beforeEach(async () => {
-    await db.clear()
-    // Ensure data directories exist
-    await backend.mkdir('data/users')
-    await backend.mkdir('data/posts')
-    await backend.mkdir('data/categories')
-    await backend.mkdir('data/products')
-    await backend.mkdir('data/items')
+    // Create a fresh instance for each test
+    backend = new MemoryBackend()
+    db = new ParqueDB({ storage: backend })
   })
 
   describe('User Management Workflow', () => {
@@ -271,13 +54,13 @@ describe('CRUD Workflow E2E', () => {
       expect(user.version).toBe(1)
 
       // 2. Read the user back
-      const fetchedUser = await db.get(user.$id)
+      const fetchedUser = await db.get('users', user.$id)
       expect(fetchedUser).not.toBeNull()
       expect(fetchedUser!.$id).toBe(user.$id)
 
       // 3. Update the user
-      const updatedUser = await db.update(user.$id, {
-        bio: 'Senior software engineer',
+      const updatedUser = await db.update('users', user.$id, {
+        $set: { bio: 'Senior software engineer' },
       })
 
       expect(updatedUser).not.toBeNull()
@@ -285,16 +68,17 @@ describe('CRUD Workflow E2E', () => {
       expect(updatedUser!.version).toBe(2)
 
       // 4. Soft delete the user
-      const deleted = await db.delete(user.$id)
-      expect(deleted).toBe(true)
+      const deleteResult = await db.delete('users', user.$id)
+      expect(deleteResult.deletedCount).toBe(1)
 
       // 5. User should not appear in regular queries
-      const users = await db.find('users')
-      expect(users.length).toBe(0)
+      const usersResult = await db.find('users')
+      expect(usersResult.items.length).toBe(0)
 
-      // 6. User data still exists (soft deleted)
-      const exists = await db.exists(user.$id)
-      expect(exists).toBe(true)
+      // 6. User data still exists (soft deleted) - can be fetched with includeDeleted
+      const deletedUser = await db.get('users', user.$id, { includeDeleted: true })
+      expect(deletedUser).not.toBeNull()
+      expect(deletedUser!.deletedAt).toBeInstanceOf(Date)
     })
 
     it('should handle multiple users', async () => {
@@ -308,12 +92,11 @@ describe('CRUD Workflow E2E', () => {
       expect(users).toHaveLength(3)
 
       // Find all users
-      const allUsers = await db.find('users')
-      expect(allUsers).toHaveLength(3)
+      const allUsersResult = await db.find('users')
+      expect(allUsersResult.items).toHaveLength(3)
 
-      // Count users
-      const count = await db.count('users')
-      expect(count).toBe(3)
+      // Count users (via find)
+      expect(allUsersResult.total).toBe(3)
     })
   })
 
@@ -341,25 +124,28 @@ describe('CRUD Workflow E2E', () => {
       expect(post.publishedAt).toBeUndefined()
 
       // 2. Update to published
-      const publishedPost = await db.update(post.$id, {
-        status: 'published',
-        publishedAt: new Date(),
+      const now = new Date()
+      const publishedPost = await db.update('posts', post.$id, {
+        $set: {
+          status: 'published',
+          publishedAt: now,
+        },
       })
 
       expect(publishedPost!.status).toBe('published')
-      expect(publishedPost!.publishedAt).toBeInstanceOf(Date)
+      expect(publishedPost!.publishedAt).toEqual(now)
       expect(publishedPost!.version).toBe(2)
 
       // 3. Edit the published post
-      const editedPost = await db.update(post.$id, {
-        content: '# Introduction\n\nParqueDB is a database...',
+      const editedPost = await db.update('posts', post.$id, {
+        $set: { content: '# Introduction\n\nParqueDB is a database...' },
       })
 
       expect(editedPost!.version).toBe(3)
 
       // 4. Archive the post
-      const archivedPost = await db.update(post.$id, {
-        status: 'archived',
+      const archivedPost = await db.update('posts', post.$id, {
+        $set: { status: 'archived' },
       })
 
       expect(archivedPost!.status).toBe('archived')
@@ -373,16 +159,16 @@ describe('CRUD Workflow E2E', () => {
       await db.create('posts', createPostInput({ status: 'archived' }))
 
       // Find draft posts
-      const drafts = await db.find('posts', { status: 'draft' })
-      expect(drafts).toHaveLength(2)
+      const draftsResult = await db.find('posts', { status: 'draft' })
+      expect(draftsResult.items).toHaveLength(2)
 
       // Find published posts
-      const published = await db.find('posts', { status: 'published' })
-      expect(published).toHaveLength(1)
+      const publishedResult = await db.find('posts', { status: 'published' })
+      expect(publishedResult.items).toHaveLength(1)
 
       // Find archived posts
-      const archived = await db.find('posts', { status: 'archived' })
-      expect(archived).toHaveLength(1)
+      const archivedResult = await db.find('posts', { status: 'archived' })
+      expect(archivedResult.items).toHaveLength(1)
     })
 
     it('should handle post with categories', async () => {
@@ -440,40 +226,40 @@ describe('CRUD Workflow E2E', () => {
       })
 
       // Sequential operations (concurrent r/w on real filesystems can race)
-      const result1 = await db.get(item.$id)
+      const result1 = await db.get('items', item.$id)
       expect(result1).not.toBeNull()
       expect(result1!.count).toBe(0)
 
-      const result2 = await db.update(item.$id, { count: 1 })
+      const result2 = await db.update('items', item.$id, { $set: { count: 1 } })
       expect(result2).not.toBeNull()
       expect(result2!.count).toBe(1)
 
-      const result3 = await db.get(item.$id)
+      const result3 = await db.get('items', item.$id)
       expect(result3).not.toBeNull()
       expect(result3!.count).toBe(1)
 
-      const result4 = await db.update(item.$id, { count: 2 })
+      const result4 = await db.update('items', item.$id, { $set: { count: 2 } })
       expect(result4).not.toBeNull()
       expect(result4!.count).toBe(2)
 
       const findResult = await db.find('items')
-      expect(findResult.length).toBeGreaterThan(0)
+      expect(findResult.items.length).toBeGreaterThan(0)
     })
   })
 
   describe('Error Handling', () => {
     it('should handle updates to non-existent entities', async () => {
-      const result = await db.update('items/nonexistent' as EntityId, { name: 'Test' })
+      const result = await db.update('items', 'items/nonexistent', { $set: { name: 'Test' } })
       expect(result).toBeNull()
     })
 
     it('should handle deletes of non-existent entities', async () => {
-      const result = await db.delete('items/nonexistent' as EntityId)
-      expect(result).toBe(false)
+      const result = await db.delete('items', 'items/nonexistent')
+      expect(result.deletedCount).toBe(0)
     })
 
     it('should handle gets of non-existent entities', async () => {
-      const result = await db.get('items/nonexistent' as EntityId)
+      const result = await db.get('items', 'items/nonexistent')
       expect(result).toBeNull()
     })
   })
@@ -488,48 +274,45 @@ describe('CRUD Workflow E2E', () => {
     })
 
     it('should filter by category', async () => {
-      const electronics = await db.find('products', { category: 'electronics' })
-      expect(electronics).toHaveLength(2)
+      const electronicsResult = await db.find('products', { category: 'electronics' })
+      expect(electronicsResult.items).toHaveLength(2)
 
-      const clothing = await db.find('products', { category: 'clothing' })
-      expect(clothing).toHaveLength(2)
+      const clothingResult = await db.find('products', { category: 'clothing' })
+      expect(clothingResult.items).toHaveLength(2)
     })
 
     it('should filter by type', async () => {
-      const products = await db.find('products', { $type: 'Product' })
-      expect(products).toHaveLength(4)
+      const productsResult = await db.find('products', { $type: 'Product' })
+      expect(productsResult.items).toHaveLength(4)
     })
 
     it('should find all without filter', async () => {
-      const all = await db.find('products')
-      expect(all).toHaveLength(4)
+      const allResult = await db.find('products')
+      expect(allResult.items).toHaveLength(4)
     })
   })
 })
 
 describe('Data Integrity E2E', () => {
-  let db: SimpleDB
-  let backend: FsBackend
-  let testDir: string
+  let db: ParqueDB
+  let backend: MemoryBackend
 
   beforeAll(async () => {
-    testDir = join(tmpdir(), `parquedb-integrity-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
-    await mkdir(testDir, { recursive: true })
-    backend = new FsBackend(testDir)
-    db = new SimpleDB(backend)
+    backend = new MemoryBackend()
+    db = new ParqueDB({ storage: backend })
   })
 
   afterAll(async () => {
-    try {
-      await rm(testDir, { recursive: true, force: true })
-    } catch {
-      // Ignore cleanup errors
+    // Dispose of ParqueDB instance
+    if (db && typeof (db as unknown as { dispose?: () => void }).dispose === 'function') {
+      (db as unknown as { dispose: () => void }).dispose()
     }
   })
 
   beforeEach(async () => {
-    await db.clear()
-    await backend.mkdir('data/items')
+    // Create a fresh instance for each test
+    backend = new MemoryBackend()
+    db = new ParqueDB({ storage: backend })
   })
 
   it('should maintain version consistency', async () => {
@@ -543,12 +326,12 @@ describe('Data Integrity E2E', () => {
     // Multiple updates
     let current = entity
     for (let i = 2; i <= 10; i++) {
-      current = (await db.update(current.$id, { name: `Update ${i}` }))!
+      current = (await db.update('items', current.$id, { $set: { name: `Update ${i}` } }))!
       expect(current.version).toBe(i)
     }
 
     // Final check
-    const final = await db.get(entity.$id)
+    const final = await db.get('items', entity.$id)
     expect(final!.version).toBe(10)
   })
 
@@ -563,7 +346,7 @@ describe('Data Integrity E2E', () => {
     // Wait and update
     await new Promise((resolve) => setTimeout(resolve, 10))
 
-    const updated = await db.update(entity.$id, { name: 'Updated Name' })
+    const updated = await db.update('items', entity.$id, { $set: { name: 'Updated Name' } })
 
     expect(updated!.createdAt.getTime()).toBe(createdAt.getTime())
     expect(updated!.updatedAt.getTime()).toBeGreaterThan(createdAt.getTime())
@@ -577,24 +360,23 @@ describe('Data Integrity E2E', () => {
 
     const originalId = entity.$id
 
-    const updated = await db.update(entity.$id, { name: 'Updated' })
+    const updated = await db.update('items', entity.$id, { $set: { name: 'Updated' } })
 
     expect(updated!.$id).toBe(originalId)
   })
 
-  it('should persist data across storage operations', async () => {
+  it('should persist data correctly in memory backend', async () => {
     const entity = await db.create('items', {
       $type: 'Item',
       name: 'Persisted Item',
       data: { nested: { value: 42 } },
     })
 
-    // Read directly from storage to verify persistence
-    const [namespace, id] = entity.$id.split('/')
-    const storedData = await backend.read(`data/${namespace}/${id}.json`)
-    const parsed = JSON.parse(new TextDecoder().decode(storedData))
+    // Read directly from the database to verify persistence
+    const fetchedEntity = await db.get('items', entity.$id)
 
-    expect(parsed.name).toBe('Persisted Item')
-    expect(parsed.data.nested.value).toBe(42)
+    expect(fetchedEntity).not.toBeNull()
+    expect(fetchedEntity!.name).toBe('Persisted Item')
+    expect(fetchedEntity!.data).toEqual({ nested: { value: 42 } })
   })
 })

@@ -376,17 +376,22 @@ describe('ParqueDB Workers E2E', () => {
     it('handles requests via SELF binding', async () => {
       const ctx = createExecutionContext()
 
-      // Create a test request
-      const request = new Request('http://localhost/ns/test', {
+      // Create a test request to the root endpoint (doesn't require storage)
+      const request = new Request('http://localhost/', {
         method: 'GET',
       })
 
       // Use SELF to call the worker
       const response = await SELF.fetch(request)
 
-      // Should get a response (even if empty result)
+      // Should get a successful response
       expect(response).toBeDefined()
-      expect(response.status).toBeLessThan(500) // Should not be a server error
+      expect(response.status).toBe(200)
+
+      // Verify response structure
+      const body = await response.json() as Record<string, unknown>
+      expect(body.api).toBeDefined()
+      expect((body.api as Record<string, unknown>).name).toBe('ParqueDB')
 
       await waitOnExecutionContext(ctx)
     })

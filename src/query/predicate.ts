@@ -6,20 +6,9 @@
  * query performance.
  */
 
-import type {
-  Filter,
-  FieldOperator,
-  ComparisonOperator,
-  StringOperator,
-  ArrayOperator,
-  ExistenceOperator,
-  isFieldOperator,
-  isComparisonOperator,
-  isStringOperator,
-  isArrayOperator,
-  isExistenceOperator,
-} from '../types/filter'
-import { deepEqual, compareValues, getNestedValue, getValueType } from '../utils'
+import type { Filter } from '../types/filter'
+import { compareValues, createSafeRegex } from '../utils'
+import { matchesFilter, createPredicate as createFilterPredicate } from './filter'
 
 // =============================================================================
 // Statistics Types
@@ -324,213 +313,11 @@ function stringPrefixCouldMatch(prefix: string, min: string, max: string): boole
  * @returns Predicate function that returns true for matching rows
  */
 export function toPredicate(filter: Filter): (row: unknown) => boolean {
-  // Empty filter matches everything
-  if (!filter || Object.keys(filter).length === 0) {
-    return () => true
-  }
-
-  // Build the predicate
-  return (row: unknown) => evaluateFilter(filter, row)
+  return createFilterPredicate(filter)
 }
 
-/**
- * Evaluate a filter against a row
- */
-function evaluateFilter(filter: Filter, row: unknown): boolean {
-  // Handle null row
-  if (row === null || row === undefined) {
-    return false
-  }
-
-  const obj = row as Record<string, unknown>
-
-  // Handle logical operators
-  if (filter.$and) {
-    return filter.$and.every(subFilter => evaluateFilter(subFilter, row))
-  }
-
-  if (filter.$or) {
-    return filter.$or.some(subFilter => evaluateFilter(subFilter, row))
-  }
-
-  if (filter.$not) {
-    return !evaluateFilter(filter.$not, row)
-  }
-
-  if (filter.$nor) {
-    return !filter.$nor.some(subFilter => evaluateFilter(subFilter, row))
-  }
-
-  // Handle special operators (text, vector, geo) - these need special handling
-  // For now, return true and let specialized code handle them
-  if (filter.$text || filter.$vector || filter.$geo) {
-    // These should be handled by specialized indexes
-    // If we get here, assume they passed (or the index already filtered)
-    return true
-  }
-
-  // Check each field filter
-  for (const [field, value] of Object.entries(filter)) {
-    // Skip logical operators (already handled) and special operators
-    if (field.startsWith('$')) continue
-
-    // Get the field value (supports nested fields with dot notation)
-    const fieldValue = getNestedValue(obj, field)
-
-    // Evaluate the field condition
-    if (!evaluateFieldCondition(fieldValue, value)) {
-      return false
-    }
-  }
-
-  return true
-}
-
-// getNestedValue is imported from ../utils
-
-/**
- * Evaluate a field condition against a value
- */
-function evaluateFieldCondition(fieldValue: unknown, condition: unknown): boolean {
-  // Null/undefined condition - match nullish values
-  if (condition === null) {
-    return fieldValue === null || fieldValue === undefined
-  }
-
-  if (condition === undefined) {
-    return true // undefined means no constraint
-  }
-
-  // Operator object
-  if (typeof condition === 'object' && condition !== null && !Array.isArray(condition) && !(condition instanceof Date)) {
-    return evaluateOperators(fieldValue, condition as Record<string, unknown>)
-  }
-
-  // Direct equality (handles primitives, dates, arrays)
-  return deepEqual(fieldValue, condition)
-}
-
-/**
- * Evaluate operator conditions
- */
-function evaluateOperators(fieldValue: unknown, operators: Record<string, unknown>): boolean {
-  for (const [op, opValue] of Object.entries(operators)) {
-    switch (op) {
-      // Comparison operators
-      case '$eq':
-        if (!deepEqual(fieldValue, opValue)) return false
-        break
-
-      case '$ne':
-        if (deepEqual(fieldValue, opValue)) return false
-        break
-
-      case '$gt':
-        if (fieldValue === null || fieldValue === undefined) return false
-        if (compareValues(fieldValue, opValue) <= 0) return false
-        break
-
-      case '$gte':
-        if (fieldValue === null || fieldValue === undefined) return false
-        if (compareValues(fieldValue, opValue) < 0) return false
-        break
-
-      case '$lt':
-        if (fieldValue === null || fieldValue === undefined) return false
-        if (compareValues(fieldValue, opValue) >= 0) return false
-        break
-
-      case '$lte':
-        if (fieldValue === null || fieldValue === undefined) return false
-        if (compareValues(fieldValue, opValue) > 0) return false
-        break
-
-      case '$in':
-        if (!Array.isArray(opValue)) return false
-        if (!opValue.some(v => deepEqual(fieldValue, v))) return false
-        break
-
-      case '$nin':
-        if (!Array.isArray(opValue)) return false
-        if (opValue.some(v => deepEqual(fieldValue, v))) return false
-        break
-
-      // String operators
-      case '$regex': {
-        if (typeof fieldValue !== 'string') return false
-        const pattern = opValue instanceof RegExp
-          ? opValue
-          : new RegExp(opValue as string, (operators.$options as string) || '')
-        if (!pattern.test(fieldValue)) return false
-        break
-      }
-
-      case '$options':
-        // Handled with $regex
-        break
-
-      case '$startsWith':
-        if (typeof fieldValue !== 'string') return false
-        if (!fieldValue.startsWith(opValue as string)) return false
-        break
-
-      case '$endsWith':
-        if (typeof fieldValue !== 'string') return false
-        if (!fieldValue.endsWith(opValue as string)) return false
-        break
-
-      case '$contains':
-        if (typeof fieldValue !== 'string') return false
-        if (!fieldValue.includes(opValue as string)) return false
-        break
-
-      // Array operators
-      case '$all': {
-        if (!Array.isArray(fieldValue)) return false
-        const required = opValue as unknown[]
-        if (!required.every(v => fieldValue.some(fv => deepEqual(fv, v)))) return false
-        break
-      }
-
-      case '$elemMatch': {
-        if (!Array.isArray(fieldValue)) return false
-        const subFilter = opValue as Filter
-        if (!fieldValue.some(elem => evaluateFilter(subFilter, elem))) return false
-        break
-      }
-
-      case '$size':
-        if (!Array.isArray(fieldValue)) return false
-        if (fieldValue.length !== opValue) return false
-        break
-
-      // Existence operators
-      case '$exists':
-        if (opValue === true) {
-          if (fieldValue === undefined) return false
-        } else {
-          if (fieldValue !== undefined) return false
-        }
-        break
-
-      case '$type': {
-        const actualType = getValueType(fieldValue)
-        if (actualType !== opValue) return false
-        break
-      }
-
-      default:
-        // Unknown operator - ignore (or could throw)
-        break
-    }
-  }
-
-  return true
-}
-
-// getValueType is imported from ../utils
-
-// deepEqual is imported from ../utils
+// Re-export matchesFilter for backwards compatibility with any code that imported it from here
+export { matchesFilter } from './filter'
 
 // =============================================================================
 // Field Extraction
@@ -596,7 +383,7 @@ function extractFieldsRecursive(filter: Filter, fields: Set<string>): void {
     fields.add(field)
 
     // Also add root field for nested fields
-    const rootField = field.split('.')[0]
+    const rootField = field.split('.')[0]!
     if (rootField !== field) {
       fields.add(rootField)
     }

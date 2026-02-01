@@ -345,13 +345,14 @@ export interface R2Bucket {
  * R2 specific error
  */
 export class R2Error extends Error {
+  override readonly name = 'R2Error'
   constructor(
     message: string,
     public readonly code: string,
     public readonly status?: number
   ) {
     super(message)
-    this.name = 'R2Error'
+    Object.setPrototypeOf(this, R2Error.prototype)
   }
 }
 

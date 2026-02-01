@@ -8,6 +8,8 @@
  * https://parquet.apache.org/docs/file-format/types/variantshredding/
  */
 
+import { createSafeRegex } from '../utils/safe-regex'
+
 /**
  * Variant column metadata for filter transformation
  */
@@ -59,7 +61,7 @@ export function transformVariantFilter(
 
       if (variantConfig) {
         // Check if this field is shredded
-        const fieldName = fieldPath.split('.')[0]
+        const fieldName = fieldPath.split('.')[0]!
         if (variantConfig.fields.includes(fieldName)) {
           // Transform to Parquet Variant shredding path
           // $index.titleType -> $index.typed_value.titleType.typed_value
@@ -116,7 +118,7 @@ export function extractVariantFilterColumns(
         // Find Variant config
         const variantConfig = config.find(c => c.column === columnName)
         if (variantConfig) {
-          const fieldName = fieldPath.split('.')[0]
+          const fieldName = fieldPath.split('.')[0]!
           if (variantConfig.fields.includes(fieldName)) {
             // Need to read the Variant column
             readColumns.add(columnName)
@@ -250,7 +252,7 @@ function matchesCondition(value: unknown, condition: unknown): boolean {
         break
       case '$regex':
         if (typeof value !== 'string') return false
-        if (!new RegExp(target as string).test(value)) return false
+        if (!createSafeRegex(target as string).test(value)) return false
         break
     }
   }

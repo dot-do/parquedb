@@ -365,8 +365,8 @@ function calculatePercentiles(latencies: number[]): { p50: number; p95: number; 
   const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length
 
   return {
-    p50: Math.round(sorted[p50Index]),
-    p95: Math.round(sorted[p95Index]),
+    p50: Math.round(sorted[p50Index] ?? 0),
+    p95: Math.round(sorted[p95Index] ?? 0),
     avg: Math.round(avg),
   }
 }
@@ -407,7 +407,7 @@ function calculateDatasetSummaries(results: QueryBenchmarkResult[]): DatasetBenc
 function calculateOverallSummary(results: QueryBenchmarkResult[]): IndexedBenchmarkResult['summary'] {
   const speedups = results.map(r => r.speedup).sort((a, b) => a - b)
   const avgSpeedup = speedups.reduce((a, b) => a + b, 0) / speedups.length
-  const medianSpeedup = speedups[Math.floor(speedups.length / 2)]
+  const medianSpeedup = speedups[Math.floor(speedups.length / 2)] ?? 0
 
   const best = results.reduce((a, b) => a.speedup > b.speedup ? a : b)
 

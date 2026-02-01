@@ -141,11 +141,13 @@ export async function processEmbedOperator(
   // Generate embeddings in batches by model
   for (const [model, tasks] of tasksByModel) {
     const texts = tasks.map(t => t.text)
-    const embedOptions: EmbedOptions = model !== embeddings.model ? { model } : undefined
+    const embedOptions: EmbedOptions = model !== embeddings.model ? { model } : {}
 
     let vectors: number[][]
     if (texts.length === 1) {
-      const vector = await embeddings.embed(texts[0], embedOptions)
+      const text = texts[0]
+      if (!text) continue
+      const vector = await embeddings.embed(text, embedOptions)
       vectors = [vector]
     } else {
       vectors = await embeddings.embedBatch(texts, embedOptions)
@@ -154,6 +156,7 @@ export async function processEmbedOperator(
     // Set embeddings in data
     for (let i = 0; i < tasks.length; i++) {
       const task = tasks[i]
+      if (!task) continue
       const vector = vectors[i]
       setNestedValue(data, task.targetField, vector)
     }

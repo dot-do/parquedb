@@ -19,6 +19,7 @@ import { checkBloomFilter } from './bloom'
 import type { IndexManager, SelectedIndex } from '../indexes/manager'
 import type { IndexLookupResult, FTSSearchResult } from '../indexes/types'
 import { logger } from '../utils/logger'
+import { stringToBase64 } from '../utils/base64'
 
 // =============================================================================
 // Query Result Types
@@ -834,8 +835,8 @@ export class QueryExecutor {
       }
     }
 
-    // Base64 encode the cursor
-    return Buffer.from(JSON.stringify(cursorData)).toString('base64')
+    // Base64 encode the cursor (Worker-safe)
+    return stringToBase64(JSON.stringify(cursorData))
   }
 
   /**

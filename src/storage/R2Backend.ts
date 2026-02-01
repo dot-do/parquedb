@@ -22,11 +22,13 @@ import type {
   R2MultipartUpload,
   R2UploadedPart,
 } from './types/r2'
+import { validateRange, InvalidRangeError } from './validation'
 
 /**
  * Error thrown when an R2 operation fails
  */
 export class R2OperationError extends Error {
+  override readonly name = 'R2OperationError'
   readonly operation: string
   readonly key?: string
   readonly underlyingCause?: Error
@@ -38,7 +40,7 @@ export class R2OperationError extends Error {
     cause?: Error
   ) {
     super(message)
-    this.name = 'R2OperationError'
+    Object.setPrototypeOf(this, R2OperationError.prototype)
     this.operation = operation
     this.key = key
     this.underlyingCause = cause
@@ -49,13 +51,14 @@ export class R2OperationError extends Error {
  * Error thrown when a conditional write fails due to ETag mismatch
  */
 export class R2ETagMismatchError extends Error {
+  override readonly name = 'R2ETagMismatchError'
   constructor(
     public readonly key: string,
     public readonly expectedEtag: string | null,
     public readonly actualEtag: string | null
   ) {
     super(`ETag mismatch for ${key}: expected ${expectedEtag}, got ${actualEtag}`)
-    this.name = 'R2ETagMismatchError'
+    Object.setPrototypeOf(this, R2ETagMismatchError.prototype)
   }
 }
 
@@ -63,9 +66,10 @@ export class R2ETagMismatchError extends Error {
  * Error thrown when an object is not found
  */
 export class R2NotFoundError extends Error {
+  override readonly name = 'R2NotFoundError'
   constructor(public readonly key: string) {
     super(`Object not found: ${key}`)
-    this.name = 'R2NotFoundError'
+    Object.setPrototypeOf(this, R2NotFoundError.prototype)
   }
 }
 
@@ -132,20 +136,14 @@ export class R2Backend implements StorageBackend, MultipartBackend {
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
-    // Validate range parameters
-    if (start < 0) {
-      throw new R2OperationError(
-        `Invalid range: start (${start}) must be non-negative`,
-        'readRange',
-        path
-      )
-    }
-    if (end < start) {
-      throw new R2OperationError(
-        `Invalid range: end (${end}) must be >= start (${start})`,
-        'readRange',
-        path
-      )
+    // Validate range parameters using shared validation
+    try {
+      validateRange(start, end)
+    } catch (error) {
+      if (error instanceof InvalidRangeError) {
+        throw new R2OperationError(error.message, 'readRange', path)
+      }
+      throw error
     }
 
     const key = this.withPrefix(path)

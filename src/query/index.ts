@@ -73,3 +73,12 @@ export {
   type BloomFilterHeader,
   type BloomFilterIndex,
 } from './bloom'
+
+// Query builder
+export {
+  QueryBuilder,
+  type ComparisonOp,
+  type StringOp,
+  type ExistenceOp,
+  type QueryOp,
+} from './builder'

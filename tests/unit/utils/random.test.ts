@@ -11,6 +11,8 @@ import {
   getRandomBase32,
   getRandom48Bit,
   getUUID,
+  generateULID,
+  generateId,
 } from '../../../src/utils/random'
 
 describe('random utilities', () => {
@@ -169,6 +171,149 @@ describe('random utilities', () => {
       expect(uuid[14]).toBe('4')
       // Variant bits at position 19 should be 8, 9, a, or b
       expect(['8', '9', 'a', 'b']).toContain(uuid[19])
+    })
+  })
+
+  describe('generateULID', () => {
+    it('returns a 26-character string', () => {
+      const ulid = generateULID()
+      expect(ulid.length).toBe(26)
+    })
+
+    it('returns only Crockford Base32 characters (uppercase)', () => {
+      const ulid = generateULID()
+      // Crockford Base32 excludes I, L, O, U
+      expect(ulid).toMatch(/^[0-9A-HJKMNP-TV-Z]+$/)
+    })
+
+    it('is lexicographically sortable by time', () => {
+      // Generate IDs with a small delay to ensure different timestamps
+      const ulid1 = generateULID()
+
+      // Wait a bit to ensure different timestamp
+      const start = Date.now()
+      while (Date.now() === start) {
+        // busy wait for next millisecond
+      }
+
+      const ulid2 = generateULID()
+
+      // ulid2 should be lexicographically greater than ulid1
+      expect(ulid2 > ulid1).toBe(true)
+    })
+
+    it('returns unique values on each call', () => {
+      const ulid1 = generateULID()
+      const ulid2 = generateULID()
+      expect(ulid1).not.toBe(ulid2)
+    })
+
+    it('generates unique IDs under concurrent generation', () => {
+      // Generate 10,000 IDs as fast as possible
+      const ids = new Set<string>()
+      const count = 10000
+
+      for (let i = 0; i < count; i++) {
+        ids.add(generateULID())
+      }
+
+      // All IDs should be unique
+      expect(ids.size).toBe(count)
+    })
+
+    it('generates unique IDs in parallel (simulated concurrent access)', async () => {
+      // Simulate concurrent generation using Promise.all
+      const count = 1000
+      const promises = Array.from({ length: count }, () =>
+        Promise.resolve(generateULID())
+      )
+
+      const ids = await Promise.all(promises)
+      const uniqueIds = new Set(ids)
+
+      // All IDs should be unique
+      expect(uniqueIds.size).toBe(count)
+    })
+
+    it('maintains timestamp prefix for time-based ordering', () => {
+      const before = Date.now()
+      const ulid = generateULID()
+      const after = Date.now()
+
+      // Extract timestamp portion (first 10 characters)
+      const timestampPart = ulid.slice(0, 10)
+
+      // The timestamp should decode to a value in range [before, after]
+      // Decode Crockford Base32
+      const ENCODING = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+      let decoded = 0
+      for (const char of timestampPart) {
+        decoded = decoded * 32 + ENCODING.indexOf(char)
+      }
+
+      expect(decoded).toBeGreaterThanOrEqual(before)
+      expect(decoded).toBeLessThanOrEqual(after)
+    })
+  })
+
+  describe('generateId', () => {
+    it('returns a 26-character lowercase string', () => {
+      const id = generateId()
+      expect(id.length).toBe(26)
+      expect(id).toBe(id.toLowerCase())
+    })
+
+    it('returns only lowercase Crockford Base32 characters', () => {
+      const id = generateId()
+      // Lowercase Crockford Base32
+      expect(id).toMatch(/^[0-9a-hjkmnp-tv-z]+$/)
+    })
+
+    it('is lexicographically sortable by time', () => {
+      const id1 = generateId()
+
+      // Wait a bit to ensure different timestamp
+      const start = Date.now()
+      while (Date.now() === start) {
+        // busy wait for next millisecond
+      }
+
+      const id2 = generateId()
+
+      // id2 should be lexicographically greater than id1
+      expect(id2 > id1).toBe(true)
+    })
+
+    it('generates unique IDs under high-frequency concurrent generation', () => {
+      // This is the critical test for the race condition fix
+      // Generate IDs as fast as possible within the same millisecond
+      const ids = new Set<string>()
+      const count = 10000
+
+      for (let i = 0; i < count; i++) {
+        ids.add(generateId())
+      }
+
+      // All IDs should be unique - if there was a race condition,
+      // we would see duplicates
+      expect(ids.size).toBe(count)
+    })
+
+    it('is safe for multi-instance generation (no shared state)', () => {
+      // The new implementation should have no shared mutable state
+      // that could cause race conditions. Each call gets fresh randomness.
+      // Generate many IDs in quick succession
+      const batches = 10
+      const perBatch = 1000
+      const allIds = new Set<string>()
+
+      for (let batch = 0; batch < batches; batch++) {
+        for (let i = 0; i < perBatch; i++) {
+          allIds.add(generateId())
+        }
+      }
+
+      expect(allIds.size).toBe(batches * perBatch)
     })
   })
 })
