@@ -13,6 +13,7 @@ import type {
   Event,
   Variant,
 } from '../../src/types'
+import { isRelationshipTarget, parseEntityTarget } from '../../src/types'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -70,8 +71,10 @@ describe('Event Log', () => {
       expect(events.length).toBeGreaterThan(0)
       const createEvent = events.find((e: Event) => e.op === 'CREATE')
       expect(createEvent).toBeDefined()
-      expect(createEvent!.target).toBe('entity')
-      expect(createEvent!.before).toBeNull()
+      // Target is now "ns:id" format, not 'entity'
+      expect(createEvent!.target).toMatch(/^posts:/)
+      expect(isRelationshipTarget(createEvent!.target)).toBe(false)
+      expect(createEvent!.before).toBeUndefined()
       expect(createEvent!.after).toBeDefined()
       expect((createEvent!.after as Variant).title).toBe('Hello World')
     })
@@ -117,7 +120,7 @@ describe('Event Log', () => {
       const deleteEvent = events.find((e: Event) => e.op === 'DELETE')
       expect(deleteEvent).toBeDefined()
       expect(deleteEvent!.before).toBeDefined()
-      expect(deleteEvent!.after).toBeNull()
+      expect(deleteEvent!.after).toBeUndefined()
     })
 
     it('records LINK event for relationships', async () => {
@@ -143,8 +146,10 @@ describe('Event Log', () => {
       const eventLog = db.getEventLog()
       const events = await eventLog.getEvents(post.$id as EntityId)
 
-      // LINK events are recorded on the relationship target
-      const linkEvent = events.find((e: Event) => e.target === 'rel' && e.op === 'CREATE')
+      // LINK events are now recorded with relationship target format "from:pred:to"
+      // They use CREATE op, and the target contains the relationship path
+      const allEvents = await eventLog.getEventsByOp('CREATE')
+      const linkEvent = allEvents.find((e: Event) => isRelationshipTarget(e.target) && e.target.includes(':author:'))
       expect(linkEvent).toBeDefined()
       expect((linkEvent!.after as Variant).predicate).toBe('author')
     })
@@ -170,9 +175,9 @@ describe('Event Log', () => {
       })
 
       const eventLog = db.getEventLog()
-      const events = await eventLog.getEvents(post.$id as EntityId)
-
-      const unlinkEvent = events.find((e: Event) => e.target === 'rel' && e.op === 'DELETE')
+      // UNLINK events are now DELETE ops with relationship target format
+      const allEvents = await eventLog.getEventsByOp('DELETE')
+      const unlinkEvent = allEvents.find((e: Event) => isRelationshipTarget(e.target) && e.target.includes(':author:'))
       expect(unlinkEvent).toBeDefined()
     })
 
@@ -197,7 +202,7 @@ describe('Event Log', () => {
     })
 
     it('includes timestamp', async () => {
-      const before = new Date()
+      const before = Date.now()
 
       const entity = await db.create('posts', {
         $type: 'Post',
@@ -206,14 +211,15 @@ describe('Event Log', () => {
         content: 'Test content',
       })
 
-      const after = new Date()
+      const after = Date.now()
 
       const eventLog = db.getEventLog()
       const events = await eventLog.getEvents(entity.$id as EntityId)
 
-      expect(events[0].ts).toBeInstanceOf(Date)
-      expect(events[0].ts.getTime()).toBeGreaterThanOrEqual(before.getTime())
-      expect(events[0].ts.getTime()).toBeLessThanOrEqual(after.getTime())
+      // ts is now a number (milliseconds since epoch)
+      expect(typeof events[0].ts).toBe('number')
+      expect(events[0].ts).toBeGreaterThanOrEqual(before)
+      expect(events[0].ts).toBeLessThanOrEqual(after)
     })
 
     it('includes sequence number', async () => {
@@ -243,7 +249,7 @@ describe('Event Log', () => {
   // ===========================================================================
 
   describe('event structure', () => {
-    it('stores entityId', async () => {
+    it('stores target with ns and id', async () => {
       const entity = await db.create('posts', {
         $type: 'Post',
         name: 'Test Post',
@@ -254,8 +260,12 @@ describe('Event Log', () => {
       const eventLog = db.getEventLog()
       const events = await eventLog.getEvents(entity.$id as EntityId)
 
-      expect(events[0].entityId).toBeDefined()
-      expect(events[0].ns).toBe('posts')
+      // target is now "ns:id" format, use parseEntityTarget to extract
+      expect(events[0].target).toBeDefined()
+      expect(isRelationshipTarget(events[0].target)).toBe(false)
+      const { ns, id } = parseEntityTarget(events[0].target)
+      expect(ns).toBe('posts')
+      expect(id).toBeDefined()
     })
 
     it('stores operation type', async () => {
@@ -354,7 +364,8 @@ describe('Event Log', () => {
       const exists = await storage.exists(eventsPath)
       // Events are stored in the event log, not necessarily as a separate file
       // The key test is that the event log can retrieve them
-      expect(events[0].entityId).toBeDefined()
+      expect(events[0].target).toBeDefined()
+      expect(events[0].target).toMatch(/^posts:/)
     })
 
     it('batches writes for efficiency', async () => {
@@ -448,8 +459,15 @@ describe('Event Log', () => {
 
       expect(postEvents.length).toBeGreaterThan(0)
       expect(userEvents.length).toBeGreaterThan(0)
-      expect(postEvents.every((e: Event) => e.ns === 'posts')).toBe(true)
-      expect(userEvents.every((e: Event) => e.ns === 'users')).toBe(true)
+      // Events are filtered by namespace using target field
+      expect(postEvents.every((e: Event) => {
+        if (isRelationshipTarget(e.target)) return true
+        return parseEntityTarget(e.target).ns === 'posts'
+      })).toBe(true)
+      expect(userEvents.every((e: Event) => {
+        if (isRelationshipTarget(e.target)) return true
+        return parseEntityTarget(e.target).ns === 'users'
+      })).toBe(true)
     })
 
     it('queries events by time range', async () => {

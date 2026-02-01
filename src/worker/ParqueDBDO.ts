@@ -23,8 +23,8 @@ import type {
   UpdateInput,
   CreateInput,
   Variant,
-  entityId,
 } from '../types'
+import { entityTarget, relTarget, parseEntityTarget, isRelationshipTarget } from '../types'
 import type { Env, FlushConfig, DEFAULT_FLUSH_CONFIG, DO_SQLITE_SCHEMA } from '../types/worker'
 
 // =============================================================================
@@ -340,14 +340,12 @@ export class ParqueDBDO extends DurableObject<Env> {
     // Append create event
     await this.appendEvent({
       id: generateULID(),
-      ts: new Date(now),
-      target: 'entity',
+      ts: Date.now(),
       op: 'CREATE',
-      ns: ns as Namespace,
-      entityId: id as Id,
-      before: null,
+      target: entityTarget(ns, id),
+      before: undefined,
       after: { ...dataWithoutLinks, $type, name } as Variant,
-      actor: actor as EntityId,
+      actor: actor as string,
     })
 
     // Schedule flush if needed
@@ -498,14 +496,12 @@ export class ParqueDBDO extends DurableObject<Env> {
     // Append update event
     await this.appendEvent({
       id: generateULID(),
-      ts: new Date(now),
-      target: 'entity',
+      ts: Date.now(),
       op: 'UPDATE',
-      ns: ns as Namespace,
-      entityId: id as Id,
+      target: entityTarget(ns, id),
       before: { ...JSON.parse(current.data), $type: current.type, name: current.name } as Variant,
       after: { ...data, $type: type, name } as Variant,
-      actor: actor as EntityId,
+      actor: actor as string,
     })
 
     await this.maybeScheduleFlush()
@@ -579,14 +575,12 @@ export class ParqueDBDO extends DurableObject<Env> {
     // Append delete event
     await this.appendEvent({
       id: generateULID(),
-      ts: new Date(now),
-      target: 'entity',
+      ts: Date.now(),
       op: 'DELETE',
-      ns: ns as Namespace,
-      entityId: id as Id,
+      target: entityTarget(ns, id),
       before: { ...JSON.parse(current.data), $type: current.type, name: current.name } as Variant,
-      after: null,
-      actor: actor as EntityId,
+      after: undefined,
+      actor: actor as string,
     })
 
     await this.maybeScheduleFlush()
@@ -661,14 +655,12 @@ export class ParqueDBDO extends DurableObject<Env> {
     // Append relationship event
     await this.appendEvent({
       id: generateULID(),
-      ts: new Date(now),
-      target: 'rel',
+      ts: Date.now(),
       op: 'CREATE',
-      ns: fromNs as Namespace,
-      entityId: fromEntityId as Id,
-      before: null,
-      after: { predicate, toId, data: options.data } as Variant,
-      actor: actor as EntityId,
+      target: relTarget(entityTarget(fromNs, fromEntityId), predicate, entityTarget(toNs, toEntityId)),
+      before: undefined,
+      after: { predicate, to: toId, data: options.data } as Variant,
+      actor: actor as string,
     })
 
     await this.maybeScheduleFlush()
@@ -711,14 +703,12 @@ export class ParqueDBDO extends DurableObject<Env> {
     // Append relationship event
     await this.appendEvent({
       id: generateULID(),
-      ts: new Date(now),
-      target: 'rel',
+      ts: Date.now(),
       op: 'DELETE',
-      ns: fromNs as Namespace,
-      entityId: fromEntityId as Id,
-      before: { predicate, toId } as Variant,
-      after: null,
-      actor: actor as EntityId,
+      target: relTarget(entityTarget(fromNs, fromEntityId), predicate, entityTarget(toNs, toEntityId)),
+      before: { predicate, to: toId } as Variant,
+      after: undefined,
+      actor: actor as string,
     })
 
     await this.maybeScheduleFlush()
@@ -791,18 +781,27 @@ export class ParqueDBDO extends DurableObject<Env> {
   async appendEvent(event: Event): Promise<void> {
     await this.ensureInitialized()
 
+    // Extract ns and entity_id from target for SQLite storage
+    let ns: string | null = null
+    let entityId: string | null = null
+    if (!isRelationshipTarget(event.target)) {
+      const info = parseEntityTarget(event.target)
+      ns = info.ns
+      entityId = info.id
+    }
+
     this.sql.exec(
       `INSERT INTO events (id, ts, target, op, ns, entity_id, before, after, actor, metadata, flushed)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       event.id,
-      event.ts.toISOString(),
+      new Date(event.ts).toISOString(),
       event.target,
       event.op,
-      event.ns,
-      event.entityId,
+      ns,
+      entityId,
       event.before ? JSON.stringify(event.before) : null,
       event.after ? JSON.stringify(event.after) : null,
-      event.actor,
+      event.actor || null,
       event.metadata ? JSON.stringify(event.metadata) : null
     )
   }

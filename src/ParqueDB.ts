@@ -23,11 +23,11 @@ import type {
   HistoryOptions,
   Event,
   EventOp,
-  EventTarget,
   RelSet,
   SortSpec,
   Projection,
 } from './types'
+import { entityTarget, parseEntityTarget, relTarget, isRelationshipTarget } from './types'
 import { parseFieldType, isRelationString, parseRelation } from './types/schema'
 import { FileNotFoundError } from './storage/MemoryBackend'
 import { IndexManager } from './indexes/manager'
@@ -677,8 +677,10 @@ class ParqueDBImpl {
 
       // Also check events for entities that may have existed at asOf time
       for (const event of this.events) {
-        if (event.ns === namespace) {
-          const fullId = `${namespace}/${event.entityId}`
+        if (isRelationshipTarget(event.target)) continue
+        const { ns, id } = parseEntityTarget(event.target)
+        if (ns === namespace) {
+          const fullId = `${namespace}/${id}`
           entityIds.add(fullId)
         }
       }
@@ -884,7 +886,11 @@ class ParqueDBImpl {
     const latestSnapshot = entitySnapshots[entitySnapshots.length - 1]
     if (entitySnapshots.length > 0 && latestSnapshot) {
       const [ns, ...idParts] = fullId.split('/')
-      const entityEvents = this.events.filter(e => e.ns === ns && e.entityId === idParts.join('/'))
+      const entityEvents = this.events.filter(e => {
+        if (isRelationshipTarget(e.target)) return false
+        const info = parseEntityTarget(e.target)
+        return info.ns === ns && info.id === idParts.join('/')
+      })
       const eventsAfterSnapshot = entityEvents.length - latestSnapshot.sequenceNumber
       this.queryStats.set(fullId, {
         snapshotsUsed: 1,
@@ -1352,7 +1358,7 @@ class ParqueDBImpl {
     this.entities.set(fullId, entity as Entity)
 
     // Record CREATE event and await flush
-    await this.recordEvent('CREATE', 'entity', namespace, id, null, entity as Entity, actor)
+    await this.recordEvent('CREATE', entityTarget(namespace, id), null, entity as Entity, actor)
 
     return entity
   }
@@ -1769,21 +1775,22 @@ class ParqueDBImpl {
     // Record UPDATE event
     const [eventNs, ...eventIdParts] = fullId.split('/')
     if (eventNs) {
-      await this.recordEvent('UPDATE', 'entity', eventNs, eventIdParts.join('/'), beforeEntityForEvent, entity, actor as EntityId | undefined)
+      await this.recordEvent('UPDATE', entityTarget(eventNs, eventIdParts.join('/')), beforeEntityForEvent, entity, actor as EntityId | undefined)
 
       // Record relationship events for $link operations
       if (update.$link) {
         for (const [predicate, value] of Object.entries(update.$link)) {
-          const targets = Array.isArray(value) ? value : [value]
-          for (const target of targets) {
+          const linkTargets = Array.isArray(value) ? value : [value]
+          for (const linkTarget of linkTargets) {
+            // Convert "ns/id" to "ns:id" format for relTarget
+            const toTarget = String(linkTarget).replace('/', ':')
+            const fromTarget = entityTarget(eventNs, eventIdParts.join('/'))
             // Record CREATE rel event
             await this.recordEvent(
               'CREATE',
-              'rel',
-              eventNs,
-              eventIdParts.join('/'),
+              relTarget(fromTarget, predicate, toTarget),
               null,
-              { predicate, target } as unknown as Entity,
+              { predicate, to: linkTarget } as unknown as Entity,
               actor as EntityId | undefined
             )
           }
@@ -1794,15 +1801,16 @@ class ParqueDBImpl {
       if (update.$unlink) {
         for (const [predicate, value] of Object.entries(update.$unlink)) {
           if (value === '$all') continue // Skip $all unlink
-          const targets = Array.isArray(value) ? value : [value]
-          for (const target of targets) {
+          const unlinkTargets = Array.isArray(value) ? value : [value]
+          for (const unlinkTarget of unlinkTargets) {
+            // Convert "ns/id" to "ns:id" format for relTarget
+            const toTarget = String(unlinkTarget).replace('/', ':')
+            const fromTarget = entityTarget(eventNs, eventIdParts.join('/'))
             // Record DELETE rel event
             await this.recordEvent(
               'DELETE',
-              'rel',
-              eventNs,
-              eventIdParts.join('/'),
-              { predicate, target } as unknown as Entity,
+              relTarget(fromTarget, predicate, toTarget),
+              { predicate, to: unlinkTarget } as unknown as Entity,
               null,
               actor as EntityId | undefined
             )
@@ -1887,9 +1895,7 @@ class ParqueDBImpl {
     const [eventNs, ...eventIdParts] = fullId.split('/')
     await this.recordEvent(
       'DELETE',
-      'entity',
-      eventNs,
-      eventIdParts.join('/'),
+      entityTarget(eventNs, eventIdParts.join('/')),
       beforeEntityForEvent,
       null,
       actor
@@ -1959,7 +1965,7 @@ class ParqueDBImpl {
 
     // Record RESTORE event (as UPDATE)
     const [eventNs, ...eventIdParts] = fullId.split('/')
-    await this.recordEvent('UPDATE', 'entity', eventNs, eventIdParts.join('/'), beforeEntityForEvent, entity, actor)
+    await this.recordEvent('UPDATE', entityTarget(eventNs, eventIdParts.join('/')), beforeEntityForEvent, entity, actor)
 
     return entity as Entity<T>
   }
@@ -2152,9 +2158,13 @@ class ParqueDBImpl {
 
     // Get all events for this entity, sorted by time and ID
     const allEvents = this.events
-      .filter(e => e.ns === ns && e.entityId === entityId)
+      .filter(e => {
+        if (isRelationshipTarget(e.target)) return false
+        const info = parseEntityTarget(e.target)
+        return info.ns === ns && info.id === entityId
+      })
       .sort((a, b) => {
-        const timeDiff = a.ts.getTime() - b.ts.getTime()
+        const timeDiff = a.ts - b.ts
         if (timeDiff !== 0) return timeDiff
         return a.id.localeCompare(b.id)
       })
@@ -2169,17 +2179,16 @@ class ParqueDBImpl {
     // the specific event whose timestamp was passed.
     let targetEventIndex = -1
 
-    // First, try to find the event by Date object identity (same object reference)
-    const identityMatchIndex = allEvents.findIndex(e => e.ts === asOf)
+    // First, try to find the event by exact timestamp match
+    const exactMatchIndex = allEvents.findIndex(e => e.ts === asOfTime)
 
-    if (identityMatchIndex !== -1) {
-      // Found exact object match - this is the specific event we want
-      targetEventIndex = identityMatchIndex
+    if (exactMatchIndex !== -1) {
+      // Found exact timestamp match
+      targetEventIndex = exactMatchIndex
     } else {
-      // No identity match - fall back to timestamp comparison
-      // Find the last event at or before asOf time
+      // No exact match - find the last event at or before asOf time
       for (let i = 0; i < allEvents.length; i++) {
-        if (allEvents[i].ts.getTime() <= asOfTime) {
+        if (allEvents[i].ts <= asOfTime) {
           targetEventIndex = i
         } else {
           break
@@ -2269,7 +2278,10 @@ class ParqueDBImpl {
       await this.storage.write(`data/events.jsonl`, new TextEncoder().encode(eventData))
 
       // Step 2: Write entity data for each affected namespace
-      const affectedNamespaces = new Set(eventsToFlush.map(e => e.ns))
+      const affectedNamespaces = new Set(eventsToFlush.map(e => {
+        if (isRelationshipTarget(e.target)) return null
+        return parseEntityTarget(e.target).ns
+      }).filter((ns): ns is string => ns !== null))
       for (const ns of affectedNamespaces) {
         // Collect current state of all entities in this namespace
         const nsEntities: Entity[] = []
@@ -2284,7 +2296,10 @@ class ParqueDBImpl {
 
       // Step 3: Write namespace event logs
       for (const ns of affectedNamespaces) {
-        const nsEvents = eventsToFlush.filter(e => e.ns === ns)
+        const nsEvents = eventsToFlush.filter(e => {
+          if (isRelationshipTarget(e.target)) return false
+          return parseEntityTarget(e.target).ns === ns
+        })
         const nsEventData = JSON.stringify(nsEvents)
         await this.storage.write(`${ns}/events.json`, new TextEncoder().encode(nsEventData))
       }
@@ -2297,7 +2312,8 @@ class ParqueDBImpl {
           this.events.splice(idx, 1)
         }
         // Rollback entity state
-        const fullId = `${event.ns}/${event.entityId}`
+        const { ns, id } = isRelationshipTarget(event.target) ? { ns: '', id: '' } : parseEntityTarget(event.target)
+        const fullId = `${ns}/${id}`
         if (event.op === 'CREATE') {
           // Remove created entity
           this.entities.delete(fullId)
@@ -2333,33 +2349,36 @@ class ParqueDBImpl {
   /**
    * Record an event for an entity operation
    * Returns a promise that resolves when the event is flushed to storage
+   *
+   * @param op - Operation type (CREATE, UPDATE, DELETE)
+   * @param target - Target identifier (entity: "ns:id", relationship: "from:pred:to")
+   * @param before - State before change (undefined for CREATE)
+   * @param after - State after change (undefined for DELETE)
+   * @param actor - Who made the change
+   * @param meta - Additional metadata
    */
   private recordEvent(
     op: EventOp,
-    target: EventTarget,
-    ns: string,
-    entityId: string,
+    target: string,
     before: Entity | null,
     after: Entity | null,
     actor?: EntityId,
     meta?: Record<string, unknown>
   ): Promise<void> {
     // Deep copy to prevent mutation of stored event state
-    const deepCopy = <T>(obj: T | null): T | null => {
-      if (obj === null) return null
+    const deepCopy = <T>(obj: T | null): T | undefined => {
+      if (obj === null) return undefined
       return JSON.parse(JSON.stringify(obj))
     }
 
     const event: Event = {
       id: generateId(),
-      ts: new Date(),
+      ts: Date.now(),
       op,
       target,
-      ns: ns as unknown as import('./types').Namespace,
-      entityId: entityId as unknown as import('./types').Id,
-      before: deepCopy(before) as import('./types').Variant | null,
-      after: deepCopy(after) as import('./types').Variant | null,
-      actor: actor as EntityId,
+      before: deepCopy(before) as import('./types').Variant | undefined,
+      after: deepCopy(after) as import('./types').Variant | undefined,
+      actor: actor as string | undefined,
       metadata: meta as import('./types').Variant | undefined,
     }
     this.events.push(event)
@@ -2370,10 +2389,15 @@ class ParqueDBImpl {
     // Schedule a batched flush (unless in transaction)
     const flushPromise = this.scheduleFlush()
 
-    // Auto-snapshot if threshold is configured and reached
-    if (this.snapshotConfig.autoSnapshotThreshold && after) {
-      const fullEntityId = `${ns}/${entityId}` as EntityId
-      const entityEventCount = this.events.filter(e => e.ns === ns && e.entityId === entityId).length
+    // Auto-snapshot if threshold is configured and reached (only for entity events)
+    if (this.snapshotConfig.autoSnapshotThreshold && after && !isRelationshipTarget(target)) {
+      const { ns, id } = parseEntityTarget(target)
+      const fullEntityId = `${ns}/${id}` as EntityId
+      const entityEventCount = this.events.filter(e => {
+        if (isRelationshipTarget(e.target)) return false
+        const info = parseEntityTarget(e.target)
+        return info.ns === ns && info.id === id
+      }).length
       const existingSnapshots = this.snapshots.filter(s => s.entityId === fullEntityId)
       const lastSnapshotSeq = existingSnapshots.length > 0 ? existingSnapshots[existingSnapshots.length - 1].sequenceNumber : 0
       const eventsSinceLastSnapshot = entityEventCount - lastSnapshotSeq
@@ -2397,9 +2421,13 @@ class ParqueDBImpl {
         const id = idParts.join('/')
 
         return self.events
-          .filter(e => e.ns === ns && e.entityId === id)
+          .filter(e => {
+            if (isRelationshipTarget(e.target)) return false
+            const info = parseEntityTarget(e.target)
+            return info.ns === ns && info.id === id
+          })
           .sort((a, b) => {
-            const timeDiff = a.ts.getTime() - b.ts.getTime()
+            const timeDiff = a.ts - b.ts
             if (timeDiff !== 0) return timeDiff
             return a.id.localeCompare(b.id)
           })
@@ -2407,9 +2435,12 @@ class ParqueDBImpl {
 
       async getEventsByNamespace(ns: string): Promise<Event[]> {
         return self.events
-          .filter(e => e.ns === ns)
+          .filter(e => {
+            if (isRelationshipTarget(e.target)) return false
+            return parseEntityTarget(e.target).ns === ns
+          })
           .sort((a, b) => {
-            const timeDiff = a.ts.getTime() - b.ts.getTime()
+            const timeDiff = a.ts - b.ts
             if (timeDiff !== 0) return timeDiff
             return a.id.localeCompare(b.id)
           })
@@ -2421,7 +2452,7 @@ class ParqueDBImpl {
 
         // Sort all events first to get consistent ordering by timestamp and ID
         const sortedEvents = [...self.events].sort((a, b) => {
-          const timeDiff = a.ts.getTime() - b.ts.getTime()
+          const timeDiff = a.ts - b.ts
           if (timeDiff !== 0) return timeDiff
           return a.id.localeCompare(b.id)
         })
@@ -2433,7 +2464,7 @@ class ParqueDBImpl {
         // for tie-breaking at the same millisecond.
         const result: Event[] = []
         for (const e of sortedEvents) {
-          const eventTime = e.ts.getTime()
+          const eventTime = e.ts
           // Use inclusive range: fromTime <= eventTime <= toTime
           // This handles the case where midTime was captured in the same millisecond
           // as the first event
@@ -2446,7 +2477,7 @@ class ParqueDBImpl {
         // events that occurred strictly before the second boundary event
         if (result.length > 1) {
           const boundaryTime = toTime
-          const eventsAtBoundary = result.filter(e => e.ts.getTime() === boundaryTime)
+          const eventsAtBoundary = result.filter(e => e.ts === boundaryTime)
           if (eventsAtBoundary.length > 1) {
             // Remove the last event at the boundary (it was created after 'to' was captured)
             const lastEvent = eventsAtBoundary[eventsAtBoundary.length - 1]
@@ -2464,7 +2495,7 @@ class ParqueDBImpl {
         return self.events
           .filter(e => e.op === op)
           .sort((a, b) => {
-            const timeDiff = a.ts.getTime() - b.ts.getTime()
+            const timeDiff = a.ts - b.ts
             if (timeDiff !== 0) return timeDiff
             return a.id.localeCompare(b.id)
           })
@@ -2491,14 +2522,20 @@ class ParqueDBImpl {
     const [ns, ...idParts] = fullId.split('/')
     const id = idParts.join('/')
 
-    let relevantEvents = this.events.filter(e => e.ns === ns && e.entityId === id)
+    let relevantEvents = this.events.filter(e => {
+      if (isRelationshipTarget(e.target)) return false
+      const info = parseEntityTarget(e.target)
+      return info.ns === ns && info.id === id
+    })
 
     // Filter by time range
     if (options?.from) {
-      relevantEvents = relevantEvents.filter(e => e.ts.getTime() > options.from!.getTime())
+      const fromTime = options.from.getTime()
+      relevantEvents = relevantEvents.filter(e => e.ts > fromTime)
     }
     if (options?.to) {
-      relevantEvents = relevantEvents.filter(e => e.ts.getTime() <= options.to!.getTime())
+      const toTime = options.to.getTime()
+      relevantEvents = relevantEvents.filter(e => e.ts <= toTime)
     }
 
     // Filter by operation type
@@ -2513,7 +2550,7 @@ class ParqueDBImpl {
 
     // Sort by timestamp, then by ID for events at the same timestamp
     relevantEvents.sort((a, b) => {
-      const timeDiff = a.ts.getTime() - b.ts.getTime()
+      const timeDiff = a.ts - b.ts
       if (timeDiff !== 0) return timeDiff
       return a.id.localeCompare(b.id)
     })
@@ -2529,17 +2566,20 @@ class ParqueDBImpl {
     // Apply pagination
     const limit = options?.limit ?? 1000
     const hasMore = relevantEvents.length > limit
-    const items = relevantEvents.slice(0, limit).map(e => ({
-      id: e.id,
-      ts: e.ts,
-      op: e.op,
-      entityId: e.entityId,
-      ns: e.ns,
-      before: (e.before ?? null) as Entity | null,
-      after: (e.after ?? null) as Entity | null,
-      actor: e.actor,
-      metadata: e.metadata,
-    })) as HistoryItem[]
+    const items = relevantEvents.slice(0, limit).map(e => {
+      const targetInfo = parseEntityTarget(e.target)
+      return {
+        id: e.id,
+        ts: new Date(e.ts),
+        op: e.op,
+        entityId: targetInfo.id,
+        ns: targetInfo.ns,
+        before: (e.before ?? null) as Entity | null,
+        after: (e.after ?? null) as Entity | null,
+        actor: e.actor as EntityId | undefined,
+        metadata: e.metadata,
+      }
+    }) as HistoryItem[]
 
     return {
       items,
@@ -2564,8 +2604,12 @@ class ParqueDBImpl {
 
     // Get events for this entity
     const relevantEvents = this.events
-      .filter(e => e.ns === ns && e.entityId === entityId)
-      .sort((a, b) => a.ts.getTime() - b.ts.getTime())
+      .filter(e => {
+        if (isRelationshipTarget(e.target)) return false
+        const info = parseEntityTarget(e.target)
+        return info.ns === ns && info.id === entityId
+      })
+      .sort((a, b) => a.ts - b.ts)
 
     // Apply events up to the target version
     let entity: Entity | null = null
@@ -2666,8 +2710,10 @@ class ParqueDBImpl {
           if (op.type === 'create' && op.entity) {
             self.entities.delete(op.entity.$id as string)
             // Remove the CREATE event
+            const entityIdStr = op.entity!.$id as string
+            const expectedTarget = entityIdStr.replace('/', ':')
             const idx = self.events.findIndex(
-              e => e.op === 'CREATE' && (e.entityId as string) === (op.entity!.$id as string)
+              e => e.op === 'CREATE' && e.target === expectedTarget
             )
             if (idx >= 0) self.events.splice(idx, 1)
           }
@@ -2691,7 +2737,11 @@ class ParqueDBImpl {
         if (!entity) throw new Error(`Entity not found: ${entityId}`)
         if (entity.deletedAt) throw new Error(`Cannot create snapshot of deleted entity: ${entityId}`)
         const [ns, ...idParts] = fullId.split('/')
-        const entityEvents = self.events.filter((e) => e.ns === ns && e.entityId === idParts.join('/'))
+        const entityEvents = self.events.filter((e) => {
+          if (isRelationshipTarget(e.target)) return false
+          const info = parseEntityTarget(e.target)
+          return info.ns === ns && info.id === idParts.join('/')
+        })
         const sequenceNumber = entityEvents.length
         const stateJson = JSON.stringify(entity)
         const stateSize = stateJson.length
@@ -2710,7 +2760,11 @@ class ParqueDBImpl {
         if (!event) throw new Error(`Event not found: ${eventId}`)
         const state = event.after ? { ...event.after } : null
         if (!state) throw new Error(`Event has no after state: ${eventId}`)
-        const entityEvents = self.events.filter((e) => e.ns === ns && e.entityId === entityIdPart).sort((a, b) => a.ts.getTime() - b.ts.getTime())
+        const entityEvents = self.events.filter((e) => {
+          if (isRelationshipTarget(e.target)) return false
+          const info = parseEntityTarget(e.target)
+          return info.ns === ns && info.id === entityIdPart
+        }).sort((a, b) => a.ts - b.ts)
         const eventIndex = entityEvents.findIndex((e) => e.id === eventId)
         const sequenceNumber = eventIndex + 1
         const stateJson = JSON.stringify(state)
@@ -3101,7 +3155,7 @@ class ParqueDBImpl {
     this.entities.set(fullId, newState)
 
     // Record UPDATE event with revert metadata
-    await this.recordEvent('UPDATE', 'entity', ns, id, beforeEntityForEvent, newState, actor, { revert: true })
+    await this.recordEvent('UPDATE', entityTarget(ns, id), beforeEntityForEvent, newState, actor, { revert: true })
 
     return newState as Entity<T>
   }

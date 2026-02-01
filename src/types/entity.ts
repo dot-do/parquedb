@@ -204,37 +204,100 @@ export type VariantValue =
 export type Variant = Record<string, VariantValue>
 
 // =============================================================================
-// Event Types (CDC)
+// Event Types (CDC / WAL)
 // =============================================================================
 
 /** Event operation types */
 export type EventOp = 'CREATE' | 'UPDATE' | 'DELETE'
 
-/** Event target types */
-export type EventTarget = 'entity' | 'rel'
-
-/** CDC event record */
+/**
+ * CDC event record
+ *
+ * Events are the source of truth in ParqueDB. The data.parquet and rels.parquet
+ * files are materialized views that can be reconstructed from the events log.
+ *
+ * Target format:
+ * - Entity: "users:u1", "posts:p5" (ns:id as URL-like path)
+ * - Relationship: "users:u1:authored:posts:p5" (from:pred:to)
+ */
 export interface Event {
-  /** Event ID (ULID for ordering) */
+  /** Event ID (ULID for ordering and deduplication) */
   id: string
-  /** Event timestamp */
-  ts: Date
-  /** What was affected */
-  target: EventTarget
+  /** Event timestamp (ms since epoch) */
+  ts: number
   /** Operation type */
   op: EventOp
-  /** Namespace of affected entity */
-  ns: Namespace
-  /** ID of affected entity */
-  entityId: Id
-  /** State before change (null for CREATE) */
-  before: Variant | null
-  /** State after change (null for DELETE) */
-  after: Variant | null
-  /** Who made the change */
-  actor: EntityId
+  /**
+   * Target identifier:
+   * - Entity: "ns:id" (e.g., "users:u1")
+   * - Relationship: "from:pred:to" (e.g., "users:u1:authored:posts:p5")
+   */
+  target: string
+  /** State before change (undefined for CREATE) */
+  before?: Variant
+  /** State after change (undefined for DELETE) */
+  after?: Variant
+  /** Who made the change (e.g., "users:admin") */
+  actor?: string
   /** Additional metadata (request ID, correlation ID, etc.) */
   metadata?: Variant
+}
+
+/**
+ * Check if an event target is a relationship (contains 2+ colons)
+ */
+export function isRelationshipTarget(target: string): boolean {
+  return target.split(':').length >= 4
+}
+
+/**
+ * Parse an entity target into ns and id
+ */
+export function parseEntityTarget(target: string): { ns: string; id: string } {
+  const colonIdx = target.indexOf(':')
+  if (colonIdx === -1) throw new Error(`Invalid entity target: ${target}`)
+  return {
+    ns: target.slice(0, colonIdx),
+    id: target.slice(colonIdx + 1),
+  }
+}
+
+/**
+ * Parse a relationship target into from, predicate, and to
+ */
+export function parseRelTarget(target: string): {
+  from: string
+  predicate: string
+  to: string
+} {
+  const parts = target.split(':')
+  if (parts.length < 4) throw new Error(`Invalid relationship target: ${target}`)
+  // Format: from_ns:from_id:predicate:to_ns:to_id
+  // e.g., "users:u1:authored:posts:p5"
+  const fromNs = parts[0]
+  const fromId = parts[1]
+  const predicate = parts[2]
+  const toNs = parts[3]
+  const toId = parts.slice(4).join(':') // Handle ids with colons
+  return {
+    from: `${fromNs}:${fromId}`,
+    predicate,
+    to: `${toNs}:${toId}`,
+  }
+}
+
+/**
+ * Create an entity target string
+ */
+export function entityTarget(ns: string, id: string): string {
+  return `${ns}:${id}`
+}
+
+/**
+ * Create a relationship target string
+ */
+export function relTarget(from: string, predicate: string, to: string): string {
+  return `${from}:${predicate}:${to}`
 }
 
 // =============================================================================
