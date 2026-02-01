@@ -131,7 +131,7 @@ describe('Sorting', () => {
   // ===========================================================================
 
   describe('single field sort', () => {
-    it.skip('sorts ascending (1 or "asc")', async () => {
+    it('sorts ascending (1 or "asc")', async () => {
       await createTestPosts()
 
       // Test with numeric direction
@@ -143,7 +143,7 @@ describe('Sorting', () => {
       }
     })
 
-    it.skip('sorts descending (-1 or "desc")', async () => {
+    it('sorts descending (-1 or "desc")', async () => {
       await createTestPosts()
 
       // Test with numeric direction
@@ -164,7 +164,7 @@ describe('Sorting', () => {
       expect(results.items.length).toBeGreaterThan(0)
     })
 
-    it.skip('sorts numbers numerically', async () => {
+    it('sorts numbers numerically', async () => {
       await createTestPosts()
 
       const results = await db.find('posts', {}, { sort: { views: 1 } })
@@ -184,7 +184,7 @@ describe('Sorting', () => {
       expect(results.items.length).toBeGreaterThan(0)
     })
 
-    it.skip('sorts dates descending (most recent first)', async () => {
+    it('sorts dates descending (most recent first)', async () => {
       await createTestPosts()
 
       const results = await db.find('posts', {}, { sort: { createdAt: -1 } })
@@ -199,7 +199,7 @@ describe('Sorting', () => {
       }
     })
 
-    it.skip('handles null values (nulls last)', async () => {
+    it('handles null values (nulls last)', async () => {
       await createTestPosts()
 
       const results = await db.find('posts', {}, { sort: { publishedAt: 1 } })
@@ -229,7 +229,7 @@ describe('Sorting', () => {
   // ===========================================================================
 
   describe('multi-field sort', () => {
-    it.skip('sorts by primary then secondary', async () => {
+    it('sorts by primary then secondary', async () => {
       await createTestPosts()
 
       const results = await db.find('posts', {}, {
@@ -294,7 +294,7 @@ describe('Sorting', () => {
   // ===========================================================================
 
   describe('nested field sort', () => {
-    it.skip('sorts by dot-notation path', async () => {
+    it('sorts by dot-notation path', async () => {
       await createTestPosts()
 
       const results = await db.find('posts', {}, {
@@ -337,7 +337,7 @@ describe('Sorting', () => {
   // ===========================================================================
 
   describe('sort with pagination', () => {
-    it.skip('maintains sort order across pages', async () => {
+    it('maintains sort order across pages', async () => {
       await createTestPosts()
 
       let allItems: Entity<Post>[] = []
@@ -359,7 +359,7 @@ describe('Sorting', () => {
       }
     })
 
-    it.skip('skip and sort work together', async () => {
+    it('skip and sort work together', async () => {
       await createTestPosts()
 
       const results = await db.find('posts', {}, {
@@ -376,7 +376,7 @@ describe('Sorting', () => {
       }
     })
 
-    it.skip('sort and filter combined', async () => {
+    it('sort and filter combined', async () => {
       await createTestPosts()
 
       const results = await db.find(
@@ -457,7 +457,7 @@ describe('Sorting', () => {
       expect(result.items).toBeDefined()
     })
 
-    it.skip('invalid sort direction throws error', async () => {
+    it('invalid sort direction throws error', async () => {
       await createTestPosts()
 
       await expect(

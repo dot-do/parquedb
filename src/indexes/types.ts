@@ -11,7 +11,7 @@
 /**
  * Type of index
  */
-export type IndexType = 'hash' | 'sst' | 'fts' | 'bloom'
+export type IndexType = 'hash' | 'sst' | 'fts' | 'bloom' | 'vector'
 
 /**
  * Index field definition
@@ -43,6 +43,8 @@ export interface IndexDefinition {
   ttlSeconds?: number
   /** FTS-specific options */
   ftsOptions?: FTSIndexOptions
+  /** Vector-specific options */
+  vectorOptions?: VectorIndexOptions
   /** Index metadata */
   metadata?: Record<string, unknown>
 }
@@ -61,6 +63,25 @@ export interface FTSIndexOptions {
   stopwords?: string[]
   /** Enable position indexing for phrase queries */
   indexPositions?: boolean
+}
+
+/**
+ * Vector distance metric
+ */
+export type VectorMetric = 'cosine' | 'euclidean' | 'dot'
+
+/**
+ * Vector-specific index options (HNSW parameters)
+ */
+export interface VectorIndexOptions {
+  /** Number of dimensions in the vectors */
+  dimensions: number
+  /** Distance metric to use */
+  metric?: VectorMetric
+  /** HNSW M parameter - number of connections per layer (default: 16) */
+  m?: number
+  /** HNSW efConstruction parameter - size of dynamic candidate list during construction (default: 200) */
+  efConstruction?: number
 }
 
 // =============================================================================
@@ -260,6 +281,54 @@ export interface IndexStats {
   vocabularySize?: number
   /** Average document length (for FTS index) */
   avgDocLength?: number
+  /** Vector dimensions (for vector index) */
+  dimensions?: number
+  /** Max layer in HNSW graph (for vector index) */
+  maxLayer?: number
+}
+
+// =============================================================================
+// Vector Index Types
+// =============================================================================
+
+/**
+ * Entry stored in a vector index
+ */
+export interface VectorIndexEntry {
+  /** The vector */
+  vector: number[]
+  /** Document ID */
+  docId: string
+  /** Row group number */
+  rowGroup: number
+  /** Row offset within row group */
+  rowOffset: number
+}
+
+/**
+ * Vector search options
+ */
+export interface VectorSearchOptions {
+  /** Minimum similarity score (0-1 for cosine, depends on metric) */
+  minScore?: number
+  /** HNSW efSearch parameter - size of dynamic candidate list during search */
+  efSearch?: number
+}
+
+/**
+ * Result of a vector similarity search
+ */
+export interface VectorSearchResult {
+  /** Matching document IDs (ordered by similarity) */
+  docIds: string[]
+  /** Row group hints for efficient reading */
+  rowGroups: number[]
+  /** Similarity scores for each result */
+  scores?: number[]
+  /** Whether the result is exact or approximate */
+  exact: boolean
+  /** Number of entries scanned */
+  entriesScanned: number
 }
 
 // =============================================================================

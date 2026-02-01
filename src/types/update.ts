@@ -158,6 +158,44 @@ export interface BitOperator<T = Record<string, unknown>> {
 }
 
 // =============================================================================
+// Embedding Operators (ParqueDB AI)
+// =============================================================================
+
+/**
+ * Generate embedding for text field(s)
+ *
+ * @example
+ * ```typescript
+ * // Embed a single field
+ * { $embed: { description: 'embedding' } }
+ *
+ * // Embed multiple fields into separate vectors
+ * { $embed: { title: 'title_embedding', content: 'content_embedding' } }
+ *
+ * // Embed with options
+ * { $embed: { description: { field: 'embedding', model: '@cf/baai/bge-small-en-v1.5' } } }
+ * ```
+ */
+export interface EmbedOperator {
+  $embed: {
+    /** Source field -> target field or options */
+    [sourceField: string]: string | EmbedFieldOptions
+  }
+}
+
+/**
+ * Options for embedding a specific field
+ */
+export interface EmbedFieldOptions {
+  /** Target field to store the embedding vector */
+  field: string
+  /** Model to use for embedding (default: @cf/baai/bge-m3) */
+  model?: string
+  /** Whether to overwrite existing embedding */
+  overwrite?: boolean
+}
+
+// =============================================================================
 // Combined Update Input
 // =============================================================================
 
@@ -222,6 +260,9 @@ export interface UpdateInput<T = Record<string, unknown>> {
 
   // Bit
   $bit?: Record<string, { and?: number; or?: number; xor?: number }>
+
+  // Embedding (ParqueDB AI)
+  $embed?: Record<string, string | EmbedFieldOptions>
 }
 
 // =============================================================================
@@ -247,6 +288,11 @@ export function hasArrayOperators(update: UpdateInput): boolean {
 /** Check if update has relationship operators */
 export function hasRelationshipOperators(update: UpdateInput): boolean {
   return '$link' in update || '$unlink' in update
+}
+
+/** Check if update has embedding operators */
+export function hasEmbeddingOperators(update: UpdateInput): boolean {
+  return '$embed' in update
 }
 
 /** Get all operator types in an update */

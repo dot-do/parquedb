@@ -17,6 +17,7 @@ import type {
   RangeQuery,
 } from '../types'
 import { encodeKey, decodeKey, compareKeys, encodeCompositeKey } from './key-encoder'
+import { UniqueConstraintError } from '../errors'
 import {
   FORMAT_VERSION_1,
   FORMAT_VERSION_2,
@@ -230,15 +231,58 @@ export class SSTIndex {
   // ===========================================================================
 
   /**
+   * Check if a value is unique (can be inserted without violating unique constraint)
+   *
+   * @param value - Value to check
+   * @param excludeDocId - Optional docId to exclude from check (for updates)
+   * @returns true if value is unique (can be inserted)
+   */
+  checkUnique(value: unknown, excludeDocId?: string): boolean {
+    // For sparse unique indexes, null/undefined values are always allowed
+    if (this.definition.sparse && (value === null || value === undefined)) {
+      return true
+    }
+
+    const key = this.encodeValue(value)
+
+    // Check if any entry matches the key (excluding the specified docId)
+    for (const entry of this.entries) {
+      if (this.keysEqual(entry.key, key)) {
+        if (excludeDocId && entry.docId === excludeDocId) {
+          continue
+        }
+        return false
+      }
+    }
+
+    return true
+  }
+
+  /**
    * Insert an entry into the index
    *
    * @param value - Indexed field value
    * @param docId - Document ID
    * @param rowGroup - Row group number
    * @param rowOffset - Row offset within row group
+   * @throws UniqueConstraintError if unique constraint is violated
    */
   insert(value: unknown, docId: string, rowGroup: number, rowOffset: number): void {
     const key = this.encodeValue(value)
+
+    // Check unique constraint if enabled
+    if (this.definition.unique) {
+      // For sparse unique indexes, null/undefined values are allowed to be duplicated
+      const isNullish = value === null || value === undefined
+      if (!(this.definition.sparse && isNullish)) {
+        // Check if value already exists
+        for (const entry of this.entries) {
+          if (this.keysEqual(entry.key, key)) {
+            throw new UniqueConstraintError(this.definition.name, value, this.namespace)
+          }
+        }
+      }
+    }
 
     const entry: SSTIndexEntry = {
       key,

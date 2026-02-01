@@ -191,14 +191,29 @@ export interface RelatedOptions {
 // =============================================================================
 
 /**
+ * Validation mode for schema validation
+ */
+export type ValidationMode = 'strict' | 'permissive' | 'warn'
+
+/**
  * Options for create operations
  */
 export interface CreateOptions {
   /** Actor performing the create (for audit) */
   actor?: EntityId
 
-  /** Skip validation */
+  /** Skip validation entirely */
   skipValidation?: boolean
+
+  /**
+   * Enable schema validation on write (default: true when schema is provided)
+   * - 'strict': Throws on any validation error
+   * - 'permissive': Only validates required fields and types, allows unknown fields
+   * - 'warn': Logs warnings instead of throwing errors
+   * - true: Same as 'strict'
+   * - false: Same as skipValidation
+   */
+  validateOnWrite?: boolean | ValidationMode
 
   /** Return the created entity (default: true) */
   returnDocument?: boolean
@@ -224,8 +239,18 @@ export interface UpdateOptions {
   /** Return the updated document */
   returnDocument?: 'before' | 'after'
 
-  /** Skip validation */
+  /** Skip validation entirely */
   skipValidation?: boolean
+
+  /**
+   * Enable schema validation on write (default: true when schema is provided)
+   * - 'strict': Throws on any validation error
+   * - 'permissive': Only validates required fields and types, allows unknown fields
+   * - 'warn': Logs warnings instead of throwing errors
+   * - true: Same as 'strict'
+   * - false: Same as skipValidation
+   */
+  validateOnWrite?: boolean | ValidationMode
 
   /** Array filters for positional updates */
   arrayFilters?: Filter[]

@@ -45,8 +45,8 @@ export function deepEqual(a: unknown, b: unknown): boolean {
     return a.every((v, i) => deepEqual(v, b[i]))
   }
 
-  // Object comparison
-  if (typeof a === 'object' && typeof b === 'object') {
+  // Object comparison - both must be non-null objects at this point
+  if (typeof a === 'object' && typeof b === 'object' && a !== null && b !== null) {
     const aObj = a as Record<string, unknown>
     const bObj = b as Record<string, unknown>
     const aKeys = Object.keys(aObj)
@@ -91,8 +91,17 @@ export function compareValues(a: unknown, b: unknown): number {
   if (b === null || b === undefined) return 1
 
   // Same type comparisons
-  if (typeof a === 'number' && typeof b === 'number') return a - b
-  if (typeof a === 'string' && typeof b === 'string') return a.localeCompare(b)
+  if (typeof a === 'number' && typeof b === 'number') {
+    // Handle NaN - NaN comparisons should return NaN to indicate uncomparable
+    if (Number.isNaN(a) || Number.isNaN(b)) return NaN
+    return a - b
+  }
+  if (typeof a === 'string' && typeof b === 'string') {
+    // Use simple lexicographic comparison (ASCII order) for consistency
+    if (a < b) return -1
+    if (a > b) return 1
+    return 0
+  }
   if (a instanceof Date && b instanceof Date) return a.getTime() - b.getTime()
   if (typeof a === 'boolean' && typeof b === 'boolean') return (a ? 1 : 0) - (b ? 1 : 0)
 

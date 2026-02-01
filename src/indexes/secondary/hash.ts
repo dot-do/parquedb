@@ -16,6 +16,7 @@ import type {
   HashIndexEntry,
 } from '../types'
 import { encodeKey, decodeKey, hashKey, encodeCompositeKey } from './key-encoder'
+import { UniqueConstraintError } from '../errors'
 import {
   FORMAT_VERSION_1,
   FORMAT_VERSION_2,
@@ -176,6 +177,40 @@ export class HashIndex {
     return result.docIds.length > 0
   }
 
+  /**
+   * Check if a value is unique (can be inserted without violating unique constraint)
+   *
+   * @param value - Value to check
+   * @param excludeDocId - Optional docId to exclude from check (for updates)
+   * @returns true if value is unique (can be inserted)
+   */
+  checkUnique(value: unknown, excludeDocId?: string): boolean {
+    // For sparse unique indexes, null/undefined values are always allowed
+    if (this.definition.sparse && (value === null || value === undefined)) {
+      return true
+    }
+
+    const key = this.encodeValue(value)
+    const hash = hashKey(key)
+    const bucket = this.buckets.get(hash)
+
+    if (!bucket) {
+      return true
+    }
+
+    // Check if any entry matches the key (excluding the specified docId)
+    for (const entry of bucket) {
+      if (this.keysEqual(entry.key, key)) {
+        if (excludeDocId && entry.docId === excludeDocId) {
+          continue
+        }
+        return false
+      }
+    }
+
+    return true
+  }
+
   // ===========================================================================
   // Modification Operations
   // ===========================================================================
@@ -187,10 +222,28 @@ export class HashIndex {
    * @param docId - Document ID
    * @param rowGroup - Row group number
    * @param rowOffset - Row offset within row group
+   * @throws UniqueConstraintError if unique constraint is violated
    */
   insert(value: unknown, docId: string, rowGroup: number, rowOffset: number): void {
     const key = this.encodeValue(value)
     const hash = hashKey(key)
+
+    // Check unique constraint if enabled
+    if (this.definition.unique) {
+      // For sparse unique indexes, null/undefined values are allowed to be duplicated
+      const isNullish = value === null || value === undefined
+      if (!(this.definition.sparse && isNullish)) {
+        // Check if value already exists
+        const bucket = this.buckets.get(hash)
+        if (bucket) {
+          for (const entry of bucket) {
+            if (this.keysEqual(entry.key, key)) {
+              throw new UniqueConstraintError(this.definition.name, value, this.namespace)
+            }
+          }
+        }
+      }
+    }
 
     let bucket = this.buckets.get(hash)
     if (!bucket) {

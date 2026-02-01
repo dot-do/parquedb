@@ -1136,9 +1136,11 @@ describe('type coercion edge cases', () => {
         { value: Number.MAX_VALUE },
         { value: { $eq: Number.MAX_VALUE } }
       )).toBe(true)
+      // Note: Number.MAX_VALUE - 1 === Number.MAX_VALUE in JavaScript
+      // due to floating-point precision, so we test against a meaningful smaller value
       expect(matchesFilter(
         { value: Number.MAX_VALUE },
-        { value: { $gt: Number.MAX_VALUE - 1 } }
+        { value: { $gt: Number.MAX_VALUE / 2 } }
       )).toBe(true)
     })
 

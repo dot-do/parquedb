@@ -1,15 +1,22 @@
 # ParqueDB
 
-A Parquet-native database with graph relationships, event sourcing, and first-class support for Node.js, browsers, and Cloudflare Workers.
+A hybrid relational/document/graph database built on Apache Parquet. ParqueDB provides a MongoDB-style API with bidirectional relationships, time-travel queries, and first-class support for Node.js, browsers, and Cloudflare Workers.
 
 ## Features
 
 - **Parquet-native columnar storage** - Efficient compression and predicate pushdown using Apache Parquet via hyparquet
 - **Graph database with relationships** - Bidirectional relationship indexing with forward/reverse traversal
+- **MongoDB-style query API** - Familiar filter and update operators
+- **Event sourcing with time-travel** - Full audit history with point-in-time reconstruction
 - **Multi-environment support** - Runs in Node.js, browsers, and Cloudflare Workers
-- **Event sourcing with time-travel queries** - Full audit history with point-in-time reconstruction
-- **CQRS architecture for Workers** - Reads direct to R2 with caching, writes through Durable Objects for consistency
-- **MongoDB-style query API** - Familiar filter operators ($eq, $gt, $in, $regex, etc.) and update operators ($set, $inc, $push, etc.)
+- **CQRS architecture for Workers** - Reads direct to R2 with caching, writes through Durable Objects
+- **Secondary indexes** - Hash, SST, and full-text search indexes for fast lookups
+
+## Installation
+
+```bash
+npm install parquedb
+```
 
 ## Quick Start
 
@@ -18,16 +25,20 @@ import { ParqueDB, MemoryBackend } from 'parquedb'
 
 const db = new ParqueDB({ storage: new MemoryBackend() })
 
-// Create
+// Create an entity
 const post = await db.Posts.create({
   $type: 'Post',
   name: 'Hello World',
   title: 'Hello World',
-  status: 'published'
+  status: 'published',
+  views: 0
 })
 
-// Query
-const posts = await db.Posts.find({ title: { $startsWith: 'Hello' } })
+// Query with filters
+const posts = await db.Posts.find({
+  status: 'published',
+  views: { $gte: 100 }
+})
 
 // Update with operators
 await db.Posts.update(post.$id, {
@@ -35,21 +46,18 @@ await db.Posts.update(post.$id, {
   $inc: { views: 1 }
 })
 
-// Relationships
+// Create relationships
 await db.Posts.update(post.$id, {
-  $link: { author: 'users/nathan' }
+  $link: { author: 'users/nathan', categories: ['categories/tech', 'categories/db'] }
 })
-```
 
-## Installation
-
-```bash
-npm install parquedb
+// Get by ID
+const retrieved = await db.Posts.get(post.$id)
 ```
 
 ## Storage Backends
 
-ParqueDB supports multiple storage backends:
+ParqueDB supports multiple storage backends for different environments:
 
 | Backend | Environment | Description |
 |---------|-------------|-------------|
@@ -60,15 +68,135 @@ ParqueDB supports multiple storage backends:
 | `DOSqliteBackend` | Cloudflare Workers | Durable Object SQLite for metadata |
 
 ```typescript
-import { ParqueDB, FsBackend } from 'parquedb'
+import { ParqueDB, FsBackend, R2Backend } from 'parquedb'
 
 // Node.js with filesystem
 const db = new ParqueDB({
   storage: new FsBackend({ root: './data' })
 })
+
+// Cloudflare Workers with R2
+const db = new ParqueDB({
+  storage: new R2Backend(env.BUCKET, { prefix: 'parquedb/' })
+})
 ```
 
-See [docs/architecture](./docs/architecture) for detailed storage architecture documentation.
+## Query Operators
+
+ParqueDB supports MongoDB-style filter operators:
+
+### Comparison Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `$eq` | Equals | `{ status: { $eq: 'published' } }` |
+| `$ne` | Not equals | `{ status: { $ne: 'draft' } }` |
+| `$gt` | Greater than | `{ views: { $gt: 100 } }` |
+| `$gte` | Greater than or equal | `{ views: { $gte: 100 } }` |
+| `$lt` | Less than | `{ views: { $lt: 1000 } }` |
+| `$lte` | Less than or equal | `{ views: { $lte: 1000 } }` |
+| `$in` | In array | `{ status: { $in: ['published', 'featured'] } }` |
+| `$nin` | Not in array | `{ status: { $nin: ['draft', 'archived'] } }` |
+
+### String Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `$regex` | Regular expression | `{ title: { $regex: '^Hello' } }` |
+| `$startsWith` | Starts with prefix | `{ title: { $startsWith: 'Hello' } }` |
+| `$endsWith` | Ends with suffix | `{ title: { $endsWith: 'World' } }` |
+| `$contains` | Contains substring | `{ title: { $contains: 'ello' } }` |
+
+### Array Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `$all` | Contains all values | `{ tags: { $all: ['tech', 'db'] } }` |
+| `$elemMatch` | Element matches filter | `{ items: { $elemMatch: { qty: { $gt: 5 } } } }` |
+| `$size` | Array has size | `{ tags: { $size: 3 } }` |
+
+### Logical Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `$and` | All conditions match | `{ $and: [{ status: 'published' }, { views: { $gt: 100 } }] }` |
+| `$or` | Any condition matches | `{ $or: [{ status: 'featured' }, { views: { $gt: 1000 } }] }` |
+| `$not` | Condition does not match | `{ $not: { status: 'draft' } }` |
+| `$nor` | None of conditions match | `{ $nor: [{ status: 'draft' }, { status: 'archived' }] }` |
+
+### Special Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `$exists` | Field exists | `{ email: { $exists: true } }` |
+| `$type` | Field type check | `{ data: { $type: 'object' } }` |
+| `$text` | Full-text search | `{ $text: { $search: 'parquet database' } }` |
+| `$vector` | Vector similarity | `{ $vector: { $near: embedding, $k: 10, $field: 'embedding' } }` |
+
+## Update Operators
+
+ParqueDB supports MongoDB-style update operators:
+
+### Field Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `$set` | Set field values | `{ $set: { status: 'published' } }` |
+| `$unset` | Remove fields | `{ $unset: { tempField: '' } }` |
+| `$rename` | Rename fields | `{ $rename: { oldName: 'newName' } }` |
+
+### Numeric Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `$inc` | Increment | `{ $inc: { views: 1 } }` |
+| `$mul` | Multiply | `{ $mul: { price: 1.1 } }` |
+| `$min` | Set to minimum | `{ $min: { lowScore: 50 } }` |
+| `$max` | Set to maximum | `{ $max: { highScore: 100 } }` |
+
+### Array Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `$push` | Add to array | `{ $push: { tags: 'new' } }` |
+| `$pull` | Remove from array | `{ $pull: { tags: 'old' } }` |
+| `$addToSet` | Add if not exists | `{ $addToSet: { tags: 'unique' } }` |
+| `$pop` | Remove first/last | `{ $pop: { tags: 1 } }` |
+
+### Relationship Operators (ParqueDB-specific)
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `$link` | Create relationship | `{ $link: { author: 'users/123' } }` |
+| `$unlink` | Remove relationship | `{ $unlink: { author: 'users/123' } }` |
+
+## Relationships
+
+ParqueDB provides first-class support for bidirectional relationships:
+
+```typescript
+// Create a relationship
+await db.Posts.update(postId, {
+  $link: { author: 'users/nathan' }
+})
+
+// Relationships are bidirectional - query from either side
+const userPosts = await db.Users.get('users/nathan', {
+  populate: ['posts']  // Reverse traversal
+})
+
+// Link multiple targets
+await db.Posts.update(postId, {
+  $link: {
+    categories: ['categories/tech', 'categories/databases']
+  }
+})
+
+// Remove relationships
+await db.Posts.update(postId, {
+  $unlink: { categories: 'categories/tech' }
+})
+```
 
 ## Cloudflare Workers
 
@@ -111,7 +239,25 @@ name = "PARQUEDB"
 class_name = "ParqueDBDO"
 ```
 
-See [docs/architecture/NAMESPACE_SHARDED_ARCHITECTURE.md](./docs/architecture/NAMESPACE_SHARDED_ARCHITECTURE.md) for Worker architecture details.
+## Indexes
+
+ParqueDB supports multiple index types for optimized queries:
+
+```typescript
+import { IndexManager, HashIndex, SSTIndex, FTSIndex } from 'parquedb'
+
+// Hash index for exact lookups
+const hashIndex = new HashIndex(backend, 'posts', 'status')
+await hashIndex.build()
+
+// SST index for range queries
+const sstIndex = new SSTIndex(backend, 'posts', 'createdAt')
+await sstIndex.build()
+
+// Full-text search index
+const ftsIndex = new FTSIndex(backend, 'posts', ['title', 'content'])
+await ftsIndex.build()
+```
 
 ## Examples
 

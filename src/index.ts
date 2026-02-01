@@ -24,30 +24,47 @@ export * from './types'
 export {
   MemoryBackend,
   FsBackend,
-  // R2Backend,
+  R2Backend,
+  R2OperationError,
+  R2ETagMismatchError,
+  R2NotFoundError,
   // FsxBackend,
 } from './storage'
+export type { R2BackendOptions } from './storage'
 
 // =============================================================================
 // Schema
 // =============================================================================
 
 export {
+  // Parsing
   parseSchema,
   parseFieldType,
   parseRelation,
   isRelationString,
+  isValidFieldType,
+  isValidRelationString,
+  parseNestedField,
+  // Schema Validation
   validateSchema,
   validateTypeDefinition,
   validateRelationshipTargets,
   validateEntityCoreFields,
   validateEntityFull,
+  // Runtime Validation
+  SchemaValidationError,
+  SchemaValidator,
+  createValidator,
+  validate,
+  // Schema Inference
   inferSchema,
   inferSchemaFromCollections,
   inferredToTypeDefinition,
-  isValidFieldType,
-  isValidRelationString,
-  parseNestedField,
+} from './schema'
+
+export type {
+  ValidationMode,
+  SchemaValidatorOptions,
 } from './schema'
 
 // =============================================================================
@@ -125,6 +142,33 @@ export {
   entityTarget,
   relTarget,
 } from './events'
+
+// =============================================================================
+// Embeddings (Workers AI)
+// =============================================================================
+
+export {
+  // Core Embeddings
+  WorkersAIEmbeddings,
+  createEmbeddings,
+  getModelDimensions,
+  DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
+  DEFAULT_DIMENSIONS as DEFAULT_EMBEDDING_DIMENSIONS,
+  EMBEDDING_MODELS,
+  // Auto-Embedding
+  processEmbedOperator,
+  autoEmbedFields,
+  hasEmbedOperator,
+  extractEmbedOperator,
+  buildAutoEmbedConfig,
+  // Types
+  type AIBinding,
+  type EmbeddingModelConfig,
+  type EmbedOptions,
+  type AutoEmbedFieldConfig,
+  type AutoEmbedConfig,
+  type ProcessEmbeddingsOptions,
+} from './embeddings'
 
 // =============================================================================
 // Version

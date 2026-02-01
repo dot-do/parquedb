@@ -25,14 +25,18 @@ import type {
   EventOp,
   RelSet,
   SortSpec,
+  SortDirection,
   Projection,
+  ValidationMode,
 } from './types'
 import { entityTarget, parseEntityTarget, relTarget, isRelationshipTarget } from './types'
+import { normalizeSortDirection } from './types/options'
 import { parseFieldType, isRelationString, parseRelation } from './types/schema'
+import { SchemaValidator, SchemaValidationError } from './schema/validator'
 import { FileNotFoundError } from './storage/MemoryBackend'
 import { IndexManager } from './indexes/manager'
 import type { IndexDefinition, IndexMetadata, IndexStats } from './indexes/types'
-import { getRandomBase36 } from './utils'
+import { getRandomBase36, getNestedValue, compareValues } from './utils'
 
 // =============================================================================
 // Configuration Types
@@ -200,6 +204,7 @@ const VALID_UPDATE_OPERATORS = new Set([
   '$currentDate',
   '$link', '$unlink',
   '$bit',
+  '$embed', // ParqueDB AI embedding operator
 ])
 
 /**
@@ -600,6 +605,7 @@ export interface EventLog {
 class ParqueDBImpl {
   private storage: StorageBackend
   private schema: Schema = {}
+  private schemaValidator: SchemaValidator | null = null
   private collections = new Map<string, CollectionImpl>()
   private entities: Map<string, Entity> // Shared via global store
   private events: Event[] // Shared via global store
@@ -635,6 +641,18 @@ class ParqueDBImpl {
   registerSchema(schema: Schema): void {
     // Merge with existing schema
     this.schema = { ...this.schema, ...schema }
+    // Create/update the schema validator
+    this.schemaValidator = new SchemaValidator(this.schema, {
+      mode: 'permissive', // Default to permissive, will be overridden per-operation
+      allowUnknownFields: true,
+    })
+  }
+
+  /**
+   * Get the schema validator for advanced validation scenarios
+   */
+  getSchemaValidator(): SchemaValidator | null {
+    return this.schemaValidator
   }
 
   /**
@@ -665,7 +683,7 @@ class ParqueDBImpl {
     const asOf = options?.asOf
 
     // Get all entities for this namespace from in-memory store
-    const items: Entity<T>[] = []
+    let items: Entity<T>[] = []
 
     if (asOf) {
       // Collect all entity IDs that exist in this namespace
@@ -710,9 +728,70 @@ class ParqueDBImpl {
       })
     }
 
+    // Apply sort
+    if (options?.sort) {
+      const sortEntries = Object.entries(options.sort)
+      // Validate sort directions upfront
+      for (const [, direction] of sortEntries) {
+        normalizeSortDirection(direction as SortDirection)
+      }
+      items.sort((a, b) => {
+        for (const [field, direction] of sortEntries) {
+          const dir = normalizeSortDirection(direction as SortDirection)
+          const aValue = getNestedValue(a as Record<string, unknown>, field)
+          const bValue = getNestedValue(b as Record<string, unknown>, field)
+          // Handle nulls last: null/undefined sort after all non-null values
+          const aIsNull = aValue === null || aValue === undefined
+          const bIsNull = bValue === null || bValue === undefined
+          if (aIsNull && bIsNull) continue // Both null, move to next field
+          if (aIsNull) return 1  // a is null, sort after b
+          if (bIsNull) return -1 // b is null, sort after a
+          const cmp = dir * compareValues(aValue, bValue)
+          if (cmp !== 0) return cmp
+        }
+        return 0
+      })
+    }
+
+    // Calculate total count before pagination
+    const totalCount = items.length
+
+    // Apply cursor-based pagination
+    if (options?.cursor) {
+      const cursorIndex = items.findIndex(e => e.$id === options.cursor)
+      if (cursorIndex >= 0) {
+        items = items.slice(cursorIndex + 1)
+      } else {
+        // Cursor not found - return empty
+        items = []
+      }
+    }
+
+    // Apply skip
+    if (options?.skip && options.skip > 0) {
+      items = items.slice(options.skip)
+    }
+
+    // Apply limit
+    const limit = options?.limit
+    let hasMore = false
+    let nextCursor: string | undefined
+    if (limit !== undefined && limit > 0) {
+      hasMore = items.length > limit
+      if (hasMore) {
+        items = items.slice(0, limit)
+      }
+      // Set nextCursor to last item's $id if there are more results
+      if (hasMore && items.length > 0) {
+        nextCursor = items[items.length - 1]?.$id
+      }
+    }
+
     return {
       items,
-      hasMore: false,
+      hasMore,
+      nextCursor,
+      total: totalCount,
     }
   }
 
@@ -1322,8 +1401,11 @@ class ParqueDBImpl {
   ): Promise<Entity<T>> {
     validateNamespace(namespace)
 
+    // Determine if validation should run
+    const shouldValidate = !options?.skipValidation && options?.validateOnWrite !== false
+
     // Validate required fields unless skipValidation is true
-    if (!options?.skipValidation) {
+    if (shouldValidate) {
       if (!data.$type) {
         throw new Error('Entity must have a $type field')
       }
@@ -1332,7 +1414,8 @@ class ParqueDBImpl {
       }
 
       // Validate against schema if registered
-      this.validateAgainstSchema(namespace, data)
+      // Pass the validateOnWrite option to control validation mode
+      this.validateAgainstSchema(namespace, data, options?.validateOnWrite)
     }
 
     const now = new Date()
@@ -1985,9 +2068,55 @@ class ParqueDBImpl {
   }
 
   /**
-   * Validate data against schema
+   * Validate data against schema with configurable mode
+   *
+   * @param namespace - The namespace being validated
+   * @param data - The data to validate
+   * @param validateOnWrite - Validation mode (true, false, or ValidationMode)
    */
-  private validateAgainstSchema(_namespace: string, data: CreateInput): void {
+  private validateAgainstSchema(
+    _namespace: string,
+    data: CreateInput,
+    validateOnWrite?: boolean | ValidationMode
+  ): void {
+    const typeName = data.$type
+    if (!typeName) return
+
+    // Determine validation mode
+    let mode: ValidationMode
+    if (validateOnWrite === false) {
+      return // Skip validation
+    } else if (validateOnWrite === true || validateOnWrite === undefined) {
+      mode = 'strict'
+    } else {
+      mode = validateOnWrite
+    }
+
+    // If no schema validator, use legacy validation
+    if (!this.schemaValidator) {
+      this.legacyValidateAgainstSchema(_namespace, data)
+      return
+    }
+
+    // Check if type is defined in schema
+    if (!this.schemaValidator.hasType(typeName)) {
+      return // No schema for this type, skip validation
+    }
+
+    // Create a temporary validator with the specified mode
+    const validator = new SchemaValidator(this.schema, {
+      mode,
+      allowUnknownFields: true, // Allow document flexibility
+    })
+
+    // Validate - this will throw SchemaValidationError if mode is 'strict'
+    validator.validate(typeName, data, true) // skipCoreFields=true for create input
+  }
+
+  /**
+   * Legacy validation method for backward compatibility
+   */
+  private legacyValidateAgainstSchema(_namespace: string, data: CreateInput): void {
     const typeName = data.$type
     if (!typeName) return
 

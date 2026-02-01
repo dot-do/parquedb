@@ -63,7 +63,7 @@ export interface QueryStats {
   /** Index used (if any) */
   indexUsed?: string
   /** Index type used */
-  indexType?: 'hash' | 'sst' | 'fts'
+  indexType?: 'hash' | 'sst' | 'fts' | 'vector'
 }
 
 /**
@@ -99,7 +99,7 @@ export interface QueryPlan {
     /** Index name */
     name: string
     /** Index type */
-    type: 'hash' | 'sst' | 'fts'
+    type: 'hash' | 'sst' | 'fts' | 'vector'
     /** Field being queried */
     field?: string
     /** Whether index will be used */
@@ -260,6 +260,34 @@ export class QueryExecutor {
             })
             candidateDocIds = results.map(r => r.docId)
             usedFTS = true
+          }
+          break
+        }
+
+        case 'vector': {
+          // Handle vector similarity search
+          const vectorCondition = indexPlan.condition as {
+            $near: number[]
+            $k: number
+            $field: string
+            $minScore?: number
+          }
+
+          if (vectorCondition.$near && vectorCondition.$k) {
+            const vectorResult = await this.indexManager!.vectorSearch(
+              ns,
+              indexPlan.index.name,
+              vectorCondition.$near,
+              vectorCondition.$k,
+              { minScore: vectorCondition.$minScore }
+            )
+
+            // Vector search returns results ordered by similarity
+            // We want to preserve this order in the final results
+            candidateDocIds = vectorResult.docIds
+
+            // Store scores for potential use in result metadata
+            // For now, candidateDocIds maintains the order by similarity
           }
           break
         }

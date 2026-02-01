@@ -30,27 +30,37 @@ export function matchesFilter(row: unknown, filter: Filter): boolean {
 
   const obj = row as Record<string, unknown>
 
-  // Handle logical operators
+  // Handle logical operators - these must be combined with field conditions
+  // First check $and if present
   if (filter.$and) {
-    return filter.$and.every(subFilter => matchesFilter(row, subFilter))
+    if (!filter.$and.every(subFilter => matchesFilter(row, subFilter))) {
+      return false
+    }
   }
 
+  // Check $or if present
   if (filter.$or) {
-    return filter.$or.some(subFilter => matchesFilter(row, subFilter))
+    if (!filter.$or.some(subFilter => matchesFilter(row, subFilter))) {
+      return false
+    }
   }
 
+  // Check $not if present
   if (filter.$not) {
-    return !matchesFilter(row, filter.$not)
+    if (matchesFilter(row, filter.$not)) {
+      return false
+    }
   }
 
+  // Check $nor if present
   if (filter.$nor) {
-    return !filter.$nor.some(subFilter => matchesFilter(row, subFilter))
+    if (filter.$nor.some(subFilter => matchesFilter(row, subFilter))) {
+      return false
+    }
   }
 
-  // Handle special operators
-  if (filter.$text || filter.$vector || filter.$geo) {
-    return true // These need specialized handling
-  }
+  // Handle special operators - skip for now (these need specialized handling)
+  // $text, $vector, $geo are handled by specialized index queries
 
   // Check each field filter
   for (const [field, condition] of Object.entries(filter)) {
@@ -133,25 +143,33 @@ function evaluateOperators(value: unknown, operators: Record<string, unknown>): 
         if (deepEqual(value, opValue)) return false
         break
 
-      case '$gt':
+      case '$gt': {
         if (value === null || value === undefined) return false
-        if (compareValues(value, opValue) <= 0) return false
+        const cmp = compareValues(value, opValue)
+        if (Number.isNaN(cmp) || cmp <= 0) return false
         break
+      }
 
-      case '$gte':
+      case '$gte': {
         if (value === null || value === undefined) return false
-        if (compareValues(value, opValue) < 0) return false
+        const cmp = compareValues(value, opValue)
+        if (Number.isNaN(cmp) || cmp < 0) return false
         break
+      }
 
-      case '$lt':
+      case '$lt': {
         if (value === null || value === undefined) return false
-        if (compareValues(value, opValue) >= 0) return false
+        const cmp = compareValues(value, opValue)
+        if (Number.isNaN(cmp) || cmp >= 0) return false
         break
+      }
 
-      case '$lte':
+      case '$lte': {
         if (value === null || value === undefined) return false
-        if (compareValues(value, opValue) > 0) return false
+        const cmp = compareValues(value, opValue)
+        if (Number.isNaN(cmp) || cmp > 0) return false
         break
+      }
 
       case '$in':
         if (!Array.isArray(opValue)) return false

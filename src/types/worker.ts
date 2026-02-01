@@ -2,6 +2,8 @@
  * Worker environment types for ParqueDB Cloudflare Workers
  */
 
+import type { AIBinding } from '../embeddings/workers-ai'
+
 // =============================================================================
 // Environment Bindings
 // =============================================================================
@@ -36,6 +38,9 @@ export interface Env {
 
   /** Optional FSX binding for POSIX-style file access */
   FSX?: Fetcher
+
+  /** Workers AI binding for embedding generation */
+  AI?: AIBinding
 
   // Note: Caching uses the free Cloudflare Cache API (caches.default), not KV.
   // Cache API provides 500MB on free accounts, 5GB+ on enterprise.

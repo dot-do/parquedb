@@ -56,11 +56,32 @@ export {
 // FsBackend - Node.js filesystem
 export { FsBackend, PathTraversalError } from './FsBackend'
 
-// FsxBackend - Cloudflare fsx (stub)
-// export { FsxBackend } from './FsxBackend'
+// FsxBackend - Cloudflare fsx
+export { FsxBackend } from './FsxBackend'
+export type { FsxBackendOptions } from './FsxBackend'
+export type { Fsx, FsxStorageTier, FsxError, FsxErrorCode, FsxErrorCodes } from './types/fsx'
 
-// R2Backend - Cloudflare R2 (stub)
-// export { R2Backend } from './R2Backend'
+// R2Backend - Cloudflare R2
+export {
+  R2Backend,
+  R2OperationError,
+  R2ETagMismatchError,
+  R2NotFoundError,
+  type R2BackendOptions,
+} from './R2Backend'
+export type {
+  R2Bucket,
+  R2Object,
+  R2ObjectBody,
+  R2HTTPMetadata,
+  R2GetOptions,
+  R2PutOptions,
+  R2ListOptions,
+  R2Objects,
+  R2MultipartUpload,
+  R2UploadedPart,
+  R2MultipartOptions,
+} from './types/r2'
 
 // DOSqliteBackend - Cloudflare Durable Object SQLite
 export {

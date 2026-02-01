@@ -2,6 +2,18 @@
 
 This guide covers installation, basic usage, and common operations with ParqueDB.
 
+## Prerequisites
+
+Before getting started, make sure you have:
+
+- **Node.js 18+** or a modern browser with ES2020 support
+- **npm** or **yarn** package manager
+- Basic familiarity with TypeScript (recommended but not required)
+
+ParqueDB also runs in:
+- **Cloudflare Workers** with R2 storage
+- **Browsers** with in-memory storage for development
+
 ## Installation
 
 ```bash
@@ -269,6 +281,125 @@ const matching = await db.Posts.find({
 })
 ```
 
+## Working with Relationships
+
+ParqueDB has first-class support for entity relationships. You can link entities together using the `$link` and `$unlink` operators.
+
+### Linking Entities
+
+Use `$link` to create relationships between entities:
+
+```typescript
+// Create a user
+const user = await db.Users.create({
+  $type: 'User',
+  name: 'alice',
+  email: 'alice@example.com',
+})
+
+// Create a post
+const post = await db.Posts.create({
+  $type: 'Post',
+  name: 'hello-world',
+  title: 'Hello World',
+  content: 'My first post!',
+})
+
+// Link the post to the user as author
+await db.Posts.update(post.$id, {
+  $link: { author: user.$id },
+})
+
+// The post now has an author relationship
+const linkedPost = await db.Posts.get(post.$id)
+console.log(linkedPost.author)  // { 'alice': 'users/abc123' }
+```
+
+### Unlinking Entities
+
+Use `$unlink` to remove relationships:
+
+```typescript
+// Remove the author relationship
+await db.Posts.update(post.$id, {
+  $unlink: { author: user.$id },
+})
+```
+
+### Multiple Relationships
+
+Link an entity to multiple targets:
+
+```typescript
+// Create categories
+const tech = await db.Categories.create({
+  $type: 'Category',
+  name: 'tech',
+  slug: 'technology',
+})
+
+const tutorial = await db.Categories.create({
+  $type: 'Category',
+  name: 'tutorials',
+  slug: 'tutorials',
+})
+
+// Link post to multiple categories
+await db.Posts.update(post.$id, {
+  $link: { categories: [tech.$id, tutorial.$id] },
+})
+```
+
+### Defining Relationships in Schema
+
+For bidirectional relationships, define them in your schema:
+
+```typescript
+const schema = {
+  User: {
+    $ns: 'users',
+    name: 'string!',
+    email: 'email!',
+    // Reverse relationship: User.posts shows all posts where Post.author = this user
+    posts: '<- Post.author[]',
+  },
+  Post: {
+    $ns: 'posts',
+    title: 'string!',
+    content: 'markdown!',
+    // Forward relationship: Post.author links to a User
+    author: '-> User.posts',
+    // Many-to-many: Post can have multiple categories
+    categories: '-> Category.posts[]',
+  },
+  Category: {
+    $ns: 'categories',
+    name: 'string!',
+    slug: 'string!',
+    // Reverse: all posts in this category
+    posts: '<- Post.categories[]',
+  },
+}
+
+const db = new ParqueDB({ storage, schema })
+```
+
+Relationship syntax:
+- `-> Target.reverse` - Forward relationship (stored on this entity)
+- `<- Source.predicate[]` - Reverse relationship (computed from source entities)
+- `[]` suffix indicates a to-many relationship
+
+### Combining Updates with Links
+
+You can combine `$link` with other update operators:
+
+```typescript
+await db.Posts.update(post.$id, {
+  $set: { status: 'published', publishedAt: new Date() },
+  $link: { author: user.$id },
+})
+```
+
 ## Query Options
 
 ### Sorting
@@ -407,6 +538,22 @@ await db.restore('posts', post.$id.split('/')[1])
 
 ## Next Steps
 
+Now that you know the basics, explore these topics:
+
 - [Schema Definition](./schema.md) - Define types, validation, and relationships
 - [Storage Backends](./storage-backends.md) - Choose the right storage for your environment
-- [Cloudflare Workers](./workers.md) - Deploy to the edge
+- [Cloudflare Workers](./workers.md) - Deploy to the edge with CQRS architecture
+
+### Architecture Deep Dives
+
+- [Graph-First Architecture](./architecture/GRAPH_FIRST_ARCHITECTURE.md) - How relationships are indexed
+- [Secondary Indexes](./architecture/SECONDARY_INDEXES.md) - B-tree, hash, and full-text indexes
+- [Namespace Sharded Architecture](./architecture/NAMESPACE_SHARDED_ARCHITECTURE.md) - Multi-tenant design
+
+### Example Datasets
+
+Check out the [examples](../examples) folder for real-world usage:
+- IMDB - Movie database with actors and directors
+- O*NET - Occupational data with skills and abilities
+- UNSPSC - Product classification hierarchy
+- Wikidata - Knowledge graph import

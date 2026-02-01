@@ -7,6 +7,9 @@
 // Types
 export * from './types'
 
+// Errors
+export * from './errors'
+
 // Index Manager
 export { IndexManager, type SelectedIndex } from './manager'
 
@@ -18,6 +21,9 @@ export * from './fts'
 
 // Bloom Filters
 export * from './bloom'
+
+// Vector Indexes
+export * from './vector'
 
 // Compact Encoding
 export * from './encoding'

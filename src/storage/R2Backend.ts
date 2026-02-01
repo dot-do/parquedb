@@ -29,7 +29,7 @@ import type {
 export class R2OperationError extends Error {
   readonly operation: string
   readonly key?: string
-  override readonly cause?: Error
+  readonly underlyingCause?: Error
 
   constructor(
     message: string,
@@ -41,7 +41,7 @@ export class R2OperationError extends Error {
     this.name = 'R2OperationError'
     this.operation = operation
     this.key = key
-    this.cause = cause
+    this.underlyingCause = cause
   }
 }
 

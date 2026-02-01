@@ -5,6 +5,7 @@
  */
 
 export * from './parser'
+export * from './validator'
 
 // Re-export key types for convenience
 export type {
@@ -14,3 +15,15 @@ export type {
   NestedFieldDefinition,
   ValidationOptions,
 } from './parser'
+
+export type {
+  ValidationMode,
+  SchemaValidatorOptions,
+} from './validator'
+
+export {
+  SchemaValidationError,
+  SchemaValidator,
+  createValidator,
+  validate,
+} from './validator'

@@ -17,7 +17,10 @@ import type {
   RangeQuery,
   FTSSearchOptions,
   FTSSearchResult,
+  VectorSearchOptions,
+  VectorSearchResult,
 } from './types'
+import { VectorIndex } from './vector'
 
 // =============================================================================
 // Index Manager
@@ -31,6 +34,8 @@ export class IndexManager {
   private metadata: Map<string, Map<string, IndexMetadata>> = new Map()
   private listeners: Set<IndexEventListener> = new Set()
   private loaded: boolean = false
+  /** Cache for loaded VectorIndex instances */
+  private vectorIndexes: Map<string, VectorIndex> = new Map()
 
   constructor(
     private storage: StorageBackend,
@@ -273,6 +278,19 @@ export class IndexManager {
       }
     }
 
+    // Check for $vector operator -> use vector index
+    if (filter.$vector) {
+      const vectorIndex = this.findVectorIndex(ns, filter.$vector.$field)
+      if (vectorIndex) {
+        return {
+          index: vectorIndex,
+          type: 'vector',
+          field: filter.$vector.$field,
+          condition: filter.$vector,
+        }
+      }
+    }
+
     // Extract field conditions for secondary indexes
     const candidates: Array<{
       index: IndexDefinition
@@ -387,6 +405,72 @@ export class IndexManager {
     // This will be implemented by the FTS module
     // For now, return empty result
     return []
+  }
+
+  /**
+   * Execute a vector similarity search
+   *
+   * @param ns - Namespace
+   * @param indexName - Index name
+   * @param queryVector - Query vector
+   * @param k - Number of results to return
+   * @param options - Search options (minScore, efSearch)
+   * @returns Vector search results
+   */
+  async vectorSearch(
+    ns: string,
+    indexName: string,
+    queryVector: number[],
+    k: number,
+    options?: VectorSearchOptions
+  ): Promise<VectorSearchResult> {
+    await this.load()
+
+    // Get the vector index
+    const vectorIndex = await this.getVectorIndex(ns, indexName)
+    if (!vectorIndex) {
+      return {
+        docIds: [],
+        rowGroups: [],
+        scores: [],
+        exact: false,
+        entriesScanned: 0,
+      }
+    }
+
+    // Execute the search
+    return vectorIndex.search(queryVector, k, options)
+  }
+
+  /**
+   * Get or create a VectorIndex instance
+   */
+  private async getVectorIndex(ns: string, indexName: string): Promise<VectorIndex | null> {
+    const cacheKey = `${ns}.${indexName}`
+
+    // Return cached instance if available
+    if (this.vectorIndexes.has(cacheKey)) {
+      return this.vectorIndexes.get(cacheKey)!
+    }
+
+    // Get the index definition
+    const definition = this.indexes.get(ns)?.get(indexName)
+    if (!definition || definition.type !== 'vector') {
+      return null
+    }
+
+    // Create and load the index
+    const vectorIndex = new VectorIndex(
+      this.storage,
+      ns,
+      definition,
+      this.basePath
+    )
+    await vectorIndex.load()
+
+    // Cache it
+    this.vectorIndexes.set(cacheKey, vectorIndex)
+    return vectorIndex
   }
 
   // ===========================================================================
@@ -549,6 +633,8 @@ export class IndexManager {
         return `${base}indexes/fts/${ns}/`
       case 'bloom':
         return `${base}indexes/bloom/${ns}.${definition.name}.bloom`
+      case 'vector':
+        return `${base}indexes/vector/${ns}.${definition.name}.hnsw`
       default:
         throw new Error(`Unknown index type: ${definition.type}`)
     }
@@ -651,6 +737,19 @@ export class IndexManager {
 
     for (const definition of nsIndexes.values()) {
       if (definition.type === 'fts') {
+        return definition
+      }
+    }
+
+    return null
+  }
+
+  private findVectorIndex(ns: string, field: string): IndexDefinition | null {
+    const nsIndexes = this.indexes.get(ns)
+    if (!nsIndexes) return null
+
+    for (const definition of nsIndexes.values()) {
+      if (definition.type === 'vector' && definition.fields.some(f => f.path === field)) {
         return definition
       }
     }
@@ -765,7 +864,7 @@ export interface SelectedIndex {
   /** Selected index definition */
   index: IndexDefinition
   /** Index type */
-  type: 'hash' | 'sst' | 'fts'
+  type: 'hash' | 'sst' | 'fts' | 'vector'
   /** Field being queried (for secondary indexes) */
   field?: string
   /** Query condition */
