@@ -141,7 +141,126 @@ interface LoadedBloomFilter {
 }
 
 /**
- * Simple bloom filter implementation for pre-filtering
+ * Encode a value to bytes for bloom filter hashing
+ * Must match build-indexes.mjs encodeValueForBloom()
+ *
+ * Note: This encoding is DIFFERENT from the index key encoding.
+ * Bloom filters use simple encoding without type prefixes.
+ */
+function encodeValueForBloom(value: unknown): Uint8Array {
+  if (value === null || value === undefined) {
+    return new Uint8Array([0])
+  }
+
+  if (typeof value === 'number') {
+    const buffer = new ArrayBuffer(8)
+    const view = new DataView(buffer)
+    view.setFloat64(0, value, false)
+    return new Uint8Array(buffer)
+  }
+
+  if (typeof value === 'boolean') {
+    return new Uint8Array([value ? 1 : 0])
+  }
+
+  if (typeof value === 'string') {
+    return new TextEncoder().encode(value)
+  }
+
+  // Default: JSON encode
+  return new TextEncoder().encode(JSON.stringify(value))
+}
+
+/**
+ * MurmurHash3 implementation matching build-indexes.mjs
+ */
+function murmurHash3(key: Uint8Array, seed: number): number {
+  const c1 = 0xcc9e2d51
+  const c2 = 0x1b873593
+  const r1 = 15
+  const r2 = 13
+  const m = 5
+  const n = 0xe6546b64
+
+  let hash = seed
+  const len = key.length
+  const numBlocks = Math.floor(len / 4)
+
+  // Process 4-byte blocks
+  for (let i = 0; i < numBlocks; i++) {
+    let k =
+      key[i * 4] |
+      (key[i * 4 + 1] << 8) |
+      (key[i * 4 + 2] << 16) |
+      (key[i * 4 + 3] << 24)
+
+    k = Math.imul(k, c1)
+    k = (k << r1) | (k >>> (32 - r1))
+    k = Math.imul(k, c2)
+
+    hash ^= k
+    hash = (hash << r2) | (hash >>> (32 - r2))
+    hash = Math.imul(hash, m) + n
+  }
+
+  // Process remaining bytes
+  const tail = len - numBlocks * 4
+  let k1 = 0
+  if (tail >= 3) {
+    k1 ^= key[numBlocks * 4 + 2] << 16
+  }
+  if (tail >= 2) {
+    k1 ^= key[numBlocks * 4 + 1] << 8
+  }
+  if (tail >= 1) {
+    k1 ^= key[numBlocks * 4]
+    k1 = Math.imul(k1, c1)
+    k1 = (k1 << r1) | (k1 >>> (32 - r1))
+    k1 = Math.imul(k1, c2)
+    hash ^= k1
+  }
+
+  // Finalization
+  hash ^= len
+  hash ^= hash >>> 16
+  hash = Math.imul(hash, 0x85ebca6b)
+  hash ^= hash >>> 13
+  hash = Math.imul(hash, 0xc2b2ae35)
+  hash ^= hash >>> 16
+
+  return hash >>> 0
+}
+
+/**
+ * Generate multiple hash values using double hashing technique
+ */
+function getBloomHashes(key: Uint8Array, numHashes: number, filterBits: number): number[] {
+  const h1 = murmurHash3(key, 0)
+  const h2 = murmurHash3(key, h1)
+
+  const hashes: number[] = []
+  for (let i = 0; i < numHashes; i++) {
+    const hash = ((h1 + i * h2) >>> 0) % filterBits
+    hashes.push(hash)
+  }
+
+  return hashes
+}
+
+/**
+ * Bloom filter implementation for pre-filtering
+ *
+ * Format (from build-indexes.mjs):
+ * Header (16 bytes):
+ * - bytes 0-3: MAGIC "PQBF" (0x50, 0x51, 0x42, 0x46)
+ * - bytes 4-5: VERSION (uint16 big endian) = 1
+ * - bytes 6-7: numHashFunctions (uint16 big endian) = 3
+ * - bytes 8-11: valueFilterSize (uint32 big endian)
+ * - bytes 12-13: numRowGroups (uint16 big endian)
+ * - bytes 14-15: reserved
+ * Data:
+ * - bytes 16 to 16+valueFilterSize: value bloom filter bits
+ * - remaining: row group bloom filters
  */
 class BloomFilter {
   private bits: Uint8Array
@@ -149,11 +268,25 @@ class BloomFilter {
   private numBits: number
 
   constructor(data: Uint8Array) {
-    // Parse bloom filter format: [numHashes (1 byte)][numBits (4 bytes LE)][bits...]
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-    this.numHashes = data[0]
-    this.numBits = view.getUint32(1, true) // little endian
-    this.bits = data.slice(5)
+
+    // Verify magic bytes
+    const magic = [data[0], data[1], data[2], data[3]]
+    const expectedMagic = [0x50, 0x51, 0x42, 0x46] // "PQBF"
+    const isMagicValid = magic.every((b, i) => b === expectedMagic[i])
+
+    if (isMagicValid) {
+      // New format with 16-byte header
+      this.numHashes = view.getUint16(6, false) // big endian
+      const valueFilterSize = view.getUint32(8, false) // big endian
+      this.numBits = valueFilterSize * 8
+      this.bits = data.slice(16, 16 + valueFilterSize)
+    } else {
+      // Fallback to old simple format: [numHashes (1 byte)][numBits (4 bytes LE)][bits...]
+      this.numHashes = data[0]
+      this.numBits = view.getUint32(1, true) // little endian
+      this.bits = data.slice(5)
+    }
   }
 
   /**
@@ -161,29 +294,17 @@ class BloomFilter {
    * @returns true if value might exist, false if definitely doesn't exist
    */
   mightContain(value: unknown): boolean {
-    const str = String(value)
-    for (let i = 0; i < this.numHashes; i++) {
-      const hash = this.hash(str, i)
-      const bitIndex = hash % this.numBits
-      const byteIndex = Math.floor(bitIndex / 8)
-      const bitOffset = bitIndex % 8
+    const key = encodeValueForBloom(value)
+    const hashes = getBloomHashes(key, this.numHashes, this.numBits)
+
+    for (const hash of hashes) {
+      const byteIndex = Math.floor(hash / 8)
+      const bitOffset = hash % 8
       if ((this.bits[byteIndex] & (1 << bitOffset)) === 0) {
         return false
       }
     }
     return true
-  }
-
-  /**
-   * FNV-1a hash with seed for multiple hash functions
-   */
-  private hash(value: string, seed: number): number {
-    let hash = 2166136261 ^ seed
-    for (let i = 0; i < value.length; i++) {
-      hash ^= value.charCodeAt(i)
-      hash = Math.imul(hash, 16777619)
-    }
-    return hash >>> 0 // Ensure unsigned
   }
 }
 

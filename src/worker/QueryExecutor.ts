@@ -798,7 +798,8 @@ export class QueryExecutor {
         let cumulativeRows = 0
         for (const rg of metadata.rowGroups) {
           rowGroupOffsets.push(cumulativeRows)
-          cumulativeRows += rg.numRows
+          // Convert BigInt to number (parquet metadata uses BigInt for row counts)
+          cumulativeRows += Number(rg.numRows)
         }
 
         // Sort target row groups and merge adjacent ones into ranges
@@ -809,7 +810,7 @@ export class QueryExecutor {
           if (rgIndex < 0 || rgIndex >= metadata.rowGroups.length) continue
           const rg = metadata.rowGroups[rgIndex]
           const rowStart = rowGroupOffsets[rgIndex]
-          const rowEnd = rowStart + rg.numRows
+          const rowEnd = rowStart + Number(rg.numRows)
 
           // Try to merge with previous range if adjacent
           const lastRange = rowRanges[rowRanges.length - 1]
@@ -834,7 +835,10 @@ export class QueryExecutor {
             rowEnd: range.rowEnd,
             compressors,
           }) as DataRow[]
-          rows.push(...rangeRows)
+          // Use loop instead of spread to avoid stack overflow with large arrays
+          for (const row of rangeRows) {
+            rows.push(row)
+          }
           totalRowsScanned += rangeRows.length
         }
 
