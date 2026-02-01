@@ -7,7 +7,8 @@
 
 import { parquetWriteBuffer } from 'hyparquet-writer'
 import { parquetQuery } from 'hyparquet'
-import { compressors } from 'hyparquet-compressors'
+// Use Worker-compatible compressors (pure JS Snappy instead of WASM)
+import { compressors } from '../parquet/compressors'
 import { logger } from '../utils/logger'
 
 // Use the Cloudflare R2Bucket type directly

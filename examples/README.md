@@ -2,6 +2,49 @@
 
 This directory contains examples demonstrating how to use ParqueDB with real-world datasets. Each example showcases different aspects of working with large-scale data: streaming, partitioning, graph relationships, and memory-efficient processing.
 
+## Quick Start
+
+The fastest way to get started is to use the pre-generated example datasets:
+
+```bash
+# List available datasets
+node scripts/load-examples.mjs --list
+
+# Load all sample datasets (creates data in data-v3/)
+node scripts/load-examples.mjs
+
+# Load a specific dataset
+node scripts/load-examples.mjs --dataset imdb-1m
+
+# Verify existing datasets
+node scripts/load-examples.mjs --verify
+
+# Force regeneration
+node scripts/load-examples.mjs --force
+```
+
+### Pre-loaded Datasets
+
+The following datasets are available in `data-v3/`:
+
+| Dataset | Description | Rows | Size |
+|---------|-------------|------|------|
+| `imdb-1m` | 1M movie/TV titles with cast | 3.5M | ~88MB |
+| `imdb` | 100K sample IMDB data | 350K | ~10MB |
+| `onet` | O*NET occupational data (sample) | ~1K | ~1MB |
+| `onet-full` | Complete O*NET database | ~100K | ~10MB |
+| `unspsc` | UNSPSC taxonomy (sample) | ~250 | ~50KB |
+| `unspsc-full` | Complete UNSPSC taxonomy | ~75K | ~5MB |
+
+### Dataset Schema
+
+All datasets use the dual-variant architecture with indexed columns:
+
+- `$id` - Entity identifier (e.g., `title:tt0000001`)
+- `$index_*` - Indexed columns for efficient querying
+- `name` - Human-readable name
+- `$data` - Full entity data as JSON
+
 ## Examples
 
 | Example | Description | Data Size | Key Concepts |

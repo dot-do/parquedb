@@ -53,7 +53,8 @@
     "hyparquet": "github:dot-do/hyparquet#variant-shredding",
     "hyparquet-compressors": "^1.1.1",
     "hyparquet-writer": "github:dot-do/hyparquet-writer#variant-shredding",
-    "pluralize": "^8.0.0"
+    "pluralize": "^8.0.0",
+    "snappyjs": "^0.7.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.8",

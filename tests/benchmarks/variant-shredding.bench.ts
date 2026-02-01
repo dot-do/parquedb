@@ -13,7 +13,8 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { parquetWriteBuffer } from 'hyparquet-writer'
 import { parquetQuery, parquetMetadataAsync } from 'hyparquet'
-import { compressors } from 'hyparquet-compressors'
+// Use Worker-compatible compressors (pure JS Snappy instead of WASM)
+import { compressors } from '../../src/parquet/compressors'
 import {
   Timer,
   startTimer,
