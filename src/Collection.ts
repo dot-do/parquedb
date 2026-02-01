@@ -25,7 +25,7 @@ import type {
   SortDirection,
 } from './types'
 import { normalizeSortDirection } from './types'
-import { deepClone, getNestedValue, compareValues } from './utils'
+import { deepClone, getNestedValue, compareValues, getRandomBase36 } from './utils'
 
 /** Aggregation pipeline stage */
 export type AggregationStage =
@@ -162,7 +162,7 @@ export function clearEventLog(): void {
  * Generate a unique ID
  */
 function generateId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 9)}`
+  return `${Date.now().toString(36)}-${getRandomBase36(7)}`
 }
 
 // getNestedValue is imported from ./utils

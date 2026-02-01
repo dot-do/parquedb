@@ -26,6 +26,7 @@ import {
   FileExistsError,
   DirectoryNotEmptyError,
 } from './MemoryBackend'
+import { getRandomBase36 } from '../utils'
 
 /**
  * Error thrown when a path traversal attempt is detected
@@ -338,7 +339,7 @@ export class FsBackend implements StorageBackend {
 
   async writeAtomic(path: string, data: Uint8Array, options?: WriteOptions): Promise<WriteResult> {
     const fullPath = this.resolvePath(path)
-    const tempPath = `${fullPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`
+    const tempPath = `${fullPath}.tmp.${Date.now()}.${getRandomBase36(10)}`
 
     // Handle ifNoneMatch: '*' (fail if file exists)
     if (options?.ifNoneMatch === '*') {

@@ -12,16 +12,34 @@
  */
 
 import { parquetMetadataAsync, parquetReadObjects } from 'hyparquet'
+import type {
+  FileMetaData,
+  RowGroup as HyparquetRowGroup,
+  ColumnChunk as HyparquetColumnChunk,
+  KeyValue,
+  Compressors,
+} from 'hyparquet'
 import { compressors } from './compression'
 import type { StorageBackend } from '../types/storage'
 import type {
   ParquetReaderOptions,
   ReadOptions,
   ParquetMetadata,
-  RowGroupMetadata,
   AsyncBuffer,
   RowFilter,
+  EncodingType,
+  CompressionCodec,
 } from './types'
+
+/**
+ * Options for hyparquet's parquetReadObjects function
+ */
+interface HyparquetReadOptions {
+  file: AsyncBuffer
+  compressors?: Compressors
+  columns?: string[]
+  rowGroups?: number[]
+}
 
 // =============================================================================
 // AsyncBuffer Adapter
@@ -179,7 +197,7 @@ export class ParquetReader {
 
     // Build read options for hyparquet
     // Include compressors for LZ4, GZIP, ZSTD, and Brotli support
-    const readOptions: any = {
+    const readOptions: HyparquetReadOptions = {
       file: asyncBuffer,
       compressors,
     }
@@ -193,7 +211,7 @@ export class ParquetReader {
     }
 
     // Read data using parquetReadObjects which returns row objects directly
-    const rows = await parquetReadObjects(readOptions) as T[]
+    const rows = (await parquetReadObjects(readOptions)) as T[]
 
     // Apply post-read filtering if needed
     let filteredRows = rows
@@ -249,7 +267,7 @@ export class ParquetReader {
 
       // Read single row group
       // Include compressors for LZ4, GZIP, ZSTD, and Brotli support
-      const readOptions: any = {
+      const readOptions: HyparquetReadOptions = {
         file: asyncBuffer,
         rowGroups: [groupIndex],
         compressors,
@@ -259,7 +277,7 @@ export class ParquetReader {
         readOptions.columns = columns
       }
 
-      const rows = await parquetReadObjects(readOptions) as T[]
+      const rows = (await parquetReadObjects(readOptions)) as T[]
 
       for (const row of rows) {
         // Skip rows until we reach offset
@@ -316,6 +334,7 @@ export class ParquetReader {
 
     for (let i = 0; i < metadata.rowGroups.length; i++) {
       const rowGroup = metadata.rowGroups[i]
+      if (!rowGroup) continue
 
       // Find the column statistics
       const columnMeta = rowGroup.columns.find(
@@ -350,35 +369,39 @@ export class ParquetReader {
   /**
    * Convert hyparquet metadata to our format
    */
-  private convertMetadata(metadata: any): ParquetMetadata {
+  private convertMetadata(metadata: FileMetaData): ParquetMetadata {
     return {
       version: metadata.version ?? 1,
       schema: metadata.schema ?? [],
-      numRows: metadata.num_rows ?? 0,
-      rowGroups: (metadata.row_groups ?? []).map((rg: any, index: number) => ({
-        numRows: rg.num_rows ?? 0,
-        totalByteSize: rg.total_byte_size ?? 0,
-        columns: (rg.columns ?? []).map((col: any) => ({
+      numRows: Number(metadata.num_rows ?? 0),
+      rowGroups: (metadata.row_groups ?? []).map((rg: HyparquetRowGroup, index: number) => ({
+        numRows: Number(rg.num_rows ?? 0),
+        totalByteSize: Number(rg.total_byte_size ?? 0),
+        columns: (rg.columns ?? []).map((col: HyparquetColumnChunk) => ({
           pathInSchema: col.meta_data?.path_in_schema ?? [],
-          totalCompressedSize: col.meta_data?.total_compressed_size ?? 0,
-          totalUncompressedSize: col.meta_data?.total_uncompressed_size ?? 0,
-          numValues: col.meta_data?.num_values ?? 0,
-          encodings: col.meta_data?.encodings ?? [],
-          codec: col.meta_data?.codec ?? 'UNCOMPRESSED',
+          totalCompressedSize: Number(col.meta_data?.total_compressed_size ?? 0),
+          totalUncompressedSize: Number(col.meta_data?.total_uncompressed_size ?? 0),
+          numValues: Number(col.meta_data?.num_values ?? 0),
+          encodings: (col.meta_data?.encodings ?? []) as EncodingType[],
+          codec: (col.meta_data?.codec ?? 'UNCOMPRESSED') as CompressionCodec,
           statistics: col.meta_data?.statistics
             ? {
                 min: col.meta_data.statistics.min_value,
                 max: col.meta_data.statistics.max_value,
-                nullCount: col.meta_data.statistics.null_count,
-                distinctCount: col.meta_data.statistics.distinct_count,
+                nullCount: col.meta_data.statistics.null_count !== undefined
+                  ? Number(col.meta_data.statistics.null_count)
+                  : undefined,
+                distinctCount: col.meta_data.statistics.distinct_count !== undefined
+                  ? Number(col.meta_data.statistics.distinct_count)
+                  : undefined,
               }
             : undefined,
         })),
         ordinal: index,
       })),
-      keyValueMetadata: metadata.key_value_metadata?.map((kv: any) => ({
+      keyValueMetadata: metadata.key_value_metadata?.map((kv: KeyValue) => ({
         key: kv.key,
-        value: kv.value,
+        value: kv.value ?? '',
       })),
       createdBy: metadata.created_by,
     }
@@ -386,9 +409,13 @@ export class ParquetReader {
 
   /**
    * Convert column data to row objects
+   *
+   * Note: This is a legacy helper method for converting hyparquet's column format
+   * to row format. Since parquetReadObjects now returns row objects directly,
+   * this method is no longer actively used.
    */
   private convertToRows<T>(
-    result: any,
+    result: Record<string, unknown[]>,
     columns?: string[]
   ): T[] {
     // hyparquet returns data in column format
@@ -406,7 +433,11 @@ export class ParquetReader {
     }
 
     // Get the number of rows from the first column
-    const firstColumn = result[columnNames[0]]
+    const firstColName = columnNames[0]
+    if (!firstColName) {
+      return []
+    }
+    const firstColumn = result[firstColName]
     if (!firstColumn || !Array.isArray(firstColumn)) {
       return []
     }
@@ -417,8 +448,9 @@ export class ParquetReader {
     for (let i = 0; i < numRows; i++) {
       const row: Record<string, unknown> = {}
       for (const colName of columnNames) {
-        if (colName in result) {
-          row[colName] = result[colName][i]
+        const colData = result[colName]
+        if (colData) {
+          row[colName] = colData[i]
         }
       }
       rows.push(row as T)

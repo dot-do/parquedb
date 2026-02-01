@@ -61,6 +61,7 @@
     "@cloudflare/workers-types": "^4.20241230.0",
     "@types/node": "^25.1.0",
     "@vitest/browser": "^3.0.4",
+    "@vitest/coverage-v8": "^3.2.4",
     "csv-parse": "^6.1.0",
     "dotenv": "^17.2.3",
     "lz4": "^0.6.5",

@@ -50,6 +50,25 @@ export default defineConfig({
     // Default timeout
     testTimeout: 30000,
 
+    // Coverage configuration
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'html', 'lcov'],
+      reportsDirectory: './coverage',
+      include: ['src/**/*.ts'],
+      exclude: [
+        'src/**/*.d.ts',
+        'src/**/*.test.ts',
+        'src/**/index.ts', // Re-export files
+      ],
+      thresholds: {
+        lines: 80,
+        branches: 70,
+        functions: 80,
+        statements: 80,
+      },
+    },
+
     // Benchmark configuration (only used with `vitest bench`)
     benchmark: {
       include: ['tests/benchmarks/**/*.bench.ts'],

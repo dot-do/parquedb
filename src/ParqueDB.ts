@@ -32,6 +32,7 @@ import { parseFieldType, isRelationString, parseRelation } from './types/schema'
 import { FileNotFoundError } from './storage/MemoryBackend'
 import { IndexManager } from './indexes/manager'
 import type { IndexDefinition, IndexMetadata, IndexStats } from './indexes/types'
+import { getRandomBase36 } from './utils'
 
 // =============================================================================
 // Configuration Types
@@ -287,7 +288,7 @@ function generateId(): string {
   }
   const timestamp = now.toString(36).padStart(9, '0')
   const counter = idCounter.toString(36).padStart(4, '0')
-  const random = Math.random().toString(36).substring(2, 6)
+  const random = getRandomBase36(4)
   return `${timestamp}${counter}${random}`
 }
 
@@ -2401,7 +2402,13 @@ class ParqueDBImpl {
       const lastSnapshotSeq = lastSnapshot?.sequenceNumber ?? 0
       const eventsSinceLastSnapshot = entityEventCount - lastSnapshotSeq
       if (eventsSinceLastSnapshot >= this.snapshotConfig.autoSnapshotThreshold) {
-        this.getSnapshotManager().createSnapshot(fullEntityId).catch(() => {})
+        // TODO(parquedb-y9aw): Auto-snapshot is fire-and-forget by design for performance,
+        // but errors are silently swallowed. Consider logging snapshot failures or
+        // implementing a retry mechanism with exponential backoff.
+        this.getSnapshotManager().createSnapshot(fullEntityId).catch((err) => {
+          // Log error but don't fail the main operation - snapshots are optimization only
+          console.warn(`[ParqueDB] Auto-snapshot failed for ${fullEntityId}:`, err)
+        })
       }
     }
 

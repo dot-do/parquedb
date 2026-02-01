@@ -520,8 +520,10 @@ export class IndexManager {
     for (const listener of this.listeners) {
       try {
         listener(event)
-      } catch {
-        // Ignore listener errors
+      } catch (err) {
+        // TODO(parquedb-y9aw): Listener errors are silently swallowed.
+        // Consider logging or providing an onError callback for monitoring.
+        console.warn('[IndexManager] Event listener error:', err)
       }
     }
   }

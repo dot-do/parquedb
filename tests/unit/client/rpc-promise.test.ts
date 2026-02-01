@@ -20,6 +20,9 @@ import {
   resolvedRpcPromise,
   RpcError,
   deserializeFunction,
+  registerMapper,
+  getRegisteredMapper,
+  clearMapperRegistry,
   type RpcPromiseChain,
 } from '../../../src/client/rpc-promise'
 import type { RpcService } from '../../../src/client/collection'
@@ -310,7 +313,7 @@ describe('createRpcPromise', () => {
 // =============================================================================
 
 describe('RpcPromise.map', () => {
-  it('should serialize arrow function', async () => {
+  it('should serialize arrow function as path mapper', async () => {
     const service = createMockRpcService(() => null)
     const promise = createRpcPromise(service, 'find', ['posts', {}])
       .map((x: any) => x.name)
@@ -321,8 +324,9 @@ describe('RpcPromise.map', () => {
     expect(typeof mapArg).toBe('string')
 
     const parsed = JSON.parse(mapArg as string)
-    expect(parsed.type).toBe('sync')
-    expect(parsed.body).toContain('=>')
+    // Simple property access is converted to 'path' type
+    expect(parsed.mapperType).toBe('path')
+    expect(parsed.path).toBe('name')
   })
 
   it('should serialize async arrow function', async () => {
@@ -334,7 +338,9 @@ describe('RpcPromise.map', () => {
 
     const mapArg = service.lastChain?.[1]?.args?.[0]
     const parsed = JSON.parse(mapArg as string)
-    expect(parsed.type).toBe('async')
+    // Simple property access is converted to 'path' type, with async flag
+    expect(parsed.mapperType).toBe('path')
+    expect(parsed.async).toBe(true)
   })
 
   it('should return same RpcPromise for chaining', () => {
@@ -632,10 +638,22 @@ describe('deserializeFunction', () => {
   })
 
   describe('regular functions', () => {
-    it('should deserialize named function', () => {
+    it('should reject named functions for security (use anonymous instead)', () => {
+      // Named functions look like function calls and are blocked for security
+      // Use anonymous functions instead: function(x) { return x.name; }
       const serialized = JSON.stringify({
         type: 'sync',
         body: 'function getName(x) { return x.name; }',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow('Unsafe function calls detected')
+    })
+
+    it('should deserialize anonymous function with simple body', () => {
+      // Anonymous functions with simple bodies are allowed
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: 'function(x) { return x.name; }',
       })
       const fn = deserializeFunction<{ name: string }, string>(serialized)
 
@@ -731,6 +749,215 @@ describe('deserializeFunction', () => {
 
       expect(fn({ active: true })).toBe('yes')
       expect(fn({ active: false })).toBe('no')
+    })
+  })
+
+  describe('path-based mappers (secure)', () => {
+    it('should deserialize simple path mapper', () => {
+      const serialized = JSON.stringify({
+        mapperType: 'path',
+        path: 'name',
+      })
+      const fn = deserializeFunction<{ name: string }, string>(serialized)
+
+      expect(fn({ name: 'test' })).toBe('test')
+    })
+
+    it('should deserialize nested path mapper', () => {
+      const serialized = JSON.stringify({
+        mapperType: 'path',
+        path: 'author.name',
+      })
+      const fn = deserializeFunction<{ author: { name: string } }, string>(serialized)
+
+      expect(fn({ author: { name: 'John' } })).toBe('John')
+    })
+
+    it('should deserialize deeply nested path mapper', () => {
+      const serialized = JSON.stringify({
+        mapperType: 'path',
+        path: 'user.profile.settings.theme',
+      })
+      const fn = deserializeFunction<{ user: { profile: { settings: { theme: string } } } }, string>(serialized)
+
+      expect(fn({ user: { profile: { settings: { theme: 'dark' } } } })).toBe('dark')
+    })
+
+    it('should handle empty path (return entire object)', () => {
+      const serialized = JSON.stringify({
+        mapperType: 'path',
+        path: '',
+      })
+      const fn = deserializeFunction<{ name: string }, { name: string }>(serialized)
+
+      expect(fn({ name: 'test' })).toEqual({ name: 'test' })
+    })
+
+    it('should handle array index access', () => {
+      const serialized = JSON.stringify({
+        mapperType: 'path',
+        path: 'items[0]',
+      })
+      const fn = deserializeFunction<{ items: string[] }, string>(serialized)
+
+      expect(fn({ items: ['first', 'second'] })).toBe('first')
+    })
+
+    it('should return undefined for missing paths', () => {
+      const serialized = JSON.stringify({
+        mapperType: 'path',
+        path: 'missing.property',
+      })
+      const fn = deserializeFunction<{ name: string }, unknown>(serialized)
+
+      expect(fn({ name: 'test' })).toBeUndefined()
+    })
+  })
+
+  describe('registered mappers (secure)', () => {
+    beforeEach(() => {
+      // Clear registry before each test
+      clearMapperRegistry()
+    })
+
+    it('should use registered mapper', () => {
+      // Register a mapper
+      registerMapper('extractName', (x: any) => x.name.toUpperCase())
+
+      const serialized = JSON.stringify({
+        mapperType: 'registered',
+        name: 'extractName',
+      })
+      const fn = deserializeFunction<{ name: string }, string>(serialized)
+
+      expect(fn({ name: 'test' })).toBe('TEST')
+    })
+
+    it('should throw for unregistered mapper', () => {
+      const serialized = JSON.stringify({
+        mapperType: 'registered',
+        name: 'nonexistent',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow("Mapper 'nonexistent' is not registered")
+    })
+
+    it('should throw when registering duplicate mapper name', () => {
+      registerMapper('duplicate', (x: any) => x)
+
+      expect(() => registerMapper('duplicate', (x: any) => x)).toThrow("Mapper 'duplicate' is already registered")
+    })
+  })
+
+  describe('security validation', () => {
+    it('should block eval', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => eval(x.code)',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow('Unsafe function pattern detected')
+    })
+
+    it('should block new Function', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => new Function(x.code)()',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow('Unsafe function pattern detected')
+    })
+
+    it('should block fetch', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => fetch(x.url)',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow('Unsafe function pattern detected')
+    })
+
+    it('should block process', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => process.env.SECRET',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow('Unsafe function pattern detected')
+    })
+
+    it('should block globalThis', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => globalThis.fetch(x)',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow('Unsafe function pattern detected')
+    })
+
+    it('should block import', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => import(x.module)',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow('Unsafe function pattern detected')
+    })
+
+    it('should block require', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => require(x.module)',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow('Unsafe function pattern detected')
+    })
+
+    it('should block constructor access', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => x.constructor.constructor("return this")()',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow('Unsafe function pattern detected')
+    })
+
+    it('should block __proto__ access', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => x.__proto__.polluted = true',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow('Unsafe function pattern detected')
+    })
+
+    it('should block setTimeout', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => setTimeout(() => {}, 0)',
+      })
+
+      expect(() => deserializeFunction(serialized)).toThrow('Unsafe function pattern detected')
+    })
+
+    it('should allow safe built-in methods like slice', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => x.name.slice(0, 3)',
+      })
+      const fn = deserializeFunction<{ name: string }, string>(serialized)
+
+      expect(fn({ name: 'testing' })).toBe('tes')
+    })
+
+    it('should allow safe built-in methods like toLowerCase', () => {
+      const serialized = JSON.stringify({
+        type: 'sync',
+        body: '(x) => x.name.toLowerCase()',
+      })
+      const fn = deserializeFunction<{ name: string }, string>(serialized)
+
+      expect(fn({ name: 'TEST' })).toBe('test')
     })
   })
 })

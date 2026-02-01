@@ -173,15 +173,26 @@ export class EventWriter {
 
   /**
    * Start the periodic flush timer
+   *
+   * NOTE: The timer callback is fire-and-forget by design - errors during
+   * periodic flushes are logged but don't propagate. This prevents a single
+   * failed flush from stopping all future flushes. Critical data loss is
+   * prevented by the explicit flush() call in close().
    */
   startTimer(): void {
     if (this.flushTimer) {
       return
     }
 
-    this.flushTimer = setInterval(async () => {
+    this.flushTimer = setInterval(() => {
       if (this.buffer.length > 0 && !this.flushPromise) {
-        await this.flush()
+        // Wrap in promise chain to properly handle async errors
+        // Errors are logged but don't stop the timer - next interval will retry
+        this.flush().catch((err) => {
+          console.error('[EventWriter] Periodic flush failed:', err)
+          // TODO(parquedb-y9aw): Consider implementing retry with backoff
+          // or emitting an error event for monitoring
+        })
       }
     }, this.config.flushIntervalMs)
   }

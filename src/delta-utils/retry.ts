@@ -8,6 +8,8 @@
  * for handling optimistic concurrency conflicts and other transient errors.
  */
 
+import { getSecureRandom } from '../utils'
+
 // =============================================================================
 // TYPES
 // =============================================================================
@@ -204,7 +206,7 @@ function calculateDelay(
   if (config.jitter) {
     const jitterRange = delay * config.jitterFactor
     // Random value between -jitterRange and +jitterRange
-    const jitter = (Math.random() * 2 - 1) * jitterRange
+    const jitter = (getSecureRandom() * 2 - 1) * jitterRange
     delay = delay + jitter
   }
 

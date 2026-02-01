@@ -506,21 +506,30 @@ export class ReadPath {
 
   /**
    * Revalidate cache entry in background
+   *
+   * NOTE: This is intentionally fire-and-forget for stale-while-revalidate pattern.
+   * The caller returns cached data immediately while we refresh in the background.
+   * Errors during revalidation are logged but don't affect the user request.
+   *
+   * TODO(parquedb-y9aw): Accept ExecutionContext to use ctx.waitUntil() for proper
+   * background task lifecycle management in Workers. Without waitUntil, background
+   * revalidation may be terminated early if the Worker instance is recycled.
    */
   private revalidateInBackground(
     path: string,
     cacheKey: Request,
     ttl: number
   ): void {
-    // Use waitUntil if available (in Worker context)
-    // For now, just fire and forget
+    // Fire-and-forget by design - stale-while-revalidate pattern
+    // Errors are logged but don't fail the request since we already returned cached data
     this.bucket.get(path).then(async (obj) => {
       if (obj) {
         const data = await obj.arrayBuffer()
         await this.cacheResponse(cacheKey, data, obj.etag, ttl)
       }
-    }).catch(() => {
-      // Ignore revalidation errors
+    }).catch((err) => {
+      // Log revalidation errors - these indicate potential cache coherence issues
+      console.warn(`[ReadPath] Background revalidation failed for ${path}:`, err)
     })
   }
 

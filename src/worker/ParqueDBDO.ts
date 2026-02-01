@@ -26,6 +26,7 @@ import type {
 } from '../types'
 import { entityTarget, relTarget, parseEntityTarget, isRelationshipTarget } from '../types'
 import type { Env, FlushConfig, DEFAULT_FLUSH_CONFIG, DO_SQLITE_SCHEMA } from '../types/worker'
+import { getRandom48Bit } from '../utils'
 
 // =============================================================================
 // ULID Generation (simplified, for event IDs)
@@ -41,7 +42,8 @@ function generateULID(): string {
     lastRandom++
   } else {
     lastTime = now
-    lastRandom = Math.floor(Math.random() * 0x1000000000000)
+    // Use cryptographically secure random for ULID random component
+    lastRandom = getRandom48Bit()
   }
 
   let time = ''
