@@ -601,8 +601,8 @@ export class IndexManager {
           definition,
           metadata: {
             ...metadata,
-            createdAt: metadata.createdAt.toISOString() as any,
-            updatedAt: metadata.updatedAt.toISOString() as any,
+            createdAt: metadata.createdAt.toISOString(),
+            updatedAt: metadata.updatedAt.toISOString(),
           },
         })
       }
@@ -749,7 +749,11 @@ interface IndexCatalog {
 
 interface IndexCatalogEntry {
   definition: IndexDefinition
-  metadata: IndexMetadata
+  /** Serialized metadata with ISO date strings instead of Date objects */
+  metadata: Omit<IndexMetadata, 'createdAt' | 'updatedAt'> & {
+    createdAt: string
+    updatedAt: string
+  }
 }
 
 /**

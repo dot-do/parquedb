@@ -303,7 +303,9 @@ export class CollectionClient<T = unknown> implements RpcTargetMarker {
     filter: Filter,
     mapper: (entity: Entity<T>) => U
   ): RpcPromiseMarker<U[]> {
-    return this.find(filter).map(mapper as any) as unknown as RpcPromiseMarker<U[]>
+    // The map function on RpcPromise takes (T extends (infer E)[] ? E : T) => U
+    // Since find() returns PaginatedResult<Entity<T>>.items which is Entity<T>[], the mapper is correct
+    return this.find(filter).map(mapper as (entity: Entity<T>) => U) as unknown as RpcPromiseMarker<U[]>
   }
 
   /**

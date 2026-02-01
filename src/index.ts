@@ -37,6 +37,17 @@ export {
   parseFieldType,
   parseRelation,
   isRelationString,
+  validateSchema,
+  validateTypeDefinition,
+  validateRelationshipTargets,
+  validateEntityCoreFields,
+  validateEntityFull,
+  inferSchema,
+  inferSchemaFromCollections,
+  inferredToTypeDefinition,
+  isValidFieldType,
+  isValidRelationString,
+  parseNestedField,
 } from './schema'
 
 // =============================================================================

@@ -746,7 +746,7 @@ class ParqueDBImpl {
         }
       } else {
         // Field filter
-        const entityValue = (entity as any)[key]
+        const entityValue = (entity as Record<string, unknown>)[key]
         if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
           // Operator filter
           for (const [op, opValue] of Object.entries(value)) {
@@ -911,7 +911,7 @@ class ParqueDBImpl {
         for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
           if (typeof fieldDef === 'string' && fieldDef.startsWith('<-')) {
             // This is a reverse relationship field
-            const currentField = (entity as any)[fieldName]
+            const currentField = (entity as Record<string, unknown>)[fieldName]
             if (currentField && typeof currentField === 'object' && !Array.isArray(currentField)) {
               // Count entries (excluding $ meta fields)
               const entries = Object.entries(currentField).filter(([key]) => !key.startsWith('$'))
@@ -931,10 +931,10 @@ class ParqueDBImpl {
                 relSet.$next = String(maxInbound)
               }
 
-              ;(resultEntity as any)[fieldName] = relSet
+              ;(resultEntity as Record<string, unknown>)[fieldName] = relSet
             } else {
               // No current entries - set to empty RelSet with $count: 0
-              ;(resultEntity as any)[fieldName] = { $count: 0 }
+              ;(resultEntity as Record<string, unknown>)[fieldName] = { $count: 0 }
             }
           }
         }
@@ -968,7 +968,7 @@ class ParqueDBImpl {
                   if (relatedEntity.deletedAt) return // Skip deleted
 
                   // Check if the related entity's field points to this entity
-                  const refField = (relatedEntity as any)[relatedField]
+                  const refField = (relatedEntity as Record<string, unknown>)[relatedField]
                   if (refField && typeof refField === 'object') {
                     // Reference format: { 'Display Name': 'ns/id' }
                     for (const [, refId] of Object.entries(refField)) {
@@ -988,7 +988,7 @@ class ParqueDBImpl {
 
                 // If no related entities, return RelSet with $count: 0 for consistency
                 if (totalCount === 0) {
-                  ;(hydratedEntity as any)[fieldName] = { $count: 0 }
+                  ;(hydratedEntity as Record<string, unknown>)[fieldName] = { $count: 0 }
                 } else {
                   const relSet: RelSet = {
                     $count: totalCount,
@@ -1005,7 +1005,7 @@ class ParqueDBImpl {
                     relSet.$next = String(maxInbound)
                   }
 
-                  ;(hydratedEntity as any)[fieldName] = relSet
+                  ;(hydratedEntity as Record<string, unknown>)[fieldName] = relSet
                 }
               }
             }
@@ -1041,7 +1041,7 @@ class ParqueDBImpl {
             })
 
             if (Object.keys(relatedEntities).length > 0) {
-              ;(hydratedEntity as any)[fieldName] = relatedEntities
+              ;(hydratedEntity as Record<string, unknown>)[fieldName] = relatedEntities
             }
           }
         }
@@ -1080,7 +1080,7 @@ class ParqueDBImpl {
                 if (relatedEntity.deletedAt) return // Skip deleted
 
                 // Check if the related entity's field points to this entity
-                const refField = (relatedEntity as any)[relatedField]
+                const refField = (relatedEntity as Record<string, unknown>)[relatedField]
                 if (refField && typeof refField === 'object') {
                   // Reference format: { 'Display Name': 'ns/id' }
                   for (const [, refId] of Object.entries(refField)) {
@@ -1100,7 +1100,7 @@ class ParqueDBImpl {
 
               // If no related entities, return RelSet with $count: 0 for consistency
               if (totalCount === 0) {
-                ;(hydratedEntity as any)[fieldName] = { $count: 0 }
+                ;(hydratedEntity as Record<string, unknown>)[fieldName] = { $count: 0 }
               } else {
                 const relSet: RelSet = {
                   $count: totalCount,
@@ -1117,7 +1117,7 @@ class ParqueDBImpl {
                   relSet.$next = String(maxInbound)
                 }
 
-                ;(hydratedEntity as any)[fieldName] = relSet
+                ;(hydratedEntity as Record<string, unknown>)[fieldName] = relSet
               }
             }
           }
@@ -1153,7 +1153,7 @@ class ParqueDBImpl {
           })
 
           if (Object.keys(relatedEntities).length > 0) {
-            ;(hydratedEntity as any)[fieldName] = relatedEntities
+            ;(hydratedEntity as Record<string, unknown>)[fieldName] = relatedEntities
           }
         }
       }
@@ -1197,7 +1197,7 @@ class ParqueDBImpl {
     // Check if this is a forward relationship (->)
     if (fieldDef.startsWith('->')) {
       // For forward relationships, read the entity's field directly
-      const relField = (entity as any)[relationField]
+      const relField = (entity as Record<string, unknown>)[relationField]
       if (relField && typeof relField === 'object') {
         // relField is like { 'Alice': 'users/123', 'Bob': 'users/456' }
         for (const [, targetId] of Object.entries(relField)) {
@@ -1231,7 +1231,7 @@ class ParqueDBImpl {
         if (relatedEntity.deletedAt && !options?.includeDeleted) return
 
         // Check if the related entity's field points to this entity
-        const refField = (relatedEntity as any)[relatedField]
+        const refField = (relatedEntity as Record<string, unknown>)[relatedField]
         if (refField && typeof refField === 'object') {
           for (const [, refId] of Object.entries(refField)) {
             if (refId === fullId) {
@@ -1256,8 +1256,8 @@ class ParqueDBImpl {
       const sortFields = Object.entries(options.sort)
       filteredEntities.sort((a, b) => {
         for (const [field, direction] of sortFields) {
-          const aVal = (a as any)[field]
-          const bVal = (b as any)[field]
+          const aVal = (a as Record<string, unknown>)[field]
+          const bVal = (b as Record<string, unknown>)[field]
           let cmp = 0
           if (aVal === bVal) {
             cmp = 0
@@ -1293,10 +1293,10 @@ class ParqueDBImpl {
     let resultItems = paginatedEntities
     if (options?.project) {
       resultItems = paginatedEntities.map(e => {
-        const projected: any = { $id: e.$id }
+        const projected: Record<string, unknown> = { $id: e.$id }
         for (const field of Object.keys(options.project!)) {
           if (options.project![field] === 1) {
-            projected[field] = (e as any)[field]
+            projected[field] = (e as Record<string, unknown>)[field]
           }
         }
         return projected as Entity<T>
@@ -1440,20 +1440,20 @@ class ParqueDBImpl {
         if (key.includes('.')) {
           // Handle dot notation path
           const parts = key.split('.')
-          let current = entity as any
+          let current: Record<string, unknown> = entity as Record<string, unknown>
           for (let i = 0; i < parts.length - 1; i++) {
             const part = parts[i]!
             if (current[part] === undefined) {
               current[part] = {}
             }
-            current = current[part]
+            current = current[part] as Record<string, unknown>
           }
           const lastPart = parts[parts.length - 1]
           if (lastPart !== undefined) {
             current[lastPart] = value
           }
         } else {
-          (entity as any)[key] = value
+          (entity as Record<string, unknown>)[key] = value
         }
       }
     }
@@ -1461,35 +1461,35 @@ class ParqueDBImpl {
     // $unset
     if (update.$unset) {
       for (const key of Object.keys(update.$unset)) {
-        delete (entity as any)[key]
+        delete (entity as Record<string, unknown>)[key]
       }
     }
 
     // $inc - validate numeric fields
     if (update.$inc) {
       for (const [key, value] of Object.entries(update.$inc)) {
-        const current = (entity as any)[key]
+        const current = (entity as Record<string, unknown>)[key]
         if (current !== undefined && typeof current !== 'number') {
           throw new Error(`Cannot apply $inc to non-numeric field: ${key}`)
         }
-        ;(entity as any)[key] = (current || 0) + (value as number)
+        ;(entity as Record<string, unknown>)[key] = ((current as number) || 0) + (value as number)
       }
     }
 
     // $mul
     if (update.$mul) {
       for (const [key, value] of Object.entries(update.$mul)) {
-        const current = (entity as any)[key] || 0
-        ;(entity as any)[key] = current * (value as number)
+        const current = ((entity as Record<string, unknown>)[key] as number) || 0
+        ;(entity as Record<string, unknown>)[key] = current * (value as number)
       }
     }
 
     // $min
     if (update.$min) {
       for (const [key, value] of Object.entries(update.$min)) {
-        const current = (entity as any)[key]
-        if (current === undefined || (value as number) < current) {
-          ;(entity as any)[key] = value
+        const current = (entity as Record<string, unknown>)[key]
+        if (current === undefined || (value as number) < (current as number)) {
+          ;(entity as Record<string, unknown>)[key] = value
         }
       }
     }
@@ -1497,9 +1497,9 @@ class ParqueDBImpl {
     // $max
     if (update.$max) {
       for (const [key, value] of Object.entries(update.$max)) {
-        const current = (entity as any)[key]
-        if (current === undefined || (value as number) > current) {
-          ;(entity as any)[key] = value
+        const current = (entity as Record<string, unknown>)[key]
+        if (current === undefined || (value as number) > (current as number)) {
+          ;(entity as Record<string, unknown>)[key] = value
         }
       }
     }
@@ -1507,13 +1507,14 @@ class ParqueDBImpl {
     // $push - support $each, $position, $slice, $sort modifiers
     if (update.$push) {
       for (const [key, value] of Object.entries(update.$push)) {
-        if (!Array.isArray((entity as any)[key])) {
-          ;(entity as any)[key] = []
+        const entityRec = entity as Record<string, unknown>
+        if (!Array.isArray(entityRec[key])) {
+          entityRec[key] = []
         }
-        const arr = (entity as any)[key] as unknown[]
+        const arr = entityRec[key] as unknown[]
 
         // Check if value is a modifier object with $each
-        if (value && typeof value === 'object' && !Array.isArray(value) && '$each' in (value as any)) {
+        if (value && typeof value === 'object' && !Array.isArray(value) && '$each' in (value as Record<string, unknown>)) {
           const modifier = value as { $each: unknown[]; $position?: number; $slice?: number; $sort?: 1 | -1 }
           const items = modifier.$each
 
@@ -1558,8 +1559,9 @@ class ParqueDBImpl {
     // $pull - support filter conditions
     if (update.$pull) {
       for (const [key, condition] of Object.entries(update.$pull)) {
-        if (Array.isArray((entity as any)[key])) {
-          ;(entity as any)[key] = (entity as any)[key].filter((item: unknown) => {
+        const entityRec = entity as Record<string, unknown>
+        if (Array.isArray(entityRec[key])) {
+          entityRec[key] = (entityRec[key] as unknown[]).filter((item: unknown) => {
             // Check if condition is an operator object (e.g., { $lt: 30 } or { spam: true })
             if (condition && typeof condition === 'object' && !Array.isArray(condition)) {
               const condObj = condition as Record<string, unknown>
@@ -1614,11 +1616,12 @@ class ParqueDBImpl {
     // $addToSet
     if (update.$addToSet) {
       for (const [key, value] of Object.entries(update.$addToSet)) {
-        if (!Array.isArray((entity as any)[key])) {
-          ;(entity as any)[key] = []
+        const entityRec = entity as Record<string, unknown>
+        if (!Array.isArray(entityRec[key])) {
+          entityRec[key] = []
         }
-        if (!(entity as any)[key].includes(value)) {
-          ;(entity as any)[key].push(value)
+        if (!(entityRec[key] as unknown[]).includes(value)) {
+          (entityRec[key] as unknown[]).push(value)
         }
       }
     }
@@ -1626,7 +1629,7 @@ class ParqueDBImpl {
     // $currentDate
     if (update.$currentDate) {
       for (const key of Object.keys(update.$currentDate)) {
-        ;(entity as any)[key] = now
+        ;(entity as Record<string, unknown>)[key] = now
       }
     }
 
@@ -1667,13 +1670,14 @@ class ParqueDBImpl {
         }
 
         // Initialize field as object if not already
-        if (typeof (entity as any)[key] !== 'object' || (entity as any)[key] === null || Array.isArray((entity as any)[key])) {
-          ;(entity as any)[key] = {}
+        const entityRec = entity as Record<string, unknown>
+        if (typeof entityRec[key] !== 'object' || entityRec[key] === null || Array.isArray(entityRec[key])) {
+          entityRec[key] = {}
         }
 
         // For singular relationships, clear existing links first
         if (!isPlural) {
-          ;(entity as any)[key] = {}
+          entityRec[key] = {}
         }
 
         // Add new links using display name as key
@@ -1682,9 +1686,9 @@ class ParqueDBImpl {
           if (targetEntity) {
             const displayName = (targetEntity.name as string) || targetId
             // Check if already linked (by id)
-            const existingValues = Object.values((entity as any)[key] as Record<string, EntityId>)
+            const existingValues = Object.values(entityRec[key] as Record<string, EntityId>)
             if (!existingValues.includes(targetId as EntityId)) {
-              ;(entity as any)[key][displayName] = targetId
+              ;(entityRec[key] as Record<string, unknown>)[displayName] = targetId
             }
           }
         }
@@ -1718,13 +1722,14 @@ class ParqueDBImpl {
     // $unlink
     if (update.$unlink) {
       for (const [key, value] of Object.entries(update.$unlink)) {
+        const entityRec = entity as Record<string, unknown>
         // Handle $all to remove all links
         if (value === '$all') {
-          ;(entity as any)[key] = {}
+          entityRec[key] = {}
           continue
         }
 
-        const currentRel = (entity as any)[key]
+        const currentRel = entityRec[key]
         if (currentRel && typeof currentRel === 'object' && !Array.isArray(currentRel)) {
           const values = Array.isArray(value) ? value : [value]
 
@@ -1994,7 +1999,7 @@ class ParqueDBImpl {
 
       const isRequired = this.isFieldRequired(fieldDef)
       const hasDefault = this.hasDefault(fieldDef)
-      const fieldValue = (data as any)[fieldName]
+      const fieldValue = (data as Record<string, unknown>)[fieldName]
 
       if (isRequired && !hasDefault && fieldValue === undefined) {
         throw new Error(`Missing required field: ${fieldName}`)
@@ -2113,7 +2118,7 @@ class ParqueDBImpl {
     const typeDef = this.schema[typeName]
     if (!typeDef) return data
 
-    const result = { ...data } as any
+    const result: Record<string, unknown> = { ...data }
 
     for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
       if (fieldName.startsWith('$')) continue
@@ -2924,8 +2929,7 @@ class ParqueDBImpl {
           }
 
           // Remove $setOnInsert from update since we're updating
-          const updateWithoutSetOnInsert: UpdateInput<T> = { ...item.update }
-          delete (updateWithoutSetOnInsert as any).$setOnInsert
+          const { $setOnInsert: _, ...updateWithoutSetOnInsert } = item.update as UpdateInput<T> & { $setOnInsert?: unknown }
 
           await this.update<T>(namespace, entity.$id as string, updateWithoutSetOnInsert, updateOptions)
           result.modifiedCount++
@@ -2941,7 +2945,7 @@ class ParqueDBImpl {
           }
 
           // Build the create data
-          const createData: any = {
+          const createData: Record<string, unknown> = {
             $type: 'Unknown',
             name: 'Upserted',
             ...filterFields,
@@ -2953,15 +2957,16 @@ class ParqueDBImpl {
           // Handle $inc - start from 0
           if (item.update.$inc) {
             for (const [key, value] of Object.entries(item.update.$inc)) {
-              createData[key] = (createData[key] || 0) + (value as number)
+              createData[key] = ((createData[key] as number) || 0) + (value as number)
             }
           }
 
           // Handle $push - create array with single element
           if (item.update.$push) {
             for (const [key, value] of Object.entries(item.update.$push)) {
-              if (value && typeof value === 'object' && '$each' in (value as any)) {
-                createData[key] = [...((value as any).$each || [])]
+              const pushValue = value as Record<string, unknown>
+              if (value && typeof value === 'object' && '$each' in pushValue) {
+                createData[key] = [...((pushValue.$each as unknown[]) || [])]
               } else {
                 createData[key] = [value]
               }
@@ -2989,7 +2994,7 @@ class ParqueDBImpl {
             createOptions.actor = actor
           }
 
-          const created = await this.create<T>(namespace, createData, createOptions)
+          const created = await this.create<T>(namespace, createData as CreateInput<T>, createOptions)
 
           result.insertedCount++
           result.upsertedCount++

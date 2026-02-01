@@ -172,20 +172,31 @@ export function fromIceType(
 
   const schema: import('./schema').Schema = {}
 
+  // Extended IceTypeSchema type for legacy properties
+  type ExtendedIceSchema = import('@icetype/core').IceTypeSchema & {
+    $type?: string
+    $description?: string
+    $index?: unknown[]
+    $unique?: string[][]
+    $fts?: (string | { field: string; language?: string; weight?: number })[]
+    $vector?: { field: string; dimensions: number; metric?: string }[]
+  }
+
   for (const [name, iceSchema] of schemas) {
     const typeDef: import('./schema').TypeDefinition = {}
+    const extSchema = iceSchema as ExtendedIceSchema
 
     // Handle directives from the new IceTypeSchema structure
     const directives = iceSchema.directives || {}
 
     // Preserve $type if it was passed through
-    if ((iceSchema as any).$type) {
-      typeDef.$type = (iceSchema as any).$type
+    if (extSchema.$type) {
+      typeDef.$type = extSchema.$type
     }
 
     // Handle $description
-    if ((iceSchema as any).$description) {
-      typeDef.$description = (iceSchema as any).$description
+    if (extSchema.$description) {
+      typeDef.$description = extSchema.$description
     }
 
     // Handle partitioning hint from directives
@@ -194,7 +205,7 @@ export function fromIceType(
     }
 
     // Handle indexes - prefer legacy $index format for tests, fall back to directives.index
-    const legacyIndex = (iceSchema as any).$index
+    const legacyIndex = extSchema.$index
     if (legacyIndex && Array.isArray(legacyIndex) && legacyIndex.length > 0) {
       typeDef.$indexes = []
       for (let i = 0; i < legacyIndex.length; i++) {
@@ -229,7 +240,7 @@ export function fromIceType(
     }
 
     // Handle $unique constraints - convert to unique indexes
-    const legacyUnique = (iceSchema as any).$unique
+    const legacyUnique = extSchema.$unique
     if (legacyUnique && Array.isArray(legacyUnique) && legacyUnique.length > 0) {
       if (!typeDef.$indexes) {
         typeDef.$indexes = []
@@ -307,7 +318,7 @@ export function fromIceType(
     }
 
     // Handle FTS indexes - prefer legacy $fts format for extended options
-    const legacyFts = (iceSchema as any).$fts
+    const legacyFts = extSchema.$fts
     if (legacyFts && Array.isArray(legacyFts)) {
       for (const ftsEntry of legacyFts) {
         if (typeof ftsEntry === 'string') {
@@ -320,7 +331,7 @@ export function fromIceType(
           const ftsObj = ftsEntry as { field: string; language?: string; weight?: number }
           const existing = typeDef[ftsObj.field]
           const type = typeof existing === 'string' ? existing :
-                       typeof existing === 'object' && existing !== null ? (existing as any).type : 'text'
+                       typeof existing === 'object' && existing !== null ? (existing as { type?: string }).type : 'text'
           typeDef[ftsObj.field] = {
             type,
             index: 'fts',
@@ -338,7 +349,7 @@ export function fromIceType(
     }
 
     // Handle vector indexes from directives
-    const vectorDefs = directives.vector || (iceSchema as any).$vector
+    const vectorDefs = directives.vector || extSchema.$vector
     if (vectorDefs && Array.isArray(vectorDefs)) {
       for (const vec of vectorDefs) {
         // Validate dimensions
@@ -346,7 +357,7 @@ export function fromIceType(
           throw new Error(`Invalid vector dimensions: ${vec.dimensions}. Must be a positive integer.`)
         }
 
-        const vecDef: any = {
+        const vecDef: import('./schema').FieldDefinition = {
           type: `vector(${vec.dimensions})`,
           index: 'vector',
           dimensions: vec.dimensions,
@@ -409,7 +420,7 @@ export async function loadSchema(source: SchemaSource): Promise<import('./schema
       throw new Error('TypeScript schema loading not yet implemented')
 
     default:
-      throw new Error(`Unknown schema source type: ${(source as any).type}`)
+      throw new Error(`Unknown schema source type: ${(source as { type: string }).type}`)
   }
 }
 

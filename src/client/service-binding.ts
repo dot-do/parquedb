@@ -105,9 +105,10 @@ export class ServiceBindingAdapter {
    */
   async call<T>(method: string, args: unknown[]): Promise<T> {
     // Check if the binding supports direct RPC
-    if (typeof (this.binding as any)[method] === 'function') {
+    const bindingMethod = this.binding[method]
+    if (typeof bindingMethod === 'function') {
       // Call the method directly
-      return (this.binding as any)[method](...args)
+      return bindingMethod(...args) as T
     }
 
     // Fall back to HTTP-style call
@@ -132,8 +133,9 @@ export class ServiceBindingAdapter {
    */
   async executeChain<T>(chain: RpcPromiseChain): Promise<T> {
     // Try direct RPC first
-    if (typeof (this.binding as any).executeChain === 'function') {
-      return (this.binding as any).executeChain(chain)
+    const bindingExecuteChain = this.binding.executeChain
+    if (typeof bindingExecuteChain === 'function') {
+      return bindingExecuteChain(chain) as T
     }
 
     // Fall back to HTTP

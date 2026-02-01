@@ -437,7 +437,7 @@ export class ParquetWriter {
       for (const element of (metadata.schema || [])) {
         if (element.name && element.type) {
           schema[element.name] = {
-            type: element.type as any,
+            type: element.type as ParquetSchema[string]['type'],
             optional: element.repetition_type !== 'REQUIRED',
           }
         }

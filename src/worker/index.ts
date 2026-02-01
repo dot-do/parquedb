@@ -843,8 +843,8 @@ export default {
       // Benchmark - Real R2 I/O Performance Tests
       // =======================================================================
       if (path === '/benchmark') {
-        // Cast to any to avoid type incompatibility between different R2Bucket definitions
-        return handleBenchmarkRequest(request, env.BUCKET as any)
+        // Use type assertion to the minimal R2Bucket interface expected by benchmark
+        return handleBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleBenchmarkRequest>[1])
       }
 
       // =======================================================================
@@ -852,7 +852,7 @@ export default {
       // =======================================================================
       if (path === '/benchmark-datasets') {
         // Test real dataset files from data-v3 uploaded to R2
-        return handleDatasetBenchmarkRequest(request, env.BUCKET as any)
+        return handleDatasetBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleDatasetBenchmarkRequest>[1])
       }
 
       // =======================================================================
@@ -860,7 +860,7 @@ export default {
       // =======================================================================
       if (path === '/benchmark-indexed') {
         // Compare indexed vs scan query performance across real datasets
-        return handleIndexedBenchmarkRequest(request, env.BUCKET as any)
+        return handleIndexedBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleIndexedBenchmarkRequest>[1])
       }
 
       // =======================================================================
@@ -917,7 +917,7 @@ export default {
         const filter = JSON.parse(url.searchParams.get('filter') || '{"$index_jobZone": 3}')
 
         const { IndexCache, createR2IndexStorageAdapter } = await import('./IndexCache')
-        const indexCache = new IndexCache(createR2IndexStorageAdapter(env.BUCKET as any))
+        const indexCache = new IndexCache(createR2IndexStorageAdapter(env.BUCKET as Parameters<typeof createR2IndexStorageAdapter>[0]))
 
         // Load catalog
         const catalog = await indexCache.loadCatalog(dataset)

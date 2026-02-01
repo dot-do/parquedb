@@ -446,13 +446,13 @@ export class ParquetReader {
       case 'ne':
         return value !== filter.value
       case 'gt':
-        return value !== null && value !== undefined && value > (filter.value as any)
+        return value !== null && value !== undefined && (value as number | string | Date) > (filter.value as number | string | Date)
       case 'gte':
-        return value !== null && value !== undefined && value >= (filter.value as any)
+        return value !== null && value !== undefined && (value as number | string | Date) >= (filter.value as number | string | Date)
       case 'lt':
-        return value !== null && value !== undefined && value < (filter.value as any)
+        return value !== null && value !== undefined && (value as number | string | Date) < (filter.value as number | string | Date)
       case 'lte':
-        return value !== null && value !== undefined && value <= (filter.value as any)
+        return value !== null && value !== undefined && (value as number | string | Date) <= (filter.value as number | string | Date)
       case 'in':
         return Array.isArray(filter.value) && filter.value.includes(value)
       case 'isNull':

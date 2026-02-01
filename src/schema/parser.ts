@@ -821,3 +821,465 @@ export function isValidRelationString(value: string): boolean {
 
   return false
 }
+
+// =============================================================================
+// Schema Inference
+// =============================================================================
+
+/**
+ * Inferred type information for a field
+ */
+export interface InferredField {
+  type: string
+  required: boolean
+  isArray: boolean
+  nested?: InferredSchema
+}
+
+/**
+ * Inferred schema from documents
+ */
+export interface InferredSchema {
+  [fieldName: string]: InferredField
+}
+
+/**
+ * Options for schema inference
+ */
+export interface InferSchemaOptions {
+  /** Number of documents to sample (default: 100) */
+  sampleSize?: number
+  /** Fields to mark as required if present in all samples */
+  detectRequired?: boolean
+  /** Infer nested object schemas */
+  inferNested?: boolean
+  /** Maximum depth for nested schema inference (default: 5) */
+  maxDepth?: number
+}
+
+/**
+ * Infer a schema from a collection of documents
+ *
+ * @param documents - Array of documents to analyze
+ * @param options - Inference options
+ * @returns Inferred schema
+ *
+ * @example
+ * const docs = [
+ *   { name: 'Alice', age: 30, email: 'alice@example.com' },
+ *   { name: 'Bob', age: 25 },
+ * ]
+ * const schema = inferSchema(docs)
+ * // => {
+ * //   name: { type: 'string', required: true, isArray: false },
+ * //   age: { type: 'number', required: true, isArray: false },
+ * //   email: { type: 'string', required: false, isArray: false },
+ * // }
+ */
+export function inferSchema(
+  documents: Record<string, unknown>[],
+  options: InferSchemaOptions = {}
+): InferredSchema {
+  const {
+    sampleSize = 100,
+    detectRequired = true,
+    inferNested = true,
+    maxDepth = 5,
+  } = options
+
+  if (!documents || documents.length === 0) {
+    return {}
+  }
+
+  // Sample documents
+  const sampled = documents.slice(0, sampleSize)
+  const totalDocs = sampled.length
+
+  // Track field occurrences and types
+  const fieldStats = new Map<string, {
+    count: number
+    types: Set<string>
+    isArray: boolean
+    nestedValues: Record<string, unknown>[]
+  }>()
+
+  // Analyze each document
+  for (const doc of sampled) {
+    if (!doc || typeof doc !== 'object') continue
+
+    for (const [key, value] of Object.entries(doc)) {
+      // Skip metadata fields
+      if (key.startsWith('$')) continue
+
+      const stats = fieldStats.get(key) || {
+        count: 0,
+        types: new Set(),
+        isArray: false,
+        nestedValues: [],
+      }
+
+      stats.count++
+
+      if (value === null || value === undefined) {
+        stats.types.add('null')
+      } else if (Array.isArray(value)) {
+        stats.isArray = true
+        // Infer type from array elements
+        if (value.length > 0) {
+          const elementType = inferValueType(value[0])
+          stats.types.add(elementType)
+          if (elementType === 'object' && inferNested) {
+            stats.nestedValues.push(...(value.filter(v => v && typeof v === 'object') as Record<string, unknown>[]))
+          }
+        } else {
+          stats.types.add('json') // Unknown array element type
+        }
+      } else {
+        const valueType = inferValueType(value)
+        stats.types.add(valueType)
+        if (valueType === 'object' && inferNested) {
+          stats.nestedValues.push(value as Record<string, unknown>)
+        }
+      }
+
+      fieldStats.set(key, stats)
+    }
+  }
+
+  // Build inferred schema
+  const schema: InferredSchema = {}
+
+  for (const [fieldName, stats] of fieldStats) {
+    // Determine the primary type
+    const types = Array.from(stats.types).filter(t => t !== 'null')
+    let primaryType = types.length > 0 ? types[0] : 'json'
+
+    // If multiple types, use json
+    if (types.length > 1) {
+      primaryType = 'json'
+    }
+
+    const field: InferredField = {
+      type: primaryType,
+      required: detectRequired ? stats.count === totalDocs && !stats.types.has('null') : false,
+      isArray: stats.isArray,
+    }
+
+    // Recursively infer nested schema
+    if (primaryType === 'object' && inferNested && maxDepth > 0 && stats.nestedValues.length > 0) {
+      field.nested = inferSchema(stats.nestedValues, {
+        ...options,
+        maxDepth: maxDepth - 1,
+      })
+    }
+
+    schema[fieldName] = field
+  }
+
+  return schema
+}
+
+/**
+ * Infer the type of a single value
+ */
+function inferValueType(value: unknown): string {
+  if (value === null || value === undefined) return 'null'
+  if (typeof value === 'string') {
+    // Check for specific string formats
+    if (/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?/.test(value)) return 'datetime'
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) return 'uuid'
+    if (/.+@.+\..+/.test(value)) return 'email'
+    if (/^https?:\/\//.test(value)) return 'url'
+    return 'string'
+  }
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? 'int' : 'number'
+  }
+  if (typeof value === 'boolean') return 'boolean'
+  if (value instanceof Date) return 'datetime'
+  if (Array.isArray(value)) return 'array'
+  if (typeof value === 'object') return 'object'
+  return 'json'
+}
+
+/**
+ * Convert an inferred schema to a TypeDefinition
+ *
+ * @param name - Type name
+ * @param schema - Inferred schema
+ * @returns TypeDefinition that can be used in a Schema
+ */
+export function inferredToTypeDefinition(
+  name: string,
+  schema: InferredSchema
+): TypeDefinition {
+  const typeDef: TypeDefinition = {}
+
+  for (const [fieldName, field] of Object.entries(schema)) {
+    let typeStr = field.type
+
+    // Handle nested objects
+    if (field.type === 'object' && field.nested) {
+      // For nested objects, we use 'json' type as ParqueDB stores them in Variant
+      typeStr = 'json'
+    }
+
+    // Add array modifier
+    if (field.isArray) {
+      typeStr += '[]'
+    }
+
+    // Add required modifier
+    if (field.required) {
+      typeStr += '!'
+    }
+
+    typeDef[fieldName] = typeStr
+  }
+
+  return typeDef
+}
+
+/**
+ * Infer a complete Schema from multiple document collections
+ *
+ * @param collections - Map of collection name to documents
+ * @param options - Inference options
+ * @returns Complete schema definition
+ *
+ * @example
+ * const schema = inferSchemaFromCollections({
+ *   User: [{ name: 'Alice', email: 'alice@example.com' }],
+ *   Post: [{ title: 'Hello', content: 'World', views: 100 }],
+ * })
+ */
+export function inferSchemaFromCollections(
+  collections: Record<string, Record<string, unknown>[]>,
+  options: InferSchemaOptions = {}
+): Schema {
+  const schema: Schema = {}
+
+  for (const [collectionName, documents] of Object.entries(collections)) {
+    // Convert collection name to type name (capitalize first letter)
+    const typeName = collectionName.charAt(0).toUpperCase() + collectionName.slice(1)
+    const inferredSchema = inferSchema(documents, options)
+    schema[typeName] = inferredToTypeDefinition(typeName, inferredSchema)
+  }
+
+  return schema
+}
+
+// =============================================================================
+// Nested Schema Support
+// =============================================================================
+
+/**
+ * Nested field definition for object types
+ */
+export interface NestedFieldDefinition extends FieldDefinition {
+  /** Nested schema for object types */
+  properties?: Record<string, FieldDef>
+}
+
+/**
+ * Parse a nested field definition that may contain object properties
+ *
+ * @param name - Field name
+ * @param def - Field definition (may include nested properties)
+ * @returns Parsed field with optional nested schema
+ */
+export function parseNestedField(name: string, def: FieldDef | NestedFieldDefinition): ParsedField & { properties?: Map<string, ParsedField> } {
+  // First parse as regular field
+  const baseParsed = parseFieldFromDef(name, def)
+
+  // Check if this is a nested object definition
+  if (typeof def === 'object' && def !== null && !Array.isArray(def)) {
+    const nestedDef = def as NestedFieldDefinition
+    if (nestedDef.properties && typeof nestedDef.properties === 'object') {
+      const properties = new Map<string, ParsedField>()
+      for (const [propName, propDef] of Object.entries(nestedDef.properties)) {
+        properties.set(propName, parseFieldFromDef(propName, propDef as FieldDef))
+      }
+      return { ...baseParsed, properties }
+    }
+  }
+
+  return baseParsed
+}
+
+/**
+ * Internal helper to parse a field from its definition
+ */
+function parseFieldFromDef(name: string, def: FieldDef): ParsedField {
+  if (typeof def === 'string') {
+    // Check if it's a relationship
+    if (_isRelationString(def)) {
+      const rel = _parseRelation(def)!
+
+      let targetType: string
+      let reverseName: string
+
+      if (rel.direction === 'forward') {
+        targetType = rel.toType
+        reverseName = rel.reverse
+      } else {
+        targetType = rel.fromType
+        reverseName = rel.fromField
+      }
+
+      return {
+        name,
+        type: 'relation',
+        required: false,
+        isArray: rel.isArray,
+        isRelation: true,
+        relationDirection: rel.direction,
+        relationMode: rel.mode,
+        targetType,
+        reverseName,
+      }
+    }
+
+    // Regular field type string
+    const { type, required, isArray, default: defaultValue } = _parseFieldType(def)
+    return {
+      name,
+      type,
+      required,
+      isArray,
+      default: defaultValue ? parseDefaultValueFromString(defaultValue) : undefined,
+      isRelation: false,
+    }
+  }
+
+  // Object field definition
+  const fieldObj = def as FieldDefinition
+  const { type, required, isArray } = _parseFieldType(fieldObj.type)
+
+  return {
+    name,
+    type,
+    required: fieldObj.required ?? required,
+    isArray,
+    default: fieldObj.default,
+    index: fieldObj.index,
+    isRelation: false,
+  }
+}
+
+/**
+ * Parse a default value string into its actual value
+ */
+function parseDefaultValueFromString(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
+// =============================================================================
+// Entity Validation with Required Fields
+// =============================================================================
+
+/**
+ * Validate that an entity has the required core fields ($id, $type, name)
+ *
+ * @param entity - The entity to validate
+ * @returns Validation result
+ */
+export function validateEntityCoreFields(entity: unknown): ValidationResult {
+  const errors: ValidationError[] = []
+
+  if (!entity || typeof entity !== 'object') {
+    errors.push({
+      path: '',
+      message: 'Entity must be an object',
+      code: 'INVALID_TYPE',
+    })
+    return { valid: false, errors }
+  }
+
+  const obj = entity as Record<string, unknown>
+
+  // Check for $id
+  if (!('$id' in obj) || obj.$id === undefined || obj.$id === null) {
+    errors.push({
+      path: '$id',
+      message: 'Entity must have a $id field',
+      code: 'MISSING_REQUIRED_FIELD',
+    })
+  } else if (typeof obj.$id !== 'string') {
+    errors.push({
+      path: '$id',
+      message: '$id must be a string',
+      code: 'INVALID_TYPE',
+    })
+  }
+
+  // Check for $type
+  if (!('$type' in obj) || obj.$type === undefined || obj.$type === null) {
+    errors.push({
+      path: '$type',
+      message: 'Entity must have a $type field',
+      code: 'MISSING_REQUIRED_FIELD',
+    })
+  } else if (typeof obj.$type !== 'string') {
+    errors.push({
+      path: '$type',
+      message: '$type must be a string',
+      code: 'INVALID_TYPE',
+    })
+  }
+
+  // Check for name
+  if (!('name' in obj) || obj.name === undefined || obj.name === null) {
+    errors.push({
+      path: 'name',
+      message: 'Entity must have a name field',
+      code: 'MISSING_REQUIRED_FIELD',
+    })
+  } else if (typeof obj.name !== 'string') {
+    errors.push({
+      path: 'name',
+      message: 'name must be a string',
+      code: 'INVALID_TYPE',
+    })
+  }
+
+  return { valid: errors.length === 0, errors }
+}
+
+/**
+ * Validate an entity against its schema type, including core field validation
+ *
+ * @param parsedSchema - The parsed schema
+ * @param typeName - The type name to validate against
+ * @param entity - The entity to validate
+ * @param options - Validation options
+ * @returns Validation result
+ */
+export function validateEntityFull(
+  parsedSchema: ParsedSchema,
+  typeName: string,
+  entity: unknown,
+  options?: { validateCoreFields?: boolean }
+): ValidationResult {
+  const allErrors: ValidationError[] = []
+
+  // Validate core fields if requested
+  if (options?.validateCoreFields !== false) {
+    const coreResult = validateEntityCoreFields(entity)
+    if (!coreResult.valid) {
+      allErrors.push(...coreResult.errors)
+    }
+  }
+
+  // Validate against type schema
+  const typeResult = parsedSchema.validate(typeName, entity)
+  if (!typeResult.valid) {
+    allErrors.push(...typeResult.errors)
+  }
+
+  return { valid: allErrors.length === 0, errors: allErrors }
+}

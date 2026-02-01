@@ -171,11 +171,11 @@ export async function runIndexedBenchmark(
 ): Promise<IndexedBenchmarkResult> {
   const startTime = performance.now()
 
-  // Initialize query executor
-  const readPath = new ReadPath(bucket as any, cache, DEFAULT_CACHE_CONFIG)
+  // Initialize query executor - cast bucket to global R2Bucket for compatibility
+  const readPath = new ReadPath(bucket as unknown as globalThis.R2Bucket, cache, DEFAULT_CACHE_CONFIG)
   const queryExecutor = new QueryExecutor(
     readPath,
-    bucket as any,
+    bucket as unknown as globalThis.R2Bucket,
     undefined,
     undefined
   )

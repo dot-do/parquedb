@@ -303,7 +303,7 @@ export function isRpcPromise<T>(value: unknown): value is RpcPromiseMarker<T> {
     value !== null &&
     typeof value === 'object' &&
     '__rpcPromise' in value &&
-    (value as any).__rpcPromise === true
+    (value as { __rpcPromise: unknown }).__rpcPromise === true
   )
 }
 
