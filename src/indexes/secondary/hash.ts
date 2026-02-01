@@ -16,6 +16,15 @@ import type {
   HashIndexEntry,
 } from '../types'
 import { encodeKey, decodeKey, hashKey, encodeCompositeKey } from './key-encoder'
+import {
+  FORMAT_VERSION_1,
+  FORMAT_VERSION_2,
+  FORMAT_VERSION_3,
+  readVarint,
+  readCompactHeader,
+  readCompactEntry,
+  readCompactEntryWithKey,
+} from '../encoding'
 
 // =============================================================================
 // Hash Index
@@ -480,18 +489,34 @@ export class HashIndex {
 
     // Version
     const version = view.getUint8(offset)
-    offset += 1
 
-    if (version !== 1) {
+    if (version === FORMAT_VERSION_3) {
+      // Compact format v3
+      await this.deserializeCompact(data)
+    } else if (version === FORMAT_VERSION_1 || version === FORMAT_VERSION_2) {
+      // Original or sharded format (same structure)
+      await this.deserializeV1V2(data)
+    } else {
       throw new Error(`Unsupported index version: ${version}`)
     }
+  }
+
+  /**
+   * Deserialize v1/v2 format (original with full key)
+   */
+  private async deserializeV1V2(data: Uint8Array): Promise<void> {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    const textDecoder = new TextDecoder()
+    let offset = 0
+
+    // Skip version
+    offset += 1
 
     // Entry count
     const entryCount = view.getUint32(offset, false)
     offset += 4
 
     // Entries
-    const textDecoder = new TextDecoder()
     for (let i = 0; i < entryCount; i++) {
       // Key length and key
       const keyLen = view.getUint16(offset, false)
@@ -521,6 +546,67 @@ export class HashIndex {
       }
 
       bucket.push({ key, docId, rowGroup, rowOffset })
+      this.entryCount++
+    }
+  }
+
+  /**
+   * Deserialize compact v3 format
+   *
+   * V3 format has smaller entries:
+   * - Header: [version:u8][flags:u8][entryCount:u32]
+   * - Entry (with keyHash): [keyHash:u32][rowGroup:u16][rowOffset:varint][docIdLen:u8][docId:bytes]
+   * - Entry (no keyHash): [rowGroup:u16][rowOffset:varint][docIdLen:u8][docId:bytes]
+   */
+  private async deserializeCompact(data: Uint8Array): Promise<void> {
+    let offset = 0
+
+    // Read header
+    const { header, bytesRead: headerBytes } = readCompactHeader(data, offset)
+    offset += headerBytes
+
+    // Read entries
+    for (let i = 0; i < header.entryCount; i++) {
+      if (header.hasKeyHash) {
+        // Entry with key hash (for non-sharded indexes)
+        const { entry, bytesRead } = readCompactEntryWithKey(data, offset)
+        offset += bytesRead
+
+        // Use the key hash directly as bucket key
+        let bucket = this.buckets.get(entry.keyHash)
+        if (!bucket) {
+          bucket = []
+          this.buckets.set(entry.keyHash, bucket)
+        }
+
+        // Create entry with empty key (we don't have the full key in compact format)
+        bucket.push({
+          key: new Uint8Array(0), // Placeholder - compact format doesn't store full key
+          docId: entry.docId,
+          rowGroup: entry.rowGroup,
+          rowOffset: entry.rowOffset,
+        })
+      } else {
+        // Entry without key hash (for sharded indexes, key is implicit)
+        const { entry, bytesRead } = readCompactEntry(data, offset)
+        offset += bytesRead
+
+        // For sharded indexes, all entries in the shard have the same key
+        // Use a single bucket with hash 0
+        let bucket = this.buckets.get(0)
+        if (!bucket) {
+          bucket = []
+          this.buckets.set(0, bucket)
+        }
+
+        bucket.push({
+          key: new Uint8Array(0), // Key is implicit in shard name
+          docId: entry.docId,
+          rowGroup: entry.rowGroup,
+          rowOffset: entry.rowOffset,
+        })
+      }
+
       this.entryCount++
     }
   }

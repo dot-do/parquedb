@@ -45,6 +45,62 @@ export interface IndexCatalogEntry {
   entryCount: number
   /** Last updated timestamp */
   updatedAt?: string
+  /** Whether this index is sharded */
+  sharded?: boolean
+  /** Path to manifest file (for sharded indexes) */
+  manifestPath?: string
+}
+
+/**
+ * Shard entry in a sharded index manifest
+ */
+export interface ShardEntry {
+  /** Shard name */
+  name: string
+  /** Path to shard file relative to index directory */
+  path: string
+  /** Value this shard contains (for hash indexes) */
+  value: string | number | boolean
+  /** Number of entries in this shard */
+  entryCount: number
+  /** Min value (for SST range shards) */
+  minValue?: unknown
+  /** Max value (for SST range shards) */
+  maxValue?: unknown
+}
+
+/**
+ * Sharded index manifest format
+ */
+export interface ShardedIndexManifest {
+  /** Manifest version */
+  version: number
+  /** Index type */
+  type: 'hash' | 'sst'
+  /** Indexed field */
+  field: string
+  /** Sharding strategy */
+  sharding: 'by-value' | 'by-range'
+  /** Whether shards use compact format */
+  compact: boolean
+  /** Path to bloom filter file (optional) */
+  bloomPath?: string
+  /** Total entry count across all shards */
+  totalEntries?: number
+  /** Shard entries */
+  shards: ShardEntry[]
+}
+
+/**
+ * Compact shard entry (parsed from v3 format)
+ */
+export interface CompactShardEntry {
+  /** Document ID */
+  docId: string
+  /** Row group number */
+  rowGroup: number
+  /** Row offset within row group */
+  rowOffset: number
 }
 
 /**
@@ -65,6 +121,70 @@ interface LoadedIndex {
   index: HashIndex | SSTIndex | FTSIndex
   loadedAt: number
   sizeBytes: number
+}
+
+/**
+ * Loaded sharded index manifest wrapper
+ */
+interface LoadedManifest {
+  manifest: ShardedIndexManifest
+  loadedAt: number
+}
+
+/**
+ * Loaded bloom filter wrapper
+ */
+interface LoadedBloomFilter {
+  filter: BloomFilter
+  loadedAt: number
+  sizeBytes: number
+}
+
+/**
+ * Simple bloom filter implementation for pre-filtering
+ */
+class BloomFilter {
+  private bits: Uint8Array
+  private numHashes: number
+  private numBits: number
+
+  constructor(data: Uint8Array) {
+    // Parse bloom filter format: [numHashes (1 byte)][numBits (4 bytes LE)][bits...]
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    this.numHashes = data[0]
+    this.numBits = view.getUint32(1, true) // little endian
+    this.bits = data.slice(5)
+  }
+
+  /**
+   * Check if a value might be in the set
+   * @returns true if value might exist, false if definitely doesn't exist
+   */
+  mightContain(value: unknown): boolean {
+    const str = String(value)
+    for (let i = 0; i < this.numHashes; i++) {
+      const hash = this.hash(str, i)
+      const bitIndex = hash % this.numBits
+      const byteIndex = Math.floor(bitIndex / 8)
+      const bitOffset = bitIndex % 8
+      if ((this.bits[byteIndex] & (1 << bitOffset)) === 0) {
+        return false
+      }
+    }
+    return true
+  }
+
+  /**
+   * FNV-1a hash with seed for multiple hash functions
+   */
+  private hash(value: string, seed: number): number {
+    let hash = 2166136261 ^ seed
+    for (let i = 0; i < value.length; i++) {
+      hash ^= value.charCodeAt(i)
+      hash = Math.imul(hash, 16777619)
+    }
+    return hash >>> 0 // Ensure unsigned
+  }
 }
 
 /**
@@ -97,6 +217,12 @@ export class IndexCache {
 
   /** Index cache: `${dataset}/${name}` -> loaded index */
   private indexCache = new Map<string, LoadedIndex>()
+
+  /** Manifest cache: `${dataset}/${manifestPath}` -> loaded manifest */
+  private manifestCache = new Map<string, LoadedManifest>()
+
+  /** Bloom filter cache: `${dataset}/${bloomPath}` -> loaded bloom filter */
+  private bloomCache = new Map<string, LoadedBloomFilter>()
 
   /** Maximum cache size in bytes (default: 50MB) */
   private maxCacheBytes: number
@@ -139,10 +265,21 @@ export class IndexCache {
       const data = await this.storage.read(catalogPath)
       const catalog = JSON.parse(new TextDecoder().decode(data)) as IndexCatalog
 
-      // Validate version
-      if (catalog.version !== 1) {
+      // Validate version (support version 1, 2, and 3)
+      if (catalog.version < 1 || catalog.version > 3) {
         console.warn(`Unsupported index catalog version: ${catalog.version}`)
         return []
+      }
+
+      // Detect sharded indexes by checking for manifestPath or sharded flag
+      for (const entry of catalog.indexes) {
+        if (entry.sharded || entry.manifestPath) {
+          entry.sharded = true
+          // If manifestPath not set, derive it from the entry name
+          if (!entry.manifestPath) {
+            entry.manifestPath = `indexes/secondary/${entry.name}/_manifest.json`
+          }
+        }
       }
 
       // Cache the catalog
@@ -164,6 +301,107 @@ export class IndexCache {
   async getIndexForField(dataset: string, field: string): Promise<IndexCatalogEntry | null> {
     const catalog = await this.loadCatalog(dataset)
     return catalog.find(entry => entry.field === field) ?? null
+  }
+
+  // ===========================================================================
+  // Sharded Index Operations
+  // ===========================================================================
+
+  /**
+   * Load manifest for a sharded index
+   *
+   * @param dataset - Dataset ID
+   * @param manifestPath - Path to manifest file relative to dataset root
+   * @returns Loaded manifest
+   */
+  async loadManifest(dataset: string, manifestPath: string): Promise<ShardedIndexManifest> {
+    const cacheKey = `${dataset}/${manifestPath}`
+
+    // Check cache first
+    const cached = this.manifestCache.get(cacheKey)
+    if (cached) {
+      return cached.manifest
+    }
+
+    // Load from storage
+    const fullPath = `${dataset}/${manifestPath}`
+    const data = await this.storage.read(fullPath)
+    const manifest = JSON.parse(new TextDecoder().decode(data)) as ShardedIndexManifest
+
+    // Validate version
+    if (manifest.version < 1 || manifest.version > 3) {
+      throw new Error(`Unsupported manifest version: ${manifest.version}`)
+    }
+
+    // Cache the manifest
+    this.manifestCache.set(cacheKey, {
+      manifest,
+      loadedAt: Date.now(),
+    })
+
+    return manifest
+  }
+
+  /**
+   * Load bloom filter for a sharded index
+   *
+   * @param dataset - Dataset ID
+   * @param indexDir - Index directory (e.g., 'indexes/secondary/titleType')
+   * @param bloomPath - Path to bloom filter file relative to index directory
+   * @returns Loaded bloom filter
+   */
+  async loadBloomFilter(dataset: string, indexDir: string, bloomPath: string): Promise<BloomFilter> {
+    const fullPath = `${dataset}/${indexDir}/${bloomPath}`
+    const cacheKey = fullPath
+
+    // Check cache first
+    const cached = this.bloomCache.get(cacheKey)
+    if (cached) {
+      return cached.filter
+    }
+
+    // Load from storage
+    const data = await this.storage.read(fullPath)
+    const filter = new BloomFilter(data)
+
+    // Cache the bloom filter (counts toward cache size)
+    this.cacheBloomFilter(cacheKey, {
+      filter,
+      loadedAt: Date.now(),
+      sizeBytes: data.byteLength,
+    })
+
+    return filter
+  }
+
+  /**
+   * Load a compact v3 format shard
+   *
+   * @param shardPath - Full path to shard file
+   * @param isCompact - Whether shard uses compact v3 format
+   * @returns Array of shard entries
+   */
+  async loadShardedHashIndex(shardPath: string, isCompact: boolean): Promise<CompactShardEntry[]> {
+    const data = await this.storage.read(shardPath)
+
+    if (isCompact) {
+      return readCompactShard(data)
+    }
+
+    // Fall back to JSON format for non-compact shards
+    const json = JSON.parse(new TextDecoder().decode(data)) as CompactShardEntry[]
+    return json
+  }
+
+  /**
+   * Get index directory from manifest path
+   */
+  private getIndexDir(manifestPath: string): string {
+    // manifestPath is like 'indexes/secondary/titleType/_manifest.json'
+    // We want 'indexes/secondary/titleType'
+    const parts = manifestPath.split('/')
+    parts.pop() // Remove '_manifest.json'
+    return parts.join('/')
   }
 
   /**
@@ -383,6 +621,12 @@ export class IndexCache {
     entry: IndexCatalogEntry,
     condition: unknown
   ): Promise<IndexLookupResult> {
+    // Check if this is a sharded index
+    if (entry.sharded && entry.manifestPath) {
+      return this.executeShardedHashLookup(dataset, entry, condition)
+    }
+
+    // Non-sharded: use original hash index loading
     const index = await this.loadHashIndex(dataset, entry)
 
     // Handle $in operator
@@ -400,6 +644,84 @@ export class IndexCache {
   }
 
   /**
+   * Execute a sharded hash index lookup with bloom filter pre-filtering
+   *
+   * @param dataset - Dataset ID
+   * @param entry - Index catalog entry (must be sharded)
+   * @param condition - Query condition
+   * @returns Index lookup result with document IDs
+   */
+  private async executeShardedHashLookup(
+    dataset: string,
+    entry: IndexCatalogEntry,
+    condition: unknown
+  ): Promise<IndexLookupResult> {
+    const manifestPath = entry.manifestPath!
+    const indexDir = this.getIndexDir(manifestPath)
+
+    // Load manifest
+    const manifest = await this.loadManifest(dataset, manifestPath)
+
+    // Extract values to look up
+    let values: unknown[]
+    if (typeof condition === 'object' && condition !== null && '$in' in (condition as object)) {
+      values = (condition as { $in: unknown[] }).$in
+    } else if (typeof condition === 'object' && condition !== null && '$eq' in (condition as object)) {
+      values = [(condition as { $eq: unknown }).$eq]
+    } else {
+      values = [condition]
+    }
+
+    // Optionally use bloom filter for quick pre-filtering
+    let filteredValues = values
+    if (manifest.bloomPath) {
+      try {
+        const bloom = await this.loadBloomFilter(dataset, indexDir, manifest.bloomPath)
+        filteredValues = values.filter(v => bloom.mightContain(v))
+        if (filteredValues.length === 0) {
+          // All values definitely don't exist
+          return { docIds: [], rowGroups: [], exact: true, entriesScanned: 0 }
+        }
+      } catch (error) {
+        // Bloom filter failed to load, continue without pre-filtering
+        console.warn(`Failed to load bloom filter for ${entry.name}:`, error)
+      }
+    }
+
+    // Collect results from matching shards
+    const allDocIds: string[] = []
+    const allRowGroups: Set<number> = new Set()
+    let entriesScanned = 0
+
+    for (const value of filteredValues) {
+      // Find the shard for this value
+      const shard = manifest.shards.find(s => s.value === value)
+      if (!shard) {
+        // Value not in any shard
+        continue
+      }
+
+      // Load the shard
+      const shardPath = `${dataset}/${indexDir}/${shard.path}`
+      const entries = await this.loadShardedHashIndex(shardPath, manifest.compact)
+      entriesScanned += entries.length
+
+      // Collect all entries from the shard (entire shard matches the value)
+      for (const e of entries) {
+        allDocIds.push(e.docId)
+        allRowGroups.add(e.rowGroup)
+      }
+    }
+
+    return {
+      docIds: allDocIds,
+      rowGroups: Array.from(allRowGroups).sort((a, b) => a - b),
+      exact: true,
+      entriesScanned,
+    }
+  }
+
+  /**
    * Execute an SST index lookup (range or equality)
    *
    * @param dataset - Dataset ID
@@ -412,6 +734,12 @@ export class IndexCache {
     entry: IndexCatalogEntry,
     condition: unknown
   ): Promise<IndexLookupResult> {
+    // Check if this is a sharded index
+    if (entry.sharded && entry.manifestPath) {
+      return this.executeShardedSSTLookup(dataset, entry, condition)
+    }
+
+    // Non-sharded: use original SST index loading
     const index = await this.loadSSTIndex(dataset, entry)
 
     // Handle direct equality
@@ -439,6 +767,133 @@ export class IndexCache {
 
     // Fallback to full scan
     return index.scan()
+  }
+
+  /**
+   * Execute a sharded SST index lookup (range queries over sharded data)
+   *
+   * @param dataset - Dataset ID
+   * @param entry - Index catalog entry (must be sharded)
+   * @param condition - Query condition
+   * @returns Index lookup result with document IDs
+   */
+  private async executeShardedSSTLookup(
+    dataset: string,
+    entry: IndexCatalogEntry,
+    condition: unknown
+  ): Promise<IndexLookupResult> {
+    const manifestPath = entry.manifestPath!
+    const indexDir = this.getIndexDir(manifestPath)
+
+    // Load manifest
+    const manifest = await this.loadManifest(dataset, manifestPath)
+
+    // Parse condition to determine which shards to query
+    let targetValue: unknown = undefined
+    let rangeQuery: RangeQuery | undefined = undefined
+
+    if (typeof condition !== 'object' || condition === null) {
+      // Direct equality
+      targetValue = condition
+    } else {
+      const condObj = condition as Record<string, unknown>
+      if ('$eq' in condObj) {
+        targetValue = condObj.$eq
+      } else {
+        // Range query
+        rangeQuery = {}
+        if ('$gt' in condObj) rangeQuery.$gt = condObj.$gt
+        if ('$gte' in condObj) rangeQuery.$gte = condObj.$gte
+        if ('$lt' in condObj) rangeQuery.$lt = condObj.$lt
+        if ('$lte' in condObj) rangeQuery.$lte = condObj.$lte
+      }
+    }
+
+    // Collect results from matching shards
+    const allDocIds: string[] = []
+    const allRowGroups: Set<number> = new Set()
+    let entriesScanned = 0
+
+    // Find shards that overlap with our query
+    const matchingShards = manifest.shards.filter(shard => {
+      if (targetValue !== undefined) {
+        // Equality: shard contains exact value or range contains it
+        if (shard.value !== undefined) {
+          return shard.value === targetValue
+        }
+        if (shard.minValue !== undefined && shard.maxValue !== undefined) {
+          return this.compareValues(shard.minValue, targetValue) <= 0 &&
+                 this.compareValues(shard.maxValue, targetValue) >= 0
+        }
+        return true // Unknown structure, load it
+      }
+
+      if (rangeQuery) {
+        // Range query: check if shard's range overlaps with query range
+        if (shard.minValue !== undefined && shard.maxValue !== undefined) {
+          return this.rangeOverlaps(shard.minValue, shard.maxValue, rangeQuery)
+        }
+        return true // Unknown structure, load it
+      }
+
+      return true // Load all if no specific query
+    })
+
+    // Load matching shards
+    for (const shard of matchingShards) {
+      const shardPath = `${dataset}/${indexDir}/${shard.path}`
+      const entries = await this.loadShardedHashIndex(shardPath, manifest.compact)
+      entriesScanned += entries.length
+
+      for (const e of entries) {
+        allDocIds.push(e.docId)
+        allRowGroups.add(e.rowGroup)
+      }
+    }
+
+    return {
+      docIds: allDocIds,
+      rowGroups: Array.from(allRowGroups).sort((a, b) => a - b),
+      exact: true,
+      entriesScanned,
+    }
+  }
+
+  /**
+   * Compare two values for ordering
+   */
+  private compareValues(a: unknown, b: unknown): number {
+    if (typeof a === 'number' && typeof b === 'number') {
+      return a - b
+    }
+    if (typeof a === 'string' && typeof b === 'string') {
+      return a.localeCompare(b)
+    }
+    // Fall back to string comparison
+    return String(a).localeCompare(String(b))
+  }
+
+  /**
+   * Check if a shard's range overlaps with a range query
+   */
+  private rangeOverlaps(shardMin: unknown, shardMax: unknown, query: RangeQuery): boolean {
+    // Check if shard is entirely below the query range
+    if (query.$gt !== undefined && this.compareValues(shardMax, query.$gt) <= 0) {
+      return false
+    }
+    if (query.$gte !== undefined && this.compareValues(shardMax, query.$gte) < 0) {
+      return false
+    }
+
+    // Check if shard is entirely above the query range
+    if (query.$lt !== undefined && this.compareValues(shardMin, query.$lt) >= 0) {
+      return false
+    }
+    if (query.$lte !== undefined && this.compareValues(shardMin, query.$lte) > 0) {
+      return false
+    }
+
+    return true
   }
 
   /**
@@ -492,7 +947,28 @@ export class IndexCache {
   }
 
   /**
-   * Find the oldest cache entry for eviction
+   * Cache a bloom filter with LRU eviction
+   */
+  private cacheBloomFilter(key: string, loaded: LoadedBloomFilter): void {
+    // Evict if necessary
+    while (this.currentCacheBytes + loaded.sizeBytes > this.maxCacheBytes) {
+      const oldestKey = this.findOldestCacheEntry()
+      if (!oldestKey) break
+
+      const evicted = this.indexCache.get(oldestKey)
+      if (evicted) {
+        this.currentCacheBytes -= evicted.sizeBytes
+        this.indexCache.delete(oldestKey)
+      }
+    }
+
+    // Add to cache
+    this.bloomCache.set(key, loaded)
+    this.currentCacheBytes += loaded.sizeBytes
+  }
+
+  /**
+   * Find the oldest cache entry for eviction (across indexes and bloom filters)
    */
   private findOldestCacheEntry(): string | null {
     let oldestKey: string | null = null
@@ -505,6 +981,14 @@ export class IndexCache {
       }
     }
 
+    // Also check bloom filters for oldest entry
+    for (const [key, entry] of this.bloomCache) {
+      if (entry.loadedAt < oldestTime) {
+        oldestTime = entry.loadedAt
+        oldestKey = `bloom:${key}`
+      }
+    }
+
     return oldestKey
   }
 
@@ -514,6 +998,8 @@ export class IndexCache {
   clearCache(): void {
     this.indexCache.clear()
     this.catalogCache.clear()
+    this.manifestCache.clear()
+    this.bloomCache.clear()
     this.currentCacheBytes = 0
   }
 
@@ -523,12 +1009,16 @@ export class IndexCache {
   getCacheStats(): {
     catalogCount: number
     indexCount: number
+    manifestCount: number
+    bloomFilterCount: number
     cacheBytes: number
     maxBytes: number
   } {
     return {
       catalogCount: this.catalogCache.size,
       indexCount: this.indexCache.size,
+      manifestCount: this.manifestCache.size,
+      bloomFilterCount: this.bloomCache.size,
       cacheBytes: this.currentCacheBytes,
       maxBytes: this.maxCacheBytes,
     }
@@ -638,6 +1128,75 @@ class MemoryStorageAdapter {
   async rmdir(_path: string): Promise<void> {}
   async copy(_from: string, _to: string): Promise<void> {}
   async move(_from: string, _to: string): Promise<void> {}
+}
+
+// =============================================================================
+// Compact Shard Reader (v3 format)
+// =============================================================================
+
+/**
+ * Read a compact v3 format shard file
+ *
+ * Format:
+ * - version: 1 byte (should be 3)
+ * - flags: 1 byte (bit 0 = hasKeyHash)
+ * - entryCount: 4 bytes (big endian)
+ * - entries: [keyHash?][rowGroup (2 bytes BE)][rowOffset (varint)][docIdLen (1 byte)][docId (string)]
+ *
+ * @param buffer - Raw shard data
+ * @returns Array of parsed entries
+ */
+function readCompactShard(buffer: Uint8Array): CompactShardEntry[] {
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+  let offset = 0
+
+  // Read header
+  const version = buffer[offset++]
+  if (version !== 3) {
+    throw new Error(`Unsupported compact shard version: ${version}, expected 3`)
+  }
+
+  const flags = buffer[offset++]
+  const hasKeyHash = (flags & 0x01) !== 0
+
+  const entryCount = view.getUint32(offset, false) // big endian
+  offset += 4
+
+  const entries: CompactShardEntry[] = []
+  const decoder = new TextDecoder()
+
+  for (let i = 0; i < entryCount; i++) {
+    // Skip key hash if present
+    if (hasKeyHash) {
+      offset += 4
+    }
+
+    // Read row group (2 bytes big endian)
+    const rowGroup = view.getUint16(offset, false)
+    offset += 2
+
+    // Read varint rowOffset
+    let rowOffset = 0
+    let shift = 0
+    while (true) {
+      const byte = buffer[offset++]
+      rowOffset |= (byte & 0x7f) << shift
+      if ((byte & 0x80) === 0) break
+      shift += 7
+      if (shift > 35) {
+        throw new Error('Varint too long')
+      }
+    }
+
+    // Read docId length and string
+    const docIdLen = buffer[offset++]
+    const docId = decoder.decode(buffer.subarray(offset, offset + docIdLen))
+    offset += docIdLen
+
+    entries.push({ docId, rowGroup, rowOffset })
+  }
+
+  return entries
 }
 
 // =============================================================================

@@ -17,6 +17,14 @@ import type {
   RangeQuery,
 } from '../types'
 import { encodeKey, decodeKey, compareKeys, encodeCompositeKey } from './key-encoder'
+import {
+  FORMAT_VERSION_1,
+  FORMAT_VERSION_2,
+  FORMAT_VERSION_3,
+  readCompactHeader,
+  readCompactEntry,
+  readCompactEntryWithKey,
+} from '../encoding'
 
 // =============================================================================
 // SST Index
@@ -547,19 +555,35 @@ export class SSTIndex {
     }
 
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-    let offset = 0
 
-    const version = view.getUint8(offset)
-    offset += 1
+    // Version
+    const version = view.getUint8(0)
 
-    if (version !== 1) {
+    if (version === FORMAT_VERSION_3) {
+      // Compact format v3
+      await this.deserializeCompact(data)
+    } else if (version === FORMAT_VERSION_1 || version === FORMAT_VERSION_2) {
+      // Original or sharded format (same structure)
+      await this.deserializeV1V2(data)
+    } else {
       throw new Error(`Unsupported index version: ${version}`)
     }
+  }
+
+  /**
+   * Deserialize v1/v2 format (original with full key)
+   */
+  private async deserializeV1V2(data: Uint8Array): Promise<void> {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    const textDecoder = new TextDecoder()
+    let offset = 0
+
+    // Skip version
+    offset += 1
 
     const entryCount = view.getUint32(offset, false)
     offset += 4
 
-    const textDecoder = new TextDecoder()
     for (let i = 0; i < entryCount; i++) {
       const keyLen = view.getUint16(offset, false)
       offset += 2
@@ -579,6 +603,54 @@ export class SSTIndex {
 
       this.entries.push({ key, docId, rowGroup, rowOffset })
     }
+  }
+
+  /**
+   * Deserialize compact v3 format
+   *
+   * V3 format has smaller entries:
+   * - Header: [version:u8][flags:u8][entryCount:u32]
+   * - Entry (with keyHash): [keyHash:u32][rowGroup:u16][rowOffset:varint][docIdLen:u8][docId:bytes]
+   * - Entry (no keyHash): [rowGroup:u16][rowOffset:varint][docIdLen:u8][docId:bytes]
+   */
+  private async deserializeCompact(data: Uint8Array): Promise<void> {
+    let offset = 0
+
+    // Read header
+    const { header, bytesRead: headerBytes } = readCompactHeader(data, offset)
+    offset += headerBytes
+
+    // Read entries
+    for (let i = 0; i < header.entryCount; i++) {
+      if (header.hasKeyHash) {
+        // Entry with key hash (for non-sharded indexes)
+        const { entry, bytesRead } = readCompactEntryWithKey(data, offset)
+        offset += bytesRead
+
+        // SST needs keys for sorting - use empty placeholder
+        // For compact format, the key is implicit in the shard
+        this.entries.push({
+          key: new Uint8Array(0), // Placeholder - full key not stored in compact format
+          docId: entry.docId,
+          rowGroup: entry.rowGroup,
+          rowOffset: entry.rowOffset,
+        })
+      } else {
+        // Entry without key hash (for sharded indexes, key is implicit)
+        const { entry, bytesRead } = readCompactEntry(data, offset)
+        offset += bytesRead
+
+        this.entries.push({
+          key: new Uint8Array(0), // Key is implicit in shard name
+          docId: entry.docId,
+          rowGroup: entry.rowGroup,
+          rowOffset: entry.rowOffset,
+        })
+      }
+    }
+
+    // SST entries are already sorted in the file
+    this.sorted = true
   }
 }
 

@@ -15,3 +15,9 @@ export * from './secondary'
 
 // Full-Text Search
 export * from './fts'
+
+// Bloom Filters
+export * from './bloom'
+
+// Compact Encoding
+export * from './encoding'

@@ -95,6 +95,27 @@ export {
 } from './indexes'
 
 // =============================================================================
+// Events (CDC / Time-Travel)
+// =============================================================================
+
+export {
+  // Types
+  type Event,
+  type EventBatch,
+  type EventSegment,
+  type EventManifest,
+  type EventWriterConfig,
+  type DatasetConfig,
+  type TimeTravelOptions,
+  // Utilities
+  isRelationshipTarget,
+  parseEntityTarget,
+  parseRelTarget,
+  entityTarget,
+  relTarget,
+} from './events'
+
+// =============================================================================
 // Version
 // =============================================================================
 
