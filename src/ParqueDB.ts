@@ -36,7 +36,7 @@ import { SchemaValidator, SchemaValidationError } from './schema/validator'
 import { FileNotFoundError } from './storage/MemoryBackend'
 import { IndexManager } from './indexes/manager'
 import type { IndexDefinition, IndexMetadata, IndexStats } from './indexes/types'
-import { getRandomBase36, getNestedValue, compareValues } from './utils'
+import { getNestedValue, compareValues, generateId } from './utils'
 
 // =============================================================================
 // Configuration Types
@@ -112,6 +112,41 @@ export interface UpsertManyResult {
 }
 
 /**
+ * Event log configuration options
+ */
+export interface EventLogConfig {
+  /** Maximum number of events to keep in the log (default: 10000) */
+  maxEvents?: number
+  /** Maximum age of events in milliseconds (default: 7 days = 604800000) */
+  maxAge?: number
+  /** Whether to archive rotated events instead of dropping them (default: false) */
+  archiveOnRotation?: boolean
+}
+
+/**
+ * Result of an event archival operation
+ */
+export interface ArchiveEventsResult {
+  /** Number of events archived */
+  archivedCount: number
+  /** Number of events dropped (if archiveOnRotation is false) */
+  droppedCount: number
+  /** Timestamp of the oldest remaining event */
+  oldestEventTs?: number
+  /** Timestamp of the newest archived event */
+  newestArchivedTs?: number
+}
+
+/**
+ * Default event log configuration
+ */
+export const DEFAULT_EVENT_LOG_CONFIG: Required<EventLogConfig> = {
+  maxEvents: 10000,
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
+  archiveOnRotation: false,
+}
+
+/**
  * ParqueDB configuration options
  */
 export interface ParqueDBConfig {
@@ -126,6 +161,9 @@ export interface ParqueDBConfig {
 
   /** Snapshot configuration */
   snapshotConfig?: SnapshotConfig
+
+  /** Event log configuration for rotation and archival */
+  eventLogConfig?: EventLogConfig
 }
 
 // =============================================================================
@@ -274,29 +312,6 @@ function normalizeNamespace(name: string): string {
   return name.toLowerCase()
 }
 
-/**
- * Counter for generating unique IDs within the same millisecond
- */
-let idCounter = 0
-let lastIdTime = 0
-
-/**
- * Generate a unique ID (ULID-like implementation with monotonic guarantee)
- */
-function generateId(): string {
-  const now = Date.now()
-  if (now === lastIdTime) {
-    idCounter++
-  } else {
-    idCounter = 0
-    lastIdTime = now
-  }
-  const timestamp = now.toString(36).padStart(9, '0')
-  const counter = idCounter.toString(36).padStart(4, '0')
-  const random = getRandomBase36(4)
-  return `${timestamp}${counter}${random}`
-}
-
 // =============================================================================
 // Error Classes
 // =============================================================================
@@ -436,13 +451,30 @@ const DEFAULT_MAX_INBOUND = 100
 
 /**
  * Global storage for shared entity state across ParqueDB instances.
- * Uses storage backend reference as key for shared state, allowing
+ * Uses WeakMap with storage backend reference as key for shared state, allowing
  * multiple ParqueDB instances with the same storage to share entities.
+ *
+ * WeakMap allows automatic garbage collection when StorageBackend objects
+ * are no longer referenced, preventing memory leaks from orphaned state.
+ * Call dispose() for explicit cleanup when a ParqueDB instance is no longer needed.
+ *
+ * @deprecated This in-memory store is intended for Node.js/testing use only.
+ * For Cloudflare Workers, use ParqueDBDO (SQLite) as the source of truth for writes
+ * and R2 (via QueryExecutor/ReadPath) for reads. See docs/architecture/ENTITY_STORAGE.md
+ * for the full architecture documentation.
+ *
+ * Architecture summary:
+ * - Node.js/Testing: ParqueDB.ts uses globalEntityStore (in-memory) + storage backend for persistence
+ * - Workers (writes): ParqueDBDO uses SQLite as source of truth, flushes to Parquet/R2
+ * - Workers (reads): QueryExecutor reads directly from R2 Parquet files with caching
+ *
+ * Future plans: Consolidate to always read/write through storage backend abstractions.
  */
-const globalEntityStore = new Map<StorageBackend, Map<string, Entity>>()
-const globalEventStore = new Map<StorageBackend, Event[]>()
-const globalSnapshotStore = new Map<StorageBackend, Snapshot[]>()
-const globalQueryStats = new Map<StorageBackend, Map<string, SnapshotQueryStats>>()
+const globalEntityStore = new WeakMap<StorageBackend, Map<string, Entity>>()
+const globalEventStore = new WeakMap<StorageBackend, Event[]>()
+const globalArchivedEventStore = new WeakMap<StorageBackend, Event[]>()
+const globalSnapshotStore = new WeakMap<StorageBackend, Snapshot[]>()
+const globalQueryStats = new WeakMap<StorageBackend, Map<string, SnapshotQueryStats>>()
 
 /**
  * Get or create the entity store for a storage backend
@@ -465,6 +497,16 @@ function getEventStore(storage: StorageBackend): Event[] {
 }
 
 /**
+ * Get or create the archived event store for a storage backend
+ */
+function getArchivedEventStore(storage: StorageBackend): Event[] {
+  if (!globalArchivedEventStore.has(storage)) {
+    globalArchivedEventStore.set(storage, [])
+  }
+  return globalArchivedEventStore.get(storage)!
+}
+
+/**
  * Get or create the snapshot store for a storage backend
  */
 function getSnapshotStore(storage: StorageBackend): Snapshot[] {
@@ -482,6 +524,18 @@ function getQueryStatsStore(storage: StorageBackend): Map<string, SnapshotQueryS
     globalQueryStats.set(storage, new Map())
   }
   return globalQueryStats.get(storage)!
+}
+
+/**
+ * Clear global state for a specific storage backend.
+ * This is called by dispose() for explicit cleanup.
+ */
+function clearGlobalState(storage: StorageBackend): void {
+  globalEntityStore.delete(storage)
+  globalEventStore.delete(storage)
+  globalArchivedEventStore.delete(storage)
+  globalSnapshotStore.delete(storage)
+  globalQueryStats.delete(storage)
 }
 
 /**
@@ -597,6 +651,14 @@ export interface EventLog {
   getEventsByOp(op: EventOp): Promise<Event[]>
   /** Get raw event data (for compression check) */
   getRawEvent(id: string): Promise<{ compressed: boolean; data: Event }>
+  /** Get total event count */
+  getEventCount(): Promise<number>
+  /** Get current event log configuration */
+  getConfig(): EventLogConfig
+  /** Archive old events based on configuration or manual threshold */
+  archiveEvents(options?: { olderThan?: Date; maxEvents?: number }): Promise<ArchiveEventsResult>
+  /** Get archived events (if archiveOnRotation is enabled) */
+  getArchivedEvents(): Promise<Event[]>
 }
 
 /**
@@ -609,9 +671,11 @@ class ParqueDBImpl {
   private collections = new Map<string, CollectionImpl>()
   private entities: Map<string, Entity> // Shared via global store
   private events: Event[] // Shared via global store
+  private archivedEvents: Event[] // Shared via global store for archived events
   private snapshots: Snapshot[] // Shared via global store
   private queryStats: Map<string, SnapshotQueryStats> // Shared via global store
   private snapshotConfig: SnapshotConfig
+  private eventLogConfig: Required<EventLogConfig>
   private pendingEvents: Event[] = [] // Buffer for batched writes
   private flushPromise: Promise<void> | null = null // Promise for pending flush
   private inTransaction = false // Flag to suppress auto-flush during transactions
@@ -623,9 +687,11 @@ class ParqueDBImpl {
     }
     this.storage = config.storage
     this.snapshotConfig = config.snapshotConfig || {}
+    this.eventLogConfig = { ...DEFAULT_EVENT_LOG_CONFIG, ...config.eventLogConfig }
     // Use global stores keyed by storage backend for persistence across instances
     this.entities = getEntityStore(config.storage)
     this.events = getEventStore(config.storage)
+    this.archivedEvents = getArchivedEventStore(config.storage)
     this.snapshots = getSnapshotStore(config.storage)
     this.queryStats = getQueryStatsStore(config.storage)
     // Initialize index manager
@@ -653,6 +719,33 @@ class ParqueDBImpl {
    */
   getSchemaValidator(): SchemaValidator | null {
     return this.schemaValidator
+  }
+
+  /**
+   * Dispose of this ParqueDB instance and clean up associated global state.
+   * Call this when you are done using a ParqueDB instance to prevent memory leaks.
+   *
+   * After calling dispose():
+   * - The global state (entities, events, snapshots, query stats) for this storage backend is cleared
+   * - The instance should not be used anymore
+   * - Other ParqueDB instances using the same storage backend will also lose their shared state
+   */
+  dispose(): void {
+    // Clear any pending operations
+    this.pendingEvents = []
+    this.flushPromise = null
+
+    // Clear instance state
+    this.collections.clear()
+
+    // Clear global state for this storage backend
+    clearGlobalState(this.storage)
+
+    // Clear local references (they now point to deleted WeakMap entries)
+    this.entities.clear()
+    this.events.length = 0
+    this.snapshots.length = 0
+    this.queryStats.clear()
   }
 
   /**
@@ -1022,110 +1115,7 @@ class ParqueDBImpl {
 
       // Continue with hydration if requested on the modified entity
       if (options?.hydrate && options.hydrate.length > 0) {
-        const hydratedEntity = { ...resultEntity }
-        for (const fieldName of options.hydrate) {
-          // Look up the schema definition for this entity type
-          const typeDef = this.schema[entity.$type]
-          let handled = false
-          if (typeDef && typeDef[fieldName]) {
-            const fieldDef = typeDef[fieldName]
-            // Check if it's a reverse relationship (<-)
-            if (typeof fieldDef === 'string' && fieldDef.startsWith('<-')) {
-              // Parse reverse relationship: '<- Post.author[]'
-              const match = fieldDef.match(/<-\s*(\w+)\.(\w+)(\[\])?/)
-              if (match) {
-                handled = true
-                const [, relatedType, relatedField] = match
-                if (!relatedType || !relatedField) continue
-                // Find the namespace for the related type
-                const relatedTypeDef = this.schema[relatedType]
-                const relatedNs = relatedTypeDef?.$ns as string || relatedType.toLowerCase()
-
-                // Find all entities of the related type that reference this entity
-                const allRelatedEntities: Array<{ name: string; id: EntityId }> = []
-                this.entities.forEach((relatedEntity, relatedId) => {
-                  if (!relatedId.startsWith(`${relatedNs}/`)) return
-                  if (relatedEntity.deletedAt) return // Skip deleted
-
-                  // Check if the related entity's field points to this entity
-                  const refField = (relatedEntity as Record<string, unknown>)[relatedField]
-                  if (refField && typeof refField === 'object') {
-                    // Reference format: { 'Display Name': 'ns/id' }
-                    for (const [, refId] of Object.entries(refField)) {
-                      if (refId === fullId) {
-                        allRelatedEntities.push({
-                          name: relatedEntity.name || relatedId,
-                          id: relatedId as EntityId,
-                        })
-                      }
-                    }
-                  }
-                })
-
-                // Build RelSet with $count and optional $next
-                const totalCount = allRelatedEntities.length
-                const limitedEntities = allRelatedEntities.slice(0, maxInbound)
-
-                // If no related entities, return RelSet with $count: 0 for consistency
-                if (totalCount === 0) {
-                  ;(hydratedEntity as Record<string, unknown>)[fieldName] = { $count: 0 }
-                } else {
-                  const relSet: RelSet = {
-                    $count: totalCount,
-                  }
-
-                  // Add entity links up to maxInbound
-                  for (const related of limitedEntities) {
-                    relSet[related.name] = related.id
-                  }
-
-                  // Add $next cursor if there are more entities
-                  if (totalCount > maxInbound) {
-                    // Use the index as a simple cursor
-                    relSet.$next = String(maxInbound)
-                  }
-
-                  ;(hydratedEntity as Record<string, unknown>)[fieldName] = relSet
-                }
-              }
-            }
-          }
-
-          // Dynamic reverse relationship lookup (no schema definition)
-          // Look for entities that reference this entity via any field
-          if (!handled) {
-            const relatedEntities: Record<string, EntityId> = {}
-
-            // Determine the namespace to search based on the fieldName
-            // e.g., 'posts' -> 'posts' namespace
-            const relatedNs = fieldName.toLowerCase()
-
-            this.entities.forEach((relatedEntity, relatedId) => {
-              if (!relatedId.startsWith(`${relatedNs}/`)) return
-              if (relatedEntity.deletedAt) return // Skip deleted
-
-              // Check all fields of the related entity for references to this entity
-              for (const [refFieldName, refField] of Object.entries(relatedEntity)) {
-                if (refFieldName.startsWith('$')) continue // Skip meta fields
-                if (refField && typeof refField === 'object' && !Array.isArray(refField)) {
-                  // Check if this is a reference field pointing to our entity
-                  // Reference format: { 'Display Name': 'ns/id' }
-                  for (const refValue of Object.values(refField as Record<string, unknown>)) {
-                    if (refValue === fullId) {
-                      relatedEntities[relatedEntity.name || relatedId] = relatedId as EntityId
-                      break
-                    }
-                  }
-                }
-              }
-            })
-
-            if (Object.keys(relatedEntities).length > 0) {
-              ;(hydratedEntity as Record<string, unknown>)[fieldName] = relatedEntities
-            }
-          }
-        }
-        return hydratedEntity as Entity<T>
+        return this.hydrateEntity(resultEntity, fullId, options.hydrate, maxInbound)
       }
 
       return resultEntity
@@ -1133,111 +1123,8 @@ class ParqueDBImpl {
 
     // Handle hydration if requested (without maxInbound specified)
     if (options?.hydrate && options.hydrate.length > 0) {
-      const hydratedEntity = { ...entity } as Entity<T>
       const maxInbound = options.maxInbound ?? DEFAULT_MAX_INBOUND
-      for (const fieldName of options.hydrate) {
-        // Look up the schema definition for this entity type
-        const typeDef = this.schema[entity.$type]
-        let handled = false
-        if (typeDef && typeDef[fieldName]) {
-          const fieldDef = typeDef[fieldName]
-          // Check if it's a reverse relationship (<-)
-          if (typeof fieldDef === 'string' && fieldDef.startsWith('<-')) {
-            // Parse reverse relationship: '<- Post.author[]'
-            const match = fieldDef.match(/<-\s*(\w+)\.(\w+)(\[\])?/)
-            if (match) {
-              handled = true
-              const [, relatedType, relatedField] = match
-              if (!relatedType || !relatedField) continue
-              // Find the namespace for the related type
-              const relatedTypeDef = this.schema[relatedType]
-              const relatedNs = relatedTypeDef?.$ns as string || relatedType.toLowerCase()
-
-              // Find all entities of the related type that reference this entity
-              const allRelatedEntities: Array<{ name: string; id: EntityId }> = []
-              this.entities.forEach((relatedEntity, relatedId) => {
-                if (!relatedId.startsWith(`${relatedNs}/`)) return
-                if (relatedEntity.deletedAt) return // Skip deleted
-
-                // Check if the related entity's field points to this entity
-                const refField = (relatedEntity as Record<string, unknown>)[relatedField]
-                if (refField && typeof refField === 'object') {
-                  // Reference format: { 'Display Name': 'ns/id' }
-                  for (const [, refId] of Object.entries(refField)) {
-                    if (refId === fullId) {
-                      allRelatedEntities.push({
-                        name: relatedEntity.name || relatedId,
-                        id: relatedId as EntityId,
-                      })
-                    }
-                  }
-                }
-              })
-
-              // Build RelSet with $count and optional $next
-              const totalCount = allRelatedEntities.length
-              const limitedEntities = allRelatedEntities.slice(0, maxInbound)
-
-              // If no related entities, return RelSet with $count: 0 for consistency
-              if (totalCount === 0) {
-                ;(hydratedEntity as Record<string, unknown>)[fieldName] = { $count: 0 }
-              } else {
-                const relSet: RelSet = {
-                  $count: totalCount,
-                }
-
-                // Add entity links up to maxInbound
-                for (const related of limitedEntities) {
-                  relSet[related.name] = related.id
-                }
-
-                // Add $next cursor if there are more entities
-                if (totalCount > maxInbound) {
-                  // Use the index as a simple cursor
-                  relSet.$next = String(maxInbound)
-                }
-
-                ;(hydratedEntity as Record<string, unknown>)[fieldName] = relSet
-              }
-            }
-          }
-        }
-
-        // Dynamic reverse relationship lookup (no schema definition)
-        // Look for entities that reference this entity via any field
-        if (!handled) {
-          const relatedEntities: Record<string, EntityId> = {}
-
-          // Determine the namespace to search based on the fieldName
-          // e.g., 'posts' -> 'posts' namespace
-          const relatedNs = fieldName.toLowerCase()
-
-          this.entities.forEach((relatedEntity, relatedId) => {
-            if (!relatedId.startsWith(`${relatedNs}/`)) return
-            if (relatedEntity.deletedAt) return // Skip deleted
-
-            // Check all fields of the related entity for references to this entity
-            for (const [refFieldName, refField] of Object.entries(relatedEntity)) {
-              if (refFieldName.startsWith('$')) continue // Skip meta fields
-              if (refField && typeof refField === 'object' && !Array.isArray(refField)) {
-                // Check if this is a reference field pointing to our entity
-                // Reference format: { 'Display Name': 'ns/id' }
-                for (const refValue of Object.values(refField as Record<string, unknown>)) {
-                  if (refValue === fullId) {
-                    relatedEntities[relatedEntity.name || relatedId] = relatedId as EntityId
-                    break
-                  }
-                }
-              }
-            }
-          })
-
-          if (Object.keys(relatedEntities).length > 0) {
-            ;(hydratedEntity as Record<string, unknown>)[fieldName] = relatedEntities
-          }
-        }
-      }
-      return hydratedEntity
+      return this.hydrateEntity(entity as Entity<T>, fullId, options.hydrate, maxInbound)
     }
 
     return entity as Entity<T>
@@ -2282,6 +2169,125 @@ class ParqueDBImpl {
   }
 
   /**
+   * Hydrate reverse relationship fields for an entity
+   * This handles both schema-defined reverse relationships and dynamic lookups.
+   */
+  private hydrateEntity<T>(
+    entity: Entity<T>,
+    fullId: string,
+    hydrateFields: string[],
+    maxInbound: number
+  ): Entity<T> {
+    const hydratedEntity = { ...entity } as Entity<T>
+
+    for (const fieldName of hydrateFields) {
+      // Look up the schema definition for this entity type
+      const typeDef = this.schema[entity.$type]
+      let handled = false
+
+      if (typeDef && typeDef[fieldName]) {
+        const fieldDef = typeDef[fieldName]
+        // Check if it's a reverse relationship (<-)
+        if (typeof fieldDef === 'string' && fieldDef.startsWith('<-')) {
+          // Parse reverse relationship: '<- Post.author[]'
+          const match = fieldDef.match(/<-\s*(\w+)\.(\w+)(\[\])?/)
+          if (match) {
+            handled = true
+            const [, relatedType, relatedField] = match
+            if (!relatedType || !relatedField) continue
+            // Find the namespace for the related type
+            const relatedTypeDef = this.schema[relatedType]
+            const relatedNs = relatedTypeDef?.$ns as string || relatedType.toLowerCase()
+
+            // Find all entities of the related type that reference this entity
+            const allRelatedEntities: Array<{ name: string; id: EntityId }> = []
+            this.entities.forEach((relatedEntity, relatedId) => {
+              if (!relatedId.startsWith(`${relatedNs}/`)) return
+              if (relatedEntity.deletedAt) return // Skip deleted
+
+              // Check if the related entity's field points to this entity
+              const refField = (relatedEntity as Record<string, unknown>)[relatedField]
+              if (refField && typeof refField === 'object') {
+                // Reference format: { 'Display Name': 'ns/id' }
+                for (const [, refId] of Object.entries(refField)) {
+                  if (refId === fullId) {
+                    allRelatedEntities.push({
+                      name: relatedEntity.name || relatedId,
+                      id: relatedId as EntityId,
+                    })
+                  }
+                }
+              }
+            })
+
+            // Build RelSet with $count and optional $next
+            const totalCount = allRelatedEntities.length
+            const limitedEntities = allRelatedEntities.slice(0, maxInbound)
+
+            // If no related entities, return RelSet with $count: 0 for consistency
+            if (totalCount === 0) {
+              ;(hydratedEntity as Record<string, unknown>)[fieldName] = { $count: 0 }
+            } else {
+              const relSet: RelSet = {
+                $count: totalCount,
+              }
+
+              // Add entity links up to maxInbound
+              for (const related of limitedEntities) {
+                relSet[related.name] = related.id
+              }
+
+              // Add $next cursor if there are more entities
+              if (totalCount > maxInbound) {
+                // Use the index as a simple cursor
+                relSet.$next = String(maxInbound)
+              }
+
+              ;(hydratedEntity as Record<string, unknown>)[fieldName] = relSet
+            }
+          }
+        }
+      }
+
+      // Dynamic reverse relationship lookup (no schema definition)
+      // Look for entities that reference this entity via any field
+      if (!handled) {
+        const relatedEntities: Record<string, EntityId> = {}
+
+        // Determine the namespace to search based on the fieldName
+        // e.g., 'posts' -> 'posts' namespace
+        const relatedNs = fieldName.toLowerCase()
+
+        this.entities.forEach((relatedEntity, relatedId) => {
+          if (!relatedId.startsWith(`${relatedNs}/`)) return
+          if (relatedEntity.deletedAt) return // Skip deleted
+
+          // Check all fields of the related entity for references to this entity
+          for (const [refFieldName, refField] of Object.entries(relatedEntity)) {
+            if (refFieldName.startsWith('$')) continue // Skip meta fields
+            if (refField && typeof refField === 'object' && !Array.isArray(refField)) {
+              // Check if this is a reference field pointing to our entity
+              // Reference format: { 'Display Name': 'ns/id' }
+              for (const refValue of Object.values(refField as Record<string, unknown>)) {
+                if (refValue === fullId) {
+                  relatedEntities[relatedEntity.name || relatedId] = relatedId as EntityId
+                  break
+                }
+              }
+            }
+          }
+        })
+
+        if (Object.keys(relatedEntities).length > 0) {
+          ;(hydratedEntity as Record<string, unknown>)[fieldName] = relatedEntities
+        }
+      }
+    }
+
+    return hydratedEntity
+  }
+
+  /**
    * Reconstruct entity state at a specific point in time
    * This method also tracks snapshot usage stats for optimization metrics.
    */
@@ -2517,6 +2523,9 @@ class ParqueDBImpl {
     // Schedule a batched flush (unless in transaction)
     const flushPromise = this.scheduleFlush()
 
+    // Perform event log rotation if needed (fire-and-forget)
+    this.maybeRotateEventLog()
+
     // Auto-snapshot if threshold is configured and reached (only for entity events)
     if (this.snapshotConfig.autoSnapshotThreshold && after && !isRelationshipTarget(target)) {
       const { ns, id } = parseEntityTarget(target)
@@ -2542,6 +2551,126 @@ class ParqueDBImpl {
     }
 
     return flushPromise
+  }
+
+  /**
+   * Check and perform event log rotation if limits are exceeded
+   */
+  private maybeRotateEventLog(): void {
+    const { maxEvents, maxAge, archiveOnRotation } = this.eventLogConfig
+    const now = Date.now()
+
+    // Calculate cutoff time for age-based rotation
+    const ageCutoff = now - maxAge
+
+    // Find events that should be rotated (older than maxAge OR exceeding maxEvents)
+    let eventsToRotate: Event[] = []
+    let eventsToKeep: Event[] = []
+
+    // First, filter by age
+    for (const event of this.events) {
+      if (event.ts < ageCutoff) {
+        eventsToRotate.push(event)
+      } else {
+        eventsToKeep.push(event)
+      }
+    }
+
+    // Then, if still over maxEvents, rotate oldest events
+    if (eventsToKeep.length > maxEvents) {
+      // Sort by timestamp to ensure we keep the newest
+      eventsToKeep.sort((a, b) => a.ts - b.ts)
+      const excessCount = eventsToKeep.length - maxEvents
+      const excessEvents = eventsToKeep.slice(0, excessCount)
+      eventsToRotate = [...eventsToRotate, ...excessEvents]
+      eventsToKeep = eventsToKeep.slice(excessCount)
+    }
+
+    // If there are events to rotate, perform the rotation
+    if (eventsToRotate.length > 0) {
+      if (archiveOnRotation) {
+        // Move to archived events
+        this.archivedEvents.push(...eventsToRotate)
+      }
+      // Update the events array in place to maintain reference
+      this.events.length = 0
+      this.events.push(...eventsToKeep)
+    }
+  }
+
+  /**
+   * Archive events manually based on criteria
+   *
+   * @param options - Archive options (olderThan, maxEvents)
+   * @returns Result of the archival operation
+   */
+  archiveEvents(options?: { olderThan?: Date; maxEvents?: number }): ArchiveEventsResult {
+    const now = Date.now()
+    const olderThanTs = options?.olderThan?.getTime() ?? (now - this.eventLogConfig.maxAge)
+    const maxEventsToKeep = options?.maxEvents ?? this.eventLogConfig.maxEvents
+    const { archiveOnRotation } = this.eventLogConfig
+
+    let archivedCount = 0
+    let droppedCount = 0
+    let newestArchivedTs: number | undefined
+    let eventsToArchive: Event[] = []
+    let eventsToKeep: Event[] = []
+
+    // Filter by age
+    for (const event of this.events) {
+      if (event.ts < olderThanTs) {
+        eventsToArchive.push(event)
+        if (newestArchivedTs === undefined || event.ts > newestArchivedTs) {
+          newestArchivedTs = event.ts
+        }
+      } else {
+        eventsToKeep.push(event)
+      }
+    }
+
+    // Further reduce if over maxEvents
+    if (eventsToKeep.length > maxEventsToKeep) {
+      eventsToKeep.sort((a, b) => a.ts - b.ts)
+      const excessCount = eventsToKeep.length - maxEventsToKeep
+      const excessEvents = eventsToKeep.slice(0, excessCount)
+      for (const event of excessEvents) {
+        eventsToArchive.push(event)
+        if (newestArchivedTs === undefined || event.ts > newestArchivedTs) {
+          newestArchivedTs = event.ts
+        }
+      }
+      eventsToKeep = eventsToKeep.slice(excessCount)
+    }
+
+    // Archive or drop the events
+    if (archiveOnRotation) {
+      this.archivedEvents.push(...eventsToArchive)
+      archivedCount = eventsToArchive.length
+    } else {
+      droppedCount = eventsToArchive.length
+    }
+
+    // Update the events array
+    this.events.length = 0
+    this.events.push(...eventsToKeep)
+
+    const oldestEventTs = eventsToKeep.length > 0
+      ? Math.min(...eventsToKeep.map(e => e.ts))
+      : undefined
+
+    return {
+      archivedCount,
+      droppedCount,
+      oldestEventTs,
+      newestArchivedTs,
+    }
+  }
+
+  /**
+   * Get archived events
+   */
+  getArchivedEvents(): Event[] {
+    return [...this.archivedEvents]
   }
 
   /**
@@ -2645,6 +2774,22 @@ class ParqueDBImpl {
         const eventJson = JSON.stringify(event)
         const compressed = eventJson.length > 10000
         return { compressed, data: event }
+      },
+
+      async getEventCount(): Promise<number> {
+        return self.events.length
+      },
+
+      getConfig(): EventLogConfig {
+        return { ...self.eventLogConfig }
+      },
+
+      async archiveEvents(options?: { olderThan?: Date; maxEvents?: number }): Promise<ArchiveEventsResult> {
+        return self.archiveEvents(options)
+      },
+
+      async getArchivedEvents(): Promise<Event[]> {
+        return self.getArchivedEvents()
       },
     }
   }
@@ -3002,7 +3147,7 @@ class ParqueDBImpl {
         }
       }
 
-      const data: any = {
+      const data: CreateInput<T> = {
         $type: 'Unknown',
         name: 'Upserted',
         ...filterFields,
@@ -3514,6 +3659,10 @@ export class ParqueDB {
         if (prop === 'getIndexManager') {
           return impl.getIndexManager.bind(impl)
         }
+        // Resource cleanup
+        if (prop === 'dispose') {
+          return impl.dispose.bind(impl)
+        }
 
         // Handle Symbol properties
         if (typeof prop === 'symbol') {
@@ -3808,6 +3957,23 @@ export class ParqueDB {
    * Get the index manager instance
    */
   getIndexManager(): IndexManager {
+    throw new Error('Not implemented')
+  }
+
+  // ===========================================================================
+  // Resource Management
+  // ===========================================================================
+
+  /**
+   * Dispose of this ParqueDB instance and clean up associated global state.
+   * Call this when you are done using a ParqueDB instance to prevent memory leaks.
+   *
+   * After calling dispose():
+   * - The global state (entities, events, snapshots, query stats) for this storage backend is cleared
+   * - The instance should not be used anymore
+   * - Other ParqueDB instances using the same storage backend will also lose their shared state
+   */
+  dispose(): void {
     throw new Error('Not implemented')
   }
 }

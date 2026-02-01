@@ -19,6 +19,11 @@ ParqueDB is a hybrid relational/document/graph database built on Apache Parquet.
 
 4. **Variant type**: Semi-structured data with optional shredding for hot fields
 
+5. **Dual Storage Architecture** (see `docs/architecture/ENTITY_STORAGE.md`):
+   - **Node.js/Testing**: `ParqueDB.ts` uses in-memory `globalEntityStore` + storage backend
+   - **Workers (writes)**: `ParqueDBDO.ts` uses SQLite as source of truth
+   - **Workers (reads)**: `QueryExecutor` reads directly from R2 Parquet files
+
 ### Key Dependencies
 
 - `hyparquet` / `hyparquet-writer` - Pure JS Parquet read/write

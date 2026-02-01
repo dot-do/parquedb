@@ -8,6 +8,17 @@
  * - SQLite for entity metadata and indexes (fast lookups)
  * - Event log accumulates changes before flushing to Parquet
  * - Periodic flush to R2 as Parquet files
+ *
+ * SOURCE OF TRUTH:
+ * In Cloudflare Workers, this SQLite store is the authoritative source for writes.
+ * Reads go through QueryExecutor/ReadPath to R2 for performance.
+ *
+ * This is separate from ParqueDB.ts which uses globalEntityStore (in-memory) for
+ * Node.js/testing environments. See docs/architecture/ENTITY_STORAGE.md for details.
+ *
+ * @see ParqueDBWorker - The Worker entrypoint that coordinates reads (R2) and writes (this DO)
+ * @see QueryExecutor - Handles reads directly from R2 Parquet files
+ * @see ReadPath - Caching layer for R2 reads
  */
 
 import { DurableObject } from 'cloudflare:workers'
@@ -26,7 +37,7 @@ import type {
 } from '../types'
 import { entityTarget, relTarget, parseEntityTarget, isRelationshipTarget } from '../types'
 import type { Env, FlushConfig, DEFAULT_FLUSH_CONFIG, DO_SQLITE_SCHEMA } from '../types/worker'
-import { getRandom48Bit } from '../utils'
+import { getRandom48Bit, parseStoredData } from '../utils'
 
 // =============================================================================
 // ULID Generation (simplified, for event IDs)
@@ -143,8 +154,8 @@ interface StoredEvent {
   ts: string
   target: string
   op: string
-  ns: string
-  entity_id: string
+  ns: string | null
+  entity_id: string | null
   before: string | null
   after: string | null
   actor: string
@@ -241,8 +252,8 @@ export class ParqueDBDO extends DurableObject<Env> {
         ts TEXT NOT NULL,
         target TEXT NOT NULL,
         op TEXT NOT NULL,
-        ns TEXT NOT NULL,
-        entity_id TEXT NOT NULL,
+        ns TEXT,
+        entity_id TEXT,
         before TEXT,
         after TEXT,
         actor TEXT NOT NULL,
@@ -401,15 +412,15 @@ export class ParqueDBDO extends DurableObject<Env> {
       throw new Error(`Entity ${ns}/${id} not found`)
     }
 
-    const current = rows[0]
+    const current = rows[0]!
 
     // Check version for optimistic concurrency
     if (options.expectedVersion !== undefined && current.version !== options.expectedVersion) {
       throw new Error(`Version mismatch: expected ${options.expectedVersion}, got ${current.version}`)
     }
 
-    // Apply update operators
-    let data = JSON.parse(current.data) as Record<string, unknown>
+    // Apply update operators - validate stored data is a valid object
+    let data = parseStoredData(current.data)
     let name = current.name
     let type = current.type
 
@@ -501,7 +512,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       ts: Date.now(),
       op: 'UPDATE',
       target: entityTarget(ns, id),
-      before: { ...JSON.parse(current.data), $type: current.type, name: current.name } as Variant,
+      before: { ...parseStoredData(current.data), $type: current.type, name: current.name } as Variant,
       after: { ...data, $type: type, name } as Variant,
       actor: actor as string,
     })
@@ -545,7 +556,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       return false
     }
 
-    const current = rows[0]
+    const current = rows[0]!
 
     // Check version for optimistic concurrency
     if (options.expectedVersion !== undefined && current.version !== options.expectedVersion) {
@@ -580,7 +591,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       ts: Date.now(),
       op: 'DELETE',
       target: entityTarget(ns, id),
-      before: { ...JSON.parse(current.data), $type: current.type, name: current.name } as Variant,
+      before: { ...parseStoredData(current.data), $type: current.type, name: current.name } as Variant,
       after: undefined,
       actor: actor as string,
     })
@@ -614,9 +625,11 @@ export class ParqueDBDO extends DurableObject<Env> {
     const actor = options.actor || 'system/anonymous'
 
     // Parse entity IDs
-    const [fromNs, ...fromIdParts] = fromId.split('/')
+    const [fromNsPart, ...fromIdParts] = fromId.split('/')
+    const fromNs = fromNsPart!
     const fromEntityId = fromIdParts.join('/')
-    const [toNs, ...toIdParts] = toId.split('/')
+    const [toNsPart, ...toIdParts] = toId.split('/')
+    const toNs = toNsPart!
     const toEntityId = toIdParts.join('/')
 
     // Generate reverse predicate name (simple pluralization for now)
@@ -629,7 +642,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       fromNs, fromEntityId, predicate, toNs, toEntityId
     )]
 
-    if (existing.length > 0 && existing[0].deleted_at === null) {
+    if (existing.length > 0 && existing[0]!.deleted_at === null) {
       // Already exists and not deleted
       return
     }
@@ -688,9 +701,11 @@ export class ParqueDBDO extends DurableObject<Env> {
     const actor = options.actor || 'system/anonymous'
 
     // Parse entity IDs
-    const [fromNs, ...fromIdParts] = fromId.split('/')
+    const [fromNsPart, ...fromIdParts] = fromId.split('/')
+    const fromNs = fromNsPart!
     const fromEntityId = fromIdParts.join('/')
-    const [toNs, ...toIdParts] = toId.split('/')
+    const [toNsPart, ...toIdParts] = toId.split('/')
+    const toNs = toNsPart!
     const toEntityId = toIdParts.join('/')
 
     // Soft delete the relationship
@@ -739,7 +754,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       return null
     }
 
-    return this.toEntity(rows[0])
+    return this.toEntity(rows[0]!)
   }
 
   /**
@@ -838,8 +853,8 @@ export class ParqueDBDO extends DurableObject<Env> {
       return
     }
 
-    const firstEvent = events[0]
-    const lastEvent = events[events.length - 1]
+    const firstEvent = events[0]!
+    const lastEvent = events[events.length - 1]!
     const checkpointId = generateULID()
 
     // TODO: Actually write Parquet file to R2
@@ -913,7 +928,7 @@ export class ParqueDBDO extends DurableObject<Env> {
    * Convert stored entity to API entity format
    */
   private toEntity(stored: StoredEntity): Entity {
-    const data = JSON.parse(stored.data) as Record<string, unknown>
+    const data = parseStoredData(stored.data)
 
     return {
       $id: `${stored.ns}/${stored.id}` as EntityId,
@@ -950,7 +965,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       deletedAt: stored.deleted_at ? new Date(stored.deleted_at) : undefined,
       deletedBy: stored.deleted_by as EntityId | undefined,
       version: stored.version,
-      data: stored.data ? JSON.parse(stored.data) : undefined,
+      data: stored.data ? parseStoredData(stored.data) : undefined,
     }
   }
 }
