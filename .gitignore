@@ -176,6 +176,7 @@ data/
 *.bak
 *.orig
 *.backup*
+*~
 
 # Debug files
 debug*.ts
