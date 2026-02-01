@@ -910,6 +910,29 @@ export default {
         })
       }
 
+      // Debug: index selection
+      if (path === '/debug/indexes') {
+        const dataset = url.searchParams.get('dataset') || 'onet-full/occupations'
+        const filter = JSON.parse(url.searchParams.get('filter') || '{"$index_jobZone": 3}')
+
+        const { IndexCache, createR2IndexStorageAdapter } = await import('./IndexCache')
+        const indexCache = new IndexCache(createR2IndexStorageAdapter(env.BUCKET as any))
+
+        // Load catalog
+        const catalog = await indexCache.loadCatalog(dataset)
+
+        // Select index
+        const selected = await indexCache.selectIndex(dataset, filter)
+
+        return Response.json({
+          dataset,
+          filter,
+          catalogPath: `${dataset}/indexes/_catalog.json`,
+          catalogEntries: catalog,
+          selectedIndex: selected ? { type: selected.type, name: selected.entry.name, field: selected.entry.field } : null,
+        })
+      }
+
       // Debug: cache stats
       if (path === '/debug/cache') {
         const cacheStats = await worker.getCacheStats()

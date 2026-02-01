@@ -50,9 +50,9 @@
     "@icetype/core": "^0.2.0",
     "@icetype/iceberg": "^0.2.0",
     "@types/pluralize": "^0.0.33",
-    "hyparquet": "github:dot-do/hyparquet#predicate-pushdown-parquedb",
+    "hyparquet": "github:dot-do/hyparquet#variant-shredding",
     "hyparquet-compressors": "^1.1.1",
-    "hyparquet-writer": "github:dot-do/hyparquet-writer#fix-lz4-uncompressed-size",
+    "hyparquet-writer": "github:dot-do/hyparquet-writer#variant-shredding",
     "pluralize": "^8.0.0"
   },
   "devDependencies": {

@@ -16,6 +16,8 @@ import {
   type ParquetMetadata,
 } from './predicate'
 import { checkBloomFilter } from './bloom'
+import type { IndexManager, SelectedIndex } from '../indexes/manager'
+import type { IndexLookupResult, FTSSearchResult } from '../indexes/types'
 
 // =============================================================================
 // Query Result Types
@@ -57,6 +59,10 @@ export interface QueryStats {
   columnsRead: string[]
   /** Whether bloom filter was used */
   usedBloomFilter: boolean
+  /** Index used (if any) */
+  indexUsed?: string
+  /** Index type used */
+  indexType?: 'hash' | 'sst' | 'fts'
 }
 
 /**
@@ -86,6 +92,17 @@ export interface QueryPlan {
   sort: {
     fields: string[]
     canUseSortedData: boolean
+  }
+  /** Index usage plan */
+  index?: {
+    /** Index name */
+    name: string
+    /** Index type */
+    type: 'hash' | 'sst' | 'fts'
+    /** Field being queried */
+    field?: string
+    /** Whether index will be used */
+    willUse: boolean
   }
 }
 
@@ -147,10 +164,22 @@ export interface BloomFilterReader {
  * Executes queries against Parquet files with predicate pushdown
  */
 export class QueryExecutor {
+  private indexManager?: IndexManager
+
   constructor(
     private reader: ParquetReader,
-    private storage: StorageBackend
-  ) {}
+    private storage: StorageBackend,
+    indexManager?: IndexManager
+  ) {
+    this.indexManager = indexManager
+  }
+
+  /**
+   * Set the index manager for index-aware query execution
+   */
+  setIndexManager(indexManager: IndexManager): void {
+    this.indexManager = indexManager
+  }
 
   /**
    * Execute a query with filter and options
@@ -167,6 +196,148 @@ export class QueryExecutor {
   ): Promise<QueryResult<T>> {
     const startTime = Date.now()
 
+    // Check for applicable indexes first
+    if (this.indexManager) {
+      const indexPlan = await this.indexManager.selectIndex(ns, filter)
+      if (indexPlan) {
+        const indexResult = await this.executeWithIndex<T>(ns, filter, options, indexPlan, startTime)
+        if (indexResult) {
+          return indexResult
+        }
+        // Fall through to full scan if index execution fails
+      }
+    }
+
+    // Standard execution path with predicate pushdown
+    return this.executeFullScan<T>(ns, filter, options, startTime)
+  }
+
+  /**
+   * Execute query using a secondary index
+   */
+  private async executeWithIndex<T>(
+    ns: string,
+    filter: Filter,
+    options: FindOptions<T>,
+    indexPlan: SelectedIndex,
+    startTime: number
+  ): Promise<QueryResult<T> | null> {
+    try {
+      let candidateDocIds: string[] = []
+      let usedFTS = false
+
+      // Execute index lookup based on type
+      switch (indexPlan.type) {
+        case 'hash': {
+          const result = await this.indexManager!.hashLookup(
+            ns,
+            indexPlan.index.name,
+            indexPlan.condition
+          )
+          candidateDocIds = result.docIds
+          break
+        }
+
+        case 'sst': {
+          const rangeQuery = this.extractRangeQuery(indexPlan.condition)
+          if (rangeQuery) {
+            const result = await this.indexManager!.rangeQuery(
+              ns,
+              indexPlan.index.name,
+              rangeQuery
+            )
+            candidateDocIds = result.docIds
+          }
+          break
+        }
+
+        case 'fts': {
+          const searchQuery = (filter.$text as { $search: string })?.$search
+          if (searchQuery) {
+            const results = await this.indexManager!.ftsSearch(ns, searchQuery, {
+              limit: options.limit,
+            })
+            candidateDocIds = results.map(r => r.docId)
+            usedFTS = true
+          }
+          break
+        }
+      }
+
+      if (candidateDocIds.length === 0) {
+        // Index found no matches - return empty result
+        return {
+          rows: [],
+          hasMore: false,
+          stats: {
+            totalRowGroups: 0,
+            scannedRowGroups: 0,
+            skippedRowGroups: 0,
+            rowsScanned: 0,
+            rowsMatched: 0,
+            executionTimeMs: Date.now() - startTime,
+            columnsRead: [],
+            usedBloomFilter: false,
+          },
+        }
+      }
+
+      // Load metadata for reading specific documents
+      const dataPath = `data/${ns}/data.parquet`
+      const metadata = await this.reader.readMetadata(dataPath)
+      const columns = this.selectColumns(filter, options)
+
+      // Read all rows and filter by candidate IDs
+      // TODO: Optimize to read only specific row groups based on index hints
+      const allRows = await this.reader.readAll<T>(dataPath, columns.length > 0 ? columns : undefined)
+
+      // Filter to candidate documents
+      const candidateSet = new Set(candidateDocIds)
+      let filtered = allRows.filter(row => {
+        const id = (row as Record<string, unknown>).$id as string
+        return candidateSet.has(id)
+      })
+
+      // Apply remaining filter conditions (excluding the indexed field)
+      if (!usedFTS) {
+        const predicate = toPredicate(filter)
+        filtered = filtered.filter(row => predicate(row))
+      }
+
+      // Apply post-processing (sort, limit, skip)
+      const result = this.postProcess(filtered, options)
+
+      return {
+        rows: result.rows,
+        totalCount: result.totalCount,
+        nextCursor: result.nextCursor,
+        hasMore: result.hasMore,
+        stats: {
+          totalRowGroups: metadata.rowGroups?.length ?? 0,
+          scannedRowGroups: 1, // Simplified - we read all for now
+          skippedRowGroups: 0,
+          rowsScanned: allRows.length,
+          rowsMatched: filtered.length,
+          executionTimeMs: Date.now() - startTime,
+          columnsRead: columns,
+          usedBloomFilter: false,
+        },
+      }
+    } catch {
+      // Index execution failed, fall back to full scan
+      return null
+    }
+  }
+
+  /**
+   * Execute query with full scan and predicate pushdown
+   */
+  private async executeFullScan<T>(
+    ns: string,
+    filter: Filter,
+    options: FindOptions<T>,
+    startTime: number
+  ): Promise<QueryResult<T>> {
     // 1. Load metadata
     const dataPath = `data/${ns}/data.parquet`
     const metadata = await this.reader.readMetadata(dataPath)
@@ -224,6 +395,34 @@ export class QueryExecutor {
       hasMore: result.hasMore,
       stats: executionStats,
     }
+  }
+
+  /**
+   * Extract range query operators from a condition
+   */
+  private extractRangeQuery(condition: unknown): {
+    $gt?: unknown
+    $gte?: unknown
+    $lt?: unknown
+    $lte?: unknown
+  } | null {
+    if (typeof condition !== 'object' || condition === null) {
+      return null
+    }
+
+    const obj = condition as Record<string, unknown>
+    const range: { $gt?: unknown; $gte?: unknown; $lt?: unknown; $lte?: unknown } = {}
+
+    if ('$gt' in obj) range.$gt = obj.$gt
+    if ('$gte' in obj) range.$gte = obj.$gte
+    if ('$lt' in obj) range.$lt = obj.$lt
+    if ('$lte' in obj) range.$lte = obj.$lte
+
+    if (Object.keys(range).length === 0) {
+      return null
+    }
+
+    return range
   }
 
   /**

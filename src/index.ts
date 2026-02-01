@@ -63,6 +63,38 @@ export {
 } from './query/update'
 
 // =============================================================================
+// Indexes
+// =============================================================================
+
+export {
+  // Index Manager
+  IndexManager,
+  // Secondary Indexes
+  HashIndex,
+  SSTIndex,
+  // Full-Text Search
+  FTSIndex,
+  InvertedIndex,
+  BM25Scorer,
+  tokenize,
+  tokenizeQuery,
+  porterStem,
+  // Key Encoding
+  encodeKey,
+  decodeKey,
+  compareKeys,
+  hashKey,
+  // Types
+  type IndexDefinition,
+  type IndexMetadata,
+  type IndexStats,
+  type IndexLookupResult,
+  type RangeQuery,
+  type FTSSearchOptions,
+  type FTSSearchResult,
+} from './indexes'
+
+// =============================================================================
 // Version
 // =============================================================================
 

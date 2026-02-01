@@ -227,7 +227,7 @@ function matchesCondition(value: unknown, condition: unknown): boolean {
         if (value === target) return false
         break
       case '$gt':
-        if (!(value as number) > (target as number)) return false
+        if (!((value as number) > (target as number))) return false
         break
       case '$gte':
         if (!((value as number) >= (target as number))) return false

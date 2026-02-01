@@ -30,6 +30,8 @@ import type {
 } from './types'
 import { parseFieldType, isRelationString, parseRelation } from './types/schema'
 import { FileNotFoundError } from './storage/MemoryBackend'
+import { IndexManager } from './indexes/manager'
+import type { IndexDefinition, IndexMetadata, IndexStats } from './indexes/types'
 
 // =============================================================================
 // Configuration Types
@@ -606,6 +608,7 @@ class ParqueDBImpl {
   private pendingEvents: Event[] = [] // Buffer for batched writes
   private flushPromise: Promise<void> | null = null // Promise for pending flush
   private inTransaction = false // Flag to suppress auto-flush during transactions
+  private indexManager: IndexManager // Index management
 
   constructor(config: ParqueDBConfig) {
     if (!config.storage) {
@@ -618,6 +621,8 @@ class ParqueDBImpl {
     this.events = getEventStore(config.storage)
     this.snapshots = getSnapshotStore(config.storage)
     this.queryStats = getQueryStatsStore(config.storage)
+    // Initialize index manager
+    this.indexManager = new IndexManager(config.storage)
     if (config.schema) {
       this.registerSchema(config.schema)
     }
@@ -3100,6 +3105,111 @@ class ParqueDBImpl {
 
     return newState as Entity<T>
   }
+
+  // ===========================================================================
+  // Index Management API
+  // ===========================================================================
+
+  /**
+   * Create a new index on a namespace
+   *
+   * @param ns - Namespace
+   * @param definition - Index definition
+   * @returns Index metadata
+   *
+   * @example
+   * // Create a hash index for equality lookups
+   * await db.createIndex('orders', {
+   *   name: 'idx_status',
+   *   type: 'hash',
+   *   fields: [{ path: 'status' }]
+   * })
+   *
+   * @example
+   * // Create an SST index for range queries
+   * await db.createIndex('products', {
+   *   name: 'idx_price',
+   *   type: 'sst',
+   *   fields: [{ path: 'price' }]
+   * })
+   *
+   * @example
+   * // Create an FTS index for full-text search
+   * await db.createIndex('articles', {
+   *   name: 'idx_fts_content',
+   *   type: 'fts',
+   *   fields: [{ path: 'title' }, { path: 'body' }]
+   * })
+   */
+  async createIndex(ns: string, definition: IndexDefinition): Promise<IndexMetadata> {
+    validateNamespace(ns)
+    return this.indexManager.createIndex(ns, definition)
+  }
+
+  /**
+   * Drop an index
+   *
+   * @param ns - Namespace
+   * @param indexName - Index name
+   */
+  async dropIndex(ns: string, indexName: string): Promise<void> {
+    validateNamespace(ns)
+    return this.indexManager.dropIndex(ns, indexName)
+  }
+
+  /**
+   * List all indexes for a namespace
+   *
+   * @param ns - Namespace
+   * @returns Array of index metadata
+   */
+  async listIndexes(ns: string): Promise<IndexMetadata[]> {
+    validateNamespace(ns)
+    return this.indexManager.listIndexes(ns)
+  }
+
+  /**
+   * Get metadata for a specific index
+   *
+   * @param ns - Namespace
+   * @param indexName - Index name
+   * @returns Index metadata or null if not found
+   */
+  async getIndex(ns: string, indexName: string): Promise<IndexMetadata | null> {
+    validateNamespace(ns)
+    return this.indexManager.getIndexMetadata(ns, indexName)
+  }
+
+  /**
+   * Rebuild an index
+   *
+   * @param ns - Namespace
+   * @param indexName - Index name
+   */
+  async rebuildIndex(ns: string, indexName: string): Promise<void> {
+    validateNamespace(ns)
+    return this.indexManager.rebuildIndex(ns, indexName)
+  }
+
+  /**
+   * Get statistics for an index
+   *
+   * @param ns - Namespace
+   * @param indexName - Index name
+   * @returns Index statistics
+   */
+  async getIndexStats(ns: string, indexName: string): Promise<IndexStats> {
+    validateNamespace(ns)
+    return this.indexManager.getIndexStats(ns, indexName)
+  }
+
+  /**
+   * Get the index manager instance
+   * (For advanced use cases)
+   */
+  getIndexManager(): IndexManager {
+    return this.indexManager
+  }
 }
 
 // =============================================================================
@@ -3192,6 +3302,28 @@ export class ParqueDB {
         }
         if (prop === 'getRelated') {
           return impl.getRelated.bind(impl)
+        }
+        // Index management methods
+        if (prop === 'createIndex') {
+          return impl.createIndex.bind(impl)
+        }
+        if (prop === 'dropIndex') {
+          return impl.dropIndex.bind(impl)
+        }
+        if (prop === 'listIndexes') {
+          return impl.listIndexes.bind(impl)
+        }
+        if (prop === 'getIndex') {
+          return impl.getIndex.bind(impl)
+        }
+        if (prop === 'rebuildIndex') {
+          return impl.rebuildIndex.bind(impl)
+        }
+        if (prop === 'getIndexStats') {
+          return impl.getIndexStats.bind(impl)
+        }
+        if (prop === 'getIndexManager') {
+          return impl.getIndexManager.bind(impl)
         }
 
         // Handle Symbol properties
@@ -3423,6 +3555,70 @@ export class ParqueDB {
     _relationField: string,
     _options?: GetRelatedOptions
   ): Promise<GetRelatedResult<T>> {
+    throw new Error('Not implemented')
+  }
+
+  // ===========================================================================
+  // Index Management API
+  // ===========================================================================
+
+  /**
+   * Create a new index on a namespace
+   * @param ns - Namespace
+   * @param definition - Index definition
+   */
+  createIndex(_ns: string, _definition: IndexDefinition): Promise<IndexMetadata> {
+    throw new Error('Not implemented')
+  }
+
+  /**
+   * Drop an index
+   * @param ns - Namespace
+   * @param indexName - Index name
+   */
+  dropIndex(_ns: string, _indexName: string): Promise<void> {
+    throw new Error('Not implemented')
+  }
+
+  /**
+   * List all indexes for a namespace
+   * @param ns - Namespace
+   */
+  listIndexes(_ns: string): Promise<IndexMetadata[]> {
+    throw new Error('Not implemented')
+  }
+
+  /**
+   * Get metadata for a specific index
+   * @param ns - Namespace
+   * @param indexName - Index name
+   */
+  getIndex(_ns: string, _indexName: string): Promise<IndexMetadata | null> {
+    throw new Error('Not implemented')
+  }
+
+  /**
+   * Rebuild an index
+   * @param ns - Namespace
+   * @param indexName - Index name
+   */
+  rebuildIndex(_ns: string, _indexName: string): Promise<void> {
+    throw new Error('Not implemented')
+  }
+
+  /**
+   * Get statistics for an index
+   * @param ns - Namespace
+   * @param indexName - Index name
+   */
+  getIndexStats(_ns: string, _indexName: string): Promise<IndexStats> {
+    throw new Error('Not implemented')
+  }
+
+  /**
+   * Get the index manager instance
+   */
+  getIndexManager(): IndexManager {
     throw new Error('Not implemented')
   }
 }
