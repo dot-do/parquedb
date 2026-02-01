@@ -14,6 +14,15 @@
 
 import { defineWorkspace } from 'vitest/config'
 import { defineWorkersConfig } from '@cloudflare/vitest-pool-workers/config'
+import { resolve } from 'node:path'
+
+// Shared resolve configuration for path aliases
+const sharedResolve = {
+  alias: {
+    '@': resolve(__dirname, './src'),
+    '@tests': resolve(__dirname, './tests'),
+  },
+}
 
 export default defineWorkspace([
   // ===========================================================================
@@ -22,6 +31,7 @@ export default defineWorkspace([
 
   // Unit tests - fast, isolated tests for pure functions
   {
+    resolve: sharedResolve,
     test: {
       name: 'node:unit',
       root: '.',
@@ -45,6 +55,7 @@ export default defineWorkspace([
 
   // Integration tests - tests involving multiple components
   {
+    resolve: sharedResolve,
     test: {
       name: 'node:integration',
       root: '.',
@@ -68,6 +79,7 @@ export default defineWorkspace([
 
   // E2E tests (Node.js mock environment)
   {
+    resolve: sharedResolve,
     test: {
       name: 'node:e2e',
       root: '.',
