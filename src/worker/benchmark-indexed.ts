@@ -35,6 +35,8 @@ export interface QueryBenchmarkResult {
   indexed: {
     /** Latency percentiles */
     latencyMs: { p50: number; p95: number; avg: number }
+    /** Raw latency values for debugging */
+    rawLatencies?: number[]
     /** Index lookup time */
     indexLookupMs?: number
     /** Rows scanned */
@@ -47,6 +49,8 @@ export interface QueryBenchmarkResult {
     success: boolean
     /** Error message if failed */
     error?: string
+    /** Number of iterations that completed */
+    iterations?: number
   }
   /** Scan execution metrics (baseline) */
   scan: {
@@ -136,7 +140,7 @@ export interface BenchmarkConfig {
   /** Maximum queries per dataset (for quick runs) */
   maxQueriesPerDataset?: number
   /** Specific datasets to benchmark */
-  datasets?: Array<'imdb-1m' | 'onet-full' | 'unspsc-full'>
+  datasets?: Array<'imdb' | 'imdb-1m' | 'onet-full' | 'unspsc-full'>
   /** Query categories to include */
   categories?: BenchmarkQuery['category'][]
   /** Include scan baselines */
@@ -233,6 +237,18 @@ export async function runIndexedBenchmark(
 }
 
 /**
+ * R2 prefix for benchmark data files
+ */
+const BENCHMARK_DATA_PREFIX = 'benchmark-data'
+
+/**
+ * Get the R2 namespace path for a query (with benchmark-data prefix)
+ */
+function getBenchmarkNamespace(query: BenchmarkQuery): string {
+  return `${BENCHMARK_DATA_PREFIX}/${query.dataset}/${query.collection}`
+}
+
+/**
  * Benchmark a single query
  */
 async function benchmarkQuery(
@@ -247,23 +263,36 @@ async function benchmarkQuery(
   let indexedError: string | undefined
   let scanError: string | undefined
 
+  // Namespace with benchmark-data prefix for R2 paths
+  const ns = getBenchmarkNamespace(query)
+
+  // Clear cache before benchmarking to ensure we measure cold query performance
+  executor.clearCache()
+
   // Warmup iterations
   for (let i = 0; i < config.warmupIterations; i++) {
     try {
-      await executor.find(`${query.dataset}/${query.collection}`, query.filter, { limit: 100 })
+      executor.clearCache() // Clear between iterations for consistent warmup
+      await executor.find(ns, query.filter, { limit: 100 })
     } catch {
       // Ignore warmup errors
     }
   }
 
+  // Clear cache before measured iterations
+  executor.clearCache()
+
   // Indexed execution (uses secondary index if available)
   for (let i = 0; i < config.iterations; i++) {
     try {
+      executor.clearCache() // Clear between iterations for cold measurements
       const start = performance.now()
-      indexedResult = await executor.find(`${query.dataset}/${query.collection}`, query.filter, { limit: 100 })
-      indexedLatencies.push(performance.now() - start)
+      indexedResult = await executor.find(ns, query.filter, { limit: 100 })
+      const elapsed = performance.now() - start
+      indexedLatencies.push(elapsed)
     } catch (error) {
-      indexedError = (error as Error).message
+      indexedError = `${(error as Error).message} (ns=${ns}, filter=${JSON.stringify(query.filter)})`
+      console.error('Benchmark query error:', indexedError)
     }
   }
 
@@ -273,7 +302,7 @@ async function benchmarkQuery(
     for (let i = 0; i < config.iterations; i++) {
       try {
         const start = performance.now()
-        scanResult = await executor.find(`${query.dataset}/${query.collection}`, query.scanFilter, { limit: 100 })
+        scanResult = await executor.find(ns, query.scanFilter, { limit: 100 })
         scanLatencies.push(performance.now() - start)
       } catch (error) {
         scanError = (error as Error).message
@@ -299,12 +328,14 @@ async function benchmarkQuery(
     query,
     indexed: {
       latencyMs: indexedPercentiles,
+      rawLatencies: indexedLatencies,
       indexLookupMs: indexStats?.indexLookupMs,
       rowsScanned: indexedResult?.stats?.rowsScanned ?? 0,
       rowsReturned: indexedResult?.stats?.rowsReturned ?? 0,
       indexUsed: indexStats?.indexUsed,
       success: !indexedError,
       error: indexedError,
+      iterations: indexedLatencies.length,
     },
     scan: {
       latencyMs: scanPercentiles,
@@ -441,7 +472,7 @@ export async function handleIndexedBenchmarkRequest(
 
   const datasetsParam = url.searchParams.get('datasets')
   const datasets = datasetsParam
-    ? datasetsParam.split(',') as Array<'imdb-1m' | 'onet-full' | 'unspsc-full'>
+    ? datasetsParam.split(',') as Array<'imdb' | 'imdb-1m' | 'onet-full' | 'unspsc-full'>
     : undefined
 
   const categoriesParam = url.searchParams.get('categories')

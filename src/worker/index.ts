@@ -933,6 +933,36 @@ export default {
         })
       }
 
+      // Debug: run a query with full diagnostics
+      if (path === '/debug/query') {
+        const dataset = url.searchParams.get('dataset') || 'benchmark-data/onet-full/occupations'
+        const filter = JSON.parse(url.searchParams.get('filter') || '{"$index_jobZone": 3}')
+        const limit = parseInt(url.searchParams.get('limit') || '10')
+
+        try {
+          const start = performance.now()
+          const result = await worker.find(dataset, filter, { limit })
+          const elapsed = performance.now() - start
+
+          return Response.json({
+            dataset,
+            filter,
+            limit,
+            elapsedMs: Math.round(elapsed),
+            resultCount: result.items?.length ?? 0,
+            stats: result.stats,
+            firstItem: result.items?.[0] ?? null,
+          })
+        } catch (error) {
+          return Response.json({
+            dataset,
+            filter,
+            error: (error as Error).message,
+            stack: (error as Error).stack,
+          }, { status: 500 })
+        }
+      }
+
       // Debug: cache stats
       if (path === '/debug/cache') {
         const cacheStats = await worker.getCacheStats()

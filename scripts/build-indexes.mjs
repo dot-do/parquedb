@@ -15,7 +15,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs'
 import { join, dirname } from 'path'
-import { parquetRead } from 'hyparquet'
+import { parquetRead, parquetMetadataAsync } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
 
 // =============================================================================
@@ -27,6 +27,7 @@ const OUTPUT_DIR = 'data-v3'  // Output to same directory structure
 
 // Dataset files mapping - lists all parquet files per dataset
 const DATASET_FILES = {
+  'imdb': ['titles', 'people', 'cast'],  // ~100K titles - fits in Worker limits
   'imdb-1m': ['titles', 'people', 'cast'],
   'onet-full': [
     'occupations',
@@ -42,6 +43,22 @@ const DATASET_FILES = {
 
 // Index definitions per dataset and collection
 const INDEX_DEFINITIONS = {
+  'imdb': {
+    titles: [
+      { name: 'titleType', field: '$index_titleType', type: 'hash' },
+      { name: 'startYear', field: '$index_startYear', type: 'sst' },
+      { name: 'averageRating', field: '$index_averageRating', type: 'sst' },
+      { name: 'numVotes', field: '$index_numVotes', type: 'sst' },
+      { name: 'name', field: 'name', type: 'fts' },
+    ],
+    people: [
+      { name: 'birthYear', field: '$index_birthYear', type: 'sst' },
+      { name: 'name', field: 'name', type: 'fts' },
+    ],
+    cast: [
+      { name: 'category', field: '$index_category', type: 'hash' },
+    ],
+  },
   'imdb-1m': {
     titles: [
       { name: 'titleType', field: '$index_titleType', type: 'hash' },
@@ -115,8 +132,12 @@ const INDEX_DEFINITIONS = {
 
 /**
  * Build a hash index from Parquet data
+ * @param {Array} rows - The data rows
+ * @param {string} field - Field to index
+ * @param {number[]} rowGroupBoundaries - Cumulative row counts per row group [end1, end2, ...]
+ * @param {string} idField - ID field name
  */
-function buildHashIndex(rows, field, idField = '$id') {
+function buildHashIndex(rows, field, rowGroupBoundaries = [], idField = '$id') {
   console.log(`  Building hash index for ${field}...`)
   const buckets = new Map()
   let entryCount = 0
@@ -136,23 +157,31 @@ function buildHashIndex(rows, field, idField = '$id') {
       buckets.set(hash, [])
     }
 
+    // Calculate row group from boundaries
+    const rowGroup = getRowGroup(i, rowGroupBoundaries)
+    const rowOffset = getRowOffset(i, rowGroup, rowGroupBoundaries)
+
     buckets.get(hash).push({
       key,
       docId: String(docId),
-      rowGroup: 0,
-      rowOffset: i,
+      rowGroup,
+      rowOffset,
     })
     entryCount++
   }
 
-  console.log(`  Created ${entryCount} entries in ${buckets.size} buckets`)
+  console.log(`  Created ${entryCount} entries in ${buckets.size} buckets across ${rowGroupBoundaries.length || 1} row groups`)
   return serializeHashIndex(buckets, entryCount)
 }
 
 /**
  * Build an SST index from Parquet data
+ * @param {Array} rows - The data rows
+ * @param {string} field - Field to index
+ * @param {number[]} rowGroupBoundaries - Cumulative row counts per row group [end1, end2, ...]
+ * @param {string} idField - ID field name
  */
-function buildSSTIndex(rows, field, idField = '$id') {
+function buildSSTIndex(rows, field, rowGroupBoundaries = [], idField = '$id') {
   console.log(`  Building SST index for ${field}...`)
   const entries = []
 
@@ -163,18 +192,22 @@ function buildSSTIndex(rows, field, idField = '$id') {
 
     if (value === undefined || value === null) continue
 
+    // Calculate row group from boundaries
+    const rowGroup = getRowGroup(i, rowGroupBoundaries)
+    const rowOffset = getRowOffset(i, rowGroup, rowGroupBoundaries)
+
     entries.push({
       key: encodeKey(value),
       docId: String(docId),
-      rowGroup: 0,
-      rowOffset: i,
+      rowGroup,
+      rowOffset,
     })
   }
 
   // Sort by key
   entries.sort((a, b) => compareKeys(a.key, b.key))
 
-  console.log(`  Created ${entries.length} sorted entries`)
+  console.log(`  Created ${entries.length} sorted entries across ${rowGroupBoundaries.length || 1} row groups`)
   return serializeSSTIndex(entries)
 }
 
@@ -333,7 +366,7 @@ function compareKeys(a, b) {
 }
 
 // =============================================================================
-// Tokenization
+// Tokenization with Porter Stemming
 // =============================================================================
 
 const STOP_WORDS = new Set([
@@ -348,6 +381,145 @@ function tokenize(text) {
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)
     .filter(word => word.length >= 2 && word.length <= 50 && !STOP_WORDS.has(word))
+    .map(word => porterStem(word))  // Apply stemming to match search tokenizer
+}
+
+// =============================================================================
+// Porter Stemmer (matching src/indexes/fts/tokenizer.ts)
+// =============================================================================
+
+function porterStem(word) {
+  if (word.length <= 2) return word
+
+  let stem = word
+  // Step 1a
+  if (stem.endsWith('sses')) stem = stem.slice(0, -2)
+  else if (stem.endsWith('ies')) stem = stem.slice(0, -2)
+  else if (!stem.endsWith('ss') && stem.endsWith('s')) stem = stem.slice(0, -1)
+
+  // Step 1b
+  if (stem.endsWith('eed')) {
+    if (measureConsonants(stem.slice(0, -3)) > 0) stem = stem.slice(0, -1)
+  } else if (stem.endsWith('ed')) {
+    const prefix = stem.slice(0, -2)
+    if (hasVowel(prefix)) stem = step1bPostProcess(prefix)
+  } else if (stem.endsWith('ing')) {
+    const prefix = stem.slice(0, -3)
+    if (hasVowel(prefix)) stem = step1bPostProcess(prefix)
+  }
+
+  // Step 1c
+  if (stem.endsWith('y')) {
+    const prefix = stem.slice(0, -1)
+    if (hasVowel(prefix)) stem = prefix + 'i'
+  }
+
+  stem = step2(stem)
+  stem = step3(stem)
+  stem = step4(stem)
+
+  // Step 5a
+  if (stem.endsWith('e')) {
+    const prefix = stem.slice(0, -1)
+    const m = measureConsonants(prefix)
+    if (m > 1 || (m === 1 && !endsWithCVC(prefix))) stem = prefix
+  }
+
+  // Step 5b
+  if (stem.length > 1 && stem.endsWith('ll') && measureConsonants(stem.slice(0, -1)) > 1) {
+    stem = stem.slice(0, -1)
+  }
+
+  return stem
+}
+
+function step1bPostProcess(stem) {
+  if (stem.endsWith('at') || stem.endsWith('bl') || stem.endsWith('iz')) return stem + 'e'
+  if (stem.length >= 2) {
+    const last = stem[stem.length - 1]
+    const secondLast = stem[stem.length - 2]
+    if (last === secondLast && isConsonant(stem, stem.length - 1) && !['l', 's', 'z'].includes(last)) {
+      return stem.slice(0, -1)
+    }
+  }
+  if (endsWithCVC(stem) && measureConsonants(stem) === 1) return stem + 'e'
+  return stem
+}
+
+function step2(stem) {
+  const suffixes = {
+    'ational': 'ate', 'tional': 'tion', 'enci': 'ence', 'anci': 'ance',
+    'izer': 'ize', 'abli': 'able', 'alli': 'al', 'entli': 'ent',
+    'eli': 'e', 'ousli': 'ous', 'ization': 'ize', 'ation': 'ate',
+    'ator': 'ate', 'alism': 'al', 'iveness': 'ive', 'fulness': 'ful',
+    'ousness': 'ous', 'aliti': 'al', 'iviti': 'ive', 'biliti': 'ble',
+  }
+  for (const [suffix, replacement] of Object.entries(suffixes)) {
+    if (stem.endsWith(suffix)) {
+      const prefix = stem.slice(0, -suffix.length)
+      if (measureConsonants(prefix) > 0) return prefix + replacement
+    }
+  }
+  return stem
+}
+
+function step3(stem) {
+  const suffixes = { 'icate': 'ic', 'ative': '', 'alize': 'al', 'iciti': 'ic', 'ical': 'ic', 'ful': '', 'ness': '' }
+  for (const [suffix, replacement] of Object.entries(suffixes)) {
+    if (stem.endsWith(suffix)) {
+      const prefix = stem.slice(0, -suffix.length)
+      if (measureConsonants(prefix) > 0) return prefix + replacement
+    }
+  }
+  return stem
+}
+
+function step4(stem) {
+  const suffixes = ['al', 'ance', 'ence', 'er', 'ic', 'able', 'ible', 'ant', 'ement', 'ment', 'ent', 'ion', 'ou', 'ism', 'ate', 'iti', 'ous', 'ive', 'ize']
+  for (const suffix of suffixes) {
+    if (stem.endsWith(suffix)) {
+      const prefix = stem.slice(0, -suffix.length)
+      if (suffix === 'ion') {
+        if ((prefix.endsWith('s') || prefix.endsWith('t')) && measureConsonants(prefix) > 1) return prefix
+      } else if (measureConsonants(prefix) > 1) return prefix
+    }
+  }
+  return stem
+}
+
+function isVowel(word, index) {
+  const c = word[index]
+  if ('aeiou'.includes(c)) return true
+  if (c === 'y' && index > 0 && !isVowel(word, index - 1)) return true
+  return false
+}
+
+function isConsonant(word, index) { return !isVowel(word, index) }
+
+function hasVowel(word) {
+  for (let i = 0; i < word.length; i++) if (isVowel(word, i)) return true
+  return false
+}
+
+function measureConsonants(word) {
+  let m = 0, i = 0
+  while (i < word.length && isConsonant(word, i)) i++
+  while (i < word.length) {
+    while (i < word.length && isVowel(word, i)) i++
+    if (i >= word.length) break
+    while (i < word.length && isConsonant(word, i)) i++
+    m++
+  }
+  return m
+}
+
+function endsWithCVC(word) {
+  const len = word.length
+  if (len < 3) return false
+  if (isConsonant(word, len - 3) && isVowel(word, len - 2) && isConsonant(word, len - 1)) {
+    return !['w', 'x', 'y'].includes(word[len - 1])
+  }
+  return false
 }
 
 // =============================================================================
@@ -468,10 +640,53 @@ function getFieldValue(obj, path) {
   return current
 }
 
+/**
+ * Calculate which row group a row index belongs to
+ * @param {number} rowIndex - Global row index
+ * @param {number[]} boundaries - Cumulative row counts [end1, end2, ...]
+ * @returns {number} Row group index
+ */
+function getRowGroup(rowIndex, boundaries) {
+  if (!boundaries || boundaries.length === 0) return 0
+  for (let rg = 0; rg < boundaries.length; rg++) {
+    if (rowIndex < boundaries[rg]) {
+      return rg
+    }
+  }
+  return boundaries.length - 1
+}
+
+/**
+ * Calculate the row offset within a row group
+ * @param {number} rowIndex - Global row index
+ * @param {number} rowGroup - Row group index
+ * @param {number[]} boundaries - Cumulative row counts [end1, end2, ...]
+ * @returns {number} Row offset within the row group
+ */
+function getRowOffset(rowIndex, rowGroup, boundaries) {
+  if (!boundaries || boundaries.length === 0) return rowIndex
+  const groupStart = rowGroup > 0 ? boundaries[rowGroup - 1] : 0
+  return rowIndex - groupStart
+}
+
 async function readParquetFile(path) {
   console.log(`Reading ${path}...`)
   const nodeBuffer = readFileSync(path)
   const buffer = nodeBuffer.buffer.slice(nodeBuffer.byteOffset, nodeBuffer.byteOffset + nodeBuffer.byteLength)
+
+  // Get metadata to extract row group boundaries
+  const metadata = await parquetMetadataAsync(buffer)
+  const rowGroupBoundaries = []
+  let cumulativeRows = 0
+
+  if (metadata.row_groups) {
+    for (const rg of metadata.row_groups) {
+      cumulativeRows += Number(rg.num_rows)
+      rowGroupBoundaries.push(cumulativeRows)
+    }
+    console.log(`  Found ${metadata.row_groups.length} row groups: [${metadata.row_groups.map(rg => Number(rg.num_rows)).join(', ')}] rows each`)
+  }
+
   const rows = []
 
   await parquetRead({
@@ -483,8 +698,8 @@ async function readParquetFile(path) {
     },
   })
 
-  console.log(`  Loaded ${rows.length} rows`)
-  return rows
+  console.log(`  Loaded ${rows.length} rows total`)
+  return { rows, rowGroupBoundaries }
 }
 
 function ensureDir(path) {
@@ -505,7 +720,7 @@ async function buildCollectionIndexes(dataset, collection, indexesToBuild) {
     return null
   }
 
-  const rows = await readParquetFile(dataPath)
+  const { rows, rowGroupBoundaries } = await readParquetFile(dataPath)
 
   // Unpack data column if present
   const unpackedRows = rows.map(row => {
@@ -527,11 +742,11 @@ async function buildCollectionIndexes(dataset, collection, indexesToBuild) {
 
     switch (def.type) {
       case 'hash':
-        indexData = buildHashIndex(unpackedRows, def.field)
+        indexData = buildHashIndex(unpackedRows, def.field, rowGroupBoundaries)
         outputPath = join(OUTPUT_DIR, dataset, collection, 'indexes', 'secondary', `${def.name}.hash.idx`)
         break
       case 'sst':
-        indexData = buildSSTIndex(unpackedRows, def.field)
+        indexData = buildSSTIndex(unpackedRows, def.field, rowGroupBoundaries)
         outputPath = join(OUTPUT_DIR, dataset, collection, 'indexes', 'secondary', `${def.name}.sst.idx`)
         break
       case 'fts':
@@ -555,6 +770,7 @@ async function buildCollectionIndexes(dataset, collection, indexesToBuild) {
       path: outputPath.replace(`${OUTPUT_DIR}/${dataset}/${collection}/`, ''),
       sizeBytes: indexData.length,
       entryCount: unpackedRows.length,
+      rowGroups: rowGroupBoundaries.length || 1,
       updatedAt: new Date().toISOString(),
     })
   }

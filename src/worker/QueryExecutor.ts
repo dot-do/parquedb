@@ -480,6 +480,14 @@ export class QueryExecutor {
     }
   }
 
+  /**
+   * Clear in-memory caches (for benchmarking cold queries)
+   */
+  clearCache(): void {
+    this.dataCache.clear()
+    this.metadataCache.clear()
+  }
+
   // ===========================================================================
   // Find Operations
   // ===========================================================================
@@ -691,7 +699,7 @@ export class QueryExecutor {
     stats: QueryStats,
     startTime: number
   ): Promise<FindResult<T> | null> {
-    if (!this.indexCache || !this.parquetReader) {
+    if (!this.indexCache || !this.parquetReader || !this.storageAdapter) {
       return null
     }
 
@@ -703,12 +711,19 @@ export class QueryExecutor {
       }
 
       // Track index usage in stats
-      const extendedStats = stats as QueryStats & { indexUsed?: string; indexType?: string; indexLookupMs?: number }
+      const extendedStats = stats as QueryStats & {
+        indexUsed?: string
+        indexType?: string
+        indexLookupMs?: number
+        rowGroupsTotal?: number
+        rowGroupsRead?: number
+      }
       extendedStats.indexUsed = selected.entry.name
       extendedStats.indexType = selected.type
 
       const indexLookupStart = performance.now()
       let candidateDocIds: string[] = []
+      let targetRowGroups: number[] = []
 
       // Execute index lookup based on type
       switch (selected.type) {
@@ -719,6 +734,7 @@ export class QueryExecutor {
             selected.condition
           )
           candidateDocIds = result.docIds
+          targetRowGroups = result.rowGroups
           break
         }
 
@@ -729,6 +745,7 @@ export class QueryExecutor {
             selected.condition
           )
           candidateDocIds = result.docIds
+          targetRowGroups = result.rowGroups
           break
         }
 
@@ -741,6 +758,8 @@ export class QueryExecutor {
             { limit: options.limit }
           )
           candidateDocIds = ftsResults.map(r => r.docId)
+          // FTS doesn't return row groups, will need to scan all
+          targetRowGroups = []
           break
         }
       }
@@ -759,13 +778,73 @@ export class QueryExecutor {
         }
       }
 
-      // Read data.parquet and filter to candidate documents
-      type DataRow = { $id: string; data: T | string }
-      const rows = await this.parquetReader.read<DataRow>(dataPath)
-      stats.rowsScanned = rows.length
-
       // Build candidate set for O(1) lookup
       const candidateSet = new Set(candidateDocIds)
+
+      type DataRow = { $id: string; data: T | string }
+      let rows: DataRow[]
+
+      // ROW GROUP SKIPPING: Only read the row groups that contain matching documents
+      if (targetRowGroups.length > 0 && this.storageAdapter) {
+        // Read parquet metadata to get row group boundaries
+        const metadata = await this.parquetReader.readMetadata(dataPath)
+        extendedStats.rowGroupsTotal = metadata.rowGroups.length
+        extendedStats.rowGroupsRead = targetRowGroups.length
+        stats.rowGroupsSkipped = metadata.rowGroups.length - targetRowGroups.length
+
+        // Calculate row ranges for target row groups
+        // Row groups are sequential, so we need to calculate cumulative row offsets
+        const rowGroupOffsets: number[] = []
+        let cumulativeRows = 0
+        for (const rg of metadata.rowGroups) {
+          rowGroupOffsets.push(cumulativeRows)
+          cumulativeRows += rg.numRows
+        }
+
+        // Sort target row groups and merge adjacent ones into ranges
+        const sortedGroups = [...targetRowGroups].sort((a, b) => a - b)
+        const rowRanges: Array<{ rowStart: number; rowEnd: number }> = []
+
+        for (const rgIndex of sortedGroups) {
+          if (rgIndex < 0 || rgIndex >= metadata.rowGroups.length) continue
+          const rg = metadata.rowGroups[rgIndex]
+          const rowStart = rowGroupOffsets[rgIndex]
+          const rowEnd = rowStart + rg.numRows
+
+          // Try to merge with previous range if adjacent
+          const lastRange = rowRanges[rowRanges.length - 1]
+          if (lastRange && lastRange.rowEnd === rowStart) {
+            lastRange.rowEnd = rowEnd
+          } else {
+            rowRanges.push({ rowStart, rowEnd })
+          }
+        }
+
+        // Read only the target row groups using row ranges
+        // For multiple ranges, read each separately and combine
+        rows = []
+        let totalRowsScanned = 0
+
+        for (const range of rowRanges) {
+          const asyncBuffer = await this.createAsyncBuffer(dataPath)
+          const rangeRows = await parquetQuery({
+            file: asyncBuffer,
+            columns: ['$id', 'data'],
+            rowStart: range.rowStart,
+            rowEnd: range.rowEnd,
+            compressors,
+          }) as DataRow[]
+          rows.push(...rangeRows)
+          totalRowsScanned += rangeRows.length
+        }
+
+        stats.rowsScanned = totalRowsScanned
+        stats.rowGroupsScanned = targetRowGroups.length
+      } else {
+        // No row group hints, fall back to full scan
+        rows = await this.parquetReader.read<DataRow>(dataPath)
+        stats.rowsScanned = rows.length
+      }
 
       // Filter rows to candidates and unpack data
       let results = rows

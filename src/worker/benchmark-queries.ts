@@ -20,7 +20,7 @@ export interface BenchmarkQuery {
   /** Human-readable name */
   name: string
   /** Dataset this query runs against */
-  dataset: 'imdb-1m' | 'onet-full' | 'unspsc-full'
+  dataset: 'imdb' | 'imdb-1m' | 'onet-full' | 'unspsc-full'
   /** Collection within the dataset */
   collection: string
   /** Query category */
@@ -264,6 +264,128 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     id: 'imdb-scan-recent',
     name: 'Scan: recent (baseline)',
     dataset: 'imdb-1m',
+    collection: 'titles',
+    category: 'scan',
+    expectedIndex: 'none',
+    filter: { startYear: { $gte: 2020 } },
+    selectivity: 'high',
+    description: 'Baseline scan without index - filter in data column',
+  },
+]
+
+// =============================================================================
+// IMDB 100K Queries (10) - Smaller dataset that fits in Worker limits
+// =============================================================================
+
+export const IMDB_100K_QUERIES: BenchmarkQuery[] = [
+  // Equality queries (hash index)
+  {
+    id: 'imdb100k-eq-movie',
+    name: 'Movies only',
+    dataset: 'imdb',
+    collection: 'titles',
+    category: 'equality',
+    expectedIndex: 'hash',
+    filter: { $index_titleType: 'movie' },
+    selectivity: 'low',
+    description: 'Filter titles to movies only using hash index on titleType',
+  },
+  {
+    id: 'imdb100k-eq-tvseries',
+    name: 'TV Series only',
+    dataset: 'imdb',
+    collection: 'titles',
+    category: 'equality',
+    expectedIndex: 'hash',
+    filter: { $index_titleType: 'tvSeries' },
+    selectivity: 'low',
+    description: 'Filter titles to TV series only using hash index',
+  },
+  // Range queries (SST index)
+  {
+    id: 'imdb100k-range-year-2020s',
+    name: 'Year 2020-2025',
+    dataset: 'imdb',
+    collection: 'titles',
+    category: 'range',
+    expectedIndex: 'sst',
+    filter: { $index_startYear: { $gte: 2020, $lte: 2025 } },
+    selectivity: 'high',
+    description: 'Recent titles (2020-2025) using SST range index',
+  },
+  {
+    id: 'imdb100k-range-rating-high',
+    name: 'Rating >= 8.0',
+    dataset: 'imdb',
+    collection: 'titles',
+    category: 'range',
+    expectedIndex: 'sst',
+    filter: { $index_averageRating: { $gte: 8.0 } },
+    selectivity: 'high',
+    description: 'High-rated titles using SST range index',
+  },
+  {
+    id: 'imdb100k-range-votes-popular',
+    name: 'Votes >= 10000',
+    dataset: 'imdb',
+    collection: 'titles',
+    category: 'range',
+    expectedIndex: 'sst',
+    filter: { $index_numVotes: { $gte: 10000 } },
+    selectivity: 'high',
+    description: 'Popular titles by vote count using SST range index',
+  },
+  // Compound queries
+  {
+    id: 'imdb100k-compound-movie-recent',
+    name: 'Recent movies',
+    dataset: 'imdb',
+    collection: 'titles',
+    category: 'compound',
+    expectedIndex: 'hash',
+    filter: { $index_titleType: 'movie', $index_startYear: { $gte: 2020 } },
+    selectivity: 'high',
+    description: 'Compound query: movies from 2020 onwards',
+  },
+  {
+    id: 'imdb100k-compound-highrated-movie',
+    name: 'High-rated movies',
+    dataset: 'imdb',
+    collection: 'titles',
+    category: 'compound',
+    expectedIndex: 'hash',
+    filter: { $index_titleType: 'movie', $index_averageRating: { $gte: 8.0 } },
+    selectivity: 'high',
+    description: 'Compound query: movies with rating >= 8.0',
+  },
+  // FTS queries
+  {
+    id: 'imdb100k-fts-star',
+    name: 'Search: star',
+    dataset: 'imdb',
+    collection: 'titles',
+    category: 'fts',
+    expectedIndex: 'fts',
+    filter: { $text: { $search: 'star' } },
+    selectivity: 'medium',
+    description: 'Full-text search for "star" in title',
+  },
+  {
+    id: 'imdb100k-fts-love',
+    name: 'Search: love',
+    dataset: 'imdb',
+    collection: 'titles',
+    category: 'fts',
+    expectedIndex: 'fts',
+    filter: { $text: { $search: 'love' } },
+    selectivity: 'medium',
+    description: 'Full-text search for "love" in title',
+  },
+  // Scan baseline
+  {
+    id: 'imdb100k-scan-year',
+    name: 'Scan: recent (baseline)',
+    dataset: 'imdb',
     collection: 'titles',
     category: 'scan',
     expectedIndex: 'none',
@@ -756,6 +878,7 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
  */
 export const ALL_QUERIES: BenchmarkQuery[] = [
   ...IMDB_QUERIES,
+  ...IMDB_100K_QUERIES,
   ...ONET_QUERIES,
   ...UNSPSC_QUERIES,
 ]
@@ -787,6 +910,7 @@ export function getQueriesByIndexType(indexType: BenchmarkQuery['expectedIndex']
 export const QUERY_STATS = {
   total: ALL_QUERIES.length,
   byDataset: {
+    'imdb': IMDB_100K_QUERIES.length,
     'imdb-1m': IMDB_QUERIES.length,
     'onet-full': ONET_QUERIES.length,
     'unspsc-full': UNSPSC_QUERIES.length,

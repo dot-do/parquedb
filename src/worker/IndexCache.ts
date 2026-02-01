@@ -456,10 +456,14 @@ export class IndexCache {
     condition: { $search: string; $language?: string },
     options?: { limit?: number }
   ): Promise<FTSSearchResult[]> {
+    console.log(`[FTS] executeFTSSearch: dataset=${dataset}, query="${condition.$search}"`)
     const index = await this.loadFTSIndex(dataset, entry)
-    return index.search(condition.$search, {
+    console.log(`[FTS] Index loaded: ready=${index.ready}, docCount=${index.documentCount}, vocabSize=${index.vocabularySize}`)
+    const results = index.search(condition.$search, {
       limit: options?.limit ?? 100,
     })
+    console.log(`[FTS] Search results: ${results.length} matches`)
+    return results
   }
 
   // ===========================================================================

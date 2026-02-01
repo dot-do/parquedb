@@ -81,35 +81,60 @@ async function getR2FileInfo(r2Path) {
 }
 
 /**
- * Upload dataset files to R2
+ * Recursively find all files in a directory
+ */
+async function* walkDir(dir, baseDir = dir) {
+  const entries = await fs.readdir(dir, { withFileTypes: true })
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      yield* walkDir(fullPath, baseDir)
+    } else if (entry.isFile()) {
+      // Get relative path from base directory
+      const relativePath = fullPath.slice(baseDir.length + 1)
+      yield { fullPath, relativePath }
+    }
+  }
+}
+
+/**
+ * Check if a file should be uploaded
+ */
+function shouldUploadFile(filename) {
+  // Upload parquet files, index files, and catalog files
+  return filename.endsWith('.parquet') ||
+         filename.endsWith('.idx') ||
+         filename.endsWith('.json') ||
+         filename.endsWith('.idx.parquet')
+}
+
+/**
+ * Upload dataset files to R2 (recursive)
  */
 async function uploadDataset(datasetName, localDir) {
   console.log(`\n${'─'.repeat(50)}`)
   console.log(`Dataset: ${datasetName}`)
   console.log(`${'─'.repeat(50)}`)
 
-  let files
-  try {
-    files = await fs.readdir(localDir)
-  } catch {
-    console.log(`  Skipping: directory not found`)
-    return { uploaded: 0, skipped: 0, failed: 0, bytesUploaded: 0 }
-  }
-
   let uploaded = 0
   let skipped = 0
   let failed = 0
   let bytesUploaded = 0
 
-  for (const file of files) {
-    if (!file.endsWith('.parquet')) continue
+  try {
+    await fs.access(localDir)
+  } catch {
+    console.log(`  Skipping: directory not found`)
+    return { uploaded: 0, skipped: 0, failed: 0, bytesUploaded: 0 }
+  }
 
-    const localPath = join(localDir, file)
-    const stat = await fs.stat(localPath)
-    if (!stat.isFile()) continue
+  for await (const { fullPath, relativePath } of walkDir(localDir)) {
+    if (!shouldUploadFile(relativePath)) continue
 
-    // R2 path: benchmark-data/{dataset}/{filename}
-    const r2Path = `${R2_PREFIX}/${datasetName}/${file}`
+    const stat = await fs.stat(fullPath)
+
+    // R2 path: benchmark-data/{dataset}/{relativePath}
+    const r2Path = `${R2_PREFIX}/${datasetName}/${relativePath}`
 
     // Check if file already exists with same size
     if (!forceUpload) {
@@ -121,7 +146,7 @@ async function uploadDataset(datasetName, localDir) {
       }
     }
 
-    if (await uploadFile(localPath, r2Path, stat.size)) {
+    if (await uploadFile(fullPath, r2Path, stat.size)) {
       uploaded++
       bytesUploaded += stat.size
     } else {
@@ -142,15 +167,14 @@ async function listDatasets() {
 }
 
 /**
- * Get total size of a dataset
+ * Get total size of a dataset (recursive)
  */
 async function getDatasetSize(localDir) {
   let total = 0
   try {
-    const files = await fs.readdir(localDir)
-    for (const file of files) {
-      if (!file.endsWith('.parquet')) continue
-      const stat = await fs.stat(join(localDir, file))
+    for await (const { fullPath, relativePath } of walkDir(localDir)) {
+      if (!shouldUploadFile(relativePath)) continue
+      const stat = await fs.stat(fullPath)
       total += stat.size
     }
   } catch {

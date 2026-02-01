@@ -70,6 +70,8 @@ export class InvertedIndex {
       this.deserialize(data)
       this.loaded = true
     } catch (error) {
+      // Log error for debugging - FTS index load failures should be visible
+      console.error(`[FTS] Failed to load index from ${path}:`, error)
       this.index.clear()
       this.docStats.clear()
       this.loaded = true
