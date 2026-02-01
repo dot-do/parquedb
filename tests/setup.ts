@@ -16,10 +16,18 @@ declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Vi {
     interface Assertion {
+      // Existing matchers
       toBeValidEntity(): void
       toMatchFilter(filter: import('../src/types').Filter): void
       toHaveAuditFields(): void
       toBeEntityId(): void
+      // New matchers
+      toBeValidParquetFile(): void
+      toHaveRelationship(predicate: string, target?: string | RegExp): void
+      toMatchEvent(expectedOp: import('../src/types/entity').EventOp, expectedData?: Partial<import('../src/types/entity').Event>): void
+      toBeValidIndex(indexType: import('../src/indexes/types').IndexType): void
+      toHaveRowGroups(expectedCount: number): void
+      toBeCompressedWith(codec: 'UNCOMPRESSED' | 'SNAPPY' | 'GZIP' | 'LZO' | 'BROTLI' | 'LZ4' | 'ZSTD'): void
     }
   }
 }

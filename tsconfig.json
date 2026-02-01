@@ -6,6 +6,11 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
     "outDir": "./dist",
     "rootDir": "./src",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@tests/*": ["./tests/*"]
+    },
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
@@ -23,7 +28,7 @@
     "exactOptionalPropertyTypes": false,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": false,
+    "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noPropertyAccessFromIndexSignature": false,
     "esModuleInterop": true,

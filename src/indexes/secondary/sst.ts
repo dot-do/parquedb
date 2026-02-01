@@ -25,6 +25,8 @@ import {
   readCompactEntry,
   readCompactEntryWithKey,
 } from '../encoding'
+import { INDEX_PROGRESS_BATCH } from '../../constants'
+import { logger } from '../../utils/logger'
 
 // =============================================================================
 // SST Index
@@ -70,8 +72,9 @@ export class SSTIndex {
       const data = await this.storage.read(path)
       await this.deserialize(data)
       this.loaded = true
-    } catch (error) {
+    } catch (error: unknown) {
       // Index file corrupted or invalid, start fresh
+      logger.warn(`SST index load failed for ${path}, starting fresh`, error)
       this.entries = []
       this.loaded = true
     }
@@ -201,7 +204,7 @@ export class SSTIndex {
     this.ensureSorted()
     if (this.entries.length === 0) return null
 
-    const entry = this.entries[0]
+    const entry = this.entries[0]!  // length check above ensures entry exists
     return {
       value: decodeKey(entry.key),
       docId: entry.docId,
@@ -215,7 +218,7 @@ export class SSTIndex {
     this.ensureSorted()
     if (this.entries.length === 0) return null
 
-    const entry = this.entries[this.entries.length - 1]
+    const entry = this.entries[this.entries.length - 1]!  // length check above ensures entry exists
     return {
       value: decodeKey(entry.key),
       docId: entry.docId,
@@ -246,8 +249,8 @@ export class SSTIndex {
 
     // Try to insert in sorted position if we're still sorted
     if (this.sorted && this.entries.length > 0) {
-      const lastKey = this.entries[this.entries.length - 1].key
-      if (compareKeys(key, lastKey) >= 0) {
+      const lastEntry = this.entries[this.entries.length - 1]!  // length > 0 ensures valid
+      if (compareKeys(key, lastEntry.key) >= 0) {
         // Can append in sorted order
         this.entries.push(entry)
         return
@@ -270,7 +273,7 @@ export class SSTIndex {
     const key = this.encodeValue(value)
 
     for (let i = 0; i < this.entries.length; i++) {
-      const entry = this.entries[i]
+      const entry = this.entries[i]!  // loop bounds ensure valid index
       if (this.keysEqual(entry.key, key) && entry.docId === docId) {
         this.entries.splice(i, 1)
         return true
@@ -334,7 +337,7 @@ export class SSTIndex {
       }
 
       processed++
-      if (options?.onProgress && processed % 10000 === 0) {
+      if (options?.onProgress && processed % INDEX_PROGRESS_BATCH === 0) {
         options.onProgress(processed)
       }
     }
@@ -414,8 +417,9 @@ export class SSTIndex {
   }
 
   private extractValue(doc: Record<string, unknown>): unknown {
-    if (this.definition.fields.length === 1) {
-      return this.getNestedValue(doc, this.definition.fields[0].path)
+    const firstField = this.definition.fields[0]
+    if (this.definition.fields.length === 1 && firstField) {
+      return this.getNestedValue(doc, firstField.path)
     }
 
     const values: unknown[] = []
@@ -466,7 +470,8 @@ export class SSTIndex {
 
     while (lo < hi) {
       const mid = (lo + hi) >>> 1
-      if (compareKeys(this.entries[mid].key, key) < 0) {
+      const midEntry = this.entries[mid]!  // mid is between lo and hi < length
+      if (compareKeys(midEntry.key, key) < 0) {
         lo = mid + 1
       } else {
         hi = mid
@@ -485,7 +490,8 @@ export class SSTIndex {
 
     while (lo < hi) {
       const mid = (lo + hi) >>> 1
-      if (compareKeys(this.entries[mid].key, key) <= 0) {
+      const midEntry = this.entries[mid]!  // mid is between lo and hi < length
+      if (compareKeys(midEntry.key, key) <= 0) {
         lo = mid + 1
       } else {
         hi = mid

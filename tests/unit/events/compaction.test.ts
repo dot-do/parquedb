@@ -10,11 +10,11 @@ import {
   createEventCompactor,
   createStateCollector,
   createInMemoryStateWriter,
-} from '../../../src/events/compaction'
-import { ManifestManager } from '../../../src/events/manifest'
-import type { SegmentStorage } from '../../../src/events/segment'
-import type { Event } from '../../../src/types'
-import type { EventBatch, EventSegment } from '../../../src/events/types'
+} from '@/events/compaction'
+import { ManifestManager } from '@/events/manifest'
+import type { SegmentStorage } from '@/events/segment'
+import type { Event } from '@/types'
+import type { EventBatch, EventSegment } from '@/events/types'
 
 // =============================================================================
 // Mock Storage Implementation

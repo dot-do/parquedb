@@ -25,6 +25,10 @@ import { parquetQuery } from 'hyparquet'
 import { compressors } from '../parquet/compressors'
 // Index cache for secondary index lookups
 import { IndexCache, createR2IndexStorageAdapter, type SelectedIndex } from './IndexCache'
+// Centralized constants
+import { MAX_CACHE_SIZE } from '../constants'
+// Logger
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types
@@ -244,8 +248,8 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
   // Files being loaded (for deduplication)
   private loadingFiles = new Map<string, Promise<Uint8Array>>()
 
-  // Max file size for whole-file caching (2MB)
-  private static readonly MAX_CACHE_SIZE = 2 * 1024 * 1024
+  // Max file size for whole-file caching
+  private static readonly MAX_CACHE_SIZE = MAX_CACHE_SIZE
 
   constructor(
     private cdnBucket: R2Bucket,      // CDN bucket (cdn) for reads
@@ -426,8 +430,8 @@ export class QueryExecutor {
   /** Cache of file sizes for whole-file read decisions */
   private fileSizeCache = new Map<string, number>()
 
-  /** Maximum file size for whole-file caching (2MB) */
-  private static readonly MAX_CACHE_SIZE = 2 * 1024 * 1024
+  /** Maximum file size for whole-file caching */
+  private static readonly MAX_CACHE_SIZE_LIMIT = MAX_CACHE_SIZE
 
   /** R2 storage adapter for ParquetReader */
   private storageAdapter: CdnR2StorageAdapter | null = null
@@ -662,7 +666,7 @@ export class QueryExecutor {
         hasMore: processed.hasMore,
         stats,
       }
-    } catch (error) {
+    } catch (error: unknown) {
       if (error instanceof NotFoundError) {
         // No data file exists - return empty result
         stats.executionTimeMs = performance.now() - startTime
@@ -887,9 +891,9 @@ export class QueryExecutor {
         hasMore: processed.hasMore,
         stats,
       }
-    } catch (error) {
+    } catch (error: unknown) {
       // Index execution failed, fall back to full scan
-      console.error('Index execution failed, falling back to full scan:', error)
+      logger.warn('Index execution failed, falling back to full scan', error)
       return null
     }
   }
@@ -1173,7 +1177,7 @@ export class QueryExecutor {
       this.bloomCache.set(ns, bloom)
 
       return bloom
-    } catch (error) {
+    } catch (error: unknown) {
       if (error instanceof NotFoundError) {
         return null
       }

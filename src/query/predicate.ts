@@ -19,6 +19,7 @@ import type {
   isArrayOperator,
   isExistenceOperator,
 } from '../types/filter'
+import { deepEqual, compareValues, getNestedValue, getValueType } from '../utils'
 
 // =============================================================================
 // Statistics Types
@@ -286,40 +287,7 @@ function isValueInRange(value: unknown, min: unknown, max: unknown): boolean {
   return true
 }
 
-/**
- * Compare two values, returning negative if a < b, 0 if equal, positive if a > b
- * Handles different types: numbers, strings, dates, booleans
- */
-function compareValues(a: unknown, b: unknown): number {
-  // Handle null/undefined
-  if (a === null || a === undefined) {
-    if (b === null || b === undefined) return 0
-    return -1 // Nulls sort first
-  }
-  if (b === null || b === undefined) return 1
-
-  // Same type comparisons
-  if (typeof a === 'number' && typeof b === 'number') {
-    return a - b
-  }
-
-  if (typeof a === 'string' && typeof b === 'string') {
-    return a.localeCompare(b)
-  }
-
-  if (a instanceof Date && b instanceof Date) {
-    return a.getTime() - b.getTime()
-  }
-
-  if (typeof a === 'boolean' && typeof b === 'boolean') {
-    return (a ? 1 : 0) - (b ? 1 : 0)
-  }
-
-  // Cross-type comparison: convert to string
-  const strA = String(a)
-  const strB = String(b)
-  return strA.localeCompare(strB)
-}
+// compareValues is imported from ../utils
 
 /**
  * Check if a string prefix could match any value in [min, max]
@@ -418,26 +386,7 @@ function evaluateFilter(filter: Filter, row: unknown): boolean {
   return true
 }
 
-/**
- * Get a nested value from an object using dot notation
- * e.g., getNestedValue({ a: { b: 1 } }, 'a.b') => 1
- */
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  const parts = path.split('.')
-  let current: unknown = obj
-
-  for (const part of parts) {
-    if (current === null || current === undefined) {
-      return undefined
-    }
-    if (typeof current !== 'object') {
-      return undefined
-    }
-    current = (current as Record<string, unknown>)[part]
-  }
-
-  return current
-}
+// getNestedValue is imported from ../utils
 
 /**
  * Evaluate a field condition against a value
@@ -579,49 +528,9 @@ function evaluateOperators(fieldValue: unknown, operators: Record<string, unknow
   return true
 }
 
-/**
- * Get the type of a value (matching MongoDB's $type operator)
- */
-function getValueType(value: unknown): string {
-  if (value === null) return 'null'
-  if (value === undefined) return 'null'
-  if (Array.isArray(value)) return 'array'
-  if (value instanceof Date) return 'date'
-  return typeof value // 'boolean', 'number', 'string', 'object'
-}
+// getValueType is imported from ../utils
 
-/**
- * Deep equality check
- */
-function deepEqual(a: unknown, b: unknown): boolean {
-  // Identical or both null/undefined
-  if (a === b) return true
-  if (a === null || a === undefined) return b === null || b === undefined
-
-  // Date comparison
-  if (a instanceof Date && b instanceof Date) {
-    return a.getTime() === b.getTime()
-  }
-
-  // Array comparison
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false
-    return a.every((v, i) => deepEqual(v, b[i]))
-  }
-
-  // Object comparison
-  if (typeof a === 'object' && typeof b === 'object') {
-    const aObj = a as Record<string, unknown>
-    const bObj = b as Record<string, unknown>
-    const aKeys = Object.keys(aObj)
-    const bKeys = Object.keys(bObj)
-    if (aKeys.length !== bKeys.length) return false
-    return aKeys.every(k => deepEqual(aObj[k], bObj[k]))
-  }
-
-  // Primitive comparison (already failed a === b)
-  return false
-}
+// deepEqual is imported from ../utils
 
 // =============================================================================
 // Field Extraction

@@ -497,8 +497,8 @@ export class EventCompactor {
     const match = interval.match(/^(\d+)(s|m|h|d)$/)
     if (!match) return 0
 
-    const value = parseInt(match[1], 10)
-    const unit = match[2]
+    const value = parseInt(match[1]!, 10) // match[1] is guaranteed to exist after successful regex
+    const unit = match[2]!
 
     switch (unit) {
       case 's': return value * 1000

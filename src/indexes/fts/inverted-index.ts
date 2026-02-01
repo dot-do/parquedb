@@ -9,6 +9,7 @@ import type { StorageBackend } from '../../types/storage'
 import type { IndexDefinition } from '../types'
 import type { Posting, DocumentStats, CorpusStats, TokenizerOptions } from './types'
 import { tokenize } from './tokenizer'
+import { logger } from '../../utils/logger'
 
 // =============================================================================
 // Inverted Index
@@ -69,9 +70,9 @@ export class InvertedIndex {
       const data = await this.storage.read(path)
       this.deserialize(data)
       this.loaded = true
-    } catch (error) {
+    } catch (error: unknown) {
       // Log error for debugging - FTS index load failures should be visible
-      console.error(`[FTS] Failed to load index from ${path}:`, error)
+      logger.warn(`[FTS] Failed to load index from ${path}, starting fresh`, error)
       this.index.clear()
       this.docStats.clear()
       this.loaded = true

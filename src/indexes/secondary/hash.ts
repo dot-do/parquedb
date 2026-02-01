@@ -25,6 +25,8 @@ import {
   readCompactEntry,
   readCompactEntryWithKey,
 } from '../encoding'
+import { INDEX_PROGRESS_BATCH } from '../../constants'
+import { logger } from '../../utils/logger'
 
 // =============================================================================
 // Hash Index
@@ -70,8 +72,9 @@ export class HashIndex {
       const data = await this.storage.read(path)
       await this.deserialize(data)
       this.loaded = true
-    } catch (error) {
+    } catch (error: unknown) {
       // Index file corrupted or invalid, start fresh
+      logger.warn(`Hash index load failed for ${path}, starting fresh`, error)
       this.buckets.clear()
       this.entryCount = 0
       this.loaded = true
@@ -297,7 +300,7 @@ export class HashIndex {
       }
 
       processed++
-      if (options?.onProgress && processed % 10000 === 0) {
+      if (options?.onProgress && processed % INDEX_PROGRESS_BATCH === 0) {
         options.onProgress(processed)
       }
     }
@@ -375,8 +378,9 @@ export class HashIndex {
   }
 
   private extractValue(doc: Record<string, unknown>): unknown {
-    if (this.definition.fields.length === 1) {
-      return this.getNestedValue(doc, this.definition.fields[0].path)
+    const firstField = this.definition.fields[0]
+    if (this.definition.fields.length === 1 && firstField) {
+      return this.getNestedValue(doc, firstField.path)
     }
 
     // Composite key

@@ -18,6 +18,7 @@ import {
 import { checkBloomFilter } from './bloom'
 import type { IndexManager, SelectedIndex } from '../indexes/manager'
 import type { IndexLookupResult, FTSSearchResult } from '../indexes/types'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Query Result Types
@@ -939,7 +940,7 @@ export class QueryExecutor {
     // $lookup would require access to other collections
     // For now, return data unchanged
     if ('$lookup' in stage) {
-      console.warn('$lookup requires cross-collection access, skipping')
+      logger.warn('$lookup requires cross-collection access, skipping')
       return data
     }
 

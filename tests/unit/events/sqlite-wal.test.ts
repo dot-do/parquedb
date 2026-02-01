@@ -3,10 +3,10 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { SqliteWal, createSqliteWal, createSqliteFlushHandler } from '../../../src/events/sqlite-wal'
-import type { SqliteInterface } from '../../../src/events/sqlite-wal'
-import type { Event } from '../../../src/types'
-import type { EventBatch } from '../../../src/events/types'
+import { SqliteWal, createSqliteWal, createSqliteFlushHandler } from '@/events/sqlite-wal'
+import type { SqliteInterface } from '@/events/sqlite-wal'
+import type { Event } from '@/types'
+import type { EventBatch } from '@/events/types'
 
 // =============================================================================
 // Mock SQLite Implementation

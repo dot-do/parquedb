@@ -220,7 +220,7 @@ function step1bPostProcess(stem: string): string {
 
   // Double consonant
   if (stem.length >= 2) {
-    const last = stem[stem.length - 1]
+    const last = stem[stem.length - 1]!  // length >= 2 ensures valid index
     const secondLast = stem[stem.length - 2]
     if (last === secondLast && isConsonant(stem, stem.length - 1)) {
       if (!['l', 's', 'z'].includes(last)) {
@@ -326,6 +326,7 @@ function step4(stem: string): string {
 
 function isVowel(word: string, index: number): boolean {
   const c = word[index]
+  if (!c) return false
   if ('aeiou'.includes(c)) return true
   if (c === 'y' && index > 0 && !isVowel(word, index - 1)) return true
   return false
@@ -373,7 +374,7 @@ function endsWithCVC(word: string): boolean {
     isVowel(word, len - 2) &&
     isConsonant(word, len - 1)
   ) {
-    const lastChar = word[len - 1]
+    const lastChar = word[len - 1]!  // len >= 3 ensures valid index
     return !['w', 'x', 'y'].includes(lastChar)
   }
 

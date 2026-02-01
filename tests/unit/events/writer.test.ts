@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { EventWriter, createEventWriter, createTimedEventWriter } from '../../../src/events/writer'
-import type { Event } from '../../../src/types'
-import type { EventBatch } from '../../../src/events/types'
+import { EventWriter, createEventWriter, createTimedEventWriter } from '@/events/writer'
+import type { Event } from '@/types'
+import type { EventBatch } from '@/events/types'
 
 // =============================================================================
 // Helper Functions

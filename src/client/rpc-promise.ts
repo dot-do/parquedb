@@ -183,7 +183,7 @@ async function executeChain<T>(state: RpcPromiseState<T>): Promise<void> {
     const result = await response.json() as T
     state.result = result
     resolve?.(result)
-  } catch (error) {
+  } catch (error: unknown) {
     state.error = error
     reject?.(error)
   }

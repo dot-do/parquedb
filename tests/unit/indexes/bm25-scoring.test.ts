@@ -10,8 +10,8 @@ import {
   augmentedTf,
   luceneIdf,
   tfidf,
-} from '../../../src/indexes/fts/scoring'
-import type { CorpusStats, Posting } from '../../../src/indexes/fts/types'
+} from '@/indexes/fts/scoring'
+import type { CorpusStats, Posting } from '@/indexes/fts/types'
 
 describe('BM25Scorer', () => {
   describe('idf', () => {

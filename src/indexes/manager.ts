@@ -59,7 +59,7 @@ export class IndexManager {
       }
 
       this.loaded = true
-    } catch (error) {
+    } catch (error: unknown) {
       // No catalog exists yet, that's fine
       this.loaded = true
     }
@@ -134,12 +134,12 @@ export class IndexManager {
       this.emit({ type: 'build_completed', definition, stats: await this.getIndexStats(ns, definition.name) })
 
       return metadata
-    } catch (error) {
+    } catch (error: unknown) {
       // Remove the failed index
       this.indexes.get(ns)?.delete(definition.name)
       this.metadata.get(ns)?.delete(definition.name)
 
-      this.emit({ type: 'build_failed', definition, error: error as Error })
+      this.emit({ type: 'build_failed', definition, error: error instanceof Error ? error : new Error(String(error)) })
       throw error
     }
   }
@@ -235,9 +235,9 @@ export class IndexManager {
         definition: metadata.definition,
         stats: await this.getIndexStats(ns, indexName),
       })
-    } catch (error) {
+    } catch (error: unknown) {
       metadata.building = false
-      this.emit({ type: 'build_failed', definition: metadata.definition, error: error as Error })
+      this.emit({ type: 'build_failed', definition: metadata.definition, error: error instanceof Error ? error : new Error(String(error)) })
       throw error
     }
   }
@@ -317,7 +317,7 @@ export class IndexManager {
     }
 
     candidates.sort((a, b) => a.selectivity - b.selectivity)
-    const best = candidates[0]
+    const best = candidates[0]!  // candidates has at least 1 element from earlier checks
 
     return {
       index: best.index,

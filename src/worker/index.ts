@@ -31,6 +31,7 @@ import type { Update } from '../types/update'
 import { ReadPath } from './ReadPath'
 import { QueryExecutor, FindResult } from './QueryExecutor'
 import { DEFAULT_CACHE_CONFIG } from './CacheStrategy'
+import { logger } from '../utils/logger'
 
 // Re-export for external use
 export { ReadPath, NotFoundError, ReadError } from './ReadPath'
@@ -953,12 +954,14 @@ export default {
             stats: result.stats,
             firstItem: result.items?.[0] ?? null,
           })
-        } catch (error) {
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error)
+          const stack = error instanceof Error ? error.stack : undefined
           return Response.json({
             dataset,
             filter,
-            error: (error as Error).message,
-            stack: (error as Error).stack,
+            error: message,
+            stack,
           }, { status: 500 })
         }
       }
@@ -1447,9 +1450,10 @@ export default {
       // =======================================================================
       return buildErrorResponse(request, new Error(`Route '${path}' not found`), 404, startTime)
 
-    } catch (error) {
-      console.error('ParqueDB error:', error)
-      return buildErrorResponse(request, error as Error, 500, startTime)
+    } catch (error: unknown) {
+      logger.error('ParqueDB error', error)
+      const err = error instanceof Error ? error : new Error(String(error))
+      return buildErrorResponse(request, err, 500, startTime)
     }
   },
 }

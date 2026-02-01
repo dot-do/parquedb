@@ -225,7 +225,7 @@ export class SegmentWriter {
   parseSegmentPath(path: string): number | null {
     const match = path.match(/seg-(\d+)\.parquet$/)
     if (!match) return null
-    return parseInt(match[1], 10)
+    return parseInt(match[1]!, 10) // match[1] is guaranteed to exist after successful regex
   }
 
   // ===========================================================================

@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { HashIndex } from '../../../src/indexes/secondary/hash'
-import { MemoryBackend } from '../../../src/storage/MemoryBackend'
-import type { IndexDefinition } from '../../../src/indexes/types'
+import { HashIndex } from '@/indexes/secondary/hash'
+import { MemoryBackend } from '@/storage/MemoryBackend'
+import type { IndexDefinition } from '@/indexes/types'
 
 describe('HashIndex', () => {
   let storage: MemoryBackend

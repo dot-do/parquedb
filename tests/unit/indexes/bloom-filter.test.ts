@@ -10,7 +10,7 @@ import {
   IndexBloomFilter,
   calculateOptimalParams,
   estimateFalsePositiveRate,
-} from '../../../src/indexes/bloom'
+} from '@/indexes/bloom'
 
 describe('BloomFilter', () => {
   describe('basic operations', () => {

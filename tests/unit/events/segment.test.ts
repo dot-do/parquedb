@@ -8,10 +8,10 @@ import {
   createSegmentWriter,
   createSegmentFlushHandler,
   createR2Adapter,
-} from '../../../src/events/segment'
-import type { SegmentStorage } from '../../../src/events/segment'
-import type { Event } from '../../../src/types'
-import type { EventBatch } from '../../../src/events/types'
+} from '@/events/segment'
+import type { SegmentStorage } from '@/events/segment'
+import type { Event } from '@/types'
+import type { EventBatch } from '@/events/types'
 
 // =============================================================================
 // Mock Storage Implementation

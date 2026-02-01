@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { ManifestManager, createManifestManager } from '../../../src/events/manifest'
-import type { SegmentStorage } from '../../../src/events/segment'
-import type { EventSegment } from '../../../src/events/types'
+import { ManifestManager, createManifestManager } from '@/events/manifest'
+import type { SegmentStorage } from '@/events/segment'
+import type { EventSegment } from '@/events/types'
 
 // =============================================================================
 // Mock Storage Implementation

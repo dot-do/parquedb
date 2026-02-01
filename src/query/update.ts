@@ -11,6 +11,7 @@
 
 import type { UpdateInput } from '../types/update'
 import type { Filter } from '../types/filter'
+import { deepEqual, compareValues } from '../utils'
 
 // =============================================================================
 // Main Update Function
@@ -424,7 +425,7 @@ export function setField<T>(obj: T, path: string, value: unknown): T {
 
   // Base case: single part
   if (parts.length === 1) {
-    const key = parts[0]
+    const key = parts[0]!  // length === 1 ensures key exists
     const index = parseInt(key, 10)
 
     // Handle array index assignment
@@ -442,6 +443,9 @@ export function setField<T>(obj: T, path: string, value: unknown): T {
 
   // Recursive case: navigate to nested object
   const [head, ...tail] = parts
+  if (!head) {
+    return obj
+  }
   const tailPath = tail.join('.')
   const headIndex = parseInt(head, 10)
 
@@ -452,7 +456,7 @@ export function setField<T>(obj: T, path: string, value: unknown): T {
 
     // Determine if we need an array or object for the next level
     const nextPart = tail[0]
-    const needsArray = !isNaN(parseInt(nextPart, 10))
+    const needsArray = nextPart !== undefined && !isNaN(parseInt(nextPart, 10))
 
     let nested: unknown
     if (currentValue === undefined || currentValue === null) {
@@ -473,7 +477,7 @@ export function setField<T>(obj: T, path: string, value: unknown): T {
 
   // Determine if we need an array or object for the next level
   const nextPart = tail[0]
-  const needsArray = !isNaN(parseInt(nextPart, 10))
+  const needsArray = nextPart !== undefined && !isNaN(parseInt(nextPart, 10))
 
   let nested: unknown
   if (currentValue === undefined || currentValue === null) {
@@ -509,12 +513,16 @@ export function unsetField<T>(obj: T, path: string): T {
 
   // Base case: single part - remove the field
   if (parts.length === 1) {
-    const { [parts[0]]: _, ...rest } = obj as Record<string, unknown>
+    const key = parts[0]!  // length === 1 ensures key exists
+    const { [key]: _, ...rest } = obj as Record<string, unknown>
     return rest as T
   }
 
   // Recursive case: navigate to nested object
   const [head, ...tail] = parts
+  if (!head) {
+    return obj
+  }
   const tailPath = tail.join('.')
 
   const currentValue = (obj as Record<string, unknown>)[head]
@@ -537,7 +545,7 @@ export function unsetField<T>(obj: T, path: string): T {
 
   return {
     ...obj,
-    [head]: updatedNested,
+    [head as string]: updatedNested,
   }
 }
 
@@ -545,73 +553,7 @@ export function unsetField<T>(obj: T, path: string): T {
 // Comparison and Equality Helpers
 // =============================================================================
 
-/**
- * Compare two values for ordering
- * Returns negative if a < b, 0 if equal, positive if a > b
- */
-function compareValues(a: unknown, b: unknown): number {
-  // Handle null/undefined
-  if (a === null || a === undefined) {
-    if (b === null || b === undefined) return 0
-    return -1 // Nulls sort first
-  }
-  if (b === null || b === undefined) return 1
-
-  // Same type comparisons
-  if (typeof a === 'number' && typeof b === 'number') {
-    return a - b
-  }
-
-  if (typeof a === 'string' && typeof b === 'string') {
-    return a.localeCompare(b)
-  }
-
-  if (a instanceof Date && b instanceof Date) {
-    return a.getTime() - b.getTime()
-  }
-
-  if (typeof a === 'boolean' && typeof b === 'boolean') {
-    return (a ? 1 : 0) - (b ? 1 : 0)
-  }
-
-  // Cross-type comparison: convert to string
-  const strA = String(a)
-  const strB = String(b)
-  return strA.localeCompare(strB)
-}
-
-/**
- * Deep equality check for two values
- */
-function deepEqual(a: unknown, b: unknown): boolean {
-  // Identical or both null/undefined
-  if (a === b) return true
-  if (a === null || a === undefined) return b === null || b === undefined
-
-  // Date comparison
-  if (a instanceof Date && b instanceof Date) {
-    return a.getTime() === b.getTime()
-  }
-
-  // Array comparison
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false
-    return a.every((v, i) => deepEqual(v, b[i]))
-  }
-
-  // Object comparison
-  if (typeof a === 'object' && typeof b === 'object') {
-    const aObj = a as Record<string, unknown>
-    const bObj = b as Record<string, unknown>
-    const aKeys = Object.keys(aObj)
-    const bKeys = Object.keys(bObj)
-    if (aKeys.length !== bKeys.length) return false
-    return aKeys.every((k) => deepEqual(aObj[k], bObj[k]))
-  }
-
-  // Primitive comparison (already failed a === b)
-  return false
-}
+// compareValues and deepEqual are imported from ../utils
 
 // =============================================================================
 // Filter Matching (for $pull)
@@ -807,7 +749,7 @@ export function validateUpdate(update: UpdateInput): void {
       for (const field of Object.keys(opValue)) {
         // $rename has special handling - check both old and new field names
         if (op === '$rename') {
-          const newField = (opValue as Record<string, string>)[field]
+          const newField = (opValue as Record<string, string>)[field]!
           if (modifiedFields.has(field)) {
             throw new Error(
               `Conflicting operators: field '${field}' modified by multiple operators`
@@ -837,9 +779,10 @@ export function validateUpdate(update: UpdateInput): void {
 // Exports
 // =============================================================================
 
+// Re-export utility functions for backwards compatibility
+export { compareValues, deepEqual } from '../utils'
+
 export {
-  compareValues,
-  deepEqual,
   matchesFilter,
   sortArray,
   applySlice,

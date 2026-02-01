@@ -15,6 +15,8 @@
  *   Entry = [keyHash(4)] + [rowGroup(2)] + [rowOffset(varint)] + [docIdLength(1)] + [docId(variable)]
  */
 
+import { FNV_OFFSET_BASIS, FNV_PRIME } from '../constants'
+
 // =============================================================================
 // Format Constants
 // =============================================================================
@@ -87,6 +89,9 @@ export function readVarint(
     }
 
     const byte = buffer[offset + bytesRead]
+    if (byte === undefined) {
+      throw new Error('Varint extends beyond buffer')
+    }
     value |= (byte & 0x7f) << shift
     bytesRead++
 
@@ -227,6 +232,9 @@ export function readCompactEntry(
 
   // Doc ID length (1 byte) + doc ID
   const docIdLength = buffer[pos]
+  if (docIdLength === undefined) {
+    throw new Error('Buffer too short: missing docId length')
+  }
   pos += 1
   const docIdBytes = buffer.slice(pos, pos + docIdLength)
   const docId = decoder.decode(docIdBytes)
@@ -354,10 +362,16 @@ export function readCompactHeader(
 
   // Version
   const version = buffer[pos]
+  if (version === undefined) {
+    throw new Error('Buffer too short: missing version')
+  }
   pos += 1
 
   // Flags
   const flags = buffer[pos]
+  if (flags === undefined) {
+    throw new Error('Buffer too short: missing flags')
+  }
   pos += 1
   const hasKeyHash = (flags & 0x01) !== 0
 
@@ -392,9 +406,9 @@ export function serializeCompactIndex(
 
   let entriesSize = 0
   for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i]
+    const entry = entries[i]!  // loop bounds ensure valid index
     if (includeKeyHash) {
-      entriesSize += compactEntryWithKeySize({ ...entry, keyHash: keyHashFn?.(i) ?? 0 })
+      entriesSize += compactEntryWithKeySize({ ...entry, keyHash: keyHashFn?.(i) ?? 0 } as CompactEntryWithKey)
     } else {
       entriesSize += compactEntrySize(entry)
     }
@@ -412,12 +426,12 @@ export function serializeCompactIndex(
 
   // Write entries
   for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i]
+    const entry = entries[i]!  // loop bounds ensure valid index
     if (includeKeyHash) {
       offset += writeCompactEntryWithKey(buffer, offset, {
         ...entry,
         keyHash: keyHashFn?.(i) ?? 0,
-      })
+      } as CompactEntryWithKey)
     } else {
       offset += writeCompactEntry(buffer, offset, entry)
     }
@@ -469,10 +483,10 @@ export function deserializeCompactIndex(buffer: Uint8Array): {
  * FNV-1a hash function for key hashing
  */
 export function fnv1aHash(key: Uint8Array): number {
-  let hash = 2166136261
+  let hash = FNV_OFFSET_BASIS
   for (let i = 0; i < key.length; i++) {
-    hash ^= key[i]
-    hash = (hash * 16777619) >>> 0
+    hash ^= key[i]!  // loop bounds ensure valid index
+    hash = (hash * FNV_PRIME) >>> 0
   }
   return hash
 }

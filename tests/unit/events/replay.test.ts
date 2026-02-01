@@ -10,9 +10,9 @@ import {
   createEventReplayer,
   createInMemoryEventSource,
   createBatchEventSource,
-} from '../../../src/events/replay'
-import type { Event } from '../../../src/types'
-import type { EventBatch } from '../../../src/events/types'
+} from '@/events/replay'
+import type { Event } from '@/types'
+import type { EventBatch } from '@/events/types'
 
 // =============================================================================
 // Helper Functions

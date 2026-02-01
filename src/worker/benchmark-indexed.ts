@@ -11,6 +11,7 @@ import { ALL_QUERIES, getQueriesForDataset, QUERY_STATS } from './benchmark-quer
 import { QueryExecutor, type FindResult, type QueryStats } from './QueryExecutor'
 import { ReadPath } from './ReadPath'
 import { DEFAULT_CACHE_CONFIG } from './CacheStrategy'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types
@@ -290,9 +291,10 @@ async function benchmarkQuery(
       indexedResult = await executor.find(ns, query.filter, { limit: 100 })
       const elapsed = performance.now() - start
       indexedLatencies.push(elapsed)
-    } catch (error) {
-      indexedError = `${(error as Error).message} (ns=${ns}, filter=${JSON.stringify(query.filter)})`
-      console.error('Benchmark query error:', indexedError)
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      indexedError = `${errorMessage} (ns=${ns}, filter=${JSON.stringify(query.filter)})`
+      logger.warn('Benchmark query error', indexedError)
     }
   }
 
@@ -304,8 +306,8 @@ async function benchmarkQuery(
         const start = performance.now()
         scanResult = await executor.find(ns, query.scanFilter, { limit: 100 })
         scanLatencies.push(performance.now() - start)
-      } catch (error) {
-        scanError = (error as Error).message
+      } catch (error: unknown) {
+        scanError = error instanceof Error ? error.message : String(error)
       }
     }
   } else if (query.category === 'scan') {
@@ -520,11 +522,13 @@ export async function handleIndexedBenchmarkRequest(
         'Server-Timing': `total;dur=${totalTime}`,
       },
     })
-  } catch (error) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    const stack = error instanceof Error ? error.stack : undefined
     return Response.json({
       error: true,
-      message: (error as Error).message,
-      stack: (error as Error).stack,
+      message,
+      stack,
     }, { status: 500 })
   }
 }

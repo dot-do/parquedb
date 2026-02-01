@@ -25,6 +25,7 @@ import type {
   SortDirection,
 } from './types'
 import { normalizeSortDirection } from './types'
+import { deepClone, getNestedValue, compareValues } from './utils'
 
 /** Aggregation pipeline stage */
 export type AggregationStage =
@@ -73,23 +74,7 @@ function generateEventId(): string {
   return `${timestamp}-${counter}`
 }
 
-/**
- * Deep clone an object to prevent mutation issues
- */
-function deepClone<T>(obj: T): T {
-  if (obj === null || obj === undefined) return obj
-  return JSON.parse(JSON.stringify(obj, (_, value) => {
-    if (value instanceof Date) {
-      return { __date__: value.toISOString() }
-    }
-    return value
-  }), (_, value) => {
-    if (value && typeof value === 'object' && value.__date__) {
-      return new Date(value.__date__)
-    }
-    return value
-  })
-}
+// deepClone is imported from ./utils
 
 /**
  * Record an event to the global event log
@@ -180,18 +165,7 @@ function generateId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 9)}`
 }
 
-/**
- * Get value at a nested path using dot notation
- */
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  const parts = path.split('.')
-  let value: unknown = obj
-  for (const part of parts) {
-    if (value === null || value === undefined) return undefined
-    value = (value as Record<string, unknown>)[part]
-  }
-  return value
-}
+// getNestedValue is imported from ./utils
 
 /**
  * Set value at a nested path using dot notation
@@ -404,26 +378,11 @@ function getTypeOf(value: unknown): string {
 }
 
 /**
- * Compare two values for sorting
+ * Compare two values for sorting with direction
+ * Wrapper around compareValues from utils that applies sort direction
  */
-function compareValues(a: unknown, b: unknown, direction: 1 | -1): number {
-  if (a === b) return 0
-  if (a === null || a === undefined) return direction
-  if (b === null || b === undefined) return -direction
-
-  if (a instanceof Date && b instanceof Date) {
-    return direction * (a.getTime() - b.getTime())
-  }
-
-  if (typeof a === 'string' && typeof b === 'string') {
-    return direction * a.localeCompare(b)
-  }
-
-  if (typeof a === 'number' && typeof b === 'number') {
-    return direction * (a - b)
-  }
-
-  return direction * String(a).localeCompare(String(b))
+function compareValuesWithDirection(a: unknown, b: unknown, direction: 1 | -1): number {
+  return direction * compareValues(a, b)
 }
 
 /**
@@ -545,7 +504,7 @@ export class Collection<T = Record<string, unknown>> {
           const dir = normalizeSortDirection(direction as SortDirection)
           const aValue = getNestedValue(a as Record<string, unknown>, field)
           const bValue = getNestedValue(b as Record<string, unknown>, field)
-          const cmp = compareValues(aValue, bValue, dir)
+          const cmp = compareValuesWithDirection(aValue, bValue, dir)
           if (cmp !== 0) return cmp
         }
         return 0
@@ -829,7 +788,7 @@ export class Collection<T = Record<string, unknown>> {
         filtered.sort((a, b) => {
           for (const [field, direction] of sortEntries) {
             const dir = normalizeSortDirection(direction as SortDirection)
-            const cmp = compareValues(getNestedValue(a as Record<string, unknown>, field), getNestedValue(b as Record<string, unknown>, field), dir)
+            const cmp = compareValuesWithDirection(getNestedValue(a as Record<string, unknown>, field), getNestedValue(b as Record<string, unknown>, field), dir)
             if (cmp !== 0) return cmp
           }
           return 0
@@ -888,7 +847,7 @@ export class Collection<T = Record<string, unknown>> {
         filtered.sort((a, b) => {
           for (const [field, direction] of sortEntries) {
             const dir = normalizeSortDirection(direction as SortDirection)
-            const cmp = compareValues(getNestedValue(a as Record<string, unknown>, field), getNestedValue(b as Record<string, unknown>, field), dir)
+            const cmp = compareValuesWithDirection(getNestedValue(a as Record<string, unknown>, field), getNestedValue(b as Record<string, unknown>, field), dir)
             if (cmp !== 0) return cmp
           }
           return 0
@@ -1080,7 +1039,7 @@ export class Collection<T = Record<string, unknown>> {
           // Apply $sort
           if (modifier.$sort !== undefined) {
             if (typeof modifier.$sort === 'number') {
-              arr.sort((a, b) => compareValues(a, b, modifier.$sort as 1 | -1))
+              arr.sort((a, b) => compareValuesWithDirection(a, b, modifier.$sort as 1 | -1))
             }
           }
 
@@ -1360,7 +1319,7 @@ export class Collection<T = Record<string, unknown>> {
           for (const [field, direction] of sortEntries) {
             const aValue = getNestedValue(a as Record<string, unknown>, field)
             const bValue = getNestedValue(b as Record<string, unknown>, field)
-            const cmp = compareValues(aValue, bValue, direction)
+            const cmp = compareValuesWithDirection(aValue, bValue, direction)
             if (cmp !== 0) return cmp
           }
           return 0

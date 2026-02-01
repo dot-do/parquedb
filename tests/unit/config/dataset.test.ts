@@ -10,7 +10,7 @@ import {
   validateTimeTravelSupport,
   type ConfigStorage,
   type DatasetConfigFile,
-} from '../../../src/config/dataset'
+} from '@/config/dataset'
 
 // =============================================================================
 // Mock Storage Implementation

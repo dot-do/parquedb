@@ -8,7 +8,7 @@ import {
   tokenizeQuery,
   porterStem,
   ENGLISH_STOPWORDS,
-} from '../../../src/indexes/fts/tokenizer'
+} from '@/indexes/fts/tokenizer'
 
 describe('Tokenizer', () => {
   describe('tokenize', () => {

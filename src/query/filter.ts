@@ -6,6 +6,7 @@
  */
 
 import type { Filter } from '../types/filter'
+import { deepEqual, compareValues, getNestedValue, getValueType } from '../utils'
 
 // =============================================================================
 // Main Filter Evaluation
@@ -102,101 +103,10 @@ export function matchesCondition(value: unknown, condition: unknown): boolean {
 }
 
 // =============================================================================
-// Value Comparison
-// =============================================================================
-
-/**
- * Deep equality check
- *
- * @param a - First value
- * @param b - Second value
- * @returns true if values are deeply equal
- */
-export function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  if (a === null || a === undefined) return b === null || b === undefined
-
-  // Date comparison
-  if (a instanceof Date && b instanceof Date) {
-    return a.getTime() === b.getTime()
-  }
-
-  // Array comparison
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false
-    return a.every((v, i) => deepEqual(v, b[i]))
-  }
-
-  // Object comparison
-  if (typeof a === 'object' && typeof b === 'object') {
-    const aObj = a as Record<string, unknown>
-    const bObj = b as Record<string, unknown>
-    const aKeys = Object.keys(aObj)
-    const bKeys = Object.keys(bObj)
-    if (aKeys.length !== bKeys.length) return false
-    return aKeys.every(k => deepEqual(aObj[k], bObj[k]))
-  }
-
-  return false
-}
-
-/**
- * Compare two values for ordering
- *
- * @param a - First value
- * @param b - Second value
- * @returns -1 if a < b, 0 if equal, 1 if a > b
- */
-export function compareValues(a: unknown, b: unknown): number {
-  // Nulls sort first
-  if (a === null || a === undefined) {
-    return b === null || b === undefined ? 0 : -1
-  }
-  if (b === null || b === undefined) return 1
-
-  // Same type comparisons
-  if (typeof a === 'number' && typeof b === 'number') return a - b
-  if (typeof a === 'string' && typeof b === 'string') return a.localeCompare(b)
-  if (a instanceof Date && b instanceof Date) return a.getTime() - b.getTime()
-  if (typeof a === 'boolean' && typeof b === 'boolean') return (a ? 1 : 0) - (b ? 1 : 0)
-
-  // Fallback to string comparison
-  return String(a).localeCompare(String(b))
-}
-
-/**
- * Get the type of a value (matching MongoDB's $type operator)
- *
- * @param value - Value to check
- * @returns Type string
- */
-export function getValueType(value: unknown): string {
-  if (value === null) return 'null'
-  if (value === undefined) return 'null'
-  if (Array.isArray(value)) return 'array'
-  if (value instanceof Date) return 'date'
-  return typeof value
-}
-
-// =============================================================================
 // Helper Functions
 // =============================================================================
 
-/**
- * Get a nested value from an object using dot notation
- */
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  const parts = path.split('.')
-  let current: unknown = obj
-
-  for (const part of parts) {
-    if (current === null || current === undefined) return undefined
-    if (typeof current !== 'object') return undefined
-    current = (current as Record<string, unknown>)[part]
-  }
-
-  return current
-}
+// deepEqual, compareValues, getNestedValue, and getValueType are imported from ../utils
 
 /**
  * Check if value is an operator object
@@ -321,3 +231,6 @@ function evaluateOperators(value: unknown, operators: Record<string, unknown>): 
 
   return true
 }
+
+// Re-export utility functions for backwards compatibility
+export { deepEqual, compareValues, getValueType } from '../utils'

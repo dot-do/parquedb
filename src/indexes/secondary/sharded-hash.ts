@@ -114,7 +114,7 @@ export class ShardedHashIndex {
       }
 
       this.loaded = true
-    } catch (error) {
+    } catch (error: unknown) {
       // Manifest corrupted or invalid
       this.manifest = null
       this.loaded = true

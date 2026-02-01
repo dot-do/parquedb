@@ -167,7 +167,8 @@ export class ManifestManager {
     // Find the right position to insert (maintain order by minTs)
     let insertIndex = manifest.segments.length
     for (let i = 0; i < manifest.segments.length; i++) {
-      if (segment.minTs < manifest.segments[i].minTs) {
+      const seg = manifest.segments[i]
+      if (seg && segment.minTs < seg.minTs) {
         insertIndex = i
         break
       }
@@ -194,6 +195,7 @@ export class ManifestManager {
     if (index === -1) return null
 
     const [removed] = manifest.segments.splice(index, 1)
+    if (!removed) return null // splice returned empty array
     manifest.totalEvents -= removed.count
 
     this.dirty = true
@@ -211,8 +213,10 @@ export class ManifestManager {
       const index = manifest.segments.findIndex(s => s.seq === seq)
       if (index !== -1) {
         const [segment] = manifest.segments.splice(index, 1)
-        manifest.totalEvents -= segment.count
-        removed.push(segment)
+        if (segment) {
+          manifest.totalEvents -= segment.count
+          removed.push(segment)
+        }
       }
     }
 

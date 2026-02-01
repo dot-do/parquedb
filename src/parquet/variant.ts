@@ -201,7 +201,7 @@ class VariantEncoder {
     const encoded = this.textEncoder.encode(value);
     this.writeLength(encoded.length);
     for (let i = 0; i < encoded.length; i++) {
-      this.buffer.push(encoded[i]);
+      this.buffer.push(encoded[i]!);  // loop bounds ensure valid index
     }
   }
 
@@ -209,7 +209,7 @@ class VariantEncoder {
     this.buffer.push(VariantType.BINARY);
     this.writeLength(value.length);
     for (let i = 0; i < value.length; i++) {
-      this.buffer.push(value[i]);
+      this.buffer.push(value[i]!);  // loop bounds ensure valid index
     }
   }
 
@@ -236,7 +236,7 @@ class VariantEncoder {
       const encoded = this.textEncoder.encode(key);
       this.writeLength(encoded.length);
       for (let i = 0; i < encoded.length; i++) {
-        this.buffer.push(encoded[i]);
+        this.buffer.push(encoded[i]!);  // loop bounds ensure valid index
       }
       // Write value with type tag
       this.writeValue(val);
@@ -279,7 +279,7 @@ class VariantEncoder {
     const arr = new Float64Array([value]);
     const bytes = new Uint8Array(arr.buffer);
     for (let i = 0; i < bytes.length; i++) {
-      this.buffer.push(bytes[i]);
+      this.buffer.push(bytes[i]!);  // loop bounds ensure valid index
     }
   }
 
@@ -364,7 +364,11 @@ class VariantDecoder {
   }
 
   private readByte(): number {
-    return this.data[this.offset++];
+    const byte = this.data[this.offset++]
+    if (byte === undefined) {
+      throw new Error('Unexpected end of Variant data')
+    }
+    return byte
   }
 
   private readLength(): number {
@@ -382,59 +386,68 @@ class VariantDecoder {
   }
 
   private readInt8(): number {
-    const value = this.data[this.offset];
-    this.offset += 1;
-    return value > 127 ? value - 256 : value;
+    const value = this.data[this.offset]
+    if (value === undefined) throw new Error('Unexpected end of Variant data')
+    this.offset += 1
+    return value > 127 ? value - 256 : value
   }
 
   private readInt16(): number {
-    const value = this.data[this.offset] | (this.data[this.offset + 1] << 8);
-    this.offset += 2;
-    return value > 32767 ? value - 65536 : value;
+    const b0 = this.data[this.offset]
+    const b1 = this.data[this.offset + 1]
+    if (b0 === undefined || b1 === undefined) throw new Error('Unexpected end of Variant data')
+    const value = b0 | (b1 << 8)
+    this.offset += 2
+    return value > 32767 ? value - 65536 : value
   }
 
   private readInt32(): number {
-    const value =
-      this.data[this.offset] |
-      (this.data[this.offset + 1] << 8) |
-      (this.data[this.offset + 2] << 16) |
-      (this.data[this.offset + 3] << 24);
-    this.offset += 4;
-    return value;
+    const b0 = this.data[this.offset]
+    const b1 = this.data[this.offset + 1]
+    const b2 = this.data[this.offset + 2]
+    const b3 = this.data[this.offset + 3]
+    if (b0 === undefined || b1 === undefined || b2 === undefined || b3 === undefined) {
+      throw new Error('Unexpected end of Variant data')
+    }
+    const value = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+    this.offset += 4
+    return value
   }
 
   private readInt64(): number {
     // Read as BigInt and convert to Number (may lose precision for very large values)
-    return Number(this.readInt64AsBigInt());
+    return Number(this.readInt64AsBigInt())
   }
 
   private readInt64AsBigInt(): bigint {
-    let result = BigInt(0);
+    let result = BigInt(0)
     for (let i = 0; i < 8; i++) {
-      result |= BigInt(this.data[this.offset + i]) << BigInt(i * 8);
+      const byte = this.data[this.offset + i]
+      if (byte === undefined) throw new Error('Unexpected end of Variant data')
+      result |= BigInt(byte) << BigInt(i * 8)
     }
-    this.offset += 8;
+    this.offset += 8
     // Handle sign
     if (result > BigInt('9223372036854775807')) {
-      result -= BigInt('18446744073709551616');
+      result -= BigInt('18446744073709551616')
     }
-    return result;
+    return result
   }
 
   private readFloat32(): number {
     const arr = new Float32Array(
       this.data.buffer.slice(this.offset, this.offset + 4)
-    );
-    this.offset += 4;
-    return arr[0];
+    )
+    this.offset += 4
+    return arr[0] ?? 0  // Float32Array always has length 1
   }
 
   private readFloat64(): number {
     const arr = new Float64Array(
       new Uint8Array(this.data.slice(this.offset, this.offset + 8)).buffer
-    );
-    this.offset += 8;
-    return arr[0];
+    )
+    this.offset += 8
+    return arr[0] ?? 0  // Float64Array always has length 1
   }
 
   private readString(): string {

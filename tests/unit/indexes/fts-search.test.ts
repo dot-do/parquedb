@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { FTSIndex } from '../../../src/indexes/fts/search'
-import { MemoryBackend } from '../../../src/storage/MemoryBackend'
-import type { IndexDefinition } from '../../../src/indexes/types'
+import { FTSIndex } from '@/indexes/fts/search'
+import { MemoryBackend } from '@/storage/MemoryBackend'
+import type { IndexDefinition } from '@/indexes/types'
 
 describe('FTSIndex', () => {
   let storage: MemoryBackend

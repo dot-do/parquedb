@@ -19,6 +19,12 @@
  *     - One 4KB bloom filter per row group
  */
 
+import {
+  DEFAULT_BLOOM_SIZE,
+  DEFAULT_NUM_HASH_FUNCTIONS as IMPORTED_DEFAULT_NUM_HASH_FUNCTIONS,
+  ROW_GROUP_BLOOM_SIZE as IMPORTED_ROW_GROUP_BLOOM_SIZE
+} from '../../constants'
+
 // =============================================================================
 // Constants
 // =============================================================================
@@ -26,11 +32,11 @@
 const MAGIC = new Uint8Array([0x50, 0x51, 0x42, 0x46]) // "PQBF"
 const VERSION = 1
 const HEADER_SIZE = 16
-const ROW_GROUP_BLOOM_SIZE = 4096 // 4KB per row group
+const ROW_GROUP_BLOOM_SIZE = IMPORTED_ROW_GROUP_BLOOM_SIZE
 
 // Default parameters optimized for ~1% false positive rate
-const DEFAULT_NUM_HASH_FUNCTIONS = 3
-const DEFAULT_VALUE_BLOOM_SIZE = 131072 // 128KB
+const DEFAULT_NUM_HASH_FUNCTIONS = IMPORTED_DEFAULT_NUM_HASH_FUNCTIONS
+const DEFAULT_VALUE_BLOOM_SIZE = DEFAULT_BLOOM_SIZE
 
 // =============================================================================
 // MurmurHash3 Implementation
@@ -54,11 +60,12 @@ function murmurHash3(key: Uint8Array, seed: number): number {
 
   // Process 4-byte blocks
   for (let i = 0; i < numBlocks; i++) {
+    // Array access is safe: loop bounds ensure i*4+3 < numBlocks*4 <= len
     let k =
-      key[i * 4] |
-      (key[i * 4 + 1] << 8) |
-      (key[i * 4 + 2] << 16) |
-      (key[i * 4 + 3] << 24)
+      key[i * 4]! |
+      (key[i * 4 + 1]! << 8) |
+      (key[i * 4 + 2]! << 16) |
+      (key[i * 4 + 3]! << 24)
 
     k = Math.imul(k, c1)
     k = (k << r1) | (k >>> (32 - r1))
@@ -73,13 +80,13 @@ function murmurHash3(key: Uint8Array, seed: number): number {
   const tail = len - numBlocks * 4
   let k1 = 0
   if (tail >= 3) {
-    k1 ^= key[numBlocks * 4 + 2] << 16
+    k1 ^= key[numBlocks * 4 + 2]! << 16 // tail >= 3 ensures index is valid
   }
   if (tail >= 2) {
-    k1 ^= key[numBlocks * 4 + 1] << 8
+    k1 ^= key[numBlocks * 4 + 1]! << 8 // tail >= 2 ensures index is valid
   }
   if (tail >= 1) {
-    k1 ^= key[numBlocks * 4]
+    k1 ^= key[numBlocks * 4]! // tail >= 1 ensures index is valid
     k1 = Math.imul(k1, c1)
     k1 = (k1 << r1) | (k1 >>> (32 - r1))
     k1 = Math.imul(k1, c2)
@@ -147,7 +154,8 @@ export class BloomFilter {
     for (const hash of hashes) {
       const byteIndex = Math.floor(hash / 8)
       const bitIndex = hash % 8
-      this.bits[byteIndex] |= 1 << bitIndex
+      // byteIndex is bounded by hash % numBits / 8 < sizeBytes
+      this.bits[byteIndex] = (this.bits[byteIndex] ?? 0) | (1 << bitIndex)
     }
   }
 
@@ -160,7 +168,8 @@ export class BloomFilter {
     for (const hash of hashes) {
       const byteIndex = Math.floor(hash / 8)
       const bitIndex = hash % 8
-      this.bits[byteIndex] |= 1 << bitIndex
+      // byteIndex is bounded by hash % numBits / 8 < sizeBytes
+      this.bits[byteIndex] = (this.bits[byteIndex] ?? 0) | (1 << bitIndex)
     }
   }
 
@@ -175,7 +184,8 @@ export class BloomFilter {
     for (const hash of hashes) {
       const byteIndex = Math.floor(hash / 8)
       const bitIndex = hash % 8
-      if ((this.bits[byteIndex] & (1 << bitIndex)) === 0) {
+      // byteIndex is bounded by hash % numBits / 8 < sizeBytes
+      if (((this.bits[byteIndex] ?? 0) & (1 << bitIndex)) === 0) {
         return false
       }
     }
@@ -192,7 +202,8 @@ export class BloomFilter {
     for (const hash of hashes) {
       const byteIndex = Math.floor(hash / 8)
       const bitIndex = hash % 8
-      if ((this.bits[byteIndex] & (1 << bitIndex)) === 0) {
+      // byteIndex is bounded by hash % numBits / 8 < sizeBytes
+      if (((this.bits[byteIndex] ?? 0) & (1 << bitIndex)) === 0) {
         return false
       }
     }
@@ -241,7 +252,7 @@ export class BloomFilter {
   estimateCount(): number {
     let bitsSet = 0
     for (let i = 0; i < this.bits.length; i++) {
-      bitsSet += this.popCount(this.bits[i])
+      bitsSet += this.popCount(this.bits[i]!) // loop bounds ensure valid index
     }
 
     if (bitsSet === 0) return 0
@@ -327,7 +338,10 @@ export class IndexBloomFilter {
 
     // Add to row group specific bloom
     if (rowGroup >= 0 && rowGroup < this.rowGroupBlooms.length) {
-      this.rowGroupBlooms[rowGroup].addBytes(key)
+      const rowGroupBloom = this.rowGroupBlooms[rowGroup]
+      if (rowGroupBloom) {
+        rowGroupBloom.addBytes(key)
+      }
     }
   }
 
@@ -355,7 +369,8 @@ export class IndexBloomFilter {
     // Check each row group bloom
     const matches: number[] = []
     for (let i = 0; i < this.rowGroupBlooms.length; i++) {
-      if (this.rowGroupBlooms[i].mightContainBytes(key)) {
+      const bloom = this.rowGroupBlooms[i]
+      if (bloom && bloom.mightContainBytes(key)) {
         matches.push(i)
       }
     }
@@ -402,7 +417,10 @@ export class IndexBloomFilter {
 
     // Row group bloom filters
     for (let i = 0; i < this.numRowGroups; i++) {
-      bytes.set(this.rowGroupBlooms[i].toBuffer(), offset)
+      const bloom = this.rowGroupBlooms[i]
+      if (bloom) {
+        bytes.set(bloom.toBuffer(), offset)
+      }
       offset += ROW_GROUP_BLOOM_SIZE
     }
 

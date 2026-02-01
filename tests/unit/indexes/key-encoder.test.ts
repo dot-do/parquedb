@@ -12,7 +12,7 @@ import {
   hexToKey,
   encodeCompositeKey,
   decodeCompositeKey,
-} from '../../../src/indexes/secondary/key-encoder'
+} from '@/indexes/secondary/key-encoder'
 
 describe('Key Encoder', () => {
   describe('encodeKey/decodeKey roundtrip', () => {

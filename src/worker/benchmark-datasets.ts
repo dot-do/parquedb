@@ -7,6 +7,7 @@
 
 import { parquetQuery } from 'hyparquet'
 import { compressors } from '../parquet/compressors'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types
@@ -445,7 +446,7 @@ export async function runDatasetBenchmark(
     }
 
     if (fileList.objects.length === 0) {
-      console.log(`No files found for dataset: ${dataset}`)
+      logger.info(`No files found for dataset: ${dataset}`)
       continue
     }
 
@@ -457,7 +458,7 @@ export async function runDatasetBenchmark(
       const fileInfo = fileMap.get(queryDef.file)
 
       if (!fileInfo) {
-        console.log(`File not found: ${fileKey}`)
+        logger.info(`File not found: ${fileKey}`)
         continue
       }
 
@@ -478,7 +479,7 @@ export async function runDatasetBenchmark(
             compressors,
           })
         } catch (e) {
-          console.log(`Warmup error for ${queryDef.name}: ${e}`)
+          logger.debug(`Warmup error for ${queryDef.name}: ${e}`)
         }
       }
 
@@ -501,7 +502,7 @@ export async function runDatasetBenchmark(
           lastRowsReturned = rows.length
           lastBytesRead = file.bytesRead
         } catch (e) {
-          console.log(`Query error for ${queryDef.name}: ${e}`)
+          logger.debug(`Query error for ${queryDef.name}: ${e}`)
           latencies.push(-1)
         }
       }
@@ -674,12 +675,14 @@ export async function handleDatasetBenchmarkRequest(request: Request, bucket: R2
         },
       }
     )
-  } catch (error) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    const stack = error instanceof Error ? error.stack : undefined
     return Response.json(
       {
         error: true,
-        message: (error as Error).message,
-        stack: (error as Error).stack,
+        message,
+        stack,
       },
       { status: 500 }
     )

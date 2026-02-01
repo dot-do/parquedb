@@ -292,11 +292,11 @@ export class FTSIndex {
 
   private findDocumentsWithAllTerms(docIdSets: Set<string>[]): string[] {
     if (docIdSets.length === 0) return []
-    if (docIdSets.length === 1) return Array.from(docIdSets[0])
+    if (docIdSets.length === 1) return Array.from(docIdSets[0]!)
 
     // Start with smallest set for efficiency
     const sorted = [...docIdSets].sort((a, b) => a.size - b.size)
-    const smallest = sorted[0]
+    const smallest = sorted[0]!  // sorted has at least 2 elements due to earlier length check
     const rest = sorted.slice(1)
 
     const result: string[] = []
@@ -314,7 +314,9 @@ export class FTSIndex {
     termPositions: Map<string, number[]>
   ): boolean {
     // Get positions for first term
-    const firstPositions = termPositions.get(terms[0])
+    const firstTerm = terms[0]
+    if (!firstTerm) return false
+    const firstPositions = termPositions.get(firstTerm)
     if (!firstPositions || firstPositions.length === 0) {
       return false
     }
@@ -323,7 +325,9 @@ export class FTSIndex {
     for (const startPos of firstPositions) {
       let found = true
       for (let i = 1; i < terms.length; i++) {
-        const positions = termPositions.get(terms[i])
+        const term = terms[i]
+        if (!term) continue
+        const positions = termPositions.get(term)
         if (!positions || !positions.includes(startPos + i)) {
           found = false
           break

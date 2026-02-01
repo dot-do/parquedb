@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { SSTIndex } from '../../../src/indexes/secondary/sst'
-import { MemoryBackend } from '../../../src/storage/MemoryBackend'
-import type { IndexDefinition } from '../../../src/indexes/types'
+import { SSTIndex } from '@/indexes/secondary/sst'
+import { MemoryBackend } from '@/storage/MemoryBackend'
+import type { IndexDefinition } from '@/indexes/types'
 
 describe('SSTIndex', () => {
   let storage: MemoryBackend

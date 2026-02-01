@@ -26,8 +26,9 @@ export function decompressLz4(input: Uint8Array, outputLength: number): Uint8Arr
     let o = 0 // output index
     while (i < input.length - 8) {
       // Use >>> 0 to convert to unsigned 32-bit integer
-      const expectedOutputLength = (input[i++] << 24 | input[i++] << 16 | input[i++] << 8 | input[i++]) >>> 0
-      const expectedInputLength = (input[i++] << 24 | input[i++] << 16 | input[i++] << 8 | input[i++]) >>> 0
+      // i+3 and i+7 are bounds checked by loop condition (length - 8)
+      const expectedOutputLength = ((input[i++] ?? 0) << 24 | (input[i++] ?? 0) << 16 | (input[i++] ?? 0) << 8 | (input[i++] ?? 0)) >>> 0
+      const expectedInputLength = ((input[i++] ?? 0) << 24 | (input[i++] ?? 0) << 16 | (input[i++] ?? 0) << 8 | (input[i++] ?? 0)) >>> 0
       if (input.length - i < expectedInputLength) throw new Error('lz4 not hadoop')
       if (output.length < expectedOutputLength) throw new Error('lz4 not hadoop')
 
@@ -40,7 +41,7 @@ export function decompressLz4(input: Uint8Array, outputLength: number): Uint8Arr
       if (i === input.length) return output
     }
     if (i < input.length) throw new Error('lz4 not hadoop')
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof Error && error.message !== 'lz4 not hadoop') throw error
     // fallback to basic lz4
     lz4basic(input, output, 0)
@@ -67,12 +68,17 @@ function lz4basic(input: Uint8Array, output: Uint8Array, outputIndex: number): n
   let len = outputIndex // output position
   for (let i = 0; i < input.length;) {
     const token = input[i++]
+    if (token === undefined) break
 
     let literals = token >> 4
     if (literals) {
       // literal length - check if nibble is 15 (needs extension)
-      let byte = literals + 240
-      while (byte === 255) literals += byte = input[i++]
+      let byte: number = literals + 240
+      while (byte === 255) {
+        const nextByte = input[i++]
+        byte = nextByte ?? 0
+        literals += byte
+      }
       // copy literals
       output.set(input.subarray(i, i + literals), len)
       len += literals
@@ -80,7 +86,7 @@ function lz4basic(input: Uint8Array, output: Uint8Array, outputIndex: number): n
       if (i >= input.length) return len - outputIndex
     }
 
-    const offset = input[i++] | input[i++] << 8
+    const offset = (input[i++] ?? 0) | ((input[i++] ?? 0) << 8)
     if (!offset || offset > len) {
       throw new Error(`lz4 offset out of range ${offset}`)
     }
@@ -89,13 +95,17 @@ function lz4basic(input: Uint8Array, output: Uint8Array, outputIndex: number): n
     // FIX: Use (token & 0xf) not matchLength for extension check
     const matchNibble = token & 0xf
     let matchLength = matchNibble + 4 // minmatch 4
-    let byte = matchNibble + 240  // FIX: check if nibble is 15
-    while (byte === 255) matchLength += byte = input[i++]
+    let byte: number = matchNibble + 240  // FIX: check if nibble is 15
+    while (byte === 255) {
+      const nextByte = input[i++]
+      byte = nextByte ?? 0
+      matchLength += byte
+    }
 
     // copy match
     let pos = len - offset
     const end = len + matchLength
-    while (len < end) output[len++] = output[pos++]
+    while (len < end) output[len++] = output[pos++] ?? 0
   }
   return len - outputIndex
 }

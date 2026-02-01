@@ -23,7 +23,7 @@ import {
   FORMAT_VERSION_3,
   type CompactEntry,
   type CompactEntryWithKey,
-} from '../../../src/indexes/encoding'
+} from '@/indexes/encoding'
 
 describe('Varint Encoding', () => {
   it('should encode and decode small values (1 byte)', () => {

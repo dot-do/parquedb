@@ -72,7 +72,7 @@ export class ShardedSSTIndex {
       const text = new TextDecoder().decode(data)
       this.manifest = JSON.parse(text)
       this.loaded = true
-    } catch (error) {
+    } catch (error: unknown) {
       // Manifest corrupted or invalid
       this.manifest = null
       this.loaded = true
@@ -265,13 +265,15 @@ export class ShardedSSTIndex {
         (a.rangeStart ?? 0) - (b.rangeStart ?? 0)
       )
       const firstShard = sortedShards[0]
+      if (!firstShard) return null
       const entries = await this.loadShard(firstShard)
 
       if (entries.length === 0) return null
+      const firstEntry = entries[0]!  // length check above ensures entry exists
 
       return {
-        value: decodeKey(entries[0].key),
-        docId: entries[0].docId,
+        value: decodeKey(firstEntry.key),
+        docId: firstEntry.docId,
       }
     }
 
@@ -281,8 +283,9 @@ export class ShardedSSTIndex {
     for (const shardInfo of this.manifest.shards) {
       const entries = await this.loadShard(shardInfo)
       if (entries.length > 0) {
-        if (!minEntry || compareKeys(entries[0].key, minEntry.key) < 0) {
-          minEntry = entries[0]
+        const firstEntry = entries[0]!  // length > 0 ensures entry exists
+        if (!minEntry || compareKeys(firstEntry.key, minEntry.key) < 0) {
+          minEntry = firstEntry
         }
       }
     }
@@ -307,13 +310,15 @@ export class ShardedSSTIndex {
         (b.rangeEnd ?? 0) - (a.rangeEnd ?? 0)
       )
       const lastShard = sortedShards[0]
+      if (!lastShard) return null
       const entries = await this.loadShard(lastShard)
 
       if (entries.length === 0) return null
+      const lastEntry = entries[entries.length - 1]!  // length check above ensures entry exists
 
       return {
-        value: decodeKey(entries[entries.length - 1].key),
-        docId: entries[entries.length - 1].docId,
+        value: decodeKey(lastEntry.key),
+        docId: lastEntry.docId,
       }
     }
 
@@ -323,7 +328,7 @@ export class ShardedSSTIndex {
     for (const shardInfo of this.manifest.shards) {
       const entries = await this.loadShard(shardInfo)
       if (entries.length > 0) {
-        const lastEntry = entries[entries.length - 1]
+        const lastEntry = entries[entries.length - 1]!  // length > 0 ensures entry exists
         if (!maxEntry || compareKeys(lastEntry.key, maxEntry.key) > 0) {
           maxEntry = lastEntry
         }
@@ -471,7 +476,8 @@ export class ShardedSSTIndex {
 
     while (lo < hi) {
       const mid = (lo + hi) >>> 1
-      if (compareKeys(entries[mid].key, key) < 0) {
+      const midEntry = entries[mid]!  // mid is between lo and hi < length
+      if (compareKeys(midEntry.key, key) < 0) {
         lo = mid + 1
       } else {
         hi = mid
@@ -490,7 +496,8 @@ export class ShardedSSTIndex {
 
     while (lo < hi) {
       const mid = (lo + hi) >>> 1
-      if (compareKeys(entries[mid].key, key) <= 0) {
+      const midEntry = entries[mid]!  // mid is between lo and hi < length
+      if (compareKeys(midEntry.key, key) <= 0) {
         lo = mid + 1
       } else {
         hi = mid

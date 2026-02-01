@@ -8,6 +8,7 @@
 import { parquetWriteBuffer } from 'hyparquet-writer'
 import { parquetQuery } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
+import { logger } from '../utils/logger'
 
 // Use the Cloudflare R2Bucket type directly
 type R2Bucket = {
@@ -230,7 +231,7 @@ export async function runR2Benchmark(
   let bestSpeedup = { query: '', speedup: 0, size: 0 }
 
   for (const size of config.sizes) {
-    console.log(`\nBenchmarking ${size.toLocaleString()} products...`)
+    logger.info(`Benchmarking ${size.toLocaleString()} products...`)
 
     // Generate data
     const products = generateProducts(size)
@@ -410,11 +411,13 @@ export async function handleBenchmarkRequest(
         'Server-Timing': `total;dur=${totalTime}`,
       },
     })
-  } catch (error) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    const stack = error instanceof Error ? error.stack : undefined
     return Response.json({
       error: true,
-      message: (error as Error).message,
-      stack: (error as Error).stack,
+      message,
+      stack,
     }, { status: 500 })
   }
 }

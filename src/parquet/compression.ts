@@ -65,7 +65,8 @@ export function compressLz4(input: Uint8Array): Uint8Array {
 
   // Hash function (same as used in reference implementation)
   const hash4 = (pos: number): number => {
-    const v = input[pos] | (input[pos + 1] << 8) | (input[pos + 2] << 16) | (input[pos + 3] << 24)
+    // pos + 3 is bounds checked by the caller (mfLimit = inputLength - 12)
+    const v = (input[pos] ?? 0) | ((input[pos + 1] ?? 0) << 8) | ((input[pos + 2] ?? 0) << 16) | ((input[pos + 3] ?? 0) << 24)
     return ((v * 2654435761) >>> 0) >>> (32 - HASH_LOG)
   }
 
@@ -83,6 +84,7 @@ export function compressLz4(input: Uint8Array): Uint8Array {
 
     // Check for a valid match
     if (
+      ref !== undefined &&
       ref >= 0 &&
       ip - ref <= 65535 &&
       input[ref] === input[ip] &&
@@ -119,11 +121,11 @@ export function compressLz4(input: Uint8Array): Uint8Array {
 
       // Write literals
       for (let j = 0; j < litLen; j++) {
-        output[op++] = input[anchor + j]
+        output[op++] = input[anchor + j] ?? 0  // bounds checked by litLen < ip
       }
 
       // Write offset (little-endian)
-      const offset = ip - ref
+      const offset = ip - ref  // ref is validated to be >= 0 above
       output[op++] = offset & 0xff
       output[op++] = (offset >> 8) & 0xff
 
@@ -164,7 +166,7 @@ export function compressLz4(input: Uint8Array): Uint8Array {
 
     // Write remaining literals
     for (let j = 0; j < lastLitLen; j++) {
-      output[op++] = input[anchor + j]
+      output[op++] = input[anchor + j] ?? 0  // bounds checked by lastLitLen <= remaining input
     }
   }
 
@@ -203,7 +205,7 @@ function emitLiteralsOnly(input: Uint8Array): Uint8Array {
 
   // Literals
   for (let i = 0; i < litLen; i++) {
-    output[op++] = input[i]
+    output[op++] = input[i] ?? 0  // loop bounds ensure valid index
   }
 
   return output

@@ -27,3 +27,6 @@ export * from './integrations'
 
 // Worker types (Env, DO types, RPC types)
 export * from './worker'
+
+// Result type (type-safe error handling)
+export * from './result'

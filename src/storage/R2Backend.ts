@@ -117,15 +117,16 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         throw new R2NotFoundError(path)
       }
       return new Uint8Array(await obj.arrayBuffer())
-    } catch (error) {
+    } catch (error: unknown) {
       if (error instanceof R2NotFoundError) {
         throw error
       }
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to read ${path}: ${(error as Error).message}`,
+        `Failed to read ${path}: ${err.message}`,
         'read',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -158,15 +159,16 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         throw new R2NotFoundError(path)
       }
       return new Uint8Array(await obj.arrayBuffer())
-    } catch (error) {
+    } catch (error: unknown) {
       if (error instanceof R2NotFoundError) {
         throw error
       }
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to read range ${start}-${end} from ${path}: ${(error as Error).message}`,
+        `Failed to read range ${start}-${end} from ${path}: ${err.message}`,
         'readRange',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -176,12 +178,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     try {
       const obj = await this.bucket.head(key)
       return obj !== null
-    } catch (error) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to check existence of ${path}: ${(error as Error).message}`,
+        `Failed to check existence of ${path}: ${err.message}`,
         'exists',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -203,12 +206,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         contentType: obj.httpMetadata?.contentType,
         metadata: obj.customMetadata,
       }
-    } catch (error) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to stat ${path}: ${(error as Error).message}`,
+        `Failed to stat ${path}: ${err.message}`,
         'stat',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -268,12 +272,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       }
 
       return listResult
-    } catch (error) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to list ${prefix}: ${(error as Error).message}`,
+        `Failed to list ${prefix}: ${err.message}`,
         'list',
         prefix,
-        error as Error
+        err
       )
     }
   }
@@ -336,15 +341,16 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         size: result.size,
         versionId: result.version,
       }
-    } catch (error) {
+    } catch (error: unknown) {
       if (error instanceof R2ETagMismatchError) {
         throw error
       }
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to write ${path}: ${(error as Error).message}`,
+        `Failed to write ${path}: ${err.message}`,
         'write',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -374,12 +380,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
       // Write the combined data
       await this.bucket.put(key, newData, {})
-    } catch (error) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to append to ${path}: ${(error as Error).message}`,
+        `Failed to append to ${path}: ${err.message}`,
         'append',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -395,12 +402,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       await this.bucket.delete(key)
 
       return exists !== null
-    } catch (error) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to delete ${path}: ${(error as Error).message}`,
+        `Failed to delete ${path}: ${err.message}`,
         'delete',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -430,12 +438,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       } while (cursor)
 
       return totalDeleted
-    } catch (error) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to delete prefix ${prefix}: ${(error as Error).message}`,
+        `Failed to delete prefix ${prefix}: ${err.message}`,
         'deletePrefix',
         prefix,
-        error as Error
+        err
       )
     }
   }
@@ -499,15 +508,16 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         size: result.size,
         versionId: result.version,
       }
-    } catch (error) {
+    } catch (error: unknown) {
       if (error instanceof R2ETagMismatchError) {
         throw error
       }
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed conditional write to ${path}: ${(error as Error).message}`,
+        `Failed conditional write to ${path}: ${err.message}`,
         'writeConditional',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -537,15 +547,16 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       }
 
       await this.bucket.put(destKey, data, Object.keys(putOptions).length > 0 ? putOptions : undefined)
-    } catch (error) {
+    } catch (error: unknown) {
       if (error instanceof R2NotFoundError) {
         throw error
       }
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to copy ${source} to ${dest}: ${(error as Error).message}`,
+        `Failed to copy ${source} to ${dest}: ${err.message}`,
         'copy',
         source,
-        error as Error
+        err
       )
     }
   }
@@ -559,15 +570,16 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
       // Then delete source
       await this.bucket.delete(sourceKey)
-    } catch (error) {
+    } catch (error: unknown) {
       if (error instanceof R2NotFoundError) {
         throw error
       }
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to move ${source} to ${dest}: ${(error as Error).message}`,
+        `Failed to move ${source} to ${dest}: ${err.message}`,
         'move',
         source,
-        error as Error
+        err
       )
     }
   }
@@ -591,12 +603,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       const r2Upload = await this.bucket.createMultipartUpload(key, r2Options)
 
       return new R2MultipartUploadWrapper(r2Upload)
-    } catch (error) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to create multipart upload for ${path}: ${(error as Error).message}`,
+        `Failed to create multipart upload for ${path}: ${err.message}`,
         'createMultipartUpload',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -625,12 +638,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       const r2Upload = await this.bucket.createMultipartUpload(key, undefined)
       this.activeUploads.set(r2Upload.uploadId, r2Upload)
       return r2Upload.uploadId
-    } catch (error) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to create multipart upload for ${path}: ${(error as Error).message}`,
+        `Failed to create multipart upload for ${path}: ${err.message}`,
         'startMultipartUpload',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -663,12 +677,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     try {
       const part = await upload.uploadPart(partNumber, data)
       return { etag: part.etag }
-    } catch (error) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to upload part ${partNumber} for ${path}: ${(error as Error).message}`,
+        `Failed to upload part ${partNumber} for ${path}: ${err.message}`,
         'uploadPart',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -697,12 +712,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     try {
       await upload.complete(parts)
       this.activeUploads.delete(uploadId)
-    } catch (error) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to complete multipart upload for ${path}: ${(error as Error).message}`,
+        `Failed to complete multipart upload for ${path}: ${err.message}`,
         'completeMultipartUpload',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -726,12 +742,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     try {
       await upload.abort()
       this.activeUploads.delete(uploadId)
-    } catch (error) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to abort multipart upload for ${path}: ${(error as Error).message}`,
+        `Failed to abort multipart upload for ${path}: ${err.message}`,
         'abortMultipartUpload',
         path,
-        error as Error
+        err
       )
     }
   }
@@ -830,7 +847,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
           size: result.size,
           versionId: result.version,
         }
-      } catch (error) {
+      } catch (error: unknown) {
         // Attempt to abort on failure
         try {
           await upload.abort()
@@ -839,15 +856,16 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         }
         throw error
       }
-    } catch (error) {
+    } catch (error: unknown) {
       if (error instanceof R2OperationError) {
         throw error
       }
+      const err = error instanceof Error ? error : new Error(String(error))
       throw new R2OperationError(
-        `Failed to write streaming ${path}: ${(error as Error).message}`,
+        `Failed to write streaming ${path}: ${err.message}`,
         'writeStreaming',
         path,
-        error as Error
+        err
       )
     }
   }

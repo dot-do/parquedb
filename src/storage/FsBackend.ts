@@ -368,7 +368,7 @@ export class FsBackend implements StorageBackend {
         etag: this.generateEtag(stat),
         size: data.length,
       }
-    } catch (error) {
+    } catch (error: unknown) {
       // Clean up temp file if it exists
       try {
         await fs.unlink(tempPath)

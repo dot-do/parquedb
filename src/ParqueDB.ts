@@ -818,7 +818,7 @@ class ParqueDBImpl {
     try {
       const dataPath = `data/${namespace}/data.parquet`
       await this.storage.read(dataPath)
-    } catch (error) {
+    } catch (error: unknown) {
       // FileNotFoundError is expected when no data exists yet
       if (!(error instanceof FileNotFoundError)) {
         // Propagate other storage errors
@@ -831,7 +831,7 @@ class ParqueDBImpl {
     let eventLogData: Uint8Array | null = null
     try {
       eventLogData = await this.storage.read(eventLogPath)
-    } catch (error) {
+    } catch (error: unknown) {
       // FileNotFoundError is expected when no events exist yet
       if (!(error instanceof FileNotFoundError)) {
         throw error
@@ -1895,7 +1895,7 @@ class ParqueDBImpl {
     const [eventNs, ...eventIdParts] = fullId.split('/')
     await this.recordEvent(
       'DELETE',
-      entityTarget(eventNs, eventIdParts.join('/')),
+      entityTarget(eventNs ?? '', eventIdParts.join('/')),
       beforeEntityForEvent,
       null,
       actor
@@ -1965,7 +1965,7 @@ class ParqueDBImpl {
 
     // Record RESTORE event (as UPDATE)
     const [eventNs, ...eventIdParts] = fullId.split('/')
-    await this.recordEvent('UPDATE', entityTarget(eventNs, eventIdParts.join('/')), beforeEntityForEvent, entity, actor)
+    await this.recordEvent('UPDATE', entityTarget(eventNs ?? '', eventIdParts.join('/')), beforeEntityForEvent, entity, actor)
 
     return entity as Entity<T>
   }
@@ -2173,26 +2173,19 @@ class ParqueDBImpl {
       return null
     }
 
-    // Find the target event. The asOf Date object passed may be the exact same
-    // Date object from an event (e.g., from history().items[n].ts). When multiple
-    // events have the same millisecond timestamp, we use object identity to find
-    // the specific event whose timestamp was passed.
+    // Find the target event. We include all events at or before the target timestamp.
+    // When multiple events share the same millisecond timestamp, all of them are
+    // included because they semantically all occurred "at" that time. This may result
+    // in including slightly more events than a caller who passed a specific event's
+    // timestamp might expect, but it's the correct interpretation of "as of" semantics.
     let targetEventIndex = -1
 
-    // First, try to find the event by exact timestamp match
-    const exactMatchIndex = allEvents.findIndex(e => e.ts === asOfTime)
-
-    if (exactMatchIndex !== -1) {
-      // Found exact timestamp match
-      targetEventIndex = exactMatchIndex
-    } else {
-      // No exact match - find the last event at or before asOf time
-      for (let i = 0; i < allEvents.length; i++) {
-        if (allEvents[i].ts <= asOfTime) {
-          targetEventIndex = i
-        } else {
-          break
-        }
+    for (let i = 0; i < allEvents.length; i++) {
+      const event = allEvents[i]!  // loop bounds ensure valid index
+      if (event.ts <= asOfTime) {
+        targetEventIndex = i
+      } else {
+        break
       }
     }
 
@@ -2242,7 +2235,7 @@ class ParqueDBImpl {
 
     // Replay events from startIndex to targetEventIndex
     for (let i = startIndex; i <= targetEventIndex; i++) {
-      const event = allEvents[i]
+      const event = allEvents[i]!  // loop bounds ensure valid index
       if (event.after) {
         entity = { ...event.after } as Entity
       } else if (event.op === 'DELETE') {
@@ -2303,7 +2296,7 @@ class ParqueDBImpl {
         const nsEventData = JSON.stringify(nsEvents)
         await this.storage.write(`${ns}/events.json`, new TextEncoder().encode(nsEventData))
       }
-    } catch (error) {
+    } catch (error: unknown) {
       // On write failure, rollback the in-memory changes
       for (const event of eventsToFlush) {
         // Remove the event from the event store
@@ -2399,7 +2392,8 @@ class ParqueDBImpl {
         return info.ns === ns && info.id === id
       }).length
       const existingSnapshots = this.snapshots.filter(s => s.entityId === fullEntityId)
-      const lastSnapshotSeq = existingSnapshots.length > 0 ? existingSnapshots[existingSnapshots.length - 1].sequenceNumber : 0
+      const lastSnapshot = existingSnapshots.length > 0 ? existingSnapshots[existingSnapshots.length - 1] : undefined
+      const lastSnapshotSeq = lastSnapshot?.sequenceNumber ?? 0
       const eventsSinceLastSnapshot = entityEventCount - lastSnapshotSeq
       if (eventsSinceLastSnapshot >= this.snapshotConfig.autoSnapshotThreshold) {
         this.getSnapshotManager().createSnapshot(fullEntityId).catch(() => {})
@@ -2480,7 +2474,7 @@ class ParqueDBImpl {
           const eventsAtBoundary = result.filter(e => e.ts === boundaryTime)
           if (eventsAtBoundary.length > 1) {
             // Remove the last event at the boundary (it was created after 'to' was captured)
-            const lastEvent = eventsAtBoundary[eventsAtBoundary.length - 1]
+            const lastEvent = eventsAtBoundary[eventsAtBoundary.length - 1]!  // length > 1 check ensures entry exists
             const idx = result.indexOf(lastEvent)
             if (idx !== -1) {
               result.splice(idx, 1)
@@ -2584,7 +2578,7 @@ class ParqueDBImpl {
     return {
       items,
       hasMore,
-      nextCursor: hasMore ? items[items.length - 1].id : undefined,
+      nextCursor: hasMore && items.length > 0 ? items[items.length - 1]!.id : undefined,
     }
   }
 
@@ -2746,7 +2740,7 @@ class ParqueDBImpl {
         const stateJson = JSON.stringify(entity)
         const stateSize = stateJson.length
         const compressed = stateSize > 1000
-        const snapshot: Snapshot = { id: generateId(), entityId, ns, sequenceNumber, createdAt: new Date(), state: { ...entity } as Record<string, unknown>, compressed, size: compressed ? Math.floor(stateSize * 0.3) : stateSize }
+        const snapshot: Snapshot = { id: generateId(), entityId, ns: ns ?? '', sequenceNumber, createdAt: new Date(), state: { ...entity } as Record<string, unknown>, compressed, size: compressed ? Math.floor(stateSize * 0.3) : stateSize }
         self.snapshots.push(snapshot)
         const snapshotPath = `data/${ns}/snapshots/${snapshot.id}.parquet`
         await self.storage.write(snapshotPath, new TextEncoder().encode(stateJson))
@@ -2770,7 +2764,7 @@ class ParqueDBImpl {
         const stateJson = JSON.stringify(state)
         const stateSize = stateJson.length
         const compressed = stateSize > 1000
-        const snapshot: Snapshot = { id: generateId(), entityId, ns, sequenceNumber, eventId, createdAt: new Date(), state: state as Record<string, unknown>, compressed, size: compressed ? Math.floor(stateSize * 0.3) : stateSize }
+        const snapshot: Snapshot = { id: generateId(), entityId, ns: ns ?? '', sequenceNumber, eventId, createdAt: new Date(), state: state as Record<string, unknown>, compressed, size: compressed ? Math.floor(stateSize * 0.3) : stateSize }
         self.snapshots.push(snapshot)
         await self.storage.write(`data/${ns}/snapshots/${snapshot.id}.parquet`, new TextEncoder().encode(stateJson))
         return snapshot
@@ -2781,7 +2775,7 @@ class ParqueDBImpl {
       async deleteSnapshot(snapshotId: string): Promise<void> {
         const index = self.snapshots.findIndex((s) => s.id === snapshotId)
         if (index !== -1) {
-          const snapshot = self.snapshots[index]
+          const snapshot = self.snapshots[index]!  // index !== -1 ensures entry exists
           self.snapshots.splice(index, 1)
           await self.storage.delete(`data/${snapshot.ns}/snapshots/${snapshotId}.parquet`)
         }
@@ -2808,7 +2802,7 @@ class ParqueDBImpl {
             //    (handles same-millisecond snapshots by sequence number ordering)
             const shouldPrune = !olderThan ||
               snapshot.createdAt.getTime() <= olderThan.getTime() ||
-              (entitySnapshots.length > 1 && snapshot.sequenceNumber < entitySnapshots[0].sequenceNumber)
+              (entitySnapshots.length > 1 && entitySnapshots[0] && snapshot.sequenceNumber < entitySnapshots[0].sequenceNumber)
             if (shouldPrune) {
               const idx = self.snapshots.findIndex((s) => s.id === snapshot.id)
               if (idx !== -1) {
@@ -2852,7 +2846,7 @@ class ParqueDBImpl {
 
     if (result.items.length > 0) {
       // Update existing
-      const entity = result.items[0]
+      const entity = result.items[0]!  // length > 0 ensures entry exists
       return this.update<T>(namespace, entity.$id as string, update, {
         returnDocument: options?.returnDocument,
       })
@@ -2907,7 +2901,7 @@ class ParqueDBImpl {
     const actor = options?.actor
 
     for (let i = 0; i < items.length; i++) {
-      const item = items[i]
+      const item = items[i]!  // loop bounds ensure valid index
 
       try {
         // Find existing entity
@@ -2915,7 +2909,7 @@ class ParqueDBImpl {
 
         if (existing.items.length > 0) {
           // Update existing entity
-          const entity = existing.items[0]
+          const entity = existing.items[0]!  // length > 0 ensures entry exists
           result.matchedCount++
 
           // Build update options
@@ -3008,12 +3002,12 @@ class ParqueDBImpl {
             } as UpdateInput<T>, { actor })
           }
         }
-      } catch (error) {
+      } catch (error: unknown) {
         result.ok = false
         result.errors.push({
           index: i,
           filter: item.filter,
-          error: error as Error,
+          error: error instanceof Error ? error : new Error(String(error)),
         })
 
         // If ordered, stop on first error
@@ -3155,7 +3149,7 @@ class ParqueDBImpl {
     this.entities.set(fullId, newState)
 
     // Record UPDATE event with revert metadata
-    await this.recordEvent('UPDATE', entityTarget(ns, id), beforeEntityForEvent, newState, actor, { revert: true })
+    await this.recordEvent('UPDATE', entityTarget(ns ?? '', id), beforeEntityForEvent, newState, actor, { revert: true })
 
     return newState as Entity<T>
   }

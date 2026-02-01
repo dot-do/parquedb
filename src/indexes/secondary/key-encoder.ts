@@ -18,6 +18,8 @@
  *   0x70 - object (JSON)
  */
 
+import { FNV_OFFSET_BASIS, FNV_PRIME } from '../../constants'
+
 // =============================================================================
 // Type Prefixes
 // =============================================================================
@@ -106,7 +108,7 @@ function encodeNumber(num: number): Uint8Array {
     view.setFloat64(1, num, false)
     const bytes = new Uint8Array(buffer)
     for (let i = 1; i < 9; i++) {
-      bytes[i] ^= 0xff
+      bytes[i] = (bytes[i] ?? 0) ^ 0xff  // loop bounds ensure valid index
     }
   }
 
@@ -248,7 +250,7 @@ export function decodeKey(key: Uint8Array): unknown {
       return decodeObject(key)
 
     default:
-      throw new Error(`Unknown type byte: 0x${type.toString(16)}`)
+      throw new Error(`Unknown type byte: 0x${type?.toString(16) ?? 'undefined'}`)
   }
 }
 
@@ -268,7 +270,7 @@ function decodeNumber(key: Uint8Array): number {
     // Flip bits back for negative numbers
     const bytes = new Uint8Array(buffer)
     for (let i = 1; i < 9; i++) {
-      bytes[i] ^= 0xff
+      bytes[i] = (bytes[i] ?? 0) ^ 0xff  // loop bounds ensure valid index
     }
   }
 
@@ -346,8 +348,10 @@ export function compareKeys(a: Uint8Array, b: Uint8Array): number {
   const minLen = Math.min(a.length, b.length)
 
   for (let i = 0; i < minLen; i++) {
-    if (a[i] < b[i]) return -1
-    if (a[i] > b[i]) return 1
+    const aVal = a[i]!  // loop bounds ensure valid index
+    const bVal = b[i]!
+    if (aVal < bVal) return -1
+    if (aVal > bVal) return 1
   }
 
   // Shorter keys come first
@@ -398,11 +402,11 @@ export function createBoundaryKey(
  * @returns 32-bit hash value
  */
 export function hashKey(key: Uint8Array): number {
-  let hash = 2166136261 // FNV offset basis
+  let hash = FNV_OFFSET_BASIS
 
   for (let i = 0; i < key.length; i++) {
-    hash ^= key[i]
-    hash = Math.imul(hash, 16777619) // FNV prime
+    hash ^= key[i]!  // loop bounds ensure valid index
+    hash = Math.imul(hash, FNV_PRIME)
   }
 
   return hash >>> 0 // Ensure unsigned 32-bit

@@ -335,8 +335,8 @@ export function parseRelation(value: string): ParsedRelationship | null {
       fromType: '', // Set by caller
       fromField: '', // Set by caller
       predicate: '', // Set by caller
-      toType: forwardMatch[1],
-      reverse: forwardMatch[2],
+      toType: forwardMatch[1] ?? '',
+      reverse: forwardMatch[2] ?? '',
       isArray: !!forwardMatch[3],
       direction: 'forward',
       mode: 'exact',
@@ -347,9 +347,9 @@ export function parseRelation(value: string): ParsedRelationship | null {
   const backwardMatch = value.match(/^<-\s*(\w+)\.(\w+)(\[\])?$/)
   if (backwardMatch) {
     return {
-      fromType: backwardMatch[1],
-      fromField: backwardMatch[2],
-      predicate: backwardMatch[2],
+      fromType: backwardMatch[1] ?? '',
+      fromField: backwardMatch[2] ?? '',
+      predicate: backwardMatch[2] ?? '',
       toType: '', // Set by caller
       reverse: '', // Set by caller
       isArray: !!backwardMatch[3],
@@ -365,8 +365,8 @@ export function parseRelation(value: string): ParsedRelationship | null {
       fromType: '',
       fromField: '',
       predicate: '',
-      toType: fuzzyForwardMatch[1],
-      reverse: fuzzyForwardMatch[2] || '',
+      toType: fuzzyForwardMatch[1] ?? '',
+      reverse: fuzzyForwardMatch[2] ?? '',
       isArray: !!fuzzyForwardMatch[3],
       direction: 'forward',
       mode: 'fuzzy',
@@ -377,8 +377,8 @@ export function parseRelation(value: string): ParsedRelationship | null {
   const fuzzyBackwardMatch = value.match(/^<~\s*(\w+)(?:\.(\w+))?(\[\])?$/)
   if (fuzzyBackwardMatch) {
     return {
-      fromType: fuzzyBackwardMatch[1],
-      fromField: fuzzyBackwardMatch[2] || '',
+      fromType: fuzzyBackwardMatch[1] ?? '',
+      fromField: fuzzyBackwardMatch[2] ?? '',
       predicate: '',
       toType: '',
       reverse: '',
@@ -408,8 +408,8 @@ export function parseFieldType(value: string): {
   // Check for default: "string = 'default'"
   const defaultMatch = type.match(/^(.+?)\s*=\s*(.+)$/)
   if (defaultMatch) {
-    type = defaultMatch[1].trim()
-    defaultValue = defaultMatch[2].trim()
+    type = (defaultMatch[1] ?? '').trim()
+    defaultValue = (defaultMatch[2] ?? '').trim()
   }
 
   // Check for array: "string[]"

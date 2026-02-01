@@ -22,6 +22,7 @@ import { HashIndex } from '../indexes/secondary/hash'
 import { SSTIndex } from '../indexes/secondary/sst'
 import { InvertedIndex } from '../indexes/fts/inverted-index'
 import { FTSIndex } from '../indexes/fts/search'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types
@@ -388,7 +389,7 @@ export class IndexCache {
 
       // Validate version (support version 1, 2, and 3)
       if (catalog.version < 1 || catalog.version > 3) {
-        console.warn(`Unsupported index catalog version: ${catalog.version}`)
+        logger.warn(`Unsupported index catalog version: ${catalog.version}`)
         return []
       }
 
@@ -406,8 +407,8 @@ export class IndexCache {
       // Cache the catalog
       this.catalogCache.set(dataset, catalog)
       return catalog.indexes
-    } catch (error) {
-      console.error(`Failed to load index catalog for ${dataset}:`, error)
+    } catch (error: unknown) {
+      logger.warn(`Failed to load index catalog for ${dataset}`, error)
       return []
     }
   }
@@ -803,9 +804,9 @@ export class IndexCache {
           // All values definitely don't exist
           return { docIds: [], rowGroups: [], exact: true, entriesScanned: 0 }
         }
-      } catch (error) {
+      } catch (error: unknown) {
         // Bloom filter failed to load, continue without pre-filtering
-        console.warn(`Failed to load bloom filter for ${entry.name}:`, error)
+        logger.warn(`Failed to load bloom filter for ${entry.name}`, error)
       }
     }
 
@@ -1032,13 +1033,13 @@ export class IndexCache {
     condition: { $search: string; $language?: string },
     options?: { limit?: number }
   ): Promise<FTSSearchResult[]> {
-    console.log(`[FTS] executeFTSSearch: dataset=${dataset}, query="${condition.$search}"`)
+    logger.debug(`[FTS] executeFTSSearch: dataset=${dataset}, query="${condition.$search}"`)
     const index = await this.loadFTSIndex(dataset, entry)
-    console.log(`[FTS] Index loaded: ready=${index.ready}, docCount=${index.documentCount}, vocabSize=${index.vocabularySize}`)
+    logger.debug(`[FTS] Index loaded: ready=${index.ready}, docCount=${index.documentCount}, vocabSize=${index.vocabularySize}`)
     const results = index.search(condition.$search, {
       limit: options?.limit ?? 100,
     })
-    console.log(`[FTS] Search results: ${results.length} matches`)
+    logger.debug(`[FTS] Search results: ${results.length} matches`)
     return results
   }
 
