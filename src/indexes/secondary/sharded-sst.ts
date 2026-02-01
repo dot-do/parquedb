@@ -20,6 +20,12 @@ import type {
 } from '../types'
 import { encodeKey, compareKeys, decodeKey } from './key-encoder'
 import type { ShardManifest, ShardInfo } from './sharded-hash'
+import {
+  FORMAT_VERSION_3,
+  readCompactHeader,
+  readCompactEntry,
+  readCompactEntryWithKey,
+} from '../encoding'
 
 // =============================================================================
 // Sharded SST Index
@@ -88,7 +94,7 @@ export class ShardedSSTIndex {
     }
 
     const data = await this.storage.read(shardPath)
-    const entries = this.deserializeShard(data)
+    const entries = this.deserializeShard(data, shardInfo.value)
     this.loadedShards.set(shardInfo.name, entries)
 
     return entries
@@ -189,9 +195,23 @@ export class ShardedSSTIndex {
     const allRowGroups = new Set<number>()
     let totalScanned = 0
 
+    // Check if using compact format (v3) - keys not stored, so can't do binary search
+    const isCompact = (this.manifest as ShardManifest & { compact?: boolean }).compact === true
+
     // Process each relevant shard
     for (const shardInfo of relevantShards) {
       const entries = await this.loadShard(shardInfo)
+
+      // For compact v3 format, entries don't have keys stored, so we return all
+      // entries from matching shards (shard selection already filters by range)
+      if (isCompact) {
+        for (const e of entries) {
+          allDocIds.push(e.docId)
+          allRowGroups.add(e.rowGroup)
+        }
+        totalScanned += entries.length
+        continue
+      }
 
       let startIdx = 0
       let endIdx = entries.length
@@ -217,8 +237,8 @@ export class ShardedSSTIndex {
       // Handle invalid ranges
       if (startIdx < endIdx) {
         const matches = entries.slice(startIdx, endIdx)
-        allDocIds.push(...matches.map(e => e.docId))
         for (const e of matches) {
+          allDocIds.push(e.docId)
           allRowGroups.add(e.rowGroup)
         }
         totalScanned += matches.length
@@ -228,7 +248,7 @@ export class ShardedSSTIndex {
     return {
       docIds: allDocIds,
       rowGroups: [...allRowGroups],
-      exact: true,
+      exact: !isCompact, // Not exact when using compact format (may include more than requested)
       entriesScanned: totalScanned,
     }
   }
@@ -483,7 +503,7 @@ export class ShardedSSTIndex {
   /**
    * Deserialize a shard file
    */
-  private deserializeShard(data: Uint8Array): SSTIndexEntry[] {
+  private deserializeShard(data: Uint8Array, shardValue?: unknown): SSTIndexEntry[] {
     const entries: SSTIndexEntry[] = []
 
     if (data.length < 5) {
@@ -495,7 +515,42 @@ export class ShardedSSTIndex {
 
     // Version
     const version = view.getUint8(offset)
-    offset += 1
+
+    // Handle v3 compact format
+    if (version === FORMAT_VERSION_3) {
+      const { header, bytesRead } = readCompactHeader(data, 0)
+      offset = bytesRead
+
+      // For SST v3, the key is the shard value (stored in manifest)
+      const keyBytes =
+        shardValue !== undefined ? encodeKey(shardValue) : new Uint8Array(0)
+
+      for (let i = 0; i < header.entryCount; i++) {
+        if (header.hasKeyHash) {
+          const { entry, bytesRead: entryBytes } = readCompactEntryWithKey(data, offset)
+          offset += entryBytes
+          entries.push({
+            key: keyBytes,
+            docId: entry.docId,
+            rowGroup: entry.rowGroup,
+            rowOffset: entry.rowOffset,
+          })
+        } else {
+          const { entry, bytesRead: entryBytes } = readCompactEntry(data, offset)
+          offset += entryBytes
+          entries.push({
+            key: keyBytes,
+            docId: entry.docId,
+            rowGroup: entry.rowGroup,
+            rowOffset: entry.rowOffset,
+          })
+        }
+      }
+
+      return entries
+    }
+
+    offset += 1 // Skip version byte for v1/v2
 
     if (version !== 1 && version !== 2) {
       throw new Error(`Unsupported shard version: ${version}`)

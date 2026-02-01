@@ -17,6 +17,12 @@ import type {
   HashIndexEntry,
 } from '../types'
 import { encodeKey, hashKey } from './key-encoder'
+import {
+  FORMAT_VERSION_3,
+  readCompactHeader,
+  readCompactEntry,
+  readCompactEntryWithKey,
+} from '../encoding'
 
 // =============================================================================
 // Types
@@ -337,7 +343,38 @@ export class ShardedHashIndex {
 
     // Version
     const version = view.getUint8(offset)
-    offset += 1
+
+    // Handle v3 compact format
+    if (version === FORMAT_VERSION_3) {
+      const { header, bytesRead } = readCompactHeader(data, 0)
+      offset = bytesRead
+
+      for (let i = 0; i < header.entryCount; i++) {
+        if (header.hasKeyHash) {
+          const { entry, bytesRead: entryBytes } = readCompactEntryWithKey(data, offset)
+          offset += entryBytes
+          entries.push({
+            key: new Uint8Array(0), // Key not stored in v3 sharded format
+            docId: entry.docId,
+            rowGroup: entry.rowGroup,
+            rowOffset: entry.rowOffset,
+          })
+        } else {
+          const { entry, bytesRead: entryBytes } = readCompactEntry(data, offset)
+          offset += entryBytes
+          entries.push({
+            key: new Uint8Array(0), // Key not stored in v3 sharded format
+            docId: entry.docId,
+            rowGroup: entry.rowGroup,
+            rowOffset: entry.rowOffset,
+          })
+        }
+      }
+
+      return entries
+    }
+
+    offset += 1 // Skip version byte for v1/v2
 
     if (version !== 1 && version !== 2) {
       throw new Error(`Unsupported shard version: ${version}`)
