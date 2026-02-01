@@ -8,7 +8,14 @@
 // Main Classes
 // =============================================================================
 
-export { ParqueDB, type ParqueDBConfig } from './ParqueDB'
+export {
+  ParqueDB,
+  type ParqueDBConfig,
+  type EventLogConfig,
+  type ArchiveEventsResult,
+  type EventLog,
+  DEFAULT_EVENT_LOG_CONFIG,
+} from './ParqueDB'
 export { Collection } from './Collection'
 
 // =============================================================================
@@ -169,6 +176,36 @@ export {
   type AutoEmbedConfig,
   type ProcessEmbeddingsOptions,
 } from './embeddings'
+
+// =============================================================================
+// Observability (Hooks & Metrics)
+// =============================================================================
+
+export {
+  // Hook Registry
+  HookRegistry,
+  MetricsCollector,
+  globalHookRegistry,
+  // Context Factories
+  generateOperationId,
+  createQueryContext,
+  createMutationContext,
+  createStorageContext,
+  // Types
+  type HookContext,
+  type QueryContext,
+  type MutationContext,
+  type StorageContext,
+  type QueryResult as ObservabilityQueryResult,
+  type MutationResult as ObservabilityMutationResult,
+  type StorageResult,
+  type QueryHook,
+  type MutationHook,
+  type StorageHook,
+  type ObservabilityHook,
+  type OperationMetrics,
+  type AggregatedMetrics,
+} from './observability'
 
 // =============================================================================
 // Version
