@@ -74,3 +74,9 @@ export {
   tryParseJson,
   parseWithGuard,
 } from './json-validation'
+
+export {
+  UNSAFE_PATH_SEGMENTS,
+  isUnsafePath,
+  validatePath,
+} from './path-safety'

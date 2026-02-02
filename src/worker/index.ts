@@ -95,6 +95,7 @@ export {
   parseQueryOptions,
   RoutePatterns,
   matchRoute,
+  QueryParamError,
 } from './routing'
 
 // Re-export datasets config

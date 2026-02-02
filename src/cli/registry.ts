@@ -19,7 +19,7 @@
  *   })
  */
 
-import type { ParsedArgs } from './index'
+import type { ParsedArgs } from './types'
 
 // =============================================================================
 // Types

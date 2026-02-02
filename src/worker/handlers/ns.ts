@@ -5,7 +5,7 @@
  */
 
 import { buildResponse, buildErrorResponse } from '../responses'
-import { parseQueryFilter, parseQueryOptions } from '../routing'
+import { parseQueryFilter, parseQueryOptions, QueryParamError } from '../routing'
 import type { EntityRecord } from '../../types/entity'
 import type { Update } from '../../types/update'
 import type { HandlerContext } from './types'
@@ -37,8 +37,17 @@ export async function handleNsRoute(
           data: entity,
         }, startTime)
       } else {
-        const filter = parseQueryFilter(url.searchParams)
-        const options = parseQueryOptions(url.searchParams)
+        let filter
+        let options
+        try {
+          filter = parseQueryFilter(url.searchParams)
+          options = parseQueryOptions(url.searchParams)
+        } catch (err) {
+          if (err instanceof QueryParamError) {
+            return buildErrorResponse(request, err, 400, startTime)
+          }
+          throw err
+        }
         const result = await worker.find<EntityRecord>(ns, filter, options)
         return buildResponse(request, {
           api: { resource: 'collection', namespace: ns },
@@ -53,7 +62,22 @@ export async function handleNsRoute(
     }
 
     case 'POST': {
-      const data = (await request.json()) as Partial<EntityRecord>
+      let body: unknown
+      try {
+        body = await request.json()
+      } catch {
+        throw new QueryParamError('Invalid JSON body')
+      }
+      if (body === null || Array.isArray(body) || typeof body !== 'object') {
+        throw new QueryParamError('Invalid body: must be a JSON object')
+      }
+      const data = body as Partial<EntityRecord>
+      if (!data.type) {
+        console.warn(`POST /ns/${ns}: missing type field`)
+      }
+      if (!data.name) {
+        console.warn(`POST /ns/${ns}: missing name field`)
+      }
       const entity = await worker.create(ns, data)
       return Response.json(entity, { status: 201 })
     }
@@ -62,7 +86,16 @@ export async function handleNsRoute(
       if (!id) {
         return buildErrorResponse(request, new Error('ID required for update'), 400, startTime)
       }
-      const updateData = (await request.json()) as Update
+      let body: unknown
+      try {
+        body = await request.json()
+      } catch {
+        throw new QueryParamError('Invalid JSON body')
+      }
+      if (body === null || Array.isArray(body) || typeof body !== 'object') {
+        throw new QueryParamError('Invalid body: must be a JSON object')
+      }
+      const updateData = body as Update
       const result = await worker.update(ns, id, updateData)
       return Response.json(result)
     }

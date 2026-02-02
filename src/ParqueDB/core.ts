@@ -34,7 +34,7 @@ import { SchemaValidator } from '../schema/validator'
 import { FileNotFoundError } from '../storage/MemoryBackend'
 import { IndexManager } from '../indexes/manager'
 import type { IndexDefinition, IndexMetadata, IndexStats } from '../indexes/types'
-import { getNestedValue, compareValues, generateId } from '../utils'
+import { getNestedValue, compareValues, generateId, deepClone } from '../utils'
 import { matchesFilter as canonicalMatchesFilter } from '../query/filter'
 import { isUnsafePath } from '../mutation/operators'
 import { DEFAULT_MAX_INBOUND } from '../constants'
@@ -733,6 +733,9 @@ export class ParqueDBImpl {
       throw new VersionConflictError(options.expectedVersion, entity.version)
     }
 
+    // Clone the entity before mutating to avoid race conditions with concurrent readers
+    entity = deepClone(entity)
+
     // Store the "before" state if needed (for insert, return null when returnDocument: 'before')
     const beforeEntity = options?.returnDocument === 'before' ? (isInsert ? null : { ...entity }) : null
     // Always capture before state for event recording (null for inserts)
@@ -1202,13 +1205,15 @@ export class ParqueDBImpl {
       if (entity.deletedAt) {
         return { deletedCount: 0 }
       }
+      // Clone the entity before mutating to avoid race conditions with concurrent readers
+      const cloned = deepClone(entity)
       // Soft delete - set deletedAt
-      entity.deletedAt = now
-      entity.deletedBy = actor
-      entity.updatedAt = now
-      entity.updatedBy = actor
-      entity.version = (entity.version || 1) + 1
-      this.entities.set(fullId, entity)
+      cloned.deletedAt = now
+      cloned.deletedBy = actor
+      cloned.updatedAt = now
+      cloned.updatedBy = actor
+      cloned.version = (cloned.version || 1) + 1
+      this.entities.set(fullId, cloned)
     }
 
     // Record DELETE event - always use null for after since entity is being deleted
@@ -1274,20 +1279,23 @@ export class ParqueDBImpl {
     // Capture before state for event
     const beforeEntityForEvent = { ...entity } as Entity
 
-    // Remove deletedAt and deletedBy
-    delete entity.deletedAt
-    delete entity.deletedBy
-    entity.updatedAt = now
-    entity.updatedBy = actor
-    entity.version = (entity.version || 1) + 1
+    // Clone the entity before mutating to avoid race conditions with concurrent readers
+    const cloned = deepClone(entity)
 
-    this.entities.set(fullId, entity)
+    // Remove deletedAt and deletedBy
+    delete cloned.deletedAt
+    delete cloned.deletedBy
+    cloned.updatedAt = now
+    cloned.updatedBy = actor
+    cloned.version = (cloned.version || 1) + 1
+
+    this.entities.set(fullId, cloned)
 
     // Record RESTORE event (as UPDATE)
     const [eventNs, ...eventIdParts] = fullId.split('/')
-    await this.recordEvent('UPDATE', entityTarget(eventNs ?? '', eventIdParts.join('/')), beforeEntityForEvent, entity, actor)
+    await this.recordEvent('UPDATE', entityTarget(eventNs ?? '', eventIdParts.join('/')), beforeEntityForEvent, cloned, actor)
 
-    return entity as Entity<T>
+    return cloned as Entity<T>
   }
 
   /**

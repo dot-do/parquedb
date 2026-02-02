@@ -11,8 +11,8 @@
 
 import { promises as fs } from 'node:fs'
 import { join, resolve } from 'node:path'
-import type { ParsedArgs } from '../index'
-import { print, printSuccess, printError } from '../index'
+import type { ParsedArgs } from '../types'
+import { print, printSuccess, printError } from '../types'
 
 // =============================================================================
 // Types

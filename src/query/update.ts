@@ -12,6 +12,7 @@
 import type { UpdateInput } from '../types/update'
 import type { Filter } from '../types/filter'
 import { deepEqual, compareValues, createSafeRegex } from '../utils'
+import { validatePath } from '../utils/path-safety'
 import { matchesFilter as filterMatchesFilter } from './filter'
 
 // =============================================================================
@@ -382,6 +383,7 @@ function applySlice(arr: unknown[], slice: number): void {
  * getField({ a: [1, 2] }, 'a.0') // => 1
  */
 export function getField(obj: unknown, path: string): unknown {
+  validatePath(path)
   if (obj === null || obj === undefined) {
     return undefined
   }
@@ -422,6 +424,7 @@ export function getField(obj: unknown, path: string): unknown {
  * setField({ items: ['a', 'b'] }, 'items.1', 'x') // => { items: ['a', 'x'] }
  */
 export function setField<T>(obj: T, path: string, value: unknown): T {
+  validatePath(path)
   const parts = path.split('.')
 
   // Base case: single part
@@ -510,6 +513,7 @@ export function setField<T>(obj: T, path: string, value: unknown): T {
  * unsetField({ a: { b: 1, c: 2 } }, 'a.b') // => { a: { c: 2 } }
  */
 export function unsetField<T>(obj: T, path: string): T {
+  validatePath(path)
   const parts = path.split('.')
 
   // Base case: single part - remove the field

@@ -14,8 +14,8 @@
 
 import { join } from 'node:path'
 import { promises as fs } from 'node:fs'
-import type { ParsedArgs } from '../index'
-import { print, printError } from '../index'
+import type { ParsedArgs } from '../types'
+import { print, printError } from '../types'
 import { ParqueDB } from '../../ParqueDB'
 import { FsBackend } from '../../storage/FsBackend'
 import type { Filter, FindOptions } from '../../types'

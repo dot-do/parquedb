@@ -8,6 +8,23 @@ import type { Filter } from '../types/filter'
 import type { FindOptions } from '../types/options'
 
 // =============================================================================
+// Error Types
+// =============================================================================
+
+/**
+ * Error thrown when query parameters are invalid.
+ * Carries a `status` of 400 for HTTP response mapping.
+ */
+export class QueryParamError extends Error {
+  status = 400
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'QueryParamError'
+  }
+}
+
+// =============================================================================
 // Query Parsing Helpers
 // =============================================================================
 
@@ -20,12 +37,20 @@ import type { FindOptions } from '../types/options'
 export function parseQueryFilter(params: URLSearchParams): Filter {
   const filterParam = params.get('filter')
   if (filterParam) {
+    let parsed: unknown
     try {
-      return JSON.parse(filterParam)
+      parsed = JSON.parse(filterParam)
     } catch {
-      // Intentionally ignored: invalid JSON filter param falls back to empty filter
-      return {}
+      throw new QueryParamError('Invalid filter: must be valid JSON')
     }
+    if (
+      parsed === null ||
+      Array.isArray(parsed) ||
+      typeof parsed !== 'object'
+    ) {
+      throw new QueryParamError('Invalid filter: must be a JSON object')
+    }
+    return parsed as Filter
   }
   return {}
 }
@@ -44,10 +69,22 @@ export function parseQueryOptions(params: URLSearchParams): FindOptions {
   const options: FindOptions = {}
 
   const limit = params.get('limit')
-  if (limit) options.limit = parseInt(limit, 10)
+  if (limit !== null && limit !== '') {
+    const parsed = parseInt(limit, 10)
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw new QueryParamError('Invalid limit: must be a non-negative integer')
+    }
+    options.limit = parsed
+  }
 
   const skip = params.get('skip')
-  if (skip) options.skip = parseInt(skip, 10)
+  if (skip) {
+    const parsed = parseInt(skip, 10)
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw new QueryParamError('Invalid skip: must be a non-negative integer')
+    }
+    options.skip = parsed
+  }
 
   const cursor = params.get('cursor')
   if (cursor) options.cursor = cursor

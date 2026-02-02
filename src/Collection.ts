@@ -56,6 +56,7 @@ import type {
 } from './types'
 import { normalizeSortDirection } from './types'
 import { deepClone, getNestedValue, compareValues, generateId, getValueType } from './utils'
+import { validatePath } from './utils/path-safety'
 import { matchesFilter as canonicalMatchesFilter } from './query/filter'
 import { QueryBuilder } from './query/builder'
 import { executeAggregation, executeAggregationWithIndex, type AggregationStage } from './aggregation'
@@ -193,6 +194,7 @@ export function clearEventLog(): void {
  * Set value at a nested path using dot notation
  */
 function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
+  validatePath(path)
   const parts = path.split('.')
   let current = obj
   for (let i = 0; i < parts.length - 1; i++) {
@@ -212,6 +214,7 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
  * Delete value at a nested path using dot notation
  */
 function deleteNestedValue(obj: Record<string, unknown>, path: string): void {
+  validatePath(path)
   const parts = path.split('.')
   let current = obj
   for (let i = 0; i < parts.length - 1; i++) {

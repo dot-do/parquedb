@@ -366,32 +366,57 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
   async append(path: string, data: Uint8Array): Promise<void> {
     const key = this.withPrefix(path)
+    const MAX_RETRIES = 3
 
-    try {
-      // Try to read existing content
-      const existing = await this.bucket.get(key, undefined)
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const existing = await this.bucket.get(key, undefined)
 
-      let newData: Uint8Array
-      if (existing) {
-        const existingBuffer = await existing.arrayBuffer()
-        const existingData = new Uint8Array(existingBuffer)
-        newData = new Uint8Array(existingData.length + data.length)
-        newData.set(existingData)
-        newData.set(data, existingData.length)
-      } else {
-        newData = data
+        let newData: Uint8Array
+        let putOptions: R2PutOptions | undefined
+
+        if (existing) {
+          const existingBuffer = await existing.arrayBuffer()
+          const existingData = new Uint8Array(existingBuffer)
+          newData = new Uint8Array(existingData.length + data.length)
+          newData.set(existingData)
+          newData.set(data, existingData.length)
+
+          // Use ETag-based conditional write to prevent race conditions
+          putOptions = {
+            onlyIf: { etagMatches: existing.etag },
+          }
+        } else {
+          newData = data
+          putOptions = {}
+        }
+
+        const result = await this.bucket.put(key, newData, putOptions)
+        if (!result && existing) {
+          // ETag mismatch - object was modified between read and write, retry
+          if (attempt < MAX_RETRIES - 1) {
+            continue
+          }
+          throw new R2OperationError(
+            `Failed to append to ${path}: concurrent modification after ${MAX_RETRIES} retries`,
+            'append',
+            path
+          )
+        }
+
+        return // Success
+      } catch (error: unknown) {
+        if (error instanceof R2OperationError) {
+          throw error
+        }
+        const err = error instanceof Error ? error : new Error(String(error))
+        throw new R2OperationError(
+          `Failed to append to ${path}: ${err.message}`,
+          'append',
+          path,
+          err
+        )
       }
-
-      // Write the combined data
-      await this.bucket.put(key, newData, {})
-    } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error))
-      throw new R2OperationError(
-        `Failed to append to ${path}: ${err.message}`,
-        'append',
-        path,
-        err
-      )
     }
   }
 

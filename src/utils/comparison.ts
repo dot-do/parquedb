@@ -180,8 +180,8 @@ export function getNestedValue(obj: Record<string, unknown>, path: string): unkn
 /**
  * Deep clone an object, preserving Date instances
  *
- * Uses JSON serialization with custom Date handling to create
- * a complete deep copy of an object.
+ * Uses structuredClone for safe, complete deep copies without
+ * custom serialization sentinels.
  *
  * @param obj - Object to clone
  * @returns Deep cloned copy
@@ -193,20 +193,7 @@ export function getNestedValue(obj: Record<string, unknown>, path: string): unkn
  */
 export function deepClone<T>(obj: T): T {
   if (obj === null || obj === undefined) return obj
-  return JSON.parse(
-    JSON.stringify(obj, (_, value) => {
-      if (value instanceof Date) {
-        return { __date__: value.toISOString() }
-      }
-      return value
-    }),
-    (_, value) => {
-      if (value && typeof value === 'object' && value.__date__) {
-        return new Date(value.__date__)
-      }
-      return value
-    }
-  )
+  return structuredClone(obj)
 }
 
 // =============================================================================

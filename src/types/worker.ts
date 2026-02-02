@@ -64,6 +64,25 @@ export interface Env {
  * Service binding type for RPC calls between workers
  * Use import type for better tree-shaking
  */
+/**
+ * Typed stub interface for Durable Object RPC calls
+ *
+ * Used instead of `as unknown as { ... }` casts when calling DO methods.
+ * This provides a single source of truth for the DO RPC contract.
+ */
+export interface ParqueDBDOStub {
+  get(ns: string, id: string): Promise<unknown>
+  find(ns: string, filter?: unknown, options?: unknown): Promise<unknown>
+  create(ns: string, data: unknown, options?: unknown): Promise<unknown>
+  update(ns: string, id: string, update: unknown, options?: unknown): Promise<unknown>
+  updateMany(ns: string, filter: unknown, update: unknown, options?: unknown): Promise<unknown>
+  delete(ns: string, id: string, options?: unknown): Promise<unknown>
+  deleteMany(ns: string, filter: unknown, options?: unknown): Promise<unknown>
+  link(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
+  unlink(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
+  related(ns: string, id: string, options?: unknown): Promise<unknown>
+}
+
 export type ParqueDBService = Fetcher
 
 /**
