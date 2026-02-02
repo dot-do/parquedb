@@ -10,8 +10,9 @@
 
 /**
  * Type of index
+ * NOTE: 'sst' removed - native parquet predicate pushdown on $index_* columns is now faster for range queries
  */
-export type IndexType = 'hash' | 'sst' | 'fts' | 'bloom' | 'vector'
+export type IndexType = 'hash' | 'fts' | 'bloom' | 'vector'
 
 /**
  * Index field definition
@@ -19,7 +20,7 @@ export type IndexType = 'hash' | 'sst' | 'fts' | 'bloom' | 'vector'
 export interface IndexField {
   /** Field path (supports dot notation for nested fields) */
   path: string
-  /** Sort order for SST indexes */
+  /** Sort order (kept for backward compatibility) */
   order?: 'asc' | 'desc'
   /** Weight for FTS indexes (default: 1.0) */
   weight?: number
@@ -35,7 +36,7 @@ export interface IndexDefinition {
   type: IndexType
   /** Fields to index */
   fields: IndexField[]
-  /** Whether index is unique (for hash/sst) */
+  /** Whether index is unique (for hash index) */
   unique?: boolean
   /** Sparse index - only index documents where field exists */
   sparse?: boolean
@@ -120,6 +121,7 @@ export interface HashIndexEntry {
 
 /**
  * Entry stored in an SST index
+ * @deprecated SST indexes have been removed - kept for backward compatibility only
  */
 export interface SSTIndexEntry {
   /** The indexed value (encoded as sortable key) */
@@ -193,7 +195,9 @@ export interface IndexLookupResult {
 }
 
 /**
- * Range query parameters for SST index
+ * Range query parameters
+ * NOTE: Range queries now use native parquet predicate pushdown on $index_* columns
+ * @deprecated SST indexes have been removed - use parquet predicate pushdown instead
  */
 export interface RangeQuery {
   /** Greater than */
@@ -275,7 +279,7 @@ export interface IndexStats {
   sizeBytes: number
   /** Unique keys (for hash index) */
   uniqueKeys?: number
-  /** Levels (for SST index) */
+  /** Levels (kept for backward compatibility) */
   levels?: number
   /** Vocabulary size (for FTS index) */
   vocabularySize?: number

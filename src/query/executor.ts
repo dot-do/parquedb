@@ -283,18 +283,7 @@ export class QueryExecutor {
           break
         }
 
-        case 'sst': {
-          const rangeQuery = this.extractRangeQuery(indexPlan.condition)
-          if (rangeQuery) {
-            const result = await this.indexManager!.rangeQuery(
-              ns,
-              indexPlan.index.name,
-              rangeQuery
-            )
-            candidateDocIds = result.docIds
-          }
-          break
-        }
+        // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown
 
         case 'fts': {
           const searchQuery = (filter.$text as { $search: string })?.$search

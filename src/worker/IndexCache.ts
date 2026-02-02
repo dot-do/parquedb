@@ -2,7 +2,10 @@
  * IndexCache for ParqueDB Worker
  *
  * Loads and caches secondary indexes from R2 storage for Worker-based query execution.
- * Supports Hash, SST, and FTS indexes with lazy loading and LRU eviction.
+ * Supports Hash and FTS indexes with lazy loading and LRU eviction.
+ *
+ * NOTE: SST indexes have been removed - native parquet predicate pushdown
+ * on $index_* columns is now faster than secondary indexes for range queries.
  *
  * Index layout in R2:
  * {dataset}/
@@ -11,15 +14,13 @@
  * └── indexes/
  *     ├── _catalog.json           # Index metadata
  *     ├── secondary/
- *     │   ├── titleType.hash.idx  # Hash index (binary)
- *     │   └── startYear.sst.idx   # SST index (binary)
+ *     │   └── titleType.hash.idx  # Hash index (binary)
  *     └── fts/
  *         └── name.fts.json       # FTS inverted index
  */
 
-import type { IndexDefinition, IndexLookupResult, RangeQuery, FTSSearchResult } from '../indexes/types'
+import type { IndexDefinition, IndexLookupResult, FTSSearchResult } from '../indexes/types'
 import { HashIndex } from '../indexes/secondary/hash'
-import { SSTIndex } from '../indexes/secondary/sst'
 import { InvertedIndex } from '../indexes/fts/inverted-index'
 import { FTSIndex } from '../indexes/fts/search'
 import { logger } from '../utils/logger'
@@ -32,12 +33,15 @@ import { safeJsonParse, isRecord, isArray } from '../utils/json-validation'
 
 /**
  * Index catalog entry in _catalog.json
+ *
+ * NOTE: SST indexes have been removed - native parquet predicate pushdown
+ * on $index_* columns is now faster than secondary indexes for range queries.
  */
 export interface IndexCatalogEntry {
   /** Index name */
   name: string
   /** Index type */
-  type: 'hash' | 'sst' | 'fts'
+  type: 'hash' | 'fts'
   /** Indexed field (e.g., '$index_titleType') */
   field: string
   /** Path to index file relative to dataset root */
@@ -66,20 +70,23 @@ export interface ShardEntry {
   value: string | number | boolean
   /** Number of entries in this shard */
   entryCount: number
-  /** Min value (for SST range shards) */
+  /** Min value (kept for backward compatibility) */
   minValue?: unknown
-  /** Max value (for SST range shards) */
+  /** Max value (kept for backward compatibility) */
   maxValue?: unknown
 }
 
 /**
  * Sharded index manifest format
+ *
+ * NOTE: SST indexes have been removed - native parquet predicate pushdown
+ * on $index_* columns is now faster than secondary indexes for range queries.
  */
 export interface ShardedIndexManifest {
   /** Manifest version */
   version: number
   /** Index type */
-  type: 'hash' | 'sst'
+  type: 'hash'
   /** Indexed field */
   field: string
   /** Sharding strategy */
@@ -120,8 +127,8 @@ export interface IndexCatalog {
  * Loaded index wrapper
  */
 interface LoadedIndex {
-  type: 'hash' | 'sst' | 'fts'
-  index: HashIndex | SSTIndex | FTSIndex
+  type: 'hash' | 'fts'
+  index: HashIndex | FTSIndex
   loadedAt: number
   sizeBytes: number
 }
@@ -316,7 +323,7 @@ class BloomFilter {
  * Selected index for query execution
  */
 export interface SelectedIndex {
-  type: 'hash' | 'sst' | 'fts'
+  type: 'hash' | 'fts'
   entry: IndexCatalogEntry
   condition: unknown
 }
@@ -606,54 +613,6 @@ export class IndexCache {
   }
 
   /**
-   * Load an SST index
-   *
-   * @param dataset - Dataset ID
-   * @param entry - Index catalog entry
-   * @returns Loaded SST index
-   */
-  async loadSSTIndex(dataset: string, entry: IndexCatalogEntry): Promise<SSTIndex> {
-    const cacheKey = `${dataset}/${entry.name}`
-
-    // Check cache
-    const cached = this.indexCache.get(cacheKey)
-    if (cached && cached.type === 'sst') {
-      return cached.index as SSTIndex
-    }
-
-    // Load from storage
-    const indexPath = `${dataset}/${entry.path}`
-    const data = await this.storage.read(indexPath)
-
-    // Create SST index with in-memory storage adapter
-    const memoryStorage = createMemoryStorageAdapter(data)
-    const definition: IndexDefinition = {
-      name: entry.name,
-      type: 'sst',
-      fields: [{ path: entry.field }],
-    }
-
-    const index = new SSTIndex(memoryStorage as unknown as import('../types/storage').StorageBackend, entry.name, definition)
-    const loadResult = await index.load()
-
-    // Log if index load failed (corrupted data), but continue with empty index
-    // The index is still usable, just empty
-    if (isErr(loadResult)) {
-      logger.warn(`SST index ${entry.name} load returned error (using empty index): ${loadResult.error.message}`)
-    }
-
-    // Cache the loaded index
-    this.cacheIndex(cacheKey, {
-      type: 'sst',
-      index,
-      loadedAt: Date.now(),
-      sizeBytes: data.byteLength,
-    })
-
-    return index
-  }
-
-  /**
    * Load an FTS index
    *
    * @param dataset - Dataset ID
@@ -741,14 +700,7 @@ export class IndexCache {
         }
       }
 
-      if (indexEntry.type === 'sst') {
-        // SST can handle both equality and range
-        return {
-          type: 'sst',
-          entry: indexEntry,
-          condition,
-        }
-      }
+      // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown on $index_* columns
     }
 
     return null
@@ -869,181 +821,6 @@ export class IndexCache {
       exact: true,
       entriesScanned,
     }
-  }
-
-  /**
-   * Execute an SST index lookup (range or equality)
-   *
-   * @param dataset - Dataset ID
-   * @param entry - Index catalog entry
-   * @param condition - Query condition
-   * @returns Index lookup result with document IDs
-   */
-  async executeSSTLookup(
-    dataset: string,
-    entry: IndexCatalogEntry,
-    condition: unknown
-  ): Promise<IndexLookupResult> {
-    // Check if this is a sharded index
-    if (entry.sharded && entry.manifestPath) {
-      return this.executeShardedSSTLookup(dataset, entry, condition)
-    }
-
-    // Non-sharded: use original SST index loading
-    const index = await this.loadSSTIndex(dataset, entry)
-
-    // Handle direct equality
-    if (typeof condition !== 'object' || condition === null) {
-      return index.lookup(condition)
-    }
-
-    const condObj = condition as Record<string, unknown>
-
-    // Handle $eq
-    if ('$eq' in condObj) {
-      return index.lookup(condObj.$eq)
-    }
-
-    // Handle range operators
-    const rangeQuery: RangeQuery = {}
-    if ('$gt' in condObj) rangeQuery.$gt = condObj.$gt
-    if ('$gte' in condObj) rangeQuery.$gte = condObj.$gte
-    if ('$lt' in condObj) rangeQuery.$lt = condObj.$lt
-    if ('$lte' in condObj) rangeQuery.$lte = condObj.$lte
-
-    if (Object.keys(rangeQuery).length > 0) {
-      return index.range(rangeQuery)
-    }
-
-    // Fallback to full scan
-    return index.scan()
-  }
-
-  /**
-   * Execute a sharded SST index lookup (range queries over sharded data)
-   *
-   * @param dataset - Dataset ID
-   * @param entry - Index catalog entry (must be sharded)
-   * @param condition - Query condition
-   * @returns Index lookup result with document IDs
-   */
-  private async executeShardedSSTLookup(
-    dataset: string,
-    entry: IndexCatalogEntry,
-    condition: unknown
-  ): Promise<IndexLookupResult> {
-    const manifestPath = entry.manifestPath!
-    const indexDir = this.getIndexDir(manifestPath)
-
-    // Load manifest
-    const manifest = await this.loadManifest(dataset, manifestPath)
-
-    // Parse condition to determine which shards to query
-    let targetValue: unknown = undefined
-    let rangeQuery: RangeQuery | undefined = undefined
-
-    if (typeof condition !== 'object' || condition === null) {
-      // Direct equality
-      targetValue = condition
-    } else {
-      const condObj = condition as Record<string, unknown>
-      if ('$eq' in condObj) {
-        targetValue = condObj.$eq
-      } else {
-        // Range query
-        rangeQuery = {}
-        if ('$gt' in condObj) rangeQuery.$gt = condObj.$gt
-        if ('$gte' in condObj) rangeQuery.$gte = condObj.$gte
-        if ('$lt' in condObj) rangeQuery.$lt = condObj.$lt
-        if ('$lte' in condObj) rangeQuery.$lte = condObj.$lte
-      }
-    }
-
-    // Collect results from matching shards
-    const allDocIds: string[] = []
-    const allRowGroups: Set<number> = new Set()
-    let entriesScanned = 0
-
-    // Find shards that overlap with our query
-    const matchingShards = manifest.shards.filter(shard => {
-      if (targetValue !== undefined) {
-        // Equality: shard contains exact value or range contains it
-        if (shard.value !== undefined) {
-          return shard.value === targetValue
-        }
-        if (shard.minValue !== undefined && shard.maxValue !== undefined) {
-          return this.compareValues(shard.minValue, targetValue) <= 0 &&
-                 this.compareValues(shard.maxValue, targetValue) >= 0
-        }
-        return true // Unknown structure, load it
-      }
-
-      if (rangeQuery) {
-        // Range query: check if shard's range overlaps with query range
-        if (shard.minValue !== undefined && shard.maxValue !== undefined) {
-          return this.rangeOverlaps(shard.minValue, shard.maxValue, rangeQuery)
-        }
-        return true // Unknown structure, load it
-      }
-
-      return true // Load all if no specific query
-    })
-
-    // Load matching shards
-    for (const shard of matchingShards) {
-      const shardPath = `${dataset}/${indexDir}/${shard.path}`
-      const entries = await this.loadShardedHashIndex(shardPath, manifest.compact)
-      entriesScanned += entries.length
-
-      for (const e of entries) {
-        allDocIds.push(e.docId)
-        allRowGroups.add(e.rowGroup)
-      }
-    }
-
-    return {
-      docIds: allDocIds,
-      rowGroups: Array.from(allRowGroups).sort((a, b) => a - b),
-      exact: true,
-      entriesScanned,
-    }
-  }
-
-  /**
-   * Compare two values for ordering
-   */
-  private compareValues(a: unknown, b: unknown): number {
-    if (typeof a === 'number' && typeof b === 'number') {
-      return a - b
-    }
-    if (typeof a === 'string' && typeof b === 'string') {
-      return a.localeCompare(b)
-    }
-    // Fall back to string comparison
-    return String(a).localeCompare(String(b))
-  }
-
-  /**
-   * Check if a shard's range overlaps with a range query
-   */
-  private rangeOverlaps(shardMin: unknown, shardMax: unknown, query: RangeQuery): boolean {
-    // Check if shard is entirely below the query range
-    if (query.$gt !== undefined && this.compareValues(shardMax, query.$gt) <= 0) {
-      return false
-    }
-    if (query.$gte !== undefined && this.compareValues(shardMax, query.$gte) < 0) {
-      return false
-    }
-
-    // Check if shard is entirely above the query range
-    if (query.$lt !== undefined && this.compareValues(shardMin, query.$lt) >= 0) {
-      return false
-    }
-    if (query.$lte !== undefined && this.compareValues(shardMin, query.$lte) > 0) {
-      return false
-    }
-
-    return true
   }
 
   /**
@@ -1241,7 +1018,7 @@ function isEqualityCondition(condition: unknown): boolean {
 
 /**
  * Create a memory-based storage adapter from loaded data
- * This allows reusing the existing Hash/SST/FTS index classes
+ * This allows reusing the existing Hash/FTS index classes
  */
 function createMemoryStorageAdapter(data: Uint8Array): MemoryStorageAdapter {
   return new MemoryStorageAdapter(data)

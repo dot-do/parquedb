@@ -187,7 +187,6 @@ export {
   IndexManager,
   // Secondary Indexes
   HashIndex,
-  SSTIndex,
   // Full-Text Search
   FTSIndex,
   InvertedIndex,

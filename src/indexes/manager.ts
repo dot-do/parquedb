@@ -358,9 +358,10 @@ export class IndexManager {
     }
 
     // Extract field conditions for secondary indexes
+    // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown
     const candidates: Array<{
       index: IndexDefinition
-      type: 'hash' | 'sst'
+      type: 'hash'
       field: string
       condition: unknown
       selectivity: number
@@ -383,15 +384,8 @@ export class IndexManager {
             condition,
             selectivity,
           })
-        } else if (index.type === 'sst') {
-          candidates.push({
-            index,
-            type: 'sst',
-            field,
-            condition,
-            selectivity,
-          })
         }
+        // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown
       }
     }
 
@@ -432,22 +426,22 @@ export class IndexManager {
   }
 
   /**
-   * Execute a range query using an SST index
+   * Execute a range query using parquet predicate pushdown
    *
-   * @param ns - Namespace
-   * @param indexName - Index name
-   * @param range - Range query
-   * @returns Lookup result
+   * NOTE: SST indexes have been removed - range queries now use native parquet
+   * predicate pushdown on $index_* columns, which is faster than secondary indexes.
+   *
+   * @param _ns - Namespace (unused)
+   * @param _indexName - Index name (unused)
+   * @param _range - Range query (unused)
+   * @returns Never - this method is deprecated
+   * @deprecated Use native parquet predicate pushdown instead
    */
-  async rangeQuery(ns: string, indexName: string, range: RangeQuery): Promise<IndexLookupResult> {
-    await this.load()
-
-    // TODO(parquedb-poif): Wire up to SSTIndex class similar to VectorIndex
-    // For now, throw to make it clear this is not implemented
+  async rangeQuery(_ns: string, _indexName: string, _range: RangeQuery): Promise<IndexLookupResult> {
     throw new Error(
-      `Method not implemented: rangeQuery. ` +
-      `IndexManager needs to be wired up to SSTIndex for namespace '${ns}', index '${indexName}'. ` +
-      `See vectorSearch() for reference implementation.`
+      `SST indexes have been removed. Range queries now use native parquet predicate pushdown ` +
+      `on $index_* columns, which is faster than secondary indexes. ` +
+      `Use parquet filters with $gt/$gte/$lt/$lte operators directly.`
     )
   }
 
@@ -720,7 +714,6 @@ export class IndexManager {
 
     switch (definition.type) {
       case 'hash':
-      case 'sst':
         return `${base}indexes/secondary/${ns}.${definition.name}.idx.parquet`
       case 'fts':
         return `${base}indexes/fts/${ns}/`
@@ -796,9 +789,9 @@ export class IndexManager {
   }
 
   private async buildIndex(ns: string, definition: IndexDefinition): Promise<void> {
-    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, SSTIndex, FTSIndex)
+    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, FTSIndex)
     // For now, just update progress metadata without actual index building
-    // When implementing, use the build() methods on HashIndex, SSTIndex, FTSIndex classes
+    // When implementing, use the build() methods on HashIndex, FTSIndex classes
     const metadata = this.metadata.get(ns)!.get(definition.name)!
     metadata.buildProgress = 1
     metadata.building = false
@@ -813,7 +806,7 @@ export class IndexManager {
     rowGroup: number,
     rowOffset: number
   ): Promise<void> {
-    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, SSTIndex, FTSIndex)
+    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, FTSIndex)
     // For now, this is a no-op - index updates are handled by rebuild
     // When implementing, follow the pattern used in getVectorIndex() for caching
   }
@@ -824,7 +817,7 @@ export class IndexManager {
     docId: string,
     doc: Record<string, unknown>
   ): Promise<void> {
-    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, SSTIndex, FTSIndex)
+    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, FTSIndex)
     // For now, this is a no-op - index updates are handled by rebuild
     // When implementing, follow the pattern used in getVectorIndex() for caching
   }
@@ -957,12 +950,14 @@ interface IndexCatalogEntry {
 
 /**
  * Result of index selection
+ *
+ * NOTE: SST indexes have been removed - range queries now use native parquet predicate pushdown
  */
 export interface SelectedIndex {
   /** Selected index definition */
   index: IndexDefinition
   /** Index type */
-  type: 'hash' | 'sst' | 'fts' | 'vector'
+  type: 'hash' | 'fts' | 'vector'
   /** Field being queried (for secondary indexes) */
   field?: string
   /** Query condition */

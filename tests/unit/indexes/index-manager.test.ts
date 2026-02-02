@@ -245,10 +245,11 @@ describe('IndexManager', () => {
       )
     })
 
-    it('rangeQuery throws not implemented error', async () => {
+    it('rangeQuery throws deprecation error', async () => {
+      // SST indexes removed - range queries now use native parquet predicate pushdown
       const manager = new IndexManager(storage)
       await expect(manager.rangeQuery('test', 'idx', { $gte: 10 })).rejects.toThrow(
-        /Method not implemented: rangeQuery/
+        /SST indexes have been removed/
       )
     })
 

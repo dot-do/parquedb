@@ -7,7 +7,6 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { HashIndex } from '@/indexes/secondary/hash'
-import { SSTIndex } from '@/indexes/secondary/sst'
 import { MemoryBackend } from '@/storage/MemoryBackend'
 import type { IndexDefinition } from '@/indexes/types'
 import { UniqueConstraintError } from '@/indexes/errors'
@@ -270,97 +269,7 @@ describe('Unique Index Constraints', () => {
     })
   })
 
-  describe('SSTIndex with unique constraint', () => {
-    it('throws UniqueConstraintError on duplicate value', () => {
-      const definition: IndexDefinition = {
-        name: 'idx_slug',
-        type: 'sst',
-        fields: [{ path: 'slug' }],
-        unique: true,
-      }
-
-      const index = new SSTIndex(storage, 'posts', definition)
-
-      index.insert('hello-world', 'post1', 0, 0)
-
-      expect(() => {
-        index.insert('hello-world', 'post2', 0, 1)
-      }).toThrow(UniqueConstraintError)
-    })
-
-    it('allows unique values', () => {
-      const definition: IndexDefinition = {
-        name: 'idx_slug',
-        type: 'sst',
-        fields: [{ path: 'slug' }],
-        unique: true,
-      }
-
-      const index = new SSTIndex(storage, 'posts', definition)
-
-      index.insert('hello-world', 'post1', 0, 0)
-      index.insert('another-post', 'post2', 0, 1)
-      index.insert('third-post', 'post3', 0, 2)
-
-      expect(index.size).toBe(3)
-    })
-
-    it('enforces uniqueness on numeric keys', () => {
-      const definition: IndexDefinition = {
-        name: 'idx_order_number',
-        type: 'sst',
-        fields: [{ path: 'orderNumber' }],
-        unique: true,
-      }
-
-      const index = new SSTIndex(storage, 'orders', definition)
-
-      index.insert(1001, 'order1', 0, 0)
-
-      expect(() => {
-        index.insert(1001, 'order2', 0, 1)
-      }).toThrow(UniqueConstraintError)
-    })
-
-    it('enforces uniqueness on composite keys', () => {
-      const definition: IndexDefinition = {
-        name: 'idx_year_seq',
-        type: 'sst',
-        fields: [{ path: 'year' }, { path: 'sequence' }],
-        unique: true,
-      }
-
-      const index = new SSTIndex(storage, 'invoices', definition)
-
-      // Different years can have same sequence
-      index.insert([2024, 1], 'inv1', 0, 0)
-      index.insert([2025, 1], 'inv2', 0, 1)
-
-      // Same year and sequence is duplicate
-      expect(() => {
-        index.insert([2024, 1], 'inv3', 0, 2)
-      }).toThrow(UniqueConstraintError)
-    })
-
-    describe('sparse unique indexes', () => {
-      it('allows multiple null values with sparse unique SST index', () => {
-        const definition: IndexDefinition = {
-          name: 'idx_external_id',
-          type: 'sst',
-          fields: [{ path: 'externalId' }],
-          unique: true,
-          sparse: true,
-        }
-
-        const index = new SSTIndex(storage, 'items', definition)
-
-        index.insert(null, 'item1', 0, 0)
-        index.insert(null, 'item2', 0, 1)
-
-        expect(index.size).toBe(2)
-      })
-    })
-  })
+  // NOTE: SST index tests removed - range queries now use native parquet predicate pushdown
 
   describe('checkUnique method', () => {
     it('returns true if value is unique', () => {

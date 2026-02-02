@@ -217,10 +217,10 @@ describe('IndexCache', () => {
           entryCount: 100,
         },
         {
-          name: 'startYear',
-          type: 'sst',
-          field: '$index_startYear',
-          path: 'indexes/secondary/startYear.sst.idx',
+          name: 'name_fts',
+          type: 'fts',
+          field: 'name',
+          path: 'indexes/fts/name.fts.json',
           sizeBytes: 2048,
           entryCount: 200,
         },
@@ -234,8 +234,8 @@ describe('IndexCache', () => {
       expect(entries).toHaveLength(2)
       expect(entries[0].name).toBe('titleType')
       expect(entries[0].type).toBe('hash')
-      expect(entries[1].name).toBe('startYear')
-      expect(entries[1].type).toBe('sst')
+      expect(entries[1].name).toBe('name_fts')
+      expect(entries[1].type).toBe('fts')
     })
 
     it('should cache catalog after first load', async () => {
@@ -326,7 +326,7 @@ describe('IndexCache', () => {
         },
         {
           name: 'startYear',
-          type: 'sst',
+          type: 'hash',
           field: '$index_startYear',
           path: 'year.idx',
           sizeBytes: 200,
@@ -341,7 +341,7 @@ describe('IndexCache', () => {
 
       expect(entry).not.toBeNull()
       expect(entry!.name).toBe('startYear')
-      expect(entry!.type).toBe('sst')
+      expect(entry!.type).toBe('hash')
     })
   })
 
@@ -362,9 +362,9 @@ describe('IndexCache', () => {
         },
         {
           name: 'startYear',
-          type: 'sst',
+          type: 'hash',
           field: '$index_startYear',
-          path: 'indexes/secondary/startYear.sst.idx',
+          path: 'indexes/secondary/startYear.hash.idx',
           sizeBytes: 2048,
           entryCount: 200,
         },
@@ -421,14 +421,7 @@ describe('IndexCache', () => {
       expect(selected!.type).toBe('hash')
     })
 
-    it('should select SST index for range condition', async () => {
-      const cache = new IndexCache(storage)
-      const selected = await cache.selectIndex('indexed-dataset', { $index_startYear: { $gte: 2000, $lt: 2020 } })
-
-      expect(selected).not.toBeNull()
-      expect(selected!.type).toBe('sst')
-      expect(selected!.entry.name).toBe('startYear')
-    })
+    // NOTE: SST index test removed - range queries now use native parquet predicate pushdown on $index_* columns
 
     it('should select FTS index for $text operator', async () => {
       const cache = new IndexCache(storage)
@@ -803,93 +796,6 @@ describe('IndexCache', () => {
       expect(ftsIndex).not.toBeNull()
       expect(ftsIndex!.type).toBe('fts')
       expect(ftsIndex!.name).toBe('name_fts')
-    })
-  })
-
-  // ===========================================================================
-  // SST Index Lookup Tests
-  // ===========================================================================
-
-  describe('executeSSTLookup with sharded index', () => {
-    beforeEach(() => {
-      const catalogEntries: IndexCatalogEntry[] = [
-        {
-          name: 'startYear',
-          type: 'sst',
-          field: '$index_startYear',
-          path: 'indexes/secondary/startYear',
-          sizeBytes: 0,
-          entryCount: 1000,
-          sharded: true,
-          manifestPath: 'indexes/secondary/startYear/_manifest.json',
-        },
-      ]
-
-      files.set('sst-test/indexes/_catalog.json', createMockCatalog(catalogEntries))
-
-      // Manifest with range-based sharding
-      const manifest: ShardedIndexManifest = {
-        version: 3,
-        type: 'sst',
-        field: '$index_startYear',
-        sharding: 'by-range',
-        compact: true,
-        shards: [
-          { name: '1990-1999', path: '1990s.bin', value: '1990-1999', entryCount: 100, minValue: 1990, maxValue: 1999 },
-          { name: '2000-2009', path: '2000s.bin', value: '2000-2009', entryCount: 150, minValue: 2000, maxValue: 2009 },
-          { name: '2010-2019', path: '2010s.bin', value: '2010-2019', entryCount: 200, minValue: 2010, maxValue: 2019 },
-        ],
-      }
-      files.set('sst-test/indexes/secondary/startYear/_manifest.json', new TextEncoder().encode(JSON.stringify(manifest)))
-
-      // Shard files
-      files.set(
-        'sst-test/indexes/secondary/startYear/1990s.bin',
-        createCompactShard([
-          { docId: 'movie1990', rowGroup: 0, rowOffset: 0 },
-          { docId: 'movie1995', rowGroup: 0, rowOffset: 5 },
-        ])
-      )
-
-      files.set(
-        'sst-test/indexes/secondary/startYear/2000s.bin',
-        createCompactShard([
-          { docId: 'movie2000', rowGroup: 1, rowOffset: 0 },
-          { docId: 'movie2005', rowGroup: 1, rowOffset: 5 },
-        ])
-      )
-
-      files.set(
-        'sst-test/indexes/secondary/startYear/2010s.bin',
-        createCompactShard([
-          { docId: 'movie2010', rowGroup: 2, rowOffset: 0 },
-          { docId: 'movie2015', rowGroup: 2, rowOffset: 5 },
-        ])
-      )
-    })
-
-    it('should execute range query on sharded SST index', async () => {
-      const cache = new IndexCache(storage)
-      const entries = await cache.loadCatalog('sst-test')
-      const entry = entries[0]
-
-      // Query for years >= 2000 and < 2015
-      const result = await cache.executeSSTLookup('sst-test', entry, { $gte: 2000, $lt: 2015 })
-
-      // Should include 2000s and part of 2010s shards
-      expect(result.docIds.length).toBeGreaterThan(0)
-      expect(result.exact).toBe(true)
-    })
-
-    it('should skip shards outside query range', async () => {
-      const cache = new IndexCache(storage)
-      const entries = await cache.loadCatalog('sst-test')
-      const entry = entries[0]
-
-      // Query for years < 1990 (no matching shards)
-      const result = await cache.executeSSTLookup('sst-test', entry, { $lt: 1990 })
-
-      expect(result.docIds).toHaveLength(0)
     })
   })
 

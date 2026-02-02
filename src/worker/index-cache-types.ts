@@ -3,6 +3,9 @@
  *
  * Shared type definitions for IndexCache, extracted to avoid
  * circular dependencies between json-validation.ts and IndexCache.ts.
+ *
+ * NOTE: SST indexes have been removed - native parquet predicate pushdown
+ * on $index_* columns is now faster than secondary indexes for range queries.
  */
 
 // =============================================================================
@@ -15,8 +18,8 @@
 export interface IndexCatalogEntry {
   /** Index name */
   name: string
-  /** Index type */
-  type: 'hash' | 'sst' | 'fts'
+  /** Index type (SST removed - use native parquet predicate pushdown for range queries) */
+  type: 'hash' | 'fts'
   /** Indexed field (e.g., '$index_titleType') */
   field: string
   /** Path to index file relative to dataset root */
@@ -45,9 +48,9 @@ export interface ShardEntry {
   value: string | number | boolean
   /** Number of entries in this shard */
   entryCount: number
-  /** Min value (for SST range shards) */
+  /** Min value (kept for backward compatibility) */
   minValue?: unknown
-  /** Max value (for SST range shards) */
+  /** Max value (kept for backward compatibility) */
   maxValue?: unknown
 }
 
@@ -57,8 +60,8 @@ export interface ShardEntry {
 export interface ShardedIndexManifest {
   /** Manifest version */
   version: number
-  /** Index type */
-  type: 'hash' | 'sst'
+  /** Index type (SST removed - use native parquet predicate pushdown for range queries) */
+  type: 'hash'
   /** Indexed field */
   field: string
   /** Sharding strategy */

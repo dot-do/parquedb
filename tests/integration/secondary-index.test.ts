@@ -1,10 +1,12 @@
 /**
  * Integration Tests for Secondary Indexes
+ *
+ * NOTE: SST indexes have been removed - native parquet predicate pushdown
+ * on $index_* columns is now faster than secondary indexes for range queries.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { HashIndex } from '../../src/indexes/secondary/hash'
-import { SSTIndex } from '../../src/indexes/secondary/sst'
 import { IndexManager } from '../../src/indexes/manager'
 import { MemoryBackend } from '../../src/storage/MemoryBackend'
 import type { IndexDefinition } from '../../src/indexes/types'
@@ -93,87 +95,7 @@ describe('Secondary Index Integration', () => {
     })
   })
 
-  describe('SSTIndex with range queries', () => {
-    it('supports price range queries', () => {
-      const definition: IndexDefinition = {
-        name: 'idx_price',
-        type: 'sst',
-        fields: [{ path: 'price' }],
-      }
-
-      const index = new SSTIndex(storage, 'products', definition)
-
-      const products = [
-        { $id: 'p1', price: 9.99, name: 'Widget A' },
-        { $id: 'p2', price: 24.99, name: 'Widget B' },
-        { $id: 'p3', price: 49.99, name: 'Gadget A' },
-        { $id: 'p4', price: 99.99, name: 'Gadget B' },
-        { $id: 'p5', price: 149.99, name: 'Device A' },
-      ]
-
-      index.buildFromArray(
-        products.map((doc, i) => ({
-          doc,
-          docId: doc.$id,
-          rowGroup: 0,
-          rowOffset: i,
-        }))
-      )
-
-      // Products under $50
-      const cheap = index.range({ $lt: 50 })
-      expect(cheap.docIds).toHaveLength(3)
-
-      // Products $25-$100
-      const midRange = index.range({ $gte: 25, $lte: 100 })
-      expect(midRange.docIds).toHaveLength(2)
-      expect(midRange.docIds).toContain('p3')
-      expect(midRange.docIds).toContain('p4')
-
-      // Products over $100
-      const expensive = index.range({ $gt: 100 })
-      expect(expensive.docIds).toHaveLength(1)
-      expect(expensive.docIds).toContain('p5')
-    })
-
-    it('supports date range queries', () => {
-      const definition: IndexDefinition = {
-        name: 'idx_createdAt',
-        type: 'sst',
-        fields: [{ path: 'createdAt' }],
-      }
-
-      const index = new SSTIndex(storage, 'events', definition)
-
-      const events = [
-        { $id: 'e1', createdAt: new Date('2024-01-01'), name: 'Event 1' },
-        { $id: 'e2', createdAt: new Date('2024-02-15'), name: 'Event 2' },
-        { $id: 'e3', createdAt: new Date('2024-03-30'), name: 'Event 3' },
-        { $id: 'e4', createdAt: new Date('2024-06-01'), name: 'Event 4' },
-      ]
-
-      index.buildFromArray(
-        events.map((doc, i) => ({
-          doc,
-          docId: doc.$id,
-          rowGroup: 0,
-          rowOffset: i,
-        }))
-      )
-
-      // Events in Q1 2024
-      const q1 = index.range({
-        $gte: new Date('2024-01-01'),
-        $lt: new Date('2024-04-01'),
-      })
-      expect(q1.docIds).toHaveLength(3)
-
-      // Events after March
-      const afterMarch = index.range({ $gt: new Date('2024-03-31') })
-      expect(afterMarch.docIds).toHaveLength(1)
-      expect(afterMarch.docIds).toContain('e4')
-    })
-  })
+  // NOTE: SST index tests removed - range queries now use native parquet predicate pushdown
 
   describe('IndexManager', () => {
     it('selects best index for filter', async () => {
@@ -186,24 +108,15 @@ describe('Secondary Index Integration', () => {
         fields: [{ path: 'status' }],
       })
 
-      // Create an SST index
-      await manager.createIndex('orders', {
-        name: 'idx_total',
-        type: 'sst',
-        fields: [{ path: 'total' }],
-      })
-
       // Equality filter should select hash index
       const eqPlan = await manager.selectIndex('orders', { status: 'pending' })
       expect(eqPlan).not.toBeNull()
       expect(eqPlan?.type).toBe('hash')
       expect(eqPlan?.index.name).toBe('idx_status')
 
-      // Range filter should select SST index
+      // Range filter no longer uses SST indexes - use parquet predicate pushdown instead
       const rangePlan = await manager.selectIndex('orders', { total: { $gte: 100 } })
-      expect(rangePlan).not.toBeNull()
-      expect(rangePlan?.type).toBe('sst')
-      expect(rangePlan?.index.name).toBe('idx_total')
+      expect(rangePlan).toBeNull() // No index for range queries
     })
 
     it('persists indexes', async () => {

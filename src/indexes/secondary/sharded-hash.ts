@@ -31,10 +31,13 @@ import {
 
 /**
  * Manifest format for sharded indexes
+ *
+ * NOTE: SST indexes have been removed - native parquet predicate pushdown
+ * on $index_* columns is now faster than secondary indexes for range queries.
  */
 export interface ShardManifest {
   version: number
-  type: 'hash' | 'sst'
+  type: 'hash'
   field: string
   sharding: 'by-value' | 'by-range' | 'by-prefix'
   shards: ShardInfo[]

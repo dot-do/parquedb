@@ -12,7 +12,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { MemoryBackend, FileNotFoundError } from '../../src/storage/MemoryBackend'
 import { HashIndex } from '../../src/indexes/secondary/hash'
-import { SSTIndex } from '../../src/indexes/secondary/sst'
 import { IndexBloomFilter, BloomFilter } from '../../src/indexes/bloom/bloom-filter'
 import {
   FORMAT_VERSION_1,
@@ -1919,99 +1918,8 @@ describe('Storage Backend Failures Mid-Operation', () => {
 })
 
 // =============================================================================
-// SST Index Error Recovery Tests
+// SST Index Error Recovery Tests - REMOVED
 // =============================================================================
 
-describe('SST Index Error Recovery', () => {
-  let storage: FailingBackend
-  let definition: IndexDefinition
-
-  beforeEach(() => {
-    storage = new FailingBackend()
-    definition = {
-      name: 'idx_sorted',
-      type: 'sst',
-      fields: [{ path: 'score' }],
-    }
-  })
-
-  describe('Load Failures', () => {
-    it('should recover from read failure', async () => {
-      // Pre-populate with data
-      const index = new SSTIndex(storage, 'test', definition)
-      await index.load()
-      index.insert(10, 'doc1', 0, 0)
-      index.insert(20, 'doc2', 0, 1)
-      await index.save()
-
-      // Inject read failure
-      storage.failReadFor(
-        'indexes/secondary/test.idx_sorted.idx.parquet',
-        new Error('Disk read error')
-      )
-
-      const newIndex = new SSTIndex(storage, 'test', definition)
-      await newIndex.load()
-
-      // Should recover as empty
-      expect(newIndex.ready).toBe(true)
-      expect(newIndex.size).toBe(0)
-    })
-
-    it('should handle corrupted sorted order', async () => {
-      // Create SST index with sorted data
-      const index = new SSTIndex(storage, 'test', definition)
-      await index.load()
-      for (let i = 0; i < 50; i++) {
-        index.insert(i, `doc_${i}`, 0, i)
-      }
-      await index.save()
-
-      // Read and corrupt some key bytes to break sort order
-      const data = await storage.read('indexes/secondary/test.idx_sorted.idx.parquet')
-      const corrupted = new Uint8Array(data)
-      // Corrupt some bytes in entry area
-      if (corrupted.length > 50) {
-        corrupted[30] = 0xFF
-        corrupted[40] = 0x00
-      }
-      await storage.write('indexes/secondary/test.idx_sorted.idx.parquet', corrupted)
-
-      // Load should handle
-      const loaded = new SSTIndex(storage, 'test', definition)
-      await loaded.load()
-      expect(loaded.ready).toBe(true)
-    })
-  })
-
-  describe('Write Failures', () => {
-    it('should propagate write error', async () => {
-      const index = new SSTIndex(storage, 'test', definition)
-      await index.load()
-      index.insert(10, 'doc1', 0, 0)
-
-      storage.failWriteFor(
-        'indexes/secondary/test.idx_sorted.idx.parquet',
-        new Error('Write quota exceeded')
-      )
-
-      await expect(index.save()).rejects.toThrow('Write quota exceeded')
-    })
-  })
-
-  describe('Range Query on Corrupted Data', () => {
-    it('should handle range query after partial recovery', async () => {
-      const index = new SSTIndex(storage, 'test', definition)
-      await index.load()
-
-      // Add data
-      for (let i = 0; i < 100; i++) {
-        index.insert(i, `doc_${i}`, 0, i)
-      }
-
-      // Range query should work on in-memory data
-      const result = index.range({ $gte: 25, $lt: 75 })
-      expect(result.docIds.length).toBe(50)
-    })
-  })
-})
+// NOTE: SST indexes have been removed - native parquet predicate pushdown
+// on $index_* columns is now faster than secondary indexes for range queries.

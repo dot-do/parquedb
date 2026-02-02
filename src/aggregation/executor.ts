@@ -850,18 +850,7 @@ async function executeIndexedMatch(
       break
     }
 
-    case 'sst': {
-      const rangeQuery = extractRangeQuery(selectedIndex.condition)
-      if (rangeQuery) {
-        const result = await indexManager.rangeQuery(
-          namespace,
-          selectedIndex.index.name,
-          rangeQuery
-        )
-        candidateDocIds = result.docIds
-      }
-      break
-    }
+    // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown
 
     case 'fts': {
       const textCondition = filter.$text as { $search: string } | undefined

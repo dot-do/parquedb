@@ -198,7 +198,7 @@ export interface QueryPlan {
   /** Secondary index that would be used (if any) */
   secondaryIndex?: {
     name: string
-    type: 'hash' | 'sst' | 'fts'
+    type: 'hash' | 'fts'
     field: string
   } | null
   /** Number of index catalog entries for this dataset */
@@ -562,7 +562,8 @@ export class QueryExecutor {
           }
         }
 
-        // Check for applicable secondary indexes (hash, sst, fts)
+        // Check for applicable secondary indexes (hash, fts)
+        // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown
         // Pass full ns path (e.g., 'onet-full/occupations') for index catalog lookup
         if (this.indexCache) {
           const indexResult = await this.executeWithIndex<T>(ns, path, filter, options, stats, startTime)
@@ -743,20 +744,10 @@ export class QueryExecutor {
       let targetRowGroups: number[] = []
 
       // Execute index lookup based on type
+      // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown on $index_* columns
       switch (selected.type) {
         case 'hash': {
           const result = await this.indexCache.executeHashLookup(
-            datasetId,
-            selected.entry,
-            selected.condition
-          )
-          candidateDocIds = result.docIds
-          targetRowGroups = result.rowGroups
-          break
-        }
-
-        case 'sst': {
-          const result = await this.indexCache.executeSSTLookup(
             datasetId,
             selected.entry,
             selected.condition

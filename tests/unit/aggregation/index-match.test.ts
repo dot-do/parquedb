@@ -2,8 +2,11 @@
  * Tests for Index-Aware Aggregation $match Stage
  *
  * Verifies that aggregation pipelines with $match as the first stage
- * can leverage secondary indexes (hash, sst, fts, vector) for efficient
+ * can leverage secondary indexes (hash, fts, vector) for efficient
  * filtering instead of full collection scans.
+ *
+ * NOTE: SST indexes have been removed - native parquet predicate pushdown
+ * on $index_* columns is now faster than secondary indexes for range queries.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -287,47 +290,10 @@ describe('Index-Aware Aggregation $match', () => {
   })
 
   // ===========================================================================
-  // SST Index Usage for Range Queries
+  // SST Index Usage for Range Queries - REMOVED
   // ===========================================================================
 
-  describe('SST Index Usage', () => {
-    it('should use SST index for range queries', async () => {
-      const sstIndex: IndexDefinition = {
-        name: 'price_sst',
-        type: 'sst',
-        fields: [{ path: 'price' }],
-      }
-
-      // Only products/3 (price: 399) matches the range 100-500
-      const mockIndexManager = createMockIndexManager({
-        selectedIndex: {
-          index: sstIndex,
-          type: 'sst',
-          field: 'price',
-          condition: { $gte: 100, $lte: 500 },
-        },
-        rangeLookupResults: ['products/3'],
-      })
-
-      const pipeline: AggregationStage[] = [
-        { $match: { price: { $gte: 100, $lte: 500 } } },
-      ]
-
-      const results = await executeAggregationWithIndex(testData, pipeline, {
-        indexManager: mockIndexManager,
-        namespace: 'products',
-      })
-
-      expect(mockIndexManager.rangeQuery).toHaveBeenCalledWith(
-        'products',
-        'price_sst',
-        { $gte: 100, $lte: 500 }
-      )
-
-      expect(results).toHaveLength(1)
-      expect((results[0] as any).$id).toBe('products/3')
-    })
-  })
+  // NOTE: SST indexes have been removed - range queries now use native parquet predicate pushdown
 
   // ===========================================================================
   // FTS Index Usage

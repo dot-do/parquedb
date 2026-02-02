@@ -242,16 +242,7 @@ describe('toBeValidIndex', () => {
     expect(hashIndex).toBeValidIndex('hash')
   })
 
-  it('validates an SST index', () => {
-    const sstIndex = new Uint8Array(6)
-    const view = new DataView(sstIndex.buffer)
-
-    sstIndex[0] = 0x03 // version 3
-    sstIndex[1] = 0x01 // flags (has key hash)
-    view.setUint32(2, 100, false) // entry count
-
-    expect(sstIndex).toBeValidIndex('sst')
-  })
+  // NOTE: SST index test removed - range queries now use native parquet predicate pushdown
 
   it('fails for invalid bloom filter magic', () => {
     const invalidBloom = new Uint8Array(4096 + 16)

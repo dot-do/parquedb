@@ -273,8 +273,9 @@ function parseIndexStructure(data: Uint8Array, expectedType: IndexType): ParsedI
     }
   }
 
-  // Check for hash/sst indexes (6-byte header: version + flags + entryCount)
-  if (expectedType === 'hash' || expectedType === 'sst') {
+  // Check for hash indexes (6-byte header: version + flags + entryCount)
+  // NOTE: SST indexes have been removed - native parquet predicate pushdown is now faster for range queries
+  if (expectedType === 'hash') {
     const version = data[0]
     const flags = data[1]
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
@@ -639,7 +640,7 @@ export const parquedbMatchers = {
   /**
    * Assert that a buffer contains a valid index structure
    *
-   * @param indexType - Expected index type ('hash', 'sst', 'fts', 'bloom')
+   * @param indexType - Expected index type ('hash', 'fts', 'bloom')
    *
    * @example
    * expect(indexBuffer).toBeValidIndex('hash')

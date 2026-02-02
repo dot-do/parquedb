@@ -1094,7 +1094,8 @@ describe('QueryExecutor - Index Selection Integration', () => {
       expect(isEquality({ $gte: 2000, $lt: 2010 })).toBe(false)
     })
 
-    it('should identify range conditions for SST index', () => {
+    it('should identify range conditions (for parquet predicate pushdown)', () => {
+      // NOTE: SST indexes removed - range conditions now use parquet predicate pushdown
       const isRange = (condition: unknown): boolean => {
         if (typeof condition !== 'object' || condition === null) {
           return false
