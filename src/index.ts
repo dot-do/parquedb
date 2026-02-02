@@ -16,7 +16,16 @@ export {
   type EventLog,
   DEFAULT_EVENT_LOG_CONFIG,
 } from './ParqueDB'
-export { Collection } from './Collection'
+
+/**
+ * Standalone in-memory Collection for testing/development.
+ *
+ * WARNING: This Collection uses module-level global Maps and does NOT use storage backends.
+ * For production, use ParqueDB.collection() which properly delegates to storage backends.
+ *
+ * @see src/Collection.ts for full documentation
+ */
+export { Collection, clearGlobalStorage, getEventsForEntity, getEntityStateAtTime, clearEventLog } from './Collection'
 
 // =============================================================================
 // Types

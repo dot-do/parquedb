@@ -710,39 +710,32 @@ describe('RpcPromise', () => {
   })
 
   describe('deserializeFunction', () => {
-    it('should deserialize arrow function', () => {
-      const serialized = JSON.stringify({ type: 'sync', body: '(x) => x.name' })
+    it('should deserialize path mapper', () => {
+      const serialized = JSON.stringify({ mapperType: 'path', path: 'name' })
       const fn = deserializeFunction<{ name: string }, string>(serialized)
       expect(fn({ name: 'test' })).toBe('test')
     })
 
-    it('should deserialize arrow function without parens', () => {
-      const serialized = JSON.stringify({ type: 'sync', body: 'x => x.value' })
-      const fn = deserializeFunction<{ value: number }, number>(serialized)
-      expect(fn({ value: 42 })).toBe(42)
+    it('should deserialize nested path mapper', () => {
+      const serialized = JSON.stringify({ mapperType: 'path', path: 'author.name' })
+      const fn = deserializeFunction<{ author: { name: string } }, string>(serialized)
+      expect(fn({ author: { name: 'Alice' } })).toBe('Alice')
     })
 
-    it('should deserialize arrow function with block body', () => {
-      const serialized = JSON.stringify({
-        type: 'sync',
-        body: '(x) => { const y = x * 2; return y + 1; }',
-      })
+    it('should deserialize empty path mapper (identity)', () => {
+      const serialized = JSON.stringify({ mapperType: 'path', path: '' })
       const fn = deserializeFunction<number, number>(serialized)
-      expect(fn(5)).toBe(11)
+      expect(fn(42)).toBe(42)
     })
 
-    it('should deserialize regular function', () => {
-      const serialized = JSON.stringify({
-        type: 'sync',
-        body: 'function(x) { return x + 1; }',
-      })
-      const fn = deserializeFunction<number, number>(serialized)
-      expect(fn(5)).toBe(6)
+    it('should throw for unknown mapper type', () => {
+      const serialized = JSON.stringify({ mapperType: 'unknown' })
+      expect(() => deserializeFunction(serialized)).toThrow('Unknown mapper type')
     })
 
-    it('should throw for invalid function', () => {
-      const serialized = JSON.stringify({ type: 'sync', body: 'not a function' })
-      expect(() => deserializeFunction(serialized)).toThrow()
+    it('should throw for legacy format (no code execution)', () => {
+      const serialized = JSON.stringify({ type: 'sync', body: '(x) => x.name' })
+      expect(() => deserializeFunction(serialized)).toThrow('Invalid serialized function format')
     })
   })
 })

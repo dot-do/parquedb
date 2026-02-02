@@ -1,8 +1,38 @@
 /**
- * Collection class for ParqueDB
+ * Collection class for ParqueDB (In-Memory Testing/Development)
  *
- * Provides MongoDB-style CRUD operations for a specific namespace.
- * Returned by db.Posts, db.Users, etc. via Proxy.
+ * WARNING: This is a STANDALONE IN-MEMORY implementation for testing and development.
+ * It uses module-level global Maps (globalStorage, globalRelationships, globalEventLog)
+ * that bypass the storage backend system.
+ *
+ * For production use with persistent storage backends (MemoryBackend, FsBackend, R2Backend, etc.),
+ * use ParqueDB class which creates CollectionImpl instances that properly delegate to the
+ * storage backend. See src/ParqueDB/collection.ts for the production implementation.
+ *
+ * This standalone Collection is useful for:
+ * - Unit tests that need fast, isolated in-memory operations
+ * - Benchmarks measuring pure algorithmic performance
+ * - Development/prototyping without storage setup
+ *
+ * Key differences from ParqueDB/CollectionImpl:
+ * - Data is stored in module-level global Maps (shared across all Collection instances)
+ * - No persistence - data is lost when the process ends
+ * - No storage backend integration
+ * - Includes clearGlobalStorage() for test isolation
+ *
+ * @example
+ * // For testing (uses this standalone Collection)
+ * import { Collection, clearGlobalStorage } from 'parquedb'
+ * const posts = new Collection<Post>('posts')
+ * await posts.create({ $type: 'Post', name: 'Test', title: 'Hello' })
+ * clearGlobalStorage() // Clean up after test
+ *
+ * @example
+ * // For production (uses ParqueDB with storage backend)
+ * import { ParqueDB, MemoryBackend } from 'parquedb'
+ * const db = new ParqueDB({ storage: new MemoryBackend() })
+ * const posts = db.collection('posts')
+ * await posts.create({ $type: 'Post', name: 'Test', title: 'Hello' })
  */
 
 import type {
@@ -32,6 +62,14 @@ import { executeAggregation, executeAggregationWithIndex, type AggregationStage 
 
 // Re-export AggregationStage for backwards compatibility
 export type { AggregationStage } from './aggregation'
+
+// =============================================================================
+// TESTING/DEVELOPMENT ONLY: Module-Level Global State
+//
+// These global Maps provide standalone in-memory storage for testing.
+// They are NOT used by production ParqueDB instances which delegate to storage backends.
+// Use clearGlobalStorage() between tests for isolation.
+// =============================================================================
 
 // In-memory storage for entities (per namespace)
 const globalStorage = new Map<string, Map<string, Entity<unknown>>>()

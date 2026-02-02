@@ -42,7 +42,6 @@ export type RpcPromiseChain = RpcChainStep[]
 export type SerializedMapperType =
   | 'path'       // Safe property path: "author.name"
   | 'registered' // Pre-registered mapper by name
-  | 'legacy'     // Legacy new Function() - deprecated, validates pattern
 
 /**
  * Serialized mapper representation (v2 - secure)
@@ -54,8 +53,6 @@ export interface SerializedMapper {
   path?: string
   /** For 'registered': the mapper name */
   name?: string
-  /** For 'legacy': the function body (validated for safety) */
-  body?: string
   /** Whether the original function was async */
   async?: boolean
 }
@@ -274,16 +271,6 @@ export function clearMapperRegistry(): void {
 // Function Serialization (Secure)
 // =============================================================================
 
-/**
- * Serialized function representation (legacy - for backward compatibility)
- * @deprecated Use SerializedMapper instead
- */
-export interface SerializedFunction {
-  /** Function type */
-  type: 'sync' | 'async'
-  /** Function body as string */
-  body: string
-}
 
 /**
  * Safe property path pattern
@@ -337,11 +324,11 @@ function extractPropertyPath(fnString: string): string | null {
  *
  * This function analyzes the input and produces a secure serialized form:
  * 1. If the function is simple property access, extracts the path
- * 2. If it matches a registered mapper, uses the name
- * 3. Otherwise, validates and uses legacy mode (with strict pattern checking)
+ * 2. For complex functions, throws an error directing users to register mappers
  *
  * @param fn - Function to serialize
  * @returns Serialized mapper string
+ * @throws Error if function cannot be safely serialized as a property path
  */
 function serializeFunction(fn: Function): string {
   const fnString = fn.toString()
@@ -357,13 +344,12 @@ function serializeFunction(fn: Function): string {
     } satisfies SerializedMapper)
   }
 
-  // For complex functions, use legacy mode with validation warning
-  // The server will validate these strictly
-  return JSON.stringify({
-    mapperType: 'legacy',
-    body: fnString,
-    async: isAsync,
-  } satisfies SerializedMapper)
+  // For complex functions, throw an error
+  throw new Error(
+    `Cannot serialize complex function for RPC. ` +
+    `Use a simple property path (e.g., p => p.name) or register a server-side mapper with registerMapper(). ` +
+    `Function: ${fnString.slice(0, 100)}${fnString.length > 100 ? '...' : ''}`
+  )
 }
 
 /**
@@ -406,98 +392,6 @@ function getAtPath(obj: unknown, path: string): unknown {
   return current
 }
 
-/**
- * Validate that a function body is safe for legacy deserialization
- *
- * Only allows very simple patterns:
- * - Property access: x.foo, x.foo.bar
- * - Object literals: { id: x.$id, name: x.name }
- * - Template literals with only property access: `${x.first} ${x.last}`
- * - Ternary with property access: x.active ? "yes" : "no"
- * - Array access: x.items[0]
- *
- * Does NOT allow:
- * - Function calls (except for safe built-ins like .slice())
- * - Assignments
- * - eval, Function, import
- * - Network access
- * - DOM manipulation
- */
-function validateLegacyFunction(body: string): void {
-  // Forbidden patterns that indicate potentially dangerous code
-  const forbiddenPatterns = [
-    /\beval\b/i,                    // eval()
-    /\bFunction\b/,                 // new Function()
-    /\bimport\b/,                   // dynamic import
-    /\brequire\b/,                  // require()
-    /\bprocess\b/,                  // process.env, etc.
-    /\bglobal(?:This)?\b/,          // globalThis, global
-    /\bwindow\b/,                   // window object
-    /\bdocument\b/,                 // document object
-    /\bfetch\b/,                    // fetch()
-    /\bXMLHttpRequest\b/,           // XHR
-    /\bWebSocket\b/,                // WebSocket
-    /\bWorker\b/,                   // Worker
-    /\bsetTimeout\b/,               // setTimeout
-    /\bsetInterval\b/,              // setInterval
-    /\bsetImmediate\b/,             // setImmediate
-    /\bqueueMicrotask\b/,           // queueMicrotask
-    /\bPromise\b/,                  // Promise constructor
-    /\bReflect\b/,                  // Reflect API
-    /\bProxy\b/,                    // Proxy
-    /\bObject\.(?:assign|create|definePropert|getOwnPropertyDescriptor|setPrototypeOf)\b/, // Dangerous Object methods
-    /\bArray\.from\b/,              // Array.from (can be used with iterators)
-    /\.__proto__\b/,                // Prototype manipulation
-    /\bconstructor\b/,              // Constructor access
-    /\bprototype\b/,                // Prototype access
-    /[=!]=\s*undefined|undefined\s*[=!]=/, // undefined comparison (could be redefined)
-    /\bthis\b/,                     // this keyword (context dependent)
-    /\barguments\b/,                // arguments object
-    /\bawait\b/,                    // await (async context)
-    /\byield\b/,                    // yield (generator)
-    /\breturn\s+[^};\s]+\s*\(/,     // Return with function call (complex)
-  ]
-
-  for (const pattern of forbiddenPatterns) {
-    if (pattern.test(body)) {
-      throw new Error(
-        `Unsafe function pattern detected. For security, use property paths ` +
-        `(e.g., p => p.name) or register mappers with registerMapper().`
-      )
-    }
-  }
-
-  // Additional check: no complex function calls except safe ones
-  // Allow: .slice(), .trim(), .toLowerCase(), .toUpperCase(), .toString()
-  const safeMethodPattern = /\.(slice|trim|toLowerCase|toUpperCase|toString|valueOf|toFixed|toPrecision)\s*\(/g
-  const functionCallPattern = /\w+\s*\(/g
-
-  let match
-  const functionCalls: string[] = []
-  while ((match = functionCallPattern.exec(body)) !== null) {
-    functionCalls.push(match[0])
-  }
-
-  // Remove safe method calls
-  const safeMethods = new Set(['slice(', 'trim(', 'toLowerCase(', 'toUpperCase(', 'toString(', 'valueOf(', 'toFixed(', 'toPrecision('])
-  const unsafeCalls = functionCalls.filter(call => {
-    const methodName = call.trim()
-    return !safeMethods.has(methodName)
-  })
-
-  // Arrow function itself is OK: (x) or x =>
-  // Also OK: function(x)
-  const filtered = unsafeCalls.filter(call => {
-    return !/^(?:async\s+)?(?:function)?\s*\(/.test(call) && call !== '('
-  })
-
-  if (filtered.length > 0) {
-    throw new Error(
-      `Unsafe function calls detected: ${filtered.join(', ')}. ` +
-      `For security, use property paths (e.g., p => p.name) or register mappers.`
-    )
-  }
-}
 
 /**
  * Deserialize a mapper function on the server side
@@ -505,7 +399,6 @@ function validateLegacyFunction(body: string): void {
  * This is the secure version that handles different mapper types:
  * - 'path': Safe property path traversal (no code execution)
  * - 'registered': Lookup in pre-registered mapper functions
- * - 'legacy': Validated function body (strict pattern checking)
  *
  * @param serialized - Serialized mapper string
  * @returns Reconstructed function
@@ -513,7 +406,7 @@ function validateLegacyFunction(body: string): void {
 export function deserializeFunction<T, U>(serialized: string): (value: T) => U {
   const parsed = JSON.parse(serialized)
 
-  // Handle new secure format
+  // Handle secure format
   if ('mapperType' in parsed) {
     const mapper = parsed as SerializedMapper
 
@@ -537,67 +430,17 @@ export function deserializeFunction<T, U>(serialized: string): (value: T) => U {
         return fn as (value: T) => U
       }
 
-      case 'legacy': {
-        // Legacy mode with validation
-        const body = mapper.body
-        if (!body) {
-          throw new Error('Legacy mapper requires a body')
-        }
-
-        // Strict validation before using new Function()
-        validateLegacyFunction(body)
-
-        // Parse and execute (same as before, but validated)
-        return deserializeLegacyFunction<T, U>(body)
-      }
-
       default:
         throw new Error(`Unknown mapper type: ${(mapper as SerializedMapper).mapperType}`)
     }
   }
 
-  // Handle legacy format (for backward compatibility)
-  const legacy = parsed as SerializedFunction
-  if ('type' in legacy && 'body' in legacy) {
-    // Validate legacy function
-    validateLegacyFunction(legacy.body)
-    return deserializeLegacyFunction<T, U>(legacy.body)
-  }
-
-  throw new Error(`Invalid serialized function format`)
+  throw new Error(
+    `Invalid serialized function format. Only 'path' and 'registered' mapper types are supported. ` +
+    `Received: ${JSON.stringify(parsed).slice(0, 100)}`
+  )
 }
 
-/**
- * Deserialize a legacy function body (after validation)
- *
- * @internal
- */
-function deserializeLegacyFunction<T, U>(body: string): (value: T) => U {
-  // For arrow functions: match (param) => body or param => body
-  const arrowMatch = body.match(/^\s*(?:async\s+)?(?:\(([^)]*)\)|(\w+))\s*=>\s*([\s\S]+)$/)
-  if (arrowMatch) {
-    const params = arrowMatch[1] ?? arrowMatch[2] ?? ''
-    const fnBody = arrowMatch[3]
-
-    // Determine if body needs return statement
-    const needsReturn = !fnBody.trim().startsWith('{')
-    const actualBody = needsReturn ? `return ${fnBody}` : fnBody
-
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    return new Function(params, actualBody) as (value: T) => U
-  }
-
-  // For regular functions: function name(params) { body }
-  const funcMatch = body.match(/^\s*(?:async\s+)?function\s*\w*\s*\(([^)]*)\)\s*\{([\s\S]*)\}\s*$/)
-  if (funcMatch) {
-    const params = funcMatch[1] ?? ''
-    const fnBody = funcMatch[2] ?? ''
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    return new Function(params, fnBody) as (value: T) => U
-  }
-
-  throw new Error(`Unable to deserialize function: ${body}`)
-}
 
 // =============================================================================
 // Error Types
