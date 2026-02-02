@@ -1,22 +1,18 @@
 #!/usr/bin/env node
 /**
- * Build Secondary Indexes for ParqueDB
+ * Build FTS and Bloom Filter Indexes for ParqueDB
  *
- * Builds hash, SST, and FTS indexes from local Parquet data files.
+ * Builds full-text search (FTS) indexes and bloom filters from local Parquet data files.
  * Supports multi-file datasets with per-collection index definitions.
- * Generates bloom filters for fast pre-filtering.
  *
  * Usage:
- *   node scripts/build-indexes.mjs --dataset imdb-1m --collection titles --field $index_titleType --type hash
- *   node scripts/build-indexes.mjs --dataset imdb-1m --collection titles --field $index_startYear --type sst
  *   node scripts/build-indexes.mjs --dataset imdb-1m --collection titles --field name --type fts
- *   node scripts/build-indexes.mjs --dataset onet-full --collection occupations --all  # Build all indexes for collection
- *   node scripts/build-indexes.mjs --dataset imdb-1m --all  # Build all indexes for all collections in dataset
- *   node scripts/build-indexes.mjs --dataset imdb-1m --all --compact  # Use compact encoding (v3 format)
- *   node scripts/build-indexes.mjs --dataset imdb-1m --all --compact --bloom  # Include bloom filters
+ *   node scripts/build-indexes.mjs --dataset onet-full --collection occupations --all  # Build all FTS indexes for collection
+ *   node scripts/build-indexes.mjs --dataset imdb-1m --all  # Build all FTS indexes for all collections in dataset
+ *   node scripts/build-indexes.mjs --dataset imdb-1m --all --bloom  # Include bloom filters
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, rmSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { parquetRead, parquetMetadataAsync } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
@@ -27,9 +23,6 @@ import { compressors } from 'hyparquet-compressors'
 
 const DATA_DIR = 'data-v3'  // Local data directory
 const OUTPUT_DIR = 'data-v3'  // Output to same directory structure
-
-// Sharding threshold - indexes larger than this will be sharded
-const SHARD_THRESHOLD_BYTES = 5 * 1024 * 1024  // 5MB
 
 // Bloom filter configuration
 const BLOOM_FILTER_MAGIC = new Uint8Array([0x50, 0x51, 0x42, 0x46]) // "PQBF"
@@ -55,44 +48,26 @@ const DATASET_FILES = {
   'unspsc-full': ['commodities', 'classes', 'families', 'segments'],
 }
 
-// Index definitions per dataset and collection
+// Index definitions per dataset and collection (FTS only)
 const INDEX_DEFINITIONS = {
   'imdb': {
     titles: [
-      { name: 'titleType', field: '$index_titleType', type: 'hash' },
-      { name: 'startYear', field: '$index_startYear', type: 'sst' },
-      { name: 'averageRating', field: '$index_averageRating', type: 'sst' },
-      { name: 'numVotes', field: '$index_numVotes', type: 'sst' },
       { name: 'name', field: 'name', type: 'fts' },
     ],
     people: [
-      { name: 'birthYear', field: '$index_birthYear', type: 'sst' },
       { name: 'name', field: 'name', type: 'fts' },
-    ],
-    cast: [
-      { name: 'category', field: '$index_category', type: 'hash' },
     ],
   },
   'imdb-1m': {
     titles: [
-      { name: 'titleType', field: '$index_titleType', type: 'hash' },
-      { name: 'startYear', field: '$index_startYear', type: 'sst' },
-      { name: 'averageRating', field: '$index_averageRating', type: 'sst' },
-      { name: 'numVotes', field: '$index_numVotes', type: 'sst' },
       { name: 'name', field: 'name', type: 'fts' },
     ],
     people: [
-      { name: 'birthYear', field: '$index_birthYear', type: 'sst' },
       { name: 'name', field: 'name', type: 'fts' },
-    ],
-    cast: [
-      { name: 'category', field: '$index_category', type: 'hash' },
     ],
   },
   'onet-full': {
     occupations: [
-      { name: 'jobZone', field: '$index_jobZone', type: 'hash' },
-      { name: 'socCode', field: '$index_socCode', type: 'sst' },
       { name: 'title', field: 'name', type: 'fts' },
     ],
     skills: [
@@ -104,37 +79,18 @@ const INDEX_DEFINITIONS = {
     knowledge: [
       { name: 'name', field: 'name', type: 'fts' },
     ],
-    'occupation-skills': [
-      { name: 'dataValue', field: '$index_dataValue', type: 'sst' },
-      { name: 'scaleId', field: '$index_scaleId', type: 'hash' },
-    ],
-    'occupation-abilities': [
-      { name: 'dataValue', field: '$index_dataValue', type: 'sst' },
-      { name: 'scaleId', field: '$index_scaleId', type: 'hash' },
-    ],
-    'occupation-knowledge': [
-      { name: 'dataValue', field: '$index_dataValue', type: 'sst' },
-      { name: 'scaleId', field: '$index_scaleId', type: 'hash' },
-    ],
   },
   'unspsc-full': {
     commodities: [
-      { name: 'segmentCode', field: '$index_segmentCode', type: 'hash' },
-      { name: 'code', field: '$index_code', type: 'sst' },
       { name: 'title', field: 'name', type: 'fts' },
     ],
     classes: [
-      { name: 'segmentCode', field: '$index_segmentCode', type: 'hash' },
-      { name: 'code', field: '$index_code', type: 'sst' },
       { name: 'title', field: 'name', type: 'fts' },
     ],
     families: [
-      { name: 'segmentCode', field: '$index_segmentCode', type: 'hash' },
-      { name: 'code', field: '$index_code', type: 'sst' },
       { name: 'title', field: 'name', type: 'fts' },
     ],
     segments: [
-      { name: 'code', field: '$index_code', type: 'sst' },
       { name: 'title', field: 'name', type: 'fts' },
     ],
   },
@@ -143,87 +99,6 @@ const INDEX_DEFINITIONS = {
 // =============================================================================
 // Index Building
 // =============================================================================
-
-/**
- * Build a hash index from Parquet data
- * @param {Array} rows - The data rows
- * @param {string} field - Field to index
- * @param {number[]} rowGroupBoundaries - Cumulative row counts per row group [end1, end2, ...]
- * @param {string} idField - ID field name
- */
-function buildHashIndex(rows, field, rowGroupBoundaries = [], idField = '$id') {
-  console.log(`  Building hash index for ${field}...`)
-  const buckets = new Map()
-  let entryCount = 0
-
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]
-    const value = getFieldValue(row, field)
-    const docId = getFieldValue(row, idField) || `row_${i}`
-
-    if (value === undefined || value === null) continue
-
-    // Hash the value
-    const key = encodeKey(value)
-    const hash = hashKey(key)
-
-    if (!buckets.has(hash)) {
-      buckets.set(hash, [])
-    }
-
-    // Calculate row group from boundaries
-    const rowGroup = getRowGroup(i, rowGroupBoundaries)
-    const rowOffset = getRowOffset(i, rowGroup, rowGroupBoundaries)
-
-    buckets.get(hash).push({
-      key,
-      docId: String(docId),
-      rowGroup,
-      rowOffset,
-    })
-    entryCount++
-  }
-
-  console.log(`  Created ${entryCount} entries in ${buckets.size} buckets across ${rowGroupBoundaries.length || 1} row groups`)
-  return serializeHashIndex(buckets, entryCount)
-}
-
-/**
- * Build an SST index from Parquet data
- * @param {Array} rows - The data rows
- * @param {string} field - Field to index
- * @param {number[]} rowGroupBoundaries - Cumulative row counts per row group [end1, end2, ...]
- * @param {string} idField - ID field name
- */
-function buildSSTIndex(rows, field, rowGroupBoundaries = [], idField = '$id') {
-  console.log(`  Building SST index for ${field}...`)
-  const entries = []
-
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]
-    const value = getFieldValue(row, field)
-    const docId = getFieldValue(row, idField) || `row_${i}`
-
-    if (value === undefined || value === null) continue
-
-    // Calculate row group from boundaries
-    const rowGroup = getRowGroup(i, rowGroupBoundaries)
-    const rowOffset = getRowOffset(i, rowGroup, rowGroupBoundaries)
-
-    entries.push({
-      key: encodeKey(value),
-      docId: String(docId),
-      rowGroup,
-      rowOffset,
-    })
-  }
-
-  // Sort by key
-  entries.sort((a, b) => compareKeys(a.key, b.key))
-
-  console.log(`  Created ${entries.length} sorted entries across ${rowGroupBoundaries.length || 1} row groups`)
-  return serializeSSTIndex(entries)
-}
 
 /**
  * Build an FTS index from Parquet data
@@ -295,453 +170,6 @@ function buildFTSIndex(rows, field, idField = '$id') {
 
   console.log(`  Indexed ${corpusStats.documentCount} documents, ${index.size} unique terms`)
   return serializeFTSIndex(index, docStats, corpusStats)
-}
-
-// =============================================================================
-// Sharded Index Building
-// =============================================================================
-
-/**
- * Build a sharded hash index from Parquet data
- * Groups entries by value into separate shard files
- *
- * @param {Array} rows - The data rows
- * @param {string} field - Field to index
- * @param {number[]} rowGroupBoundaries - Cumulative row counts per row group
- * @param {string} idField - ID field name
- * @param {boolean} useCompact - Use compact v3 encoding
- * @returns {Object} Sharding result with entries grouped by value
- */
-function buildShardedHashIndex(rows, field, rowGroupBoundaries = [], idField = '$id', useCompact = false) {
-  console.log(`  Building sharded hash index for ${field}...`)
-
-  // Group entries by their string value
-  const shards = new Map()  // value string -> entries[]
-  let totalEntries = 0
-
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]
-    const value = getFieldValue(row, field)
-    const docId = getFieldValue(row, idField) || `row_${i}`
-
-    if (value === undefined || value === null) continue
-
-    // Use the string representation of the value as the shard name
-    const shardName = sanitizeShardName(String(value))
-    const key = encodeKey(value)
-
-    if (!shards.has(shardName)) {
-      shards.set(shardName, {
-        name: shardName,
-        originalValue: value,
-        entries: [],
-      })
-    }
-
-    const rowGroup = getRowGroup(i, rowGroupBoundaries)
-    const rowOffset = getRowOffset(i, rowGroup, rowGroupBoundaries)
-
-    shards.get(shardName).entries.push({
-      key,
-      docId: String(docId),
-      rowGroup,
-      rowOffset,
-    })
-    totalEntries++
-  }
-
-  console.log(`  Found ${shards.size} unique values, ${totalEntries} total entries`)
-
-  // Serialize each shard
-  const shardResults = []
-  for (const [shardName, shard] of shards) {
-    // Use compact encoding if enabled (no key hash since shards group by value)
-    const serialized = useCompact
-      ? serializeCompactShard(shard.entries)
-      : serializeHashShard(shard.entries)
-    shardResults.push({
-      name: shardName,
-      originalValue: shard.originalValue,
-      data: serialized,
-      entryCount: shard.entries.length,
-      sizeBytes: serialized.length,
-    })
-  }
-
-  return {
-    type: 'hash',
-    sharding: 'by-value',
-    compact: useCompact,
-    shards: shardResults,
-    totalEntries,
-    rowGroups: rowGroupBoundaries.length || 1,
-  }
-}
-
-/**
- * Build a sharded SST index from Parquet data
- * Groups entries by value range (e.g., by first character or numeric range)
- *
- * @param {Array} rows - The data rows
- * @param {string} field - Field to index
- * @param {number[]} rowGroupBoundaries - Cumulative row counts per row group
- * @param {string} idField - ID field name
- * @param {boolean} useCompact - Use compact v3 encoding
- * @returns {Object} Sharding result with entries grouped by range
- */
-function buildShardedSSTIndex(rows, field, rowGroupBoundaries = [], idField = '$id', useCompact = false) {
-  console.log(`  Building sharded SST index for ${field}...`)
-
-  // Collect all entries with their values
-  const entries = []
-
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]
-    const value = getFieldValue(row, field)
-    const docId = getFieldValue(row, idField) || `row_${i}`
-
-    if (value === undefined || value === null) continue
-
-    const rowGroup = getRowGroup(i, rowGroupBoundaries)
-    const rowOffset = getRowOffset(i, rowGroup, rowGroupBoundaries)
-
-    entries.push({
-      value,
-      key: encodeKey(value),
-      docId: String(docId),
-      rowGroup,
-      rowOffset,
-    })
-  }
-
-  // Sort by key
-  entries.sort((a, b) => compareKeys(a.key, b.key))
-
-  // Determine sharding strategy based on value type
-  const firstValue = entries[0]?.value
-  const shards = new Map()
-
-  if (typeof firstValue === 'number') {
-    // Numeric: shard by range (50-year spans for years, or order of magnitude)
-    // Find min/max without spread operator to avoid stack overflow on large arrays
-    let min = entries[0].value
-    let max = entries[0].value
-    for (const entry of entries) {
-      if (entry.value < min) min = entry.value
-      if (entry.value > max) max = entry.value
-    }
-
-    // Calculate range size to aim for shards under target size
-    // Each entry is ~36 bytes (key:9 + docId:~27 + rowGroup:4 + rowOffset:4)
-    const avgEntrySize = 36
-    const targetShardSize = SHARD_THRESHOLD_BYTES * 0.8  // 80% of threshold
-    const entriesPerShard = Math.floor(targetShardSize / avgEntrySize)
-
-    // Estimate entries per unit range based on distribution
-    const range = max - min
-    const entriesPerUnit = entries.length / Math.max(range, 1)
-
-    // Calculate range size to achieve target shard size
-    let rangeSize = Math.max(0.001, entriesPerShard / entriesPerUnit)
-
-    // Round to nice boundaries depending on the value range
-    if (range < 20) {
-      // Small ranges (like ratings 1-10): use 0.5, 1, or 2 unit chunks
-      if (rangeSize < 0.75) rangeSize = 0.5
-      else if (rangeSize < 1.5) rangeSize = 1
-      else if (rangeSize < 3) rangeSize = 2
-      else rangeSize = 5
-    } else if (range <= 200) {
-      // Year-like ranges: round to 5, 10, 20, or 25 year chunks
-      if (rangeSize < 8) rangeSize = 5
-      else if (rangeSize < 15) rangeSize = 10
-      else if (rangeSize < 22) rangeSize = 20
-      else rangeSize = 25
-    } else {
-      // For larger ranges: round to power of 10
-      rangeSize = Math.pow(10, Math.floor(Math.log10(rangeSize)))
-    }
-
-    console.log(`    Range ${min}-${max}, using ${rangeSize} unit ranges (target: ~${entriesPerShard} entries/shard)`)
-
-    for (const entry of entries) {
-      const rangeStart = Math.floor(entry.value / rangeSize) * rangeSize
-      const rangeEnd = rangeStart + rangeSize
-      const shardName = `range-${rangeStart}-${rangeEnd}`
-
-      if (!shards.has(shardName)) {
-        shards.set(shardName, {
-          name: shardName,
-          rangeStart,
-          rangeEnd,
-          entries: [],
-        })
-      }
-
-      shards.get(shardName).entries.push({
-        key: entry.key,
-        docId: entry.docId,
-        rowGroup: entry.rowGroup,
-        rowOffset: entry.rowOffset,
-      })
-    }
-  } else if (typeof firstValue === 'string') {
-    // String: shard by first character (or first 2 chars if too few buckets)
-    for (const entry of entries) {
-      const prefix = entry.value.charAt(0).toLowerCase() || '_'
-
-      if (!shards.has(prefix)) {
-        shards.set(prefix, {
-          name: prefix,
-          prefix,
-          entries: [],
-        })
-      }
-
-      shards.get(prefix).entries.push({
-        key: entry.key,
-        docId: entry.docId,
-        rowGroup: entry.rowGroup,
-        rowOffset: entry.rowOffset,
-      })
-    }
-  } else {
-    // Default: single shard
-    shards.set('all', {
-      name: 'all',
-      entries: entries.map(e => ({
-        key: e.key,
-        docId: e.docId,
-        rowGroup: e.rowGroup,
-        rowOffset: e.rowOffset,
-      })),
-    })
-  }
-
-  console.log(`  Created ${shards.size} shards, ${entries.length} total entries`)
-
-  // Serialize each shard (already sorted within each shard due to overall sort)
-  const shardResults = []
-  for (const [, shard] of shards) {
-    // Use compact encoding if enabled (no key hash since shards group by key prefix/range)
-    const serialized = useCompact
-      ? serializeCompactShard(shard.entries)
-      : serializeSSTShard(shard.entries)
-    shardResults.push({
-      name: shard.name,
-      rangeStart: shard.rangeStart,
-      rangeEnd: shard.rangeEnd,
-      prefix: shard.prefix,
-      data: serialized,
-      entryCount: shard.entries.length,
-      sizeBytes: serialized.length,
-    })
-  }
-
-  return {
-    type: 'sst',
-    sharding: typeof firstValue === 'number' ? 'by-range' : 'by-prefix',
-    compact: useCompact,
-    shards: shardResults,
-    totalEntries: entries.length,
-    rowGroups: rowGroupBoundaries.length || 1,
-  }
-}
-
-/**
- * Sanitize a value for use as a shard name (filename)
- */
-function sanitizeShardName(name) {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9-_]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .substring(0, 50) || 'default'
-}
-
-/**
- * Serialize entries for a hash index shard
- */
-function serializeHashShard(entries) {
-  let size = 1 + 4  // version + entry count
-  for (const entry of entries) {
-    size += 2 + entry.key.length + 2 + entry.docId.length + 4 + 4
-  }
-
-  const buffer = new ArrayBuffer(size)
-  const view = new DataView(buffer)
-  const bytes = new Uint8Array(buffer)
-  const encoder = new TextEncoder()
-
-  let offset = 0
-  view.setUint8(offset, 2)  // version 2 = sharded format
-  offset += 1
-  view.setUint32(offset, entries.length, false)
-  offset += 4
-
-  for (const entry of entries) {
-    view.setUint16(offset, entry.key.length, false)
-    offset += 2
-    bytes.set(entry.key, offset)
-    offset += entry.key.length
-
-    const docIdBytes = encoder.encode(entry.docId)
-    view.setUint16(offset, docIdBytes.length, false)
-    offset += 2
-    bytes.set(docIdBytes, offset)
-    offset += docIdBytes.length
-
-    view.setUint32(offset, entry.rowGroup, false)
-    offset += 4
-    view.setUint32(offset, entry.rowOffset, false)
-    offset += 4
-  }
-
-  return bytes
-}
-
-/**
- * Serialize entries for an SST index shard
- */
-function serializeSSTShard(entries) {
-  // Same format as regular SST - entries are already sorted
-  return serializeHashShard(entries)  // Same binary format
-}
-
-/**
- * Calculate estimated size for determining if sharding is needed
- */
-function estimateIndexSize(entryCount, avgKeyLen = 10, avgDocIdLen = 26) {
-  // Format: version(1) + count(4) + entries * (keyLen(2) + key + docIdLen(2) + docId + rowGroup(4) + rowOffset(4))
-  return 5 + entryCount * (2 + avgKeyLen + 2 + avgDocIdLen + 8)
-}
-
-// =============================================================================
-// Compact Encoding (Version 3)
-// =============================================================================
-
-// Format version constants
-const FORMAT_VERSION_1 = 0x01  // Original format with full key
-const FORMAT_VERSION_2 = 0x02  // Sharded format (still full key)
-const FORMAT_VERSION_3 = 0x03  // Compact format with varint encoding
-
-/**
- * Write a variable-length unsigned integer (LEB128-style)
- * @param {Uint8Array} buffer
- * @param {number} offset
- * @param {number} value
- * @returns {number} bytes written
- */
-function writeVarint(buffer, offset, value) {
-  let bytesWritten = 0
-  let v = value
-
-  while (v >= 0x80) {
-    buffer[offset + bytesWritten] = (v & 0x7f) | 0x80
-    v >>>= 7
-    bytesWritten++
-  }
-
-  buffer[offset + bytesWritten] = v
-  bytesWritten++
-
-  return bytesWritten
-}
-
-/**
- * Calculate varint size
- */
-function varintSize(value) {
-  if (value < 0x80) return 1
-  if (value < 0x4000) return 2
-  if (value < 0x200000) return 3
-  if (value < 0x10000000) return 4
-  return 5
-}
-
-/**
- * Serialize entries in compact format
- * Format: [version:u8][flags:u8][entryCount:u32][entries...]
- * Entry: [rowGroup:u16][rowOffset:varint][docIdLen:u8][docId:bytes]
- *
- * This format is ~3x smaller than v1/v2 by:
- * - Removing key from each entry (sharded indexes group by key implicitly)
- * - Using 2-byte rowGroup instead of 4-byte
- * - Using varint for rowOffset
- * - Using 1-byte docIdLen instead of 2-byte
- *
- * @param {Array} entries
- * @param {boolean} includeKeyHash - Include 4-byte key hash for non-sharded indexes
- * @returns {Uint8Array}
- */
-function serializeCompactIndex(entries, includeKeyHash = false) {
-  const encoder = new TextEncoder()
-
-  // Calculate total size
-  let totalSize = 6  // version(1) + flags(1) + entryCount(4)
-
-  for (const entry of entries) {
-    const docIdBytes = encoder.encode(entry.docId)
-    if (includeKeyHash) {
-      totalSize += 4  // keyHash
-    }
-    totalSize += 2  // rowGroup (u16)
-    totalSize += varintSize(entry.rowOffset)  // rowOffset (varint)
-    totalSize += 1  // docIdLen (u8)
-    totalSize += docIdBytes.length  // docId
-  }
-
-  const buffer = new Uint8Array(totalSize)
-  const view = new DataView(buffer.buffer)
-  let offset = 0
-
-  // Header
-  buffer[offset++] = FORMAT_VERSION_3
-  buffer[offset++] = includeKeyHash ? 0x01 : 0x00  // flags: bit 0 = hasKeyHash
-  view.setUint32(offset, entries.length, false)
-  offset += 4
-
-  // Entries
-  for (const entry of entries) {
-    // Optional key hash
-    if (includeKeyHash) {
-      view.setUint32(offset, hashKey(entry.key), false)
-      offset += 4
-    }
-
-    // Row group (2 bytes)
-    view.setUint16(offset, entry.rowGroup, false)
-    offset += 2
-
-    // Row offset (varint)
-    offset += writeVarint(buffer, offset, entry.rowOffset)
-
-    // Doc ID (1-byte length + bytes)
-    const docIdBytes = encoder.encode(entry.docId)
-    if (docIdBytes.length > 255) {
-      throw new Error(`Doc ID too long: ${docIdBytes.length} bytes (max 255)`)
-    }
-    buffer[offset++] = docIdBytes.length
-    buffer.set(docIdBytes, offset)
-    offset += docIdBytes.length
-  }
-
-  return buffer.slice(0, offset)
-}
-
-/**
- * Serialize entries in compact format for sharded indexes (no key hash)
- */
-function serializeCompactShard(entries) {
-  return serializeCompactIndex(entries, false)
-}
-
-/**
- * Serialize entries in compact format for non-sharded indexes (with key hash)
- */
-function serializeCompactNonShardedIndex(entries) {
-  return serializeCompactIndex(entries, true)
 }
 
 // =============================================================================
@@ -985,88 +413,6 @@ function buildBloomFilter(rows, field, rowGroupBoundaries = []) {
 }
 
 // =============================================================================
-// Key Encoding
-// =============================================================================
-
-// Type prefixes matching src/indexes/secondary/key-encoder.ts
-const TYPE_NULL = 0x00
-const TYPE_BOOL_FALSE = 0x10
-const TYPE_BOOL_TRUE = 0x11
-const TYPE_NUMBER_NEG = 0x20
-const TYPE_NUMBER_POS = 0x21
-const TYPE_STRING = 0x30
-const TYPE_OBJECT = 0x70
-
-function encodeKey(value) {
-  const encoder = new TextEncoder()
-
-  // Null/undefined
-  if (value === null || value === undefined) {
-    return new Uint8Array([TYPE_NULL])
-  }
-
-  // Boolean
-  if (typeof value === 'boolean') {
-    return new Uint8Array([value ? TYPE_BOOL_TRUE : TYPE_BOOL_FALSE])
-  }
-
-  // Number - encode with proper sign handling
-  if (typeof value === 'number') {
-    const buffer = new ArrayBuffer(9)
-    const view = new DataView(buffer)
-    const bytes = new Uint8Array(buffer)
-
-    if (value < 0) {
-      view.setUint8(0, TYPE_NUMBER_NEG)
-      // Invert bits for correct sort order of negative numbers
-      view.setFloat64(1, value, false)
-      for (let i = 1; i < 9; i++) {
-        bytes[i] = bytes[i] ^ 0xff
-      }
-    } else {
-      view.setUint8(0, TYPE_NUMBER_POS)
-      view.setFloat64(1, value, false)
-    }
-    return bytes
-  }
-
-  // String
-  if (typeof value === 'string') {
-    const strBytes = encoder.encode(value)
-    const result = new Uint8Array(strBytes.length + 1)
-    result[0] = TYPE_STRING
-    result.set(strBytes, 1)
-    return result
-  }
-
-  // Default: JSON encode as object
-  const json = encoder.encode(JSON.stringify(value))
-  const result = new Uint8Array(json.length + 1)
-  result[0] = TYPE_OBJECT
-  result.set(json, 1)
-  return result
-}
-
-function hashKey(key) {
-  // FNV-1a hash
-  let hash = 2166136261
-  for (let i = 0; i < key.length; i++) {
-    hash ^= key[i]
-    hash = (hash * 16777619) >>> 0
-  }
-  return hash
-}
-
-function compareKeys(a, b) {
-  const len = Math.min(a.length, b.length)
-  for (let i = 0; i < len; i++) {
-    if (a[i] < b[i]) return -1
-    if (a[i] > b[i]) return 1
-  }
-  return a.length - b.length
-}
-
-// =============================================================================
 // Tokenization with Porter Stemming
 // =============================================================================
 
@@ -1227,87 +573,6 @@ function endsWithCVC(word) {
 // Serialization
 // =============================================================================
 
-function serializeHashIndex(buckets, entryCount) {
-  // Calculate size
-  let size = 1 + 4 // version + entry count
-  for (const bucket of buckets.values()) {
-    for (const entry of bucket) {
-      size += 2 + entry.key.length + 2 + entry.docId.length + 4 + 4
-    }
-  }
-
-  const buffer = new ArrayBuffer(size)
-  const view = new DataView(buffer)
-  const bytes = new Uint8Array(buffer)
-  const encoder = new TextEncoder()
-
-  let offset = 0
-  view.setUint8(offset, 1) // version
-  offset += 1
-  view.setUint32(offset, entryCount, false)
-  offset += 4
-
-  for (const bucket of buckets.values()) {
-    for (const entry of bucket) {
-      view.setUint16(offset, entry.key.length, false)
-      offset += 2
-      bytes.set(entry.key, offset)
-      offset += entry.key.length
-
-      const docIdBytes = encoder.encode(entry.docId)
-      view.setUint16(offset, docIdBytes.length, false)
-      offset += 2
-      bytes.set(docIdBytes, offset)
-      offset += docIdBytes.length
-
-      view.setUint32(offset, entry.rowGroup, false)
-      offset += 4
-      view.setUint32(offset, entry.rowOffset, false)
-      offset += 4
-    }
-  }
-
-  return bytes
-}
-
-function serializeSSTIndex(entries) {
-  let size = 1 + 4 // version + entry count
-  for (const entry of entries) {
-    size += 2 + entry.key.length + 2 + entry.docId.length + 4 + 4
-  }
-
-  const buffer = new ArrayBuffer(size)
-  const view = new DataView(buffer)
-  const bytes = new Uint8Array(buffer)
-  const encoder = new TextEncoder()
-
-  let offset = 0
-  view.setUint8(offset, 1) // version
-  offset += 1
-  view.setUint32(offset, entries.length, false)
-  offset += 4
-
-  for (const entry of entries) {
-    view.setUint16(offset, entry.key.length, false)
-    offset += 2
-    bytes.set(entry.key, offset)
-    offset += entry.key.length
-
-    const docIdBytes = encoder.encode(entry.docId)
-    view.setUint16(offset, docIdBytes.length, false)
-    offset += 2
-    bytes.set(docIdBytes, offset)
-    offset += docIdBytes.length
-
-    view.setUint32(offset, entry.rowGroup, false)
-    offset += 4
-    view.setUint32(offset, entry.rowOffset, false)
-    offset += 4
-  }
-
-  return bytes
-}
-
 function serializeFTSIndex(index, docStats, corpusStats) {
   const data = {
     version: 1,
@@ -1357,19 +622,6 @@ function getRowGroup(rowIndex, boundaries) {
   return boundaries.length - 1
 }
 
-/**
- * Calculate the row offset within a row group
- * @param {number} rowIndex - Global row index
- * @param {number} rowGroup - Row group index
- * @param {number[]} boundaries - Cumulative row counts [end1, end2, ...]
- * @returns {number} Row offset within the row group
- */
-function getRowOffset(rowIndex, rowGroup, boundaries) {
-  if (!boundaries || boundaries.length === 0) return rowIndex
-  const groupStart = rowGroup > 0 ? boundaries[rowGroup - 1] : 0
-  return rowIndex - groupStart
-}
-
 async function readParquetFile(path) {
   console.log(`Reading ${path}...`)
   const nodeBuffer = readFileSync(path)
@@ -1415,10 +667,9 @@ function ensureDir(path) {
  * @param {string} dataset - Dataset name
  * @param {string} collection - Collection name
  * @param {Array} indexesToBuild - Index definitions to build
- * @param {boolean} useCompact - Use compact v3 encoding
  * @param {boolean} buildBloomFilters - Build bloom filters for pre-filtering
  */
-async function buildCollectionIndexes(dataset, collection, indexesToBuild, useCompact = false, buildBloomFilters = false) {
+async function buildCollectionIndexes(dataset, collection, indexesToBuild, buildBloomFilters = false) {
   // Read data file for this collection
   const dataPath = join(DATA_DIR, dataset, `${collection}.parquet`)
   if (!existsSync(dataPath)) {
@@ -1443,148 +694,53 @@ async function buildCollectionIndexes(dataset, collection, indexesToBuild, useCo
   for (const def of indexesToBuild) {
     console.log(`\nBuilding ${def.type} index: ${collection}/${def.name}`)
 
-    // Estimate size to determine if sharding is needed
-    const estimatedSize = estimateIndexSize(unpackedRows.length)
-    const shouldShard = estimatedSize > SHARD_THRESHOLD_BYTES && (def.type === 'hash' || def.type === 'sst')
-
-    if (shouldShard) {
-      console.log(`  Estimated size ${(estimatedSize / 1024 / 1024).toFixed(1)}MB > ${SHARD_THRESHOLD_BYTES / 1024 / 1024}MB threshold, using sharded format`)
-
-      // Build sharded index
-      let shardResult
-      if (def.type === 'hash') {
-        shardResult = buildShardedHashIndex(unpackedRows, def.field, rowGroupBoundaries, '$id', useCompact)
-      } else {
-        shardResult = buildShardedSSTIndex(unpackedRows, def.field, rowGroupBoundaries, '$id', useCompact)
-      }
-
-      // Write shards to directory (clean up old shards first)
-      const shardDir = join(OUTPUT_DIR, dataset, collection, 'indexes', 'secondary', def.name)
-      if (existsSync(shardDir)) {
-        // Remove entire directory and recreate
-        rmSync(shardDir, { recursive: true })
-      }
-      mkdirSync(shardDir, { recursive: true })
-
-      let totalSizeBytes = 0
-      const shardManifest = {
-        version: useCompact ? 3 : 2,
-        type: shardResult.type,
-        field: def.field,
-        sharding: shardResult.sharding,
-        compact: useCompact,
-        shards: [],
-        totalEntries: shardResult.totalEntries,
-        rowGroups: shardResult.rowGroups,
-      }
-
-      for (const shard of shardResult.shards) {
-        const shardPath = join(shardDir, `${shard.name}.shard.idx`)
-        writeFileSync(shardPath, shard.data)
-        totalSizeBytes += shard.sizeBytes
-
-        const shardInfo = {
-          name: shard.name,
-          path: `${shard.name}.shard.idx`,
-          entryCount: shard.entryCount,
-          sizeBytes: shard.sizeBytes,
-        }
-
-        // Include range info for SST shards
-        if (shard.rangeStart !== undefined) {
-          shardInfo.rangeStart = shard.rangeStart
-          shardInfo.rangeEnd = shard.rangeEnd
-        }
-        if (shard.prefix !== undefined) {
-          shardInfo.prefix = shard.prefix
-        }
-        if (shard.originalValue !== undefined) {
-          shardInfo.value = shard.originalValue
-        }
-
-        shardManifest.shards.push(shardInfo)
-      }
-
-      // Build bloom filter if requested
-      let bloomInfo = null
-      if (buildBloomFilters && (def.type === 'hash' || def.type === 'sst')) {
-        const bloomData = buildBloomFilter(unpackedRows, def.field, rowGroupBoundaries)
-        const bloomPath = join(shardDir, '_bloom.bin')
-        writeFileSync(bloomPath, bloomData)
-        console.log(`  Wrote bloom filter: ${bloomPath} (${(bloomData.length / 1024).toFixed(1)}KB)`)
-
-        bloomInfo = {
-          bloomPath: '_bloom.bin',
-          bloomSizeBytes: bloomData.length,
-        }
-        shardManifest.bloomPath = bloomInfo.bloomPath
-        shardManifest.bloomSizeBytes = bloomInfo.bloomSizeBytes
-      }
-
-      // Write manifest
-      const manifestPath = join(shardDir, '_manifest.json')
-      writeFileSync(manifestPath, JSON.stringify(shardManifest, null, 2))
-
-      console.log(`  Wrote ${shardResult.shards.length} shards to ${shardDir}`)
-      console.log(`  Total size: ${(totalSizeBytes / 1024 / 1024).toFixed(2)}MB (largest shard: ${(Math.max(...shardResult.shards.map(s => s.sizeBytes)) / 1024 / 1024).toFixed(2)}MB)`)
-
-      const indexResult = {
-        name: def.name,
-        type: def.type,
-        field: def.field,
-        sharded: true,
-        compact: useCompact,
-        manifestPath: `indexes/secondary/${def.name}/_manifest.json`,
-        sizeBytes: totalSizeBytes,
-        shardCount: shardResult.shards.length,
-        entryCount: shardResult.totalEntries,
-        rowGroups: rowGroupBoundaries.length || 1,
-        updatedAt: new Date().toISOString(),
-      }
-      if (bloomInfo) {
-        indexResult.bloomPath = `indexes/secondary/${def.name}/${bloomInfo.bloomPath}`
-        indexResult.bloomSizeBytes = bloomInfo.bloomSizeBytes
-      }
-      results.push(indexResult)
-    } else {
-      // Build non-sharded index (original logic)
-      let indexData
-      let outputPath
-
-      switch (def.type) {
-        case 'hash':
-          indexData = buildHashIndex(unpackedRows, def.field, rowGroupBoundaries)
-          outputPath = join(OUTPUT_DIR, dataset, collection, 'indexes', 'secondary', `${def.name}.hash.idx`)
-          break
-        case 'sst':
-          indexData = buildSSTIndex(unpackedRows, def.field, rowGroupBoundaries)
-          outputPath = join(OUTPUT_DIR, dataset, collection, 'indexes', 'secondary', `${def.name}.sst.idx`)
-          break
-        case 'fts':
-          indexData = buildFTSIndex(unpackedRows, def.field)
-          outputPath = join(OUTPUT_DIR, dataset, collection, 'indexes', 'fts', `${def.name}.fts.json`)
-          break
-        default:
-          console.error(`Unknown index type: ${def.type}`)
-          continue
-      }
-
-      // Write index file
-      ensureDir(outputPath)
-      writeFileSync(outputPath, indexData)
-      console.log(`  Wrote ${outputPath} (${indexData.length} bytes)`)
-
-      results.push({
-        name: def.name,
-        type: def.type,
-        field: def.field,
-        path: outputPath.replace(`${OUTPUT_DIR}/${dataset}/${collection}/`, ''),
-        sizeBytes: indexData.length,
-        entryCount: unpackedRows.length,
-        rowGroups: rowGroupBoundaries.length || 1,
-        updatedAt: new Date().toISOString(),
-      })
+    if (def.type !== 'fts') {
+      console.error(`  Unsupported index type: ${def.type} (only 'fts' is supported)`)
+      continue
     }
+
+    // Build FTS index
+    const indexData = buildFTSIndex(unpackedRows, def.field)
+    const outputPath = join(OUTPUT_DIR, dataset, collection, 'indexes', 'fts', `${def.name}.fts.json`)
+
+    // Write index file
+    ensureDir(outputPath)
+    writeFileSync(outputPath, indexData)
+    console.log(`  Wrote ${outputPath} (${indexData.length} bytes)`)
+
+    // Build bloom filter if requested
+    let bloomInfo = null
+    if (buildBloomFilters) {
+      const bloomData = buildBloomFilter(unpackedRows, def.field, rowGroupBoundaries)
+      const bloomDir = join(OUTPUT_DIR, dataset, collection, 'indexes', 'fts')
+      const bloomPath = join(bloomDir, `${def.name}.bloom.bin`)
+      ensureDir(bloomPath)
+      writeFileSync(bloomPath, bloomData)
+      console.log(`  Wrote bloom filter: ${bloomPath} (${(bloomData.length / 1024).toFixed(1)}KB)`)
+
+      bloomInfo = {
+        bloomPath: `indexes/fts/${def.name}.bloom.bin`,
+        bloomSizeBytes: bloomData.length,
+      }
+    }
+
+    const result = {
+      name: def.name,
+      type: def.type,
+      field: def.field,
+      path: outputPath.replace(`${OUTPUT_DIR}/${dataset}/${collection}/`, ''),
+      sizeBytes: indexData.length,
+      entryCount: unpackedRows.length,
+      rowGroups: rowGroupBoundaries.length || 1,
+      updatedAt: new Date().toISOString(),
+    }
+
+    if (bloomInfo) {
+      result.bloomPath = bloomInfo.bloomPath
+      result.bloomSizeBytes = bloomInfo.bloomSizeBytes
+    }
+
+    results.push(result)
   }
 
   return results
@@ -1603,7 +759,6 @@ async function main() {
   let field = null
   let type = null
   let buildAll = false
-  let useCompact = false
   let buildBloom = false
 
   for (let i = 0; i < args.length; i++) {
@@ -1617,22 +772,17 @@ async function main() {
       type = args[++i]
     } else if (args[i] === '--all') {
       buildAll = true
-    } else if (args[i] === '--compact') {
-      useCompact = true
     } else if (args[i] === '--bloom') {
       buildBloom = true
     }
   }
 
-  if (useCompact) {
-    console.log('Using compact encoding (v3 format) for ~3x smaller indexes')
-  }
   if (buildBloom) {
     console.log('Building bloom filters for fast pre-filtering')
   }
 
   if (!dataset) {
-    console.error('Usage: node scripts/build-indexes.mjs --dataset <name> [--collection <name>] [--field <field> --type <type>] [--all]')
+    console.error('Usage: node scripts/build-indexes.mjs --dataset <name> [--collection <name>] [--field <field> --type fts] [--all] [--bloom]')
     console.error('\nAvailable datasets:')
     for (const [d, collections] of Object.entries(DATASET_FILES)) {
       console.error(`  ${d}:`)
@@ -1707,7 +857,7 @@ async function main() {
     console.log(`Processing collection: ${col}`)
     console.log(`${'='.repeat(60)}`)
 
-    const results = await buildCollectionIndexes(dataset, col, indexesToBuild, useCompact, buildBloom)
+    const results = await buildCollectionIndexes(dataset, col, indexesToBuild, buildBloom)
 
     if (results && results.length > 0) {
       // Write collection-level catalog
