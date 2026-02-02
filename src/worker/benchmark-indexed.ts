@@ -46,6 +46,16 @@ export interface QueryBenchmarkResult {
     rowsReturned: number
     /** Index type actually used */
     indexUsed?: string
+    /** Total row groups in the file */
+    rowGroupsTotal?: number
+    /** Row groups actually read (after index filtering) */
+    rowGroupsRead?: number
+    /** Row groups skipped due to index or predicate pushdown */
+    rowGroupsSkipped?: number
+    /** Whether index execution fell back to full scan */
+    indexFallback?: boolean
+    /** Error from index execution (if fell back) */
+    indexError?: string
     /** Success flag */
     success: boolean
     /** Error message if failed */
@@ -324,8 +334,15 @@ async function benchmarkQuery(
   // Calculate speedup
   const speedup = scanPercentiles.p50 > 0 ? scanPercentiles.p50 / indexedPercentiles.p50 : 1
 
-  // Extract index metadata from stats
-  const indexStats = indexedResult?.stats as QueryStats & { indexUsed?: string; indexLookupMs?: number }
+  // Extract index metadata from stats (extended stats from executeWithIndex)
+  const indexStats = indexedResult?.stats as QueryStats & {
+    indexUsed?: string
+    indexLookupMs?: number
+    rowGroupsTotal?: number
+    rowGroupsRead?: number
+    indexFallback?: boolean
+    indexError?: string
+  }
 
   return {
     query,
@@ -336,6 +353,11 @@ async function benchmarkQuery(
       rowsScanned: indexedResult?.stats?.rowsScanned ?? 0,
       rowsReturned: indexedResult?.stats?.rowsReturned ?? 0,
       indexUsed: indexStats?.indexUsed,
+      rowGroupsTotal: indexStats?.rowGroupsTotal,
+      rowGroupsRead: indexStats?.rowGroupsRead,
+      rowGroupsSkipped: indexedResult?.stats?.rowGroupsSkipped,
+      indexFallback: indexStats?.indexFallback,
+      indexError: indexStats?.indexError,
       success: !indexedError,
       error: indexedError,
       iterations: indexedLatencies.length,

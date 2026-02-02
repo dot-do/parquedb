@@ -195,6 +195,14 @@ export interface QueryPlan {
   estimatedRows: number
   /** Estimated bytes to read */
   estimatedBytes: number
+  /** Secondary index that would be used (if any) */
+  secondaryIndex?: {
+    name: string
+    type: 'hash' | 'sst' | 'fts'
+    field: string
+  } | null
+  /** Number of index catalog entries for this dataset */
+  indexCatalogEntries?: number
 }
 
 // =============================================================================
@@ -787,6 +795,36 @@ export class QueryExecutor {
         }
       }
 
+      // Read parquet metadata to check selectivity before proceeding
+      const metadata = await this.parquetReader.readMetadata(dataPath)
+      const totalRows = metadata.rowGroups.reduce((sum, rg) => sum + Number(rg.numRows), 0)
+
+      // Track selectivity metrics in extended stats
+      const extendedStatsWithSelectivity = extendedStats as QueryStats & {
+        indexUsed?: string
+        indexType?: string
+        indexLookupMs?: number
+        rowGroupsTotal?: number
+        rowGroupsRead?: number
+        indexSelectivity?: number
+        candidateCount?: number
+      }
+      extendedStatsWithSelectivity.indexSelectivity = candidateDocIds.length / totalRows
+      extendedStatsWithSelectivity.candidateCount = candidateDocIds.length
+
+      // Log row-group skip ratio
+      logger.debug(`Index ${selected.entry.name}: ${targetRowGroups.length}/${metadata.rowGroups.length} row groups, ${candidateDocIds.length} candidates`)
+
+      // Check if index lookup is beneficial (reduces scan by at least 50%)
+      // If not, fall back to full scan which avoids the overhead of building
+      // candidate sets and filtering rows
+      if (candidateDocIds.length > totalRows * 0.5) {
+        // Low selectivity: index matched >50% of rows
+        // Fall back to full scan which is more efficient
+        logger.debug(`Index ${selected.entry.name} matched ${candidateDocIds.length}/${totalRows} rows (${Math.round(candidateDocIds.length/totalRows*100)}%), falling back to scan`)
+        return null
+      }
+
       // Build candidate set for O(1) lookup
       const candidateSet = new Set(candidateDocIds)
 
@@ -795,10 +833,9 @@ export class QueryExecutor {
 
       // ROW GROUP SKIPPING: Only read the row groups that contain matching documents
       if (targetRowGroups.length > 0 && this.storageAdapter) {
-        // Read parquet metadata to get row group boundaries
-        const metadata = await this.parquetReader.readMetadata(dataPath)
-        extendedStats.rowGroupsTotal = metadata.rowGroups.length
-        extendedStats.rowGroupsRead = targetRowGroups.length
+        // Use already-loaded metadata for row group boundaries
+        extendedStatsWithSelectivity.rowGroupsTotal = metadata.rowGroups.length
+        extendedStatsWithSelectivity.rowGroupsRead = targetRowGroups.length
         stats.rowGroupsSkipped = metadata.rowGroups.length - targetRowGroups.length
 
         // Calculate row ranges for target row groups
@@ -1139,6 +1176,33 @@ export class QueryExecutor {
     // Check if bloom filter can be used
     const useBloomFilter = this.canUseBloomFilter(filter)
 
+    // Check for secondary index selection
+    let secondaryIndex: QueryPlan['secondaryIndex'] = null
+    let indexCatalogEntries: number | undefined
+
+    if (this.indexCache) {
+      try {
+        // Extract dataset ID from ns (e.g., 'imdb-1m/movies' -> 'imdb-1m')
+        const datasetId = ns.includes('/') ? (ns.split('/')[0] ?? ns) : ns
+        const selected = await this.indexCache.selectIndex(datasetId, filter as Record<string, unknown>)
+
+        if (selected) {
+          secondaryIndex = {
+            name: selected.entry.name,
+            type: selected.type,
+            field: selected.entry.field,
+          }
+        }
+
+        // Get catalog entry count
+        const catalog = await this.indexCache.loadCatalog(datasetId)
+        indexCatalogEntries = catalog.length
+      } catch (error: unknown) {
+        // Index lookup failed, log and continue without index info
+        logger.debug('Failed to check secondary indexes for explain', error)
+      }
+    }
+
     return {
       optimizedFilter: filter,
       selectedRowGroups: selectedRowGroups.map((rg) => rg.index),
@@ -1146,6 +1210,8 @@ export class QueryExecutor {
       useBloomFilter,
       estimatedRows,
       estimatedBytes,
+      secondaryIndex,
+      indexCatalogEntries,
     }
   }
 

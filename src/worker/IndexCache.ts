@@ -384,6 +384,7 @@ export class IndexCache {
     try {
       const exists = await this.storage.exists(catalogPath)
       if (!exists) {
+        logger.debug(`No index catalog found at ${catalogPath}`)
         return []
       }
 
