@@ -25,9 +25,20 @@ import type {
   UpsertManyResult,
 } from './types'
 
-// Forward reference to ParqueDBImpl - will be imported at runtime
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ParqueDBImplType = any
+/**
+ * Interface for the database methods used by CollectionImpl.
+ * This avoids circular dependencies with ParqueDBImpl while providing type safety.
+ */
+interface ParqueDBMethods {
+  find<T>(namespace: string, filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
+  get<T>(namespace: string, id: string, options?: GetOptions): Promise<Entity<T> | null>
+  create<T>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
+  update<T>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
+  delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
+  deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
+  upsert<T>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: { returnDocument?: 'before' | 'after' }): Promise<Entity<T> | null>
+  upsertMany<T>(namespace: string, items: UpsertManyItem<T>[], options?: UpsertManyOptions): Promise<UpsertManyResult>
+}
 
 // =============================================================================
 // CollectionImpl Class
@@ -38,7 +49,7 @@ type ParqueDBImplType = any
  */
 export class CollectionImpl<T = Record<string, unknown>> implements Collection<T> {
   constructor(
-    private db: ParqueDBImplType,
+    private db: ParqueDBMethods,
     public readonly namespace: string
   ) {}
 

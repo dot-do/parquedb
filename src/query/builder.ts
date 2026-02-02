@@ -22,7 +22,16 @@
 import type { Filter, FieldFilter } from '../types/filter'
 import type { FindOptions, Projection, SortSpec, SortDirection } from '../types/options'
 import type { Entity } from '../types/entity'
-import type { Collection } from '../Collection'
+
+/**
+ * Interface for the collection methods used by QueryBuilder.
+ * This avoids circular dependencies with the Collection class.
+ */
+interface QueryableCollection<T> {
+  find(filter?: Filter, options?: FindOptions<T>): Promise<Entity<T>[]>
+  findOne(filter?: Filter, options?: FindOptions<T>): Promise<Entity<T> | null>
+  count(filter?: Filter): Promise<number>
+}
 
 /** Supported comparison operators */
 export type ComparisonOp =
@@ -100,7 +109,7 @@ interface BuilderState {
  * @typeParam T - The entity type being queried
  */
 export class QueryBuilder<T = Record<string, unknown>> {
-  private collection?: Collection<T>
+  private collection?: QueryableCollection<T>
   private state: BuilderState
 
   /**
@@ -108,7 +117,7 @@ export class QueryBuilder<T = Record<string, unknown>> {
    *
    * @param collection - Optional collection to execute queries against
    */
-  constructor(collection?: Collection<T>) {
+  constructor(collection?: QueryableCollection<T>) {
     this.collection = collection
     this.state = {
       conditions: [],

@@ -1080,14 +1080,7 @@ export class IndexCache {
   private cacheIndex(key: string, loaded: LoadedIndex): void {
     // Evict if necessary
     while (this.currentCacheBytes + loaded.sizeBytes > this.maxCacheBytes) {
-      const oldestKey = this.findOldestCacheEntry()
-      if (!oldestKey) break
-
-      const evicted = this.indexCache.get(oldestKey)
-      if (evicted) {
-        this.currentCacheBytes -= evicted.sizeBytes
-        this.indexCache.delete(oldestKey)
-      }
+      if (!this.evictOldestEntry()) break
     }
 
     // Add to cache
@@ -1101,14 +1094,7 @@ export class IndexCache {
   private cacheBloomFilter(key: string, loaded: LoadedBloomFilter): void {
     // Evict if necessary
     while (this.currentCacheBytes + loaded.sizeBytes > this.maxCacheBytes) {
-      const oldestKey = this.findOldestCacheEntry()
-      if (!oldestKey) break
-
-      const evicted = this.indexCache.get(oldestKey)
-      if (evicted) {
-        this.currentCacheBytes -= evicted.sizeBytes
-        this.indexCache.delete(oldestKey)
-      }
+      if (!this.evictOldestEntry()) break
     }
 
     // Add to cache
@@ -1117,7 +1103,57 @@ export class IndexCache {
   }
 
   /**
+   * Evict the oldest cache entry (either index or bloom filter)
+   * @returns true if an entry was evicted, false if cache is empty
+   */
+  private evictOldestEntry(): boolean {
+    let oldestKey: string | null = null
+    let oldestTime = Infinity
+    let isBloomFilter = false
+
+    // Find oldest index entry
+    for (const [key, entry] of this.indexCache) {
+      if (entry.loadedAt < oldestTime) {
+        oldestTime = entry.loadedAt
+        oldestKey = key
+        isBloomFilter = false
+      }
+    }
+
+    // Find oldest bloom filter entry
+    for (const [key, entry] of this.bloomCache) {
+      if (entry.loadedAt < oldestTime) {
+        oldestTime = entry.loadedAt
+        oldestKey = key
+        isBloomFilter = true
+      }
+    }
+
+    if (!oldestKey) return false
+
+    // Evict from the appropriate cache
+    if (isBloomFilter) {
+      const evicted = this.bloomCache.get(oldestKey)
+      if (evicted) {
+        this.currentCacheBytes -= evicted.sizeBytes
+        this.bloomCache.delete(oldestKey)
+        return true
+      }
+    } else {
+      const evicted = this.indexCache.get(oldestKey)
+      if (evicted) {
+        this.currentCacheBytes -= evicted.sizeBytes
+        this.indexCache.delete(oldestKey)
+        return true
+      }
+    }
+
+    return false
+  }
+
+  /**
    * Find the oldest cache entry for eviction (across indexes and bloom filters)
+   * @deprecated Use evictOldestEntry() instead for proper cache-aware eviction
    */
   private findOldestCacheEntry(): string | null {
     let oldestKey: string | null = null

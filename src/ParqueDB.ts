@@ -17,7 +17,7 @@
 // =============================================================================
 
 // Export all types
-export {
+export type {
   // Configuration types
   SnapshotConfig,
   UpsertManyItem,
@@ -26,7 +26,6 @@ export {
   UpsertManyResult,
   EventLogConfig,
   ArchiveEventsResult,
-  DEFAULT_EVENT_LOG_CONFIG,
   ParqueDBConfig,
 
   // Collection interface
@@ -53,8 +52,11 @@ export {
 
   // Event log types
   EventLog,
+} from './ParqueDB/types'
 
-  // Error classes
+// Export values (not types)
+export {
+  DEFAULT_EVENT_LOG_CONFIG,
   VersionConflictError,
 } from './ParqueDB/types'
 
