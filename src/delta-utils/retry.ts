@@ -9,6 +9,13 @@
  */
 
 import { getSecureRandom } from '../utils'
+import {
+  DEFAULT_MAX_RETRIES,
+  DEFAULT_RETRY_BASE_DELAY,
+  DEFAULT_RETRY_MAX_DELAY,
+  DEFAULT_RETRY_MULTIPLIER,
+  DEFAULT_RETRY_JITTER_FACTOR,
+} from '../constants'
 
 // =============================================================================
 // TYPES
@@ -114,12 +121,12 @@ export interface RetryResultWithMetrics<T> {
  * Default retry configuration values
  */
 export const DEFAULT_RETRY_CONFIG = {
-  maxRetries: 3,
-  baseDelay: 100,
-  maxDelay: 10000,
+  maxRetries: DEFAULT_MAX_RETRIES,
+  baseDelay: DEFAULT_RETRY_BASE_DELAY,
+  maxDelay: DEFAULT_RETRY_MAX_DELAY,
   jitter: true,
-  multiplier: 2,
-  jitterFactor: 0.5,
+  multiplier: DEFAULT_RETRY_MULTIPLIER,
+  jitterFactor: DEFAULT_RETRY_JITTER_FACTOR,
 } as const
 
 // =============================================================================

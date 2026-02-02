@@ -26,6 +26,34 @@ import type {
 import { VectorIndex } from './vector'
 
 // =============================================================================
+// Index Manager Options
+// =============================================================================
+
+/**
+ * Error handler callback for IndexManager
+ */
+export type IndexManagerErrorHandler = (error: Error, event: IndexEvent, listener: IndexEventListener) => void
+
+/**
+ * Configuration options for IndexManager
+ */
+export interface IndexManagerOptions {
+  /** Base path for index storage */
+  basePath?: string
+  /**
+   * Error handler for listener errors.
+   * If provided, called when a listener throws an error.
+   * If not provided, errors are logged via console.warn.
+   */
+  onError?: IndexManagerErrorHandler
+  /**
+   * If true, collect all listener errors and throw an AggregateError after all listeners have been called.
+   * Default: false
+   */
+  throwOnListenerError?: boolean
+}
+
+// =============================================================================
 // Index Manager
 // =============================================================================
 
@@ -39,11 +67,24 @@ export class IndexManager {
   private loaded: boolean = false
   /** Cache for loaded VectorIndex instances */
   private vectorIndexes: Map<string, VectorIndex> = new Map()
+  private basePath: string
+  private onError?: IndexManagerErrorHandler
+  private throwOnListenerError: boolean
 
   constructor(
     private storage: StorageBackend,
-    private basePath: string = ''
-  ) {}
+    options: IndexManagerOptions | string = ''
+  ) {
+    // Support legacy signature (basePath as string) and new options object
+    if (typeof options === 'string') {
+      this.basePath = options
+      this.throwOnListenerError = false
+    } else {
+      this.basePath = options.basePath ?? ''
+      this.onError = options.onError
+      this.throwOnListenerError = options.throwOnListenerError ?? false
+    }
+  }
 
   // ===========================================================================
   // Initialization
@@ -381,14 +422,13 @@ export class IndexManager {
   async hashLookup(ns: string, indexName: string, value: unknown): Promise<IndexLookupResult> {
     await this.load()
 
-    // This will be implemented by the HashIndex class
-    // For now, return empty result
-    return {
-      docIds: [],
-      rowGroups: [],
-      exact: true,
-      entriesScanned: 0,
-    }
+    // TODO(parquedb-poif): Wire up to HashIndex class similar to VectorIndex
+    // For now, throw to make it clear this is not implemented
+    throw new Error(
+      `Method not implemented: hashLookup. ` +
+      `IndexManager needs to be wired up to HashIndex for namespace '${ns}', index '${indexName}'. ` +
+      `See vectorSearch() for reference implementation.`
+    )
   }
 
   /**
@@ -402,14 +442,13 @@ export class IndexManager {
   async rangeQuery(ns: string, indexName: string, range: RangeQuery): Promise<IndexLookupResult> {
     await this.load()
 
-    // This will be implemented by the SSTIndex class
-    // For now, return empty result
-    return {
-      docIds: [],
-      rowGroups: [],
-      exact: true,
-      entriesScanned: 0,
-    }
+    // TODO(parquedb-poif): Wire up to SSTIndex class similar to VectorIndex
+    // For now, throw to make it clear this is not implemented
+    throw new Error(
+      `Method not implemented: rangeQuery. ` +
+      `IndexManager needs to be wired up to SSTIndex for namespace '${ns}', index '${indexName}'. ` +
+      `See vectorSearch() for reference implementation.`
+    )
   }
 
   /**
@@ -427,9 +466,13 @@ export class IndexManager {
   ): Promise<FTSSearchResult[]> {
     await this.load()
 
-    // This will be implemented by the FTS module
-    // For now, return empty result
-    return []
+    // TODO(parquedb-poif): Wire up to FTSIndex class similar to VectorIndex
+    // For now, throw to make it clear this is not implemented
+    throw new Error(
+      `Method not implemented: ftsSearch. ` +
+      `IndexManager needs to be wired up to FTSIndex for namespace '${ns}'. ` +
+      `See vectorSearch() for reference implementation.`
+    )
   }
 
   /**
@@ -626,14 +669,39 @@ export class IndexManager {
   }
 
   private emit(event: IndexEvent): void {
+    const errors: Array<{ error: Error; listener: IndexEventListener }> = []
+
     for (const listener of this.listeners) {
       try {
         listener(event)
       } catch (err) {
-        // TODO(parquedb-y9aw): Listener errors are silently swallowed.
-        // Consider logging or providing an onError callback for monitoring.
-        console.warn('[IndexManager] Event listener error:', err)
+        const error = err instanceof Error ? err : new Error(String(err))
+
+        if (this.onError) {
+          // Call the user-provided error handler
+          try {
+            this.onError(error, event, listener)
+          } catch {
+            // Ignore errors from the error handler itself
+          }
+        } else {
+          // Default behavior: log a warning
+          logger.warn('[IndexManager] Event listener error:', error)
+        }
+
+        if (this.throwOnListenerError) {
+          errors.push({ error, listener })
+        }
       }
+    }
+
+    // If configured to throw, aggregate all errors and throw after all listeners have been called
+    if (this.throwOnListenerError && errors.length > 0) {
+      const messages = errors.map((e, i) => `[${i + 1}] ${e.error.message}`).join('; ')
+      throw new AggregateError(
+        errors.map(e => e.error),
+        `${errors.length} listener(s) threw errors: ${messages}`
+      )
     }
   }
 
@@ -728,8 +796,9 @@ export class IndexManager {
   }
 
   private async buildIndex(ns: string, definition: IndexDefinition): Promise<void> {
-    // This will be implemented when we add the actual index implementations
-    // For now, just update progress
+    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, SSTIndex, FTSIndex)
+    // For now, just update progress metadata without actual index building
+    // When implementing, use the build() methods on HashIndex, SSTIndex, FTSIndex classes
     const metadata = this.metadata.get(ns)!.get(definition.name)!
     metadata.buildProgress = 1
     metadata.building = false
@@ -744,7 +813,9 @@ export class IndexManager {
     rowGroup: number,
     rowOffset: number
   ): Promise<void> {
-    // Will be implemented by specific index classes
+    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, SSTIndex, FTSIndex)
+    // For now, this is a no-op - index updates are handled by rebuild
+    // When implementing, follow the pattern used in getVectorIndex() for caching
   }
 
   private async removeFromIndex(
@@ -753,7 +824,9 @@ export class IndexManager {
     docId: string,
     doc: Record<string, unknown>
   ): Promise<void> {
-    // Will be implemented by specific index classes
+    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, SSTIndex, FTSIndex)
+    // For now, this is a no-op - index updates are handled by rebuild
+    // When implementing, follow the pattern used in getVectorIndex() for caching
   }
 
   private findFTSIndex(ns: string): IndexDefinition | null {

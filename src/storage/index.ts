@@ -103,6 +103,9 @@ export {
   type DOSqliteBackendOptions,
 } from './DOSqliteBackend'
 
+// ObservedBackend - Storage wrapper with observability hooks
+export { ObservedBackend, withObservability } from './ObservedBackend'
+
 // =============================================================================
 // Test Utilities
 // =============================================================================

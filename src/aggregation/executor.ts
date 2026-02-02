@@ -12,6 +12,8 @@ import type {
   GroupSpec,
   UnwindOptions,
   LookupOptions,
+  Document,
+  SumAccumulator,
 } from './types'
 import {
   isMatchStage,
@@ -30,9 +32,21 @@ import {
   isFacetStage,
   isBucketStage,
   isSampleStage,
+  isSumAccumulator,
+  isAvgAccumulator,
+  isMinAccumulator,
+  isMaxAccumulator,
+  isFirstAccumulator,
+  isLastAccumulator,
+  isPushAccumulator,
+  isAddToSetAccumulator,
+  isCountAccumulator,
+  isFieldRef,
 } from './types'
 import { matchesFilter } from '../query/filter'
 import { getNestedValue, compareValues } from '../utils'
+import type { IndexManager, SelectedIndex } from '../indexes/manager'
+import type { FTSSearchResult } from '../indexes/types'
 
 // =============================================================================
 // Helper Functions
@@ -41,15 +55,15 @@ import { getNestedValue, compareValues } from '../utils'
 /**
  * Set value at a nested path using dot notation
  */
-function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
+function setNestedValue(obj: Document, path: string, value: unknown): void {
   const parts = path.split('.')
-  let current = obj
+  let current: Document = obj
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i]!
     if (!(part in current) || typeof current[part] !== 'object' || current[part] === null) {
       current[part] = {}
     }
-    current = current[part] as Record<string, unknown>
+    current = current[part] as Document
   }
   const lastPart = parts[parts.length - 1]
   if (lastPart !== undefined) {
@@ -65,10 +79,32 @@ function compareValuesWithDirection(a: unknown, b: unknown, direction: 1 | -1): 
 }
 
 /**
+ * Type for $cond object expression
+ */
+interface CondExpression {
+  if: unknown
+  then: unknown
+  else: unknown
+}
+
+/**
+ * Type guard for $cond object expression
+ */
+function isCondObject(value: unknown): value is CondExpression {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'if' in value &&
+    'then' in value &&
+    'else' in value
+  )
+}
+
+/**
  * Evaluate a field reference (e.g., '$fieldName')
  */
-function evaluateFieldRef(doc: Record<string, unknown>, ref: unknown): unknown {
-  if (typeof ref === 'string' && ref.startsWith('$')) {
+function evaluateFieldRef(doc: Document, ref: unknown): unknown {
+  if (isFieldRef(ref)) {
     return getNestedValue(doc, ref.slice(1))
   }
   return ref
@@ -81,29 +117,28 @@ function evaluateFieldRef(doc: Record<string, unknown>, ref: unknown): unknown {
 /**
  * Execute $match stage
  */
-function executeMatch(data: unknown[], filter: Filter): unknown[] {
+function executeMatch(data: Document[], filter: Filter): Document[] {
   return data.filter(doc => matchesFilter(doc, filter))
 }
 
 /**
  * Execute $group stage
  */
-function executeGroup(data: unknown[], groupSpec: GroupSpec): unknown[] {
-  const groups = new Map<string, unknown[]>()
+function executeGroup(data: Document[], groupSpec: GroupSpec): Document[] {
+  const groups = new Map<string, Document[]>()
 
   // Group documents by _id
-  for (const item of data) {
-    const doc = item as Record<string, unknown>
+  for (const doc of data) {
     let groupKey: unknown
 
     if (groupSpec._id === null) {
       groupKey = null
-    } else if (typeof groupSpec._id === 'string' && groupSpec._id.startsWith('$')) {
+    } else if (isFieldRef(groupSpec._id)) {
       groupKey = getNestedValue(doc, groupSpec._id.slice(1))
     } else if (typeof groupSpec._id === 'object' && groupSpec._id !== null) {
       // Compound _id
-      const compoundKey: Record<string, unknown> = {}
-      for (const [key, value] of Object.entries(groupSpec._id as Record<string, unknown>)) {
+      const compoundKey: Document = {}
+      for (const [key, value] of Object.entries(groupSpec._id as Document)) {
         compoundKey[key] = evaluateFieldRef(doc, value)
       }
       groupKey = compoundKey
@@ -115,93 +150,75 @@ function executeGroup(data: unknown[], groupSpec: GroupSpec): unknown[] {
     if (!groups.has(keyStr)) {
       groups.set(keyStr, [])
     }
-    groups.get(keyStr)!.push(item)
+    groups.get(keyStr)!.push(doc)
   }
 
   // Apply accumulators to each group
   return Array.from(groups.entries()).map(([keyStr, items]) => {
-    const result: Record<string, unknown> = { _id: JSON.parse(keyStr) }
+    const result: Document = { _id: JSON.parse(keyStr) as unknown }
 
     for (const [field, spec] of Object.entries(groupSpec)) {
       if (field === '_id') continue
 
-      if (spec && typeof spec === 'object') {
-        const specObj = spec as Record<string, unknown>
-
-        // $sum accumulator
-        if ('$sum' in specObj) {
-          if (specObj.$sum === 1) {
-            result[field] = items.length
-          } else if (typeof specObj.$sum === 'number') {
-            result[field] = items.length * specObj.$sum
-          } else if (typeof specObj.$sum === 'string' && specObj.$sum.startsWith('$')) {
-            result[field] = items.reduce((sum: number, item) => {
-              const val = getNestedValue(item as Record<string, unknown>, (specObj.$sum as string).slice(1))
-              return sum + (typeof val === 'number' ? val : 0)
-            }, 0)
-          }
+      // $sum accumulator
+      if (isSumAccumulator(spec)) {
+        result[field] = executeSumAccumulator(items, spec)
+      }
+      // $avg accumulator
+      else if (isAvgAccumulator(spec) && isFieldRef(spec.$avg)) {
+        const fieldPath = spec.$avg.slice(1)
+        const sum = items.reduce((s: number, item) => {
+          const val = getNestedValue(item, fieldPath)
+          return s + (typeof val === 'number' ? val : 0)
+        }, 0)
+        result[field] = items.length > 0 ? sum / items.length : 0
+      }
+      // $max accumulator
+      else if (isMaxAccumulator(spec) && isFieldRef(spec.$max)) {
+        const fieldPath = spec.$max.slice(1)
+        result[field] = items.reduce((max: number | null, item) => {
+          const val = getNestedValue(item, fieldPath)
+          return typeof val === 'number' && (max === null || val > max) ? val : max
+        }, null as number | null)
+      }
+      // $min accumulator
+      else if (isMinAccumulator(spec) && isFieldRef(spec.$min)) {
+        const fieldPath = spec.$min.slice(1)
+        result[field] = items.reduce((min: number | null, item) => {
+          const val = getNestedValue(item, fieldPath)
+          return typeof val === 'number' && (min === null || val < min) ? val : min
+        }, null as number | null)
+      }
+      // $first accumulator
+      else if (isFirstAccumulator(spec) && isFieldRef(spec.$first)) {
+        const fieldPath = spec.$first.slice(1)
+        const firstItem = items[0]
+        if (firstItem) {
+          result[field] = getNestedValue(firstItem, fieldPath)
         }
-
-        // $avg accumulator
-        else if ('$avg' in specObj && typeof specObj.$avg === 'string' && specObj.$avg.startsWith('$')) {
-          const sum = items.reduce((s: number, item) => {
-            const val = getNestedValue(item as Record<string, unknown>, (specObj.$avg as string).slice(1))
-            return s + (typeof val === 'number' ? val : 0)
-          }, 0)
-          result[field] = items.length > 0 ? sum / items.length : 0
+      }
+      // $last accumulator
+      else if (isLastAccumulator(spec) && isFieldRef(spec.$last)) {
+        const fieldPath = spec.$last.slice(1)
+        const lastItem = items[items.length - 1]
+        if (lastItem) {
+          result[field] = getNestedValue(lastItem, fieldPath)
         }
-
-        // $max accumulator
-        else if ('$max' in specObj && typeof specObj.$max === 'string' && specObj.$max.startsWith('$')) {
-          result[field] = items.reduce((max: number | null, item) => {
-            const val = getNestedValue(item as Record<string, unknown>, (specObj.$max as string).slice(1))
-            return typeof val === 'number' && (max === null || val > max) ? val : max
-          }, null as number | null)
-        }
-
-        // $min accumulator
-        else if ('$min' in specObj && typeof specObj.$min === 'string' && specObj.$min.startsWith('$')) {
-          result[field] = items.reduce((min: number | null, item) => {
-            const val = getNestedValue(item as Record<string, unknown>, (specObj.$min as string).slice(1))
-            return typeof val === 'number' && (min === null || val < min) ? val : min
-          }, null as number | null)
-        }
-
-        // $first accumulator
-        else if ('$first' in specObj && typeof specObj.$first === 'string' && specObj.$first.startsWith('$')) {
-          const firstItem = items[0]
-          if (firstItem) {
-            result[field] = getNestedValue(firstItem as Record<string, unknown>, (specObj.$first as string).slice(1))
-          }
-        }
-
-        // $last accumulator
-        else if ('$last' in specObj && typeof specObj.$last === 'string' && specObj.$last.startsWith('$')) {
-          const lastItem = items[items.length - 1]
-          if (lastItem) {
-            result[field] = getNestedValue(lastItem as Record<string, unknown>, (specObj.$last as string).slice(1))
-          }
-        }
-
-        // $push accumulator
-        else if ('$push' in specObj && typeof specObj.$push === 'string' && specObj.$push.startsWith('$')) {
-          result[field] = items.map(item =>
-            getNestedValue(item as Record<string, unknown>, (specObj.$push as string).slice(1))
-          )
-        }
-
-        // $addToSet accumulator
-        else if ('$addToSet' in specObj && typeof specObj.$addToSet === 'string' && specObj.$addToSet.startsWith('$')) {
-          const values = items.map(item =>
-            getNestedValue(item as Record<string, unknown>, (specObj.$addToSet as string).slice(1))
-          )
-          result[field] = [...new Set(values.map(v => JSON.stringify(v)))].map(s => JSON.parse(s))
-        }
-
-        // $count accumulator (count non-null values)
-        else if ('$count' in specObj) {
-          result[field] = items.length
-        }
+      }
+      // $push accumulator
+      else if (isPushAccumulator(spec) && isFieldRef(spec.$push)) {
+        const fieldPath = spec.$push.slice(1)
+        result[field] = items.map(item => getNestedValue(item, fieldPath))
+      }
+      // $addToSet accumulator
+      else if (isAddToSetAccumulator(spec) && isFieldRef(spec.$addToSet)) {
+        const fieldPath = spec.$addToSet.slice(1)
+        const values = items.map(item => getNestedValue(item, fieldPath))
+        result[field] = [...new Set(values.map(v => JSON.stringify(v)))].map(s => JSON.parse(s) as unknown)
+      }
+      // $count accumulator (count non-null values)
+      else if (isCountAccumulator(spec)) {
+        result[field] = items.length
       }
     }
 
@@ -210,15 +227,36 @@ function executeGroup(data: unknown[], groupSpec: GroupSpec): unknown[] {
 }
 
 /**
+ * Execute $sum accumulator
+ */
+function executeSumAccumulator(items: Document[], spec: SumAccumulator): number {
+  const sumValue = spec.$sum
+
+  if (sumValue === 1) {
+    return items.length
+  } else if (typeof sumValue === 'number') {
+    return items.length * sumValue
+  } else if (isFieldRef(sumValue)) {
+    const fieldPath = sumValue.slice(1)
+    return items.reduce((sum: number, item) => {
+      const val = getNestedValue(item, fieldPath)
+      return sum + (typeof val === 'number' ? val : 0)
+    }, 0)
+  }
+
+  return 0
+}
+
+/**
  * Execute $sort stage
  */
-function executeSort(data: unknown[], sortSpec: Record<string, 1 | -1>): unknown[] {
+function executeSort(data: Document[], sortSpec: Record<string, 1 | -1>): Document[] {
   const sortEntries = Object.entries(sortSpec)
 
   return [...data].sort((a, b) => {
     for (const [field, direction] of sortEntries) {
-      const aValue = getNestedValue(a as Record<string, unknown>, field)
-      const bValue = getNestedValue(b as Record<string, unknown>, field)
+      const aValue = getNestedValue(a, field)
+      const bValue = getNestedValue(b, field)
       const cmp = compareValuesWithDirection(aValue, bValue, direction)
       if (cmp !== 0) return cmp
     }
@@ -229,24 +267,23 @@ function executeSort(data: unknown[], sortSpec: Record<string, 1 | -1>): unknown
 /**
  * Execute $limit stage
  */
-function executeLimit(data: unknown[], limit: number): unknown[] {
+function executeLimit(data: Document[], limit: number): Document[] {
   return data.slice(0, limit)
 }
 
 /**
  * Execute $skip stage
  */
-function executeSkip(data: unknown[], skip: number): unknown[] {
+function executeSkip(data: Document[], skip: number): Document[] {
   return data.slice(skip)
 }
 
 /**
  * Execute $project stage
  */
-function executeProject(data: unknown[], projection: Record<string, unknown>): unknown[] {
-  return data.map(item => {
-    const doc = item as Record<string, unknown>
-    const result: Record<string, unknown> = {}
+function executeProject(data: Document[], projection: Record<string, unknown>): Document[] {
+  return data.map(doc => {
+    const result: Document = {}
     const isInclusion = Object.values(projection).some(v => v === 1 || v === true)
 
     if (isInclusion) {
@@ -275,13 +312,13 @@ function executeProject(data: unknown[], projection: Record<string, unknown>): u
 /**
  * Evaluate a projection expression
  */
-function evaluateProjectionExpression(doc: Record<string, unknown>, expr: unknown): unknown {
-  if (typeof expr === 'string' && expr.startsWith('$')) {
+function evaluateProjectionExpression(doc: Document, expr: unknown): unknown {
+  if (isFieldRef(expr)) {
     return getNestedValue(doc, expr.slice(1))
   }
 
   if (typeof expr === 'object' && expr !== null) {
-    const exprObj = expr as Record<string, unknown>
+    const exprObj = expr as Document
 
     // String operators
     if ('$strLenCP' in exprObj) {
@@ -364,17 +401,17 @@ function evaluateProjectionExpression(doc: Record<string, unknown>, expr: unknow
         const val = evaluateFieldRef(doc, v)
         return typeof val === 'number' ? val : 0
       })
-      return b !== 0 ? (a ?? 0) / b : null
+      return b !== undefined && b !== 0 ? (a ?? 0) / b : null
     }
 
     // Conditional operators
     if ('$cond' in exprObj) {
-      const cond = exprObj.$cond as { if: unknown; then: unknown; else: unknown } | unknown[]
+      const cond = exprObj.$cond
       if (Array.isArray(cond)) {
-        const [condition, thenVal, elseVal] = cond
+        const [condition, thenVal, elseVal] = cond as [unknown, unknown, unknown]
         const evaluated = evaluateProjectionExpression(doc, condition)
         return evaluated ? evaluateFieldRef(doc, thenVal) : evaluateFieldRef(doc, elseVal)
-      } else {
+      } else if (isCondObject(cond)) {
         const evaluated = evaluateProjectionExpression(doc, cond.if)
         return evaluated ? evaluateFieldRef(doc, cond.then) : evaluateFieldRef(doc, cond.else)
       }
@@ -393,21 +430,20 @@ function evaluateProjectionExpression(doc: Record<string, unknown>, expr: unknow
 /**
  * Execute $unwind stage
  */
-function executeUnwind(data: unknown[], unwind: string | UnwindOptions): unknown[] {
+function executeUnwind(data: Document[], unwind: string | UnwindOptions): Document[] {
   const path = typeof unwind === 'string' ? unwind : unwind.path
   const preserveNull = typeof unwind === 'object' ? unwind.preserveNullAndEmptyArrays : false
   const includeArrayIndex = typeof unwind === 'object' ? unwind.includeArrayIndex : undefined
   const fieldPath = path.startsWith('$') ? path.slice(1) : path
 
-  const newData: unknown[] = []
+  const newData: Document[] = []
 
-  for (const item of data) {
-    const doc = item as Record<string, unknown>
+  for (const doc of data) {
     const arr = getNestedValue(doc, fieldPath)
 
     if (Array.isArray(arr) && arr.length > 0) {
       for (let i = 0; i < arr.length; i++) {
-        const newItem = { ...doc }
+        const newItem: Document = { ...doc }
         setNestedValue(newItem, fieldPath, arr[i])
         if (includeArrayIndex) {
           newItem[includeArrayIndex] = i
@@ -415,7 +451,7 @@ function executeUnwind(data: unknown[], unwind: string | UnwindOptions): unknown
         newData.push(newItem)
       }
     } else if (preserveNull) {
-      const newItem = { ...doc }
+      const newItem: Document = { ...doc }
       if (includeArrayIndex) {
         newItem[includeArrayIndex] = null
       }
@@ -434,40 +470,36 @@ function executeUnwind(data: unknown[], unwind: string | UnwindOptions): unknown
  * to the database instance.
  */
 function executeLookup(
-  data: unknown[],
+  data: Document[],
   lookup: LookupOptions,
-  _resolver?: (collection: string) => unknown[]
-): unknown[] {
+  _resolver?: (collection: string) => Document[]
+): Document[] {
   // Simplified implementation - just adds empty array
   // Full implementation would require database access
-  return data.map(item => {
-    const doc = item as Record<string, unknown>
-    return {
-      ...doc,
-      [lookup.as]: [],
-    }
-  })
+  return data.map(doc => ({
+    ...doc,
+    [lookup.as]: [],
+  }))
 }
 
 /**
  * Execute $count stage
  */
-function executeCount(data: unknown[], fieldName: string): unknown[] {
+function executeCount(data: Document[], fieldName: string): Document[] {
   return [{ [fieldName]: data.length }]
 }
 
 /**
  * Execute $addFields or $set stage
  */
-function executeAddFields(data: unknown[], fields: Record<string, unknown>): unknown[] {
-  return data.map(item => {
-    const doc = item as Record<string, unknown>
-    const result = { ...doc }
+function executeAddFields(data: Document[], fields: Record<string, unknown>): Document[] {
+  return data.map(doc => {
+    const result: Document = { ...doc }
 
     for (const [key, value] of Object.entries(fields)) {
       if (typeof value === 'object' && value !== null) {
         result[key] = evaluateProjectionExpression(doc, value)
-      } else if (typeof value === 'string' && value.startsWith('$')) {
+      } else if (isFieldRef(value)) {
         result[key] = getNestedValue(doc, value.slice(1))
       } else {
         result[key] = value
@@ -481,12 +513,11 @@ function executeAddFields(data: unknown[], fields: Record<string, unknown>): unk
 /**
  * Execute $unset stage
  */
-function executeUnset(data: unknown[], fields: string | string[]): unknown[] {
+function executeUnset(data: Document[], fields: string | string[]): Document[] {
   const fieldsToRemove = Array.isArray(fields) ? fields : [fields]
 
-  return data.map(item => {
-    const doc = item as Record<string, unknown>
-    const result = { ...doc }
+  return data.map(doc => {
+    const result: Document = { ...doc }
 
     for (const field of fieldsToRemove) {
       delete result[field]
@@ -499,18 +530,17 @@ function executeUnset(data: unknown[], fields: string | string[]): unknown[] {
 /**
  * Execute $replaceRoot stage
  */
-function executeReplaceRoot(data: unknown[], newRoot: unknown): unknown[] {
-  return data.map(item => {
-    const doc = item as Record<string, unknown>
+function executeReplaceRoot(data: Document[], newRoot: unknown): Document[] {
+  return data.map(doc => {
     const root = evaluateFieldRef(doc, newRoot)
-    return typeof root === 'object' && root !== null ? root : doc
+    return typeof root === 'object' && root !== null ? (root as Document) : doc
   })
 }
 
 /**
  * Execute $sample stage
  */
-function executeSample(data: unknown[], size: number): unknown[] {
+function executeSample(data: Document[], size: number): Document[] {
   // Fisher-Yates shuffle and take first `size` elements
   const shuffled = [...data]
   for (let i = shuffled.length - 1; i > 0; i--) {
@@ -521,19 +551,21 @@ function executeSample(data: unknown[], size: number): unknown[] {
 }
 
 /**
+ * Bucket stage configuration
+ */
+interface BucketConfig {
+  groupBy: string
+  boundaries: unknown[]
+  default?: string
+  output?: Record<string, unknown>
+}
+
+/**
  * Execute $bucket stage
  */
-function executeBucket(
-  data: unknown[],
-  bucket: {
-    groupBy: string
-    boundaries: unknown[]
-    default?: string
-    output?: Record<string, unknown>
-  }
-): unknown[] {
+function executeBucket(data: Document[], bucket: BucketConfig): Document[] {
   const { groupBy, boundaries, default: defaultBucket, output } = bucket
-  const groups = new Map<string, unknown[]>()
+  const groups = new Map<string, Document[]>()
 
   // Initialize buckets
   for (let i = 0; i < boundaries.length - 1; i++) {
@@ -544,21 +576,20 @@ function executeBucket(
   }
 
   // Assign documents to buckets
-  for (const item of data) {
-    const doc = item as Record<string, unknown>
+  for (const doc of data) {
     const value = evaluateFieldRef(doc, groupBy)
     let assigned = false
 
     for (let i = 0; i < boundaries.length - 1; i++) {
       if (compareValues(value, boundaries[i]) >= 0 && compareValues(value, boundaries[i + 1]) < 0) {
-        groups.get(String(boundaries[i]))!.push(item)
+        groups.get(String(boundaries[i]))!.push(doc)
         assigned = true
         break
       }
     }
 
     if (!assigned && defaultBucket) {
-      groups.get(defaultBucket)!.push(item)
+      groups.get(defaultBucket)!.push(doc)
     }
   }
 
@@ -566,20 +597,12 @@ function executeBucket(
   return Array.from(groups.entries())
     .filter(([, items]) => items.length > 0)
     .map(([key, items]) => {
-      const result: Record<string, unknown> = { _id: key === defaultBucket ? defaultBucket : Number(key) }
+      const result: Document = { _id: key === defaultBucket ? defaultBucket : Number(key) }
 
       if (output) {
         for (const [field, spec] of Object.entries(output)) {
-          if (spec && typeof spec === 'object' && '$sum' in (spec as Record<string, unknown>)) {
-            const sumSpec = (spec as Record<string, unknown>).$sum
-            if (sumSpec === 1) {
-              result[field] = items.length
-            } else if (typeof sumSpec === 'string' && sumSpec.startsWith('$')) {
-              result[field] = items.reduce((sum: number, item) => {
-                const val = getNestedValue(item as Record<string, unknown>, sumSpec.slice(1))
-                return sum + (typeof val === 'number' ? val : 0)
-              }, 0)
-            }
+          if (isSumAccumulator(spec)) {
+            result[field] = executeSumAccumulator(items, spec)
           }
         }
       } else {
@@ -597,17 +620,18 @@ function executeBucket(
 /**
  * Execute an aggregation pipeline on a dataset
  *
- * @param data - Initial dataset
+ * @param data - Initial dataset (items will be treated as Documents)
  * @param pipeline - Array of aggregation stages
  * @param options - Aggregation options
  * @returns Aggregation results
  */
-export function executeAggregation<T = unknown>(
+export function executeAggregation<T = Document>(
   data: unknown[],
   pipeline: AggregationStage[],
   options?: AggregationOptions
 ): T[] {
-  let result = [...data]
+  // Cast input data to Document[] - aggregation operates on object-like structures
+  let result: Document[] = data as Document[]
 
   // Process each stage
   for (const stage of pipeline) {
@@ -639,7 +663,7 @@ export function executeAggregation<T = unknown>(
       result = executeReplaceRoot(result, stage.$replaceRoot.newRoot)
     } else if (isFacetStage(stage)) {
       // Execute each facet pipeline and combine results
-      const facetResults: Record<string, unknown[]> = {}
+      const facetResults: Document = {}
       for (const [name, facetPipeline] of Object.entries(stage.$facet)) {
         facetResults[name] = executeAggregation(result, facetPipeline, options)
       }
@@ -652,6 +676,23 @@ export function executeAggregation<T = unknown>(
   }
 
   return result as T[]
+}
+
+/**
+ * Explain stage result
+ */
+interface ExplainStage {
+  name: string
+  inputCount: number
+  outputCount: number
+}
+
+/**
+ * Explain result
+ */
+interface ExplainResult {
+  stages: ExplainStage[]
+  totalDocuments: number
 }
 
 /**
@@ -674,19 +715,16 @@ export class AggregationExecutor {
   /**
    * Execute the pipeline and return results
    */
-  execute<T = unknown>(): T[] {
+  execute<T = Document>(): T[] {
     return executeAggregation<T>(this.data, this.pipeline, this.options)
   }
 
   /**
    * Execute the pipeline with explain mode
    */
-  explain(): {
-    stages: { name: string; inputCount: number; outputCount: number }[]
-    totalDocuments: number
-  } {
-    const stages: { name: string; inputCount: number; outputCount: number }[] = []
-    let currentData = [...this.data]
+  explain(): ExplainResult {
+    const stages: ExplainStage[] = []
+    let currentData = this.data as Document[]
 
     for (const stage of this.pipeline) {
       const inputCount = currentData.length
@@ -722,4 +760,170 @@ export class AggregationExecutor {
   getPipeline(): AggregationStage[] {
     return [...this.pipeline]
   }
+}
+
+// =============================================================================
+// Index-Aware Aggregation
+// =============================================================================
+
+/**
+ * Execute an aggregation pipeline with index support for $match stages.
+ *
+ * When the first stage is a $match and an indexManager is provided,
+ * this function will attempt to use secondary indexes (hash, sst, fts, vector)
+ * to efficiently filter the initial dataset before executing the remaining
+ * pipeline stages.
+ *
+ * @param data - Initial dataset
+ * @param pipeline - Array of aggregation stages
+ * @param options - Aggregation options including optional indexManager and namespace
+ * @returns Promise of aggregation results
+ */
+export async function executeAggregationWithIndex<T = Document>(
+  data: Document[],
+  pipeline: AggregationStage[],
+  options?: AggregationOptions
+): Promise<T[]> {
+  // If no index manager or pipeline is empty, fall back to sync execution
+  if (!options?.indexManager || pipeline.length === 0) {
+    return executeAggregation<T>(data, pipeline, options)
+  }
+
+  const indexManager = options.indexManager
+  const namespace = options.namespace ?? 'default'
+
+  // Check if first stage is $match
+  const firstStage = pipeline[0]
+  if (firstStage === undefined || !isMatchStage(firstStage)) {
+    // No $match as first stage, use sync execution
+    return executeAggregation<T>(data, pipeline, options)
+  }
+
+  const filter = firstStage.$match
+
+  // Try to select an applicable index
+  const selectedIndex = await indexManager.selectIndex(namespace, filter)
+
+  if (!selectedIndex) {
+    // No applicable index found, use sync execution
+    return executeAggregation<T>(data, pipeline, options)
+  }
+
+  // Execute index lookup and filter data
+  const filteredData = await executeIndexedMatch(data, filter, selectedIndex, indexManager, namespace)
+
+  // Execute remaining pipeline on filtered data
+  // Skip the first $match stage since we already applied it via index
+  const remainingPipeline = pipeline.slice(1)
+
+  return executeAggregation<T>(filteredData, remainingPipeline, options)
+}
+
+/**
+ * Execute a $match stage using an index and return filtered data.
+ *
+ * @param data - Full dataset to filter
+ * @param filter - The $match filter
+ * @param selectedIndex - The selected index to use
+ * @param indexManager - The index manager for lookups
+ * @param namespace - The namespace for index lookups
+ * @returns Promise of filtered data
+ */
+async function executeIndexedMatch(
+  data: Document[],
+  filter: Filter,
+  selectedIndex: SelectedIndex,
+  indexManager: IndexManager,
+  namespace: string
+): Promise<Document[]> {
+  let candidateDocIds: string[] = []
+
+  // Execute index lookup based on type
+  switch (selectedIndex.type) {
+    case 'hash': {
+      const result = await indexManager.hashLookup(
+        namespace,
+        selectedIndex.index.name,
+        selectedIndex.condition
+      )
+      candidateDocIds = result.docIds
+      break
+    }
+
+    case 'sst': {
+      const rangeQuery = extractRangeQuery(selectedIndex.condition)
+      if (rangeQuery) {
+        const result = await indexManager.rangeQuery(
+          namespace,
+          selectedIndex.index.name,
+          rangeQuery
+        )
+        candidateDocIds = result.docIds
+      }
+      break
+    }
+
+    case 'fts': {
+      const textCondition = filter.$text as { $search: string } | undefined
+      if (textCondition?.$search) {
+        const results = await indexManager.ftsSearch(namespace, textCondition.$search, {})
+        candidateDocIds = results.map((r: FTSSearchResult) => r.docId)
+      }
+      break
+    }
+
+    case 'vector': {
+      // Vector search is typically used with $vector operator, not $match
+      // For now, fall through to regular filter
+      break
+    }
+  }
+
+  // If no candidate IDs from index, perform full filter
+  if (candidateDocIds.length === 0 && selectedIndex.type !== 'vector') {
+    // Index returned no results - could mean empty result or need full scan
+    // Apply the filter to check for actual matches
+    return data.filter(doc => matchesFilter(doc, filter))
+  }
+
+  // Filter data to candidate documents
+  const candidateSet = new Set(candidateDocIds)
+  let filtered = data.filter(doc => {
+    const id = (doc as Record<string, unknown>).$id as string
+    return candidateSet.has(id)
+  })
+
+  // Apply the full filter to handle any conditions not covered by the index
+  // (e.g., compound filters where only one field is indexed)
+  filtered = filtered.filter(doc => matchesFilter(doc, filter))
+
+  return filtered
+}
+
+/**
+ * Extract range query operators from a condition.
+ */
+function extractRangeQuery(condition: unknown): {
+  $gt?: unknown
+  $gte?: unknown
+  $lt?: unknown
+  $lte?: unknown
+} | null {
+  if (typeof condition !== 'object' || condition === null) {
+    return null
+  }
+
+  const obj = condition as Record<string, unknown>
+  const range: { $gt?: unknown; $gte?: unknown; $lt?: unknown; $lte?: unknown } = {}
+
+  if ('$gt' in obj) range.$gt = obj.$gt
+  if ('$gte' in obj) range.$gte = obj.$gte
+  if ('$lt' in obj) range.$lt = obj.$lt
+  if ('$lte' in obj) range.$lte = obj.$lte
+
+  if (Object.keys(range).length === 0) {
+    return null
+  }
+
+  return range
 }

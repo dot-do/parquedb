@@ -19,11 +19,56 @@
  *   parquedb stats [namespace]
  */
 
+import { registry } from './registry'
 import { initCommand } from './commands/init'
 import { queryCommand } from './commands/query'
 import { importCommand } from './commands/import'
 import { exportCommand } from './commands/export'
 import { statsCommand } from './commands/stats'
+
+// =============================================================================
+// Register Built-in Commands
+// =============================================================================
+
+registry.register({
+  name: 'init',
+  description: 'Initialize a ParqueDB database',
+  usage: 'parquedb init [directory]',
+  category: 'Database',
+  execute: initCommand,
+})
+
+registry.register({
+  name: 'query',
+  description: 'Run a query against the database',
+  usage: 'parquedb query <namespace> [filter]',
+  category: 'Data',
+  execute: queryCommand,
+})
+
+registry.register({
+  name: 'import',
+  description: 'Import data from JSON/NDJSON/CSV file',
+  usage: 'parquedb import <namespace> <file>',
+  category: 'Data',
+  execute: importCommand,
+})
+
+registry.register({
+  name: 'export',
+  description: 'Export data to JSON/NDJSON/CSV file',
+  usage: 'parquedb export <namespace> <file>',
+  category: 'Data',
+  execute: exportCommand,
+})
+
+registry.register({
+  name: 'stats',
+  description: 'Show database statistics',
+  usage: 'parquedb stats [namespace]',
+  category: 'Database',
+  execute: statsCommand,
+})
 
 // =============================================================================
 // Constants
@@ -239,26 +284,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return 0
     }
 
-    // Execute command
-    switch (parsed.command) {
-      case 'init':
-        return await initCommand(parsed)
-      case 'query':
-        return await queryCommand(parsed)
-      case 'import':
-        return await importCommand(parsed)
-      case 'export':
-        return await exportCommand(parsed)
-      case 'stats':
-        return await statsCommand(parsed)
-      case 'help':
-        print(HELP_TEXT)
-        return 0
-      default:
-        printError(`Unknown command: ${parsed.command}`)
-        print('\nRun "parquedb --help" for usage.')
-        return 1
+    // Handle 'help' as a special case
+    if (parsed.command === 'help') {
+      print(HELP_TEXT)
+      return 0
     }
+
+    // Look up command in registry
+    const command = registry.get(parsed.command)
+    if (!command) {
+      printError(`Unknown command: ${parsed.command}`)
+      print('\nRun "parquedb --help" for usage.')
+      return 1
+    }
+
+    // Execute the command
+    return await command.execute(parsed)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     printError(message)
@@ -271,3 +312,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 if (process.argv[1]?.endsWith('/cli/index.js') || process.argv[1]?.endsWith('/cli/index.ts')) {
   main().then(code => process.exit(code))
 }
+
+// =============================================================================
+// Re-exports for Plugin Authors
+// =============================================================================
+
+export { registry } from './registry'
+export type { Command, CommandRegistry } from './registry'

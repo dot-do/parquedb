@@ -3,6 +3,34 @@
  *
  * Provides in-memory filter evaluation for MongoDB-style queries.
  * This module is used for post-pushdown filtering of rows.
+ *
+ * ## Null vs Undefined Handling
+ *
+ * ParqueDB follows MongoDB's conventions for null/undefined handling in filters:
+ *
+ * ### Equality Operators ($eq, $ne, $in, $nin)
+ * - null and undefined are treated as equivalent for equality comparisons
+ * - `{ field: null }` matches documents where field is null OR missing (undefined)
+ * - `{ field: { $eq: null } }` also matches null or missing fields
+ * - `{ field: { $in: [null] } }` matches null or missing fields
+ *
+ * ### Comparison Operators ($gt, $gte, $lt, $lte)
+ * - null and undefined values always return false for comparison operators
+ * - You cannot meaningfully compare null/undefined with other values
+ * - `{ field: { $gt: 0 } }` returns false if field is null or missing
+ *
+ * ### Existence Operator ($exists)
+ * - `{ field: { $exists: true } }` matches if field is present, even if null
+ * - `{ field: { $exists: false } }` matches only if field is missing (undefined)
+ * - This is the key distinction: $exists checks for undefined, not null
+ *
+ * ### Type Operator ($type)
+ * - Both null and undefined have type 'null'
+ * - `{ field: { $type: 'null' } }` matches null or missing fields
+ *
+ * ### Sorting (compareValues)
+ * - null and undefined are treated as equivalent for sorting
+ * - Both sort before all other values (nulls first)
  */
 
 import type { Filter } from '../types/filter'
@@ -133,16 +161,22 @@ export function createPredicate(filter: Filter): (row: unknown) => boolean {
 /**
  * Check if a value matches a condition
  *
+ * **Null/Undefined Behavior:**
+ * - If condition is null: matches if value is null OR undefined (equivalent for equality)
+ * - If condition is undefined: always returns true (no condition specified)
+ * - For equality comparisons via deepEqual: null and undefined are treated as equivalent
+ *
  * @param value - The value to check
  * @param condition - The condition to match against
  * @returns true if the value matches
  */
 export function matchesCondition(value: unknown, condition: unknown): boolean {
-  // Null condition
+  // Null condition - matches both null and undefined (MongoDB behavior)
   if (condition === null) {
     return value === null || value === undefined
   }
 
+  // Undefined condition - no condition specified, always matches
   if (condition === undefined) {
     return true
   }

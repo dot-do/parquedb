@@ -15,6 +15,7 @@
  */
 
 import type { Filter } from '../types/filter'
+import type { IndexManager } from '../indexes/manager'
 
 // =============================================================================
 // Accumulator Operators
@@ -106,6 +107,142 @@ export type Accumulator =
   | LastAccumulator
   | PushAccumulator
   | AddToSetAccumulator
+
+// =============================================================================
+// Accumulator Type Guards
+// =============================================================================
+
+/**
+ * Type guard for SumAccumulator
+ */
+export function isSumAccumulator(acc: unknown): acc is SumAccumulator {
+  return (
+    typeof acc === 'object' &&
+    acc !== null &&
+    '$sum' in acc &&
+    (typeof (acc as SumAccumulator).$sum === 'number' ||
+      typeof (acc as SumAccumulator).$sum === 'string')
+  )
+}
+
+/**
+ * Type guard for AvgAccumulator
+ */
+export function isAvgAccumulator(acc: unknown): acc is AvgAccumulator {
+  return (
+    typeof acc === 'object' &&
+    acc !== null &&
+    '$avg' in acc &&
+    typeof (acc as AvgAccumulator).$avg === 'string'
+  )
+}
+
+/**
+ * Type guard for MinAccumulator
+ */
+export function isMinAccumulator(acc: unknown): acc is MinAccumulator {
+  return (
+    typeof acc === 'object' &&
+    acc !== null &&
+    '$min' in acc &&
+    typeof (acc as MinAccumulator).$min === 'string'
+  )
+}
+
+/**
+ * Type guard for MaxAccumulator
+ */
+export function isMaxAccumulator(acc: unknown): acc is MaxAccumulator {
+  return (
+    typeof acc === 'object' &&
+    acc !== null &&
+    '$max' in acc &&
+    typeof (acc as MaxAccumulator).$max === 'string'
+  )
+}
+
+/**
+ * Type guard for CountAccumulator
+ */
+export function isCountAccumulator(acc: unknown): acc is CountAccumulator {
+  return typeof acc === 'object' && acc !== null && '$count' in acc
+}
+
+/**
+ * Type guard for FirstAccumulator
+ */
+export function isFirstAccumulator(acc: unknown): acc is FirstAccumulator {
+  return (
+    typeof acc === 'object' &&
+    acc !== null &&
+    '$first' in acc &&
+    typeof (acc as FirstAccumulator).$first === 'string'
+  )
+}
+
+/**
+ * Type guard for LastAccumulator
+ */
+export function isLastAccumulator(acc: unknown): acc is LastAccumulator {
+  return (
+    typeof acc === 'object' &&
+    acc !== null &&
+    '$last' in acc &&
+    typeof (acc as LastAccumulator).$last === 'string'
+  )
+}
+
+/**
+ * Type guard for PushAccumulator
+ */
+export function isPushAccumulator(acc: unknown): acc is PushAccumulator {
+  return (
+    typeof acc === 'object' &&
+    acc !== null &&
+    '$push' in acc &&
+    typeof (acc as PushAccumulator).$push === 'string'
+  )
+}
+
+/**
+ * Type guard for AddToSetAccumulator
+ */
+export function isAddToSetAccumulator(acc: unknown): acc is AddToSetAccumulator {
+  return (
+    typeof acc === 'object' &&
+    acc !== null &&
+    '$addToSet' in acc &&
+    typeof (acc as AddToSetAccumulator).$addToSet === 'string'
+  )
+}
+
+/**
+ * Check if an accumulator field reference is a valid field path (starts with $)
+ */
+export function isFieldPath(value: string): boolean {
+  return value.startsWith('$')
+}
+
+// =============================================================================
+// Document Types
+// =============================================================================
+
+/**
+ * Base document type - represents a generic document in the aggregation pipeline
+ */
+export type Document = Record<string, unknown>
+
+/**
+ * Field reference string (e.g., '$fieldName')
+ */
+export type FieldRef = `$${string}`
+
+/**
+ * Check if a value is a field reference
+ */
+export function isFieldRef(value: unknown): value is FieldRef {
+  return typeof value === 'string' && value.startsWith('$')
+}
 
 // =============================================================================
 // Pipeline Stages
@@ -501,6 +638,19 @@ export interface AggregationOptions {
     caseLevel?: boolean
     numericOrdering?: boolean
   }
+
+  /**
+   * Index manager for index-aware $match stage execution.
+   * When provided, the aggregation executor will attempt to use
+   * secondary indexes (hash, sst, fts, vector) for the first $match stage.
+   */
+  indexManager?: IndexManager
+
+  /**
+   * Namespace for index lookups.
+   * Required when indexManager is provided.
+   */
+  namespace?: string
 }
 
 /**

@@ -144,25 +144,135 @@ export function getUUID(): string {
 const ULID_ENCODING = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 
 /**
- * Generate a ULID (Universally Unique Lexicographically Sortable Identifier)
+ * State for monotonic ULID generation
+ * We use two 48-bit numbers to represent the 80-bit random component
+ * (since JavaScript numbers are limited to 53-bit precision)
+ */
+let lastTimestamp = 0
+let lastRandomHigh = 0 // Upper 32 bits of 80-bit random
+let lastRandomLow = 0  // Lower 48 bits of 80-bit random
+
+/**
+ * Generate a random 80-bit component split into high (32-bit) and low (48-bit) parts
+ */
+function generateRandomComponent(): { high: number; low: number } {
+  const bytes = getRandomBytes(10)
+  // High 32 bits (4 bytes)
+  const high = (bytes[0]! << 24) | (bytes[1]! << 16) | (bytes[2]! << 8) | bytes[3]!
+  // Low 48 bits (6 bytes) - fit safely in JavaScript number
+  const low =
+    bytes[4]! * 0x10000000000 +
+    bytes[5]! * 0x100000000 +
+    bytes[6]! * 0x1000000 +
+    bytes[7]! * 0x10000 +
+    bytes[8]! * 0x100 +
+    bytes[9]!
+  return { high: high >>> 0, low }
+}
+
+/**
+ * Encode 80-bit random component (high 32 bits + low 48 bits) to 16 Base32 characters
+ */
+function encodeRandom(high: number, low: number): string {
+  // We need to convert 80 bits to 16 * 5 = 80 bits in Base32
+  // high is 32 bits, low is 48 bits
+  let result = ''
+
+  // First 6 characters from high 32 bits + top 2 bits of low
+  // Character 0: bits 75-79 of 80 (top 5 bits of high's top 8 bits)
+  result += ULID_ENCODING[(high >>> 27) & 0x1f]
+  // Character 1: bits 70-74
+  result += ULID_ENCODING[(high >>> 22) & 0x1f]
+  // Character 2: bits 65-69
+  result += ULID_ENCODING[(high >>> 17) & 0x1f]
+  // Character 3: bits 60-64
+  result += ULID_ENCODING[(high >>> 12) & 0x1f]
+  // Character 4: bits 55-59
+  result += ULID_ENCODING[(high >>> 7) & 0x1f]
+  // Character 5: bits 50-54 (bottom 2 bits of high + top 3 bits of low)
+  result += ULID_ENCODING[((high & 0x7f) >>> 2)]
+  // Character 6: bits 45-49 (bottom 2 bits of high shifted + bits 45-47 of low)
+  result += ULID_ENCODING[((high & 0x03) << 3) | (Math.floor(low / 0x8000000000) & 0x07)]
+
+  // Characters 7-15 from remaining 45 bits of low
+  let remaining = low % 0x8000000000 // bottom 45 bits
+  // Character 7: bits 40-44
+  result += ULID_ENCODING[Math.floor(remaining / 0x1000000000) & 0x1f]
+  remaining = remaining % 0x1000000000
+  // Character 8: bits 35-39
+  result += ULID_ENCODING[Math.floor(remaining / 0x80000000) & 0x1f]
+  remaining = remaining % 0x80000000
+  // Character 9: bits 30-34
+  result += ULID_ENCODING[Math.floor(remaining / 0x4000000) & 0x1f]
+  remaining = remaining % 0x4000000
+  // Character 10: bits 25-29
+  result += ULID_ENCODING[Math.floor(remaining / 0x200000) & 0x1f]
+  remaining = remaining % 0x200000
+  // Character 11: bits 20-24
+  result += ULID_ENCODING[Math.floor(remaining / 0x10000) & 0x1f]
+  remaining = remaining % 0x10000
+  // Character 12: bits 15-19
+  result += ULID_ENCODING[Math.floor(remaining / 0x800) & 0x1f]
+  remaining = remaining % 0x800
+  // Character 13: bits 10-14
+  result += ULID_ENCODING[Math.floor(remaining / 0x40) & 0x1f]
+  remaining = remaining % 0x40
+  // Character 14: bits 5-9
+  result += ULID_ENCODING[Math.floor(remaining / 0x2) & 0x1f]
+  // Character 15: bits 0-4
+  result += ULID_ENCODING[((remaining & 0x1) << 4)]
+
+  return result
+}
+
+/**
+ * Increment the 80-bit random component (high 32 bits + low 48 bits)
+ * Returns true if successful, false if overflow
+ */
+function incrementRandom(): boolean {
+  lastRandomLow++
+  if (lastRandomLow >= 0x1000000000000) { // 2^48
+    lastRandomLow = 0
+    lastRandomHigh++
+    if (lastRandomHigh > 0xFFFFFFFF) { // 2^32 overflow
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * Generate a monotonic ULID (Universally Unique Lexicographically Sortable Identifier)
  *
  * ULIDs are 26 characters long and consist of:
  * - 10 characters for timestamp (48-bit millisecond precision)
- * - 16 characters for randomness (80-bit cryptographically secure random)
+ * - 16 characters for randomness (80-bit)
  *
- * This implementation is race-condition-free because:
- * - Each call generates fresh 80-bit cryptographic randomness
- * - No shared mutable state between calls
- * - Works reliably across Node.js, browsers, and Cloudflare Workers
- *
- * Note: This does not implement monotonic ULID (incrementing random part within
- * same millisecond) to avoid race conditions. The 80-bit random component provides
- * sufficient collision resistance (1 in 2^80 chance of collision within same ms).
+ * This implementation provides monotonic ordering:
+ * - Within the same millisecond, the random component is incremented
+ * - When the millisecond changes, a new random component is generated
+ * - Guarantees lexicographic ordering even for rapid consecutive calls
  *
  * @returns ULID string (e.g., "01ARZ3NDEKTSV4RRFFQ69G5FAV")
  */
 export function generateULID(): string {
   const now = Date.now()
+
+  // If same millisecond, increment the random component
+  if (now === lastTimestamp) {
+    if (!incrementRandom()) {
+      // Overflow: generate new random (extremely rare - would need 2^80 ULIDs in 1ms)
+      const { high, low } = generateRandomComponent()
+      lastRandomHigh = high
+      lastRandomLow = low
+    }
+  } else {
+    // New millisecond: generate new random component
+    lastTimestamp = now
+    const { high, low } = generateRandomComponent()
+    lastRandomHigh = high
+    lastRandomLow = low
+  }
 
   // Encode timestamp (48-bit, 10 characters in Crockford Base32)
   let time = ''
@@ -172,29 +282,19 @@ export function generateULID(): string {
     timestamp = Math.floor(timestamp / 32)
   }
 
-  // Generate 80-bit random component (10 bytes = 80 bits)
-  // Use 16 characters in Crockford Base32 (5 bits each = 80 bits total)
-  const randomBytes = getRandomBytes(10)
-  let random = ''
-
-  // Convert 10 bytes to 16 Base32 characters
-  // Each byte provides 8 bits, we need 5 bits per character
-  // Pack bytes and extract 5-bit groups
-  let bitBuffer = 0
-  let bitsInBuffer = 0
-  let byteIndex = 0
-
-  for (let i = 0; i < 16; i++) {
-    while (bitsInBuffer < 5 && byteIndex < randomBytes.length) {
-      bitBuffer = (bitBuffer << 8) | randomBytes[byteIndex]!
-      bitsInBuffer += 8
-      byteIndex++
-    }
-    bitsInBuffer -= 5
-    random += ULID_ENCODING[(bitBuffer >> bitsInBuffer) & 0x1f]
-  }
+  // Encode random component
+  const random = encodeRandom(lastRandomHigh, lastRandomLow)
 
   return time + random
+}
+
+/**
+ * Reset the monotonic ULID state (useful for testing)
+ */
+export function resetULIDState(): void {
+  lastTimestamp = 0
+  lastRandomHigh = 0
+  lastRandomLow = 0
 }
 
 /**

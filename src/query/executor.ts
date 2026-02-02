@@ -20,6 +20,13 @@ import type { IndexManager, SelectedIndex } from '../indexes/manager'
 import type { IndexLookupResult, FTSSearchResult } from '../indexes/types'
 import { logger } from '../utils/logger'
 import { stringToBase64 } from '../utils/base64'
+import {
+  globalHookRegistry,
+  createQueryContext,
+  type QueryContext,
+  type QueryResult as ObservabilityQueryResult,
+} from '../observability'
+import { DEFAULT_CONCURRENCY } from '../constants'
 
 // =============================================================================
 // Query Result Types
@@ -197,21 +204,57 @@ export class QueryExecutor {
     options: FindOptions<T> = {}
   ): Promise<QueryResult<T>> {
     const startTime = Date.now()
+    const hookContext = createQueryContext('find', ns, filter, options as FindOptions<unknown>)
 
-    // Check for applicable indexes first
-    if (this.indexManager) {
-      const indexPlan = await this.indexManager.selectIndex(ns, filter)
-      if (indexPlan) {
-        const indexResult = await this.executeWithIndex<T>(ns, filter, options, indexPlan, startTime)
-        if (indexResult) {
-          return indexResult
+    // Dispatch query start hook
+    await globalHookRegistry.dispatchQueryStart(hookContext)
+
+    try {
+      let result: QueryResult<T>
+
+      // Check for applicable indexes first
+      if (this.indexManager) {
+        const indexPlan = await this.indexManager.selectIndex(ns, filter)
+        if (indexPlan) {
+          const indexResult = await this.executeWithIndex<T>(ns, filter, options, indexPlan, startTime)
+          if (indexResult) {
+            result = indexResult
+            // Dispatch query end hook
+            await globalHookRegistry.dispatchQueryEnd(hookContext, {
+              rowCount: result.rows.length,
+              durationMs: result.stats.executionTimeMs,
+              indexUsed: result.stats.indexUsed,
+              rowGroupsScanned: result.stats.scannedRowGroups,
+              rowGroupsSkipped: result.stats.skippedRowGroups,
+            })
+            return result
+          }
+          // Fall through to full scan if index execution fails
         }
-        // Fall through to full scan if index execution fails
       }
-    }
 
-    // Standard execution path with predicate pushdown
-    return this.executeFullScan<T>(ns, filter, options, startTime)
+      // Standard execution path with predicate pushdown
+      result = await this.executeFullScan<T>(ns, filter, options, startTime)
+
+      // Dispatch query end hook
+      await globalHookRegistry.dispatchQueryEnd(hookContext, {
+        rowCount: result.rows.length,
+        durationMs: result.stats.executionTimeMs,
+        indexUsed: result.stats.indexUsed,
+        rowGroupsScanned: result.stats.scannedRowGroups,
+        rowGroupsSkipped: result.stats.skippedRowGroups,
+        cached: false,
+      })
+
+      return result
+    } catch (error) {
+      // Dispatch query error hook
+      await globalHookRegistry.dispatchQueryError(
+        hookContext,
+        error instanceof Error ? error : new Error(String(error))
+      )
+      throw error
+    }
   }
 
   /**
@@ -468,9 +511,16 @@ export class QueryExecutor {
     filter: Filter,
     options: FindOptions<T> = {}
   ): Promise<QueryPlan> {
-    // Load metadata
-    const dataPath = `data/${ns}/data.parquet`
-    const metadata = await this.reader.readMetadata(dataPath)
+    const startTime = Date.now()
+    const hookContext = createQueryContext('explain', ns, filter, options as FindOptions<unknown>)
+
+    // Dispatch query start hook
+    await globalHookRegistry.dispatchQueryStart(hookContext)
+
+    try {
+      // Load metadata
+      const dataPath = `data/${ns}/data.parquet`
+      const metadata = await this.reader.readMetadata(dataPath)
 
     // Get row group stats
     const stats = extractRowGroupStats(metadata)
@@ -500,27 +550,43 @@ export class QueryExecutor {
       ? ((rowGroupSavings / stats.length) * 100).toFixed(1)
       : '0.0'
 
-    return {
-      filter: {
-        original: filter,
-        fields: filterFields,
-        hasLogicalOps,
-        hasSpecialOps,
-      },
-      predicatePushdown: {
-        enabled: true,
-        rowGroupsTotal: stats.length,
-        rowGroupsSelected: selectedRowGroups.length,
-        estimatedSavings: `${savingsPercent}% of row groups skipped`,
-      },
-      projection: {
-        columns,
-        isFullScan: columns.length === 0,
-      },
-      sort: {
-        fields: sortFields,
-        canUseSortedData,
-      },
+      const plan: QueryPlan = {
+        filter: {
+          original: filter,
+          fields: filterFields,
+          hasLogicalOps,
+          hasSpecialOps,
+        },
+        predicatePushdown: {
+          enabled: true,
+          rowGroupsTotal: stats.length,
+          rowGroupsSelected: selectedRowGroups.length,
+          estimatedSavings: `${savingsPercent}% of row groups skipped`,
+        },
+        projection: {
+          columns,
+          isFullScan: columns.length === 0,
+        },
+        sort: {
+          fields: sortFields,
+          canUseSortedData,
+        },
+      }
+
+      // Dispatch query end hook
+      await globalHookRegistry.dispatchQueryEnd(hookContext, {
+        rowCount: 0,
+        durationMs: Date.now() - startTime,
+      })
+
+      return plan
+    } catch (error) {
+      // Dispatch query error hook
+      await globalHookRegistry.dispatchQueryError(
+        hookContext,
+        error instanceof Error ? error : new Error(String(error))
+      )
+      throw error
     }
   }
 
@@ -536,30 +602,54 @@ export class QueryExecutor {
     pipeline: AggregationStage[],
     options: AggregationOptions = {}
   ): Promise<R[]> {
+    const startTime = Date.now()
+
     // Extract $match stage if present (for predicate pushdown)
     const matchStage = pipeline.find(
       (stage): stage is { $match: Filter } => '$match' in stage
     )
     const filter = matchStage?.$match ?? {}
 
-    // Execute base query
-    const result = await this.execute<T>(ns, filter, {
-      includeDeleted: options.includeDeleted,
-      asOf: options.asOf,
-    })
+    const hookContext = createQueryContext('aggregate', ns, filter)
+    // Store pipeline in metadata
+    hookContext.metadata = { pipeline }
 
-    // Apply remaining pipeline stages
-    let data: unknown[] = result.rows
+    // Dispatch query start hook
+    await globalHookRegistry.dispatchQueryStart(hookContext)
 
-    for (const stage of pipeline) {
-      if ('$match' in stage) {
-        // Already applied via predicate pushdown
-        continue
+    try {
+      // Execute base query
+      const result = await this.execute<T>(ns, filter, {
+        includeDeleted: options.includeDeleted,
+        asOf: options.asOf,
+      })
+
+      // Apply remaining pipeline stages
+      let data: unknown[] = result.rows
+
+      for (const stage of pipeline) {
+        if ('$match' in stage) {
+          // Already applied via predicate pushdown
+          continue
+        }
+        data = this.applyAggregationStage(data, stage)
       }
-      data = this.applyAggregationStage(data, stage)
-    }
 
-    return data as R[]
+      // Dispatch query end hook
+      await globalHookRegistry.dispatchQueryEnd(hookContext, {
+        rowCount: data.length,
+        durationMs: Date.now() - startTime,
+      })
+
+      return data as R[]
+    } catch (error) {
+      // Dispatch query error hook
+      await globalHookRegistry.dispatchQueryError(
+        hookContext,
+        error instanceof Error ? error : new Error(String(error))
+      )
+      throw error
+    }
   }
 
   /**
@@ -685,7 +775,7 @@ export class QueryExecutor {
     columns: string[]
   ): Promise<T[][]> {
     // Limit concurrency to avoid overwhelming storage
-    const CONCURRENCY = 4
+    const CONCURRENCY = DEFAULT_CONCURRENCY
 
     const batches: number[][] = []
     for (let i = 0; i < rowGroups.length; i += CONCURRENCY) {

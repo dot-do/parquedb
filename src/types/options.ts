@@ -345,4 +345,11 @@ export interface AggregateOptions {
 
   /** Explain without executing */
   explain?: boolean
+
+  /**
+   * Index manager for index-aware $match stage execution.
+   * When provided, the aggregation executor will attempt to use
+   * secondary indexes (hash, sst, fts, vector) for the first $match stage.
+   */
+  indexManager?: import('../indexes/manager').IndexManager
 }

@@ -26,7 +26,7 @@ import { compressors } from '../parquet/compressors'
 // Index cache for secondary index lookups
 import { IndexCache, createR2IndexStorageAdapter, type SelectedIndex } from './IndexCache'
 // Centralized constants
-import { MAX_CACHE_SIZE } from '../constants'
+import { MAX_CACHE_SIZE, DEFAULT_CACHE_TTL } from '../constants'
 // Logger
 import { logger } from '../utils/logger'
 import { stringToBase64 } from '../utils/base64'
@@ -329,7 +329,7 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
       const url = `${this.r2DevUrl}/${path}?v=single-snappy`
       const response = await fetch(url, {
         cf: {
-          cacheTtl: 3600,  // 1 hour edge cache
+          cacheTtl: DEFAULT_CACHE_TTL,  // 1 hour edge cache
           cacheEverything: true,
         },
       })

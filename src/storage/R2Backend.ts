@@ -23,6 +23,7 @@ import type {
   R2UploadedPart,
 } from './types/r2'
 import { validateRange, InvalidRangeError } from './validation'
+import { MIN_PART_SIZE, DEFAULT_PART_SIZE, MAX_PARTS } from '../constants'
 
 /**
  * Error thrown when an R2 operation fails
@@ -755,14 +756,10 @@ export class R2Backend implements StorageBackend, MultipartBackend {
   // Streaming Write Helper
   // ===========================================================================
 
-  /** Minimum part size for multipart uploads (5MB) */
-  static readonly MIN_PART_SIZE = 5 * 1024 * 1024
-
-  /** Default part size for writeStreaming (8MB) */
-  static readonly DEFAULT_PART_SIZE = 8 * 1024 * 1024
-
-  /** Maximum number of parts (R2/S3 limit is 10,000) */
-  static readonly MAX_PARTS = 10000
+  // Storage constants imported from constants.ts
+  static readonly MIN_PART_SIZE = MIN_PART_SIZE
+  static readonly DEFAULT_PART_SIZE = DEFAULT_PART_SIZE
+  static readonly MAX_PARTS = MAX_PARTS
 
   /**
    * Write large data using multipart upload with automatic chunking

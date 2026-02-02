@@ -1,6 +1,49 @@
 # ParqueDB
 
+[![npm version](https://img.shields.io/npm/v/parquedb.svg)](https://www.npmjs.com/package/parquedb)
+[![Build Status](https://github.com/dot-do/parquedb/workflows/CI/badge.svg)](https://github.com/dot-do/parquedb/actions)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A hybrid relational/document/graph database built on Apache Parquet. ParqueDB provides a MongoDB-style API with bidirectional relationships, time-travel queries, and first-class support for Node.js, browsers, and Cloudflare Workers.
+
+## Why ParqueDB?
+
+ParqueDB fills a unique gap in the database landscape: a document database with columnar storage, graph relationships, and native Cloudflare Workers support.
+
+### Comparison with Alternatives
+
+| Feature | ParqueDB | DuckDB | SQLite | MongoDB |
+|---------|----------|--------|--------|---------|
+| **Cloudflare Workers** | Native R2/DO support | No native support | Durable Objects only | External service |
+| **Storage Format** | Parquet (columnar) | Parquet (read) | B-tree pages | BSON documents |
+| **Query API** | MongoDB-style | SQL | SQL | MongoDB |
+| **Graph Relationships** | Built-in bidirectional | Joins only | Joins only | $lookup only |
+| **Time-Travel** | Built-in event sourcing | Snapshots | WAL replay | Change streams |
+| **Compression** | 8-10x (Parquet) | 8-10x | 2-3x | 2-3x |
+| **Pure JavaScript** | Yes (hyparquet) | WASM | WASM | Native driver |
+
+### Key Differentiators
+
+1. **Built for Cloudflare Workers** - The only document database designed from the ground up for the Workers runtime with R2 storage and Durable Objects for consistency.
+
+2. **Columnar + Document Flexibility** - Get Parquet's analytical performance (read only needed columns) with MongoDB's schema flexibility. Variant shredding delivers up to 20x faster queries on indexed columns.
+
+3. **First-Class Graph Relationships** - Bidirectional relationships are indexed and traversable from either direction. No joins, no $lookup, no additional queries.
+
+4. **Event Sourcing Built-In** - Full audit history with point-in-time reconstruction. Query your data as it existed at any moment in time.
+
+### Performance Highlights
+
+Secondary indexes transform query performance at scale:
+
+| Query Type (100K docs) | Full Scan | With Index | Improvement |
+|------------------------|-----------|------------|-------------|
+| Equality lookup | 200ms | 0.5ms | **400x faster** |
+| Point lookup | 200ms | 0.3ms | **667x faster** |
+| Range query | 250ms | 2ms | **125x faster** |
+
+See [BENCHMARKS.md](./docs/BENCHMARKS.md) for comprehensive performance data.
 
 ## Features
 

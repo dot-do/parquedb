@@ -22,7 +22,7 @@
 import type { Filter, FieldFilter } from '../types/filter'
 import type { FindOptions, Projection, SortSpec, SortDirection } from '../types/options'
 import type { Entity } from '../types/entity'
-import type { Collection } from '../collection'
+import type { Collection } from '../Collection'
 
 /** Supported comparison operators */
 export type ComparisonOp =

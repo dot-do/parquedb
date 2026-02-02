@@ -26,8 +26,10 @@ import type { CreateInput } from '../../types'
 // Constants
 // =============================================================================
 
+import { MAX_BATCH_SIZE } from '../../constants'
+
 const CONFIG_FILENAME = 'parquedb.json'
-const BATCH_SIZE = 1000 // Process in batches for large files
+const BATCH_SIZE = MAX_BATCH_SIZE // Process in batches for large files
 
 // =============================================================================
 // Import Command

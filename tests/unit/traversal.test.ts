@@ -484,6 +484,648 @@ describe('Relationship Traversal', () => {
         expect(authors.items[0]?.$id).toBe(aliceId)
       }
     })
+
+    it('should traverse 3-hop path: User -> Post -> Comment -> User (comment author)', async () => {
+      // Start from Alice, get her posts, then comments on those posts, then comment authors
+      // This tests: User -> Post -> Comment -> User
+      const posts = await db.getRelated<Post>('users', localId(aliceId), 'posts')
+      expect(posts.items.length).toBeGreaterThan(0)
+
+      const commentAuthors = new Set<string>()
+      for (const post of posts.items) {
+        const comments = await db.getRelated<Comment>('posts', localId(post.$id), 'comments')
+        for (const comment of comments.items) {
+          const authors = await db.getRelated<User>('comments', localId(comment.$id), 'author')
+          for (const author of authors.items) {
+            commentAuthors.add(author.$id)
+          }
+        }
+      }
+
+      // Bob and Charlie commented on Alice's posts
+      expect(commentAuthors.size).toBeGreaterThan(0)
+      expect(commentAuthors.has(bobId)).toBe(true)
+      expect(commentAuthors.has(charlieId)).toBe(true)
+    })
+
+    it('should traverse bidirectionally: Category -> Posts -> Author', async () => {
+      // Start from a category, get all posts in that category, then get their authors
+      const postsInCategory = await db.getRelated<Post>('categories', localId(techCategoryId), 'posts')
+      expect(postsInCategory.items.length).toBeGreaterThan(0)
+
+      const authors = new Set<string>()
+      for (const post of postsInCategory.items) {
+        const postAuthors = await db.getRelated<User>('posts', localId(post.$id), 'author')
+        for (const author of postAuthors.items) {
+          authors.add(author.$id)
+        }
+      }
+
+      // Alice is the author of all posts in the tech category
+      expect(authors.has(aliceId)).toBe(true)
+    })
+
+    it('should collect unique entities across multiple paths', async () => {
+      // Both post1 and post2 are in the tech category
+      // When traversing Category -> Posts -> Author, we should find Alice once per path
+      // but the final set of authors should only contain unique entries
+      const postsInCategory = await db.getRelated<Post>('categories', localId(techCategoryId), 'posts')
+
+      // Build a map of author -> posts authored
+      const authorToPosts = new Map<string, string[]>()
+      for (const post of postsInCategory.items) {
+        const postAuthors = await db.getRelated<User>('posts', localId(post.$id), 'author')
+        for (const author of postAuthors.items) {
+          const existing = authorToPosts.get(author.$id) || []
+          existing.push(post.$id)
+          authorToPosts.set(author.$id, existing)
+        }
+      }
+
+      // Alice should appear multiple times in paths but be deduplicated in final set
+      expect(authorToPosts.size).toBe(1) // Only Alice
+      expect(authorToPosts.get(aliceId)?.length).toBeGreaterThanOrEqual(2) // Multiple posts
+    })
+  })
+
+  // =============================================================================
+  // Test Suite: Cycle Detection
+  // =============================================================================
+
+  describe('Cycle detection', () => {
+    it('should handle direct back-reference without infinite loop', async () => {
+      // User -> Posts -> Author -> Posts (cycle back to same posts)
+      const alicePosts = await db.getRelated<Post>('users', localId(aliceId), 'posts')
+      const firstPost = alicePosts.items[0]
+      expect(firstPost).toBeDefined()
+
+      // Get author of first post (Alice)
+      const authors = await db.getRelated<User>('posts', localId(firstPost.$id), 'author')
+      expect(authors.items).toHaveLength(1)
+      expect(authors.items[0].$id).toBe(aliceId)
+
+      // Get Alice's posts again (cycle back)
+      const postsAgain = await db.getRelated<Post>('users', localId(authors.items[0].$id), 'posts')
+
+      // Should return same posts without infinite recursion
+      expect(postsAgain.items.length).toBe(alicePosts.items.length)
+    })
+
+    it('should handle cycle with visited set tracking (manual BFS)', async () => {
+      // Implement manual BFS with visited tracking to detect cycles
+      const visited = new Set<string>()
+      const queue: { entityId: string; ns: string; depth: number }[] = [
+        { entityId: aliceId, ns: 'users', depth: 0 }
+      ]
+      const maxDepth = 10
+
+      // BFS traversal with cycle detection
+      while (queue.length > 0) {
+        const current = queue.shift()!
+
+        // Skip if already visited
+        if (visited.has(current.entityId)) {
+          continue
+        }
+        visited.add(current.entityId)
+
+        // Stop at max depth
+        if (current.depth >= maxDepth) {
+          continue
+        }
+
+        // Get related entities based on namespace
+        if (current.ns === 'users') {
+          const posts = await db.getRelated<Post>('users', localId(current.entityId), 'posts')
+          for (const post of posts.items) {
+            if (!visited.has(post.$id)) {
+              queue.push({ entityId: post.$id, ns: 'posts', depth: current.depth + 1 })
+            }
+          }
+        } else if (current.ns === 'posts') {
+          const authors = await db.getRelated<User>('posts', localId(current.entityId), 'author')
+          for (const author of authors.items) {
+            if (!visited.has(author.$id)) {
+              queue.push({ entityId: author.$id, ns: 'users', depth: current.depth + 1 })
+            }
+          }
+        }
+      }
+
+      // Visited should contain Alice, her posts, and no duplicates
+      expect(visited.has(aliceId)).toBe(true)
+      expect(visited.has(post1Id)).toBe(true)
+      expect(visited.has(post2Id)).toBe(true)
+      expect(visited.has(post3Id)).toBe(true)
+    })
+
+    it('should handle complex cycles: Post -> Comment -> Author -> Posts -> Comment', async () => {
+      // Post1 -> Comment1 -> Bob -> (Bob's comments) -> Post1 (cycle back)
+      const comments = await db.getRelated<Comment>('posts', localId(post1Id), 'comments')
+      expect(comments.items.length).toBeGreaterThan(0)
+
+      const visited = new Set<string>([post1Id])
+      let cycleDetected = false
+
+      for (const comment of comments.items) {
+        const authors = await db.getRelated<User>('comments', localId(comment.$id), 'author')
+        for (const author of authors.items) {
+          // Get this author's comments
+          const authorComments = await db.getRelated<Comment>('users', localId(author.$id), 'comments')
+          for (const authorComment of authorComments.items) {
+            // Get posts of these comments
+            const commentPosts = await db.getRelated<Post>('comments', localId(authorComment.$id), 'post')
+            for (const commentPost of commentPosts.items) {
+              if (visited.has(commentPost.$id)) {
+                cycleDetected = true
+              }
+            }
+          }
+        }
+      }
+
+      // A cycle should be detected when we traverse back to post1
+      expect(cycleDetected).toBe(true)
+    })
+
+    it('should not detect false positives when traversing different branches', async () => {
+      // When two different posts share the same author, visiting the author twice
+      // from different posts is NOT a cycle - it's just convergence
+      const postsWithTechCategory = await db.getRelated<Post>('categories', localId(techCategoryId), 'posts')
+
+      const authorVisitCount = new Map<string, number>()
+      for (const post of postsWithTechCategory.items) {
+        const authors = await db.getRelated<User>('posts', localId(post.$id), 'author')
+        for (const author of authors.items) {
+          const count = authorVisitCount.get(author.$id) || 0
+          authorVisitCount.set(author.$id, count + 1)
+        }
+      }
+
+      // Alice is the author of multiple posts - this is convergence, not a cycle
+      expect(authorVisitCount.get(aliceId)).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  // =============================================================================
+  // Test Suite: Depth Limits
+  // =============================================================================
+
+  describe('Depth limits', () => {
+    it('should respect depth limit of 0 (only start node)', async () => {
+      const maxDepth = 0
+      const visited = new Set<string>()
+      const queue: { entityId: string; ns: string; depth: number }[] = [
+        { entityId: aliceId, ns: 'users', depth: 0 }
+      ]
+
+      while (queue.length > 0) {
+        const current = queue.shift()!
+        if (current.depth > maxDepth) continue
+        if (visited.has(current.entityId)) continue
+
+        visited.add(current.entityId)
+
+        if (current.depth < maxDepth && current.ns === 'users') {
+          const posts = await db.getRelated<Post>('users', localId(current.entityId), 'posts')
+          for (const post of posts.items) {
+            queue.push({ entityId: post.$id, ns: 'posts', depth: current.depth + 1 })
+          }
+        }
+      }
+
+      // Only the start node should be visited
+      expect(visited.size).toBe(1)
+      expect(visited.has(aliceId)).toBe(true)
+    })
+
+    it('should respect depth limit of 1 (start + immediate neighbors)', async () => {
+      const maxDepth = 1
+      const visited = new Set<string>()
+      const queue: { entityId: string; ns: string; depth: number }[] = [
+        { entityId: aliceId, ns: 'users', depth: 0 }
+      ]
+
+      while (queue.length > 0) {
+        const current = queue.shift()!
+        if (current.depth > maxDepth) continue
+        if (visited.has(current.entityId)) continue
+
+        visited.add(current.entityId)
+
+        if (current.depth < maxDepth && current.ns === 'users') {
+          const posts = await db.getRelated<Post>('users', localId(current.entityId), 'posts')
+          for (const post of posts.items) {
+            queue.push({ entityId: post.$id, ns: 'posts', depth: current.depth + 1 })
+          }
+        }
+      }
+
+      // Start node + immediate posts
+      expect(visited.has(aliceId)).toBe(true)
+      expect(visited.has(post1Id)).toBe(true)
+      expect(visited.has(post2Id)).toBe(true)
+      expect(visited.has(post3Id)).toBe(true)
+      expect(visited.size).toBe(4) // Alice + 3 posts
+    })
+
+    it('should respect depth limit of 2 (start + neighbors + neighbors of neighbors)', async () => {
+      const maxDepth = 2
+      const visited = new Set<string>()
+      const queue: { entityId: string; ns: string; depth: number }[] = [
+        { entityId: aliceId, ns: 'users', depth: 0 }
+      ]
+
+      while (queue.length > 0) {
+        const current = queue.shift()!
+        if (current.depth > maxDepth) continue
+        if (visited.has(current.entityId)) continue
+
+        visited.add(current.entityId)
+
+        if (current.depth < maxDepth) {
+          if (current.ns === 'users') {
+            const posts = await db.getRelated<Post>('users', localId(current.entityId), 'posts')
+            for (const post of posts.items) {
+              queue.push({ entityId: post.$id, ns: 'posts', depth: current.depth + 1 })
+            }
+          } else if (current.ns === 'posts') {
+            const comments = await db.getRelated<Comment>('posts', localId(current.entityId), 'comments')
+            for (const comment of comments.items) {
+              queue.push({ entityId: comment.$id, ns: 'comments', depth: current.depth + 1 })
+            }
+          }
+        }
+      }
+
+      // Alice -> Posts -> Comments
+      expect(visited.has(aliceId)).toBe(true)
+      expect(visited.has(post1Id)).toBe(true)
+      expect(visited.has(comment1Id)).toBe(true)
+      expect(visited.has(comment2Id)).toBe(true)
+      expect(visited.has(comment3Id)).toBe(true)
+    })
+
+    it('should count edges correctly at each depth level', async () => {
+      interface DepthStats {
+        depth: number
+        nodeCount: number
+        nodes: string[]
+      }
+
+      const depthStats: DepthStats[] = []
+      const visited = new Set<string>()
+      let currentDepth = 0
+      let currentLevel: { entityId: string; ns: string }[] = [{ entityId: aliceId, ns: 'users' }]
+
+      while (currentLevel.length > 0 && currentDepth <= 3) {
+        const nodesAtDepth: string[] = []
+        const nextLevel: { entityId: string; ns: string }[] = []
+
+        for (const { entityId, ns } of currentLevel) {
+          if (visited.has(entityId)) continue
+          visited.add(entityId)
+          nodesAtDepth.push(entityId)
+
+          if (ns === 'users') {
+            const posts = await db.getRelated<Post>('users', localId(entityId), 'posts')
+            for (const post of posts.items) {
+              if (!visited.has(post.$id)) {
+                nextLevel.push({ entityId: post.$id, ns: 'posts' })
+              }
+            }
+          } else if (ns === 'posts') {
+            const comments = await db.getRelated<Comment>('posts', localId(entityId), 'comments')
+            for (const comment of comments.items) {
+              if (!visited.has(comment.$id)) {
+                nextLevel.push({ entityId: comment.$id, ns: 'comments' })
+              }
+            }
+          } else if (ns === 'comments') {
+            const authors = await db.getRelated<User>('comments', localId(entityId), 'author')
+            for (const author of authors.items) {
+              if (!visited.has(author.$id)) {
+                nextLevel.push({ entityId: author.$id, ns: 'users' })
+              }
+            }
+          }
+        }
+
+        if (nodesAtDepth.length > 0) {
+          depthStats.push({
+            depth: currentDepth,
+            nodeCount: nodesAtDepth.length,
+            nodes: nodesAtDepth
+          })
+        }
+
+        currentLevel = nextLevel
+        currentDepth++
+      }
+
+      // Verify depth stats
+      expect(depthStats[0].depth).toBe(0)
+      expect(depthStats[0].nodeCount).toBe(1) // Alice
+      expect(depthStats[1].depth).toBe(1)
+      expect(depthStats[1].nodeCount).toBe(3) // 3 posts
+      expect(depthStats[2].depth).toBe(2)
+      expect(depthStats[2].nodeCount).toBe(3) // 3 comments
+    })
+  })
+
+  // =============================================================================
+  // Test Suite: Filtered Traversal (Predicate Selection)
+  // =============================================================================
+
+  describe('Filtered traversal', () => {
+    it('should only follow "author" predicate, not "categories"', async () => {
+      // Start from a post, but only follow the author relationship
+      const predicatesToFollow = ['author']
+      const visited = new Set<string>()
+      const queue: { entityId: string; ns: string; depth: number }[] = [
+        { entityId: post1Id, ns: 'posts', depth: 0 }
+      ]
+      const maxDepth = 2
+
+      while (queue.length > 0) {
+        const current = queue.shift()!
+        if (current.depth > maxDepth) continue
+        if (visited.has(current.entityId)) continue
+        visited.add(current.entityId)
+
+        if (current.depth < maxDepth && current.ns === 'posts') {
+          // Only follow specified predicates
+          if (predicatesToFollow.includes('author')) {
+            const authors = await db.getRelated<User>('posts', localId(current.entityId), 'author')
+            for (const author of authors.items) {
+              queue.push({ entityId: author.$id, ns: 'users', depth: current.depth + 1 })
+            }
+          }
+          // Explicitly NOT following categories
+        }
+      }
+
+      // Should have visited post and author, but NOT categories
+      expect(visited.has(post1Id)).toBe(true)
+      expect(visited.has(aliceId)).toBe(true)
+      expect(visited.has(techCategoryId)).toBe(false)
+      expect(visited.has(dbCategoryId)).toBe(false)
+    })
+
+    it('should only follow "categories" predicate, not "author"', async () => {
+      const predicatesToFollow = ['categories']
+      const visited = new Set<string>()
+      const queue: { entityId: string; ns: string; depth: number }[] = [
+        { entityId: post1Id, ns: 'posts', depth: 0 }
+      ]
+      const maxDepth = 2
+
+      while (queue.length > 0) {
+        const current = queue.shift()!
+        if (current.depth > maxDepth) continue
+        if (visited.has(current.entityId)) continue
+        visited.add(current.entityId)
+
+        if (current.depth < maxDepth && current.ns === 'posts') {
+          if (predicatesToFollow.includes('categories')) {
+            const categories = await db.getRelated<Category>('posts', localId(current.entityId), 'categories')
+            for (const category of categories.items) {
+              queue.push({ entityId: category.$id, ns: 'categories', depth: current.depth + 1 })
+            }
+          }
+        }
+      }
+
+      // Should have visited post and categories, but NOT author
+      expect(visited.has(post1Id)).toBe(true)
+      expect(visited.has(techCategoryId)).toBe(true)
+      expect(visited.has(dbCategoryId)).toBe(true)
+      expect(visited.has(aliceId)).toBe(false)
+    })
+
+    it('should follow multiple predicates when specified', async () => {
+      const predicatesToFollow = ['author', 'categories']
+      const visited = new Set<string>()
+      const queue: { entityId: string; ns: string; depth: number }[] = [
+        { entityId: post1Id, ns: 'posts', depth: 0 }
+      ]
+      const maxDepth = 1
+
+      while (queue.length > 0) {
+        const current = queue.shift()!
+        if (current.depth > maxDepth) continue
+        if (visited.has(current.entityId)) continue
+        visited.add(current.entityId)
+
+        if (current.depth < maxDepth && current.ns === 'posts') {
+          if (predicatesToFollow.includes('author')) {
+            const authors = await db.getRelated<User>('posts', localId(current.entityId), 'author')
+            for (const author of authors.items) {
+              queue.push({ entityId: author.$id, ns: 'users', depth: current.depth + 1 })
+            }
+          }
+          if (predicatesToFollow.includes('categories')) {
+            const categories = await db.getRelated<Category>('posts', localId(current.entityId), 'categories')
+            for (const category of categories.items) {
+              queue.push({ entityId: category.$id, ns: 'categories', depth: current.depth + 1 })
+            }
+          }
+        }
+      }
+
+      // Should have visited post, author, and categories
+      expect(visited.has(post1Id)).toBe(true)
+      expect(visited.has(aliceId)).toBe(true)
+      expect(visited.has(techCategoryId)).toBe(true)
+      expect(visited.has(dbCategoryId)).toBe(true)
+    })
+
+    it('should apply filter to entities within traversal', async () => {
+      // Only get published posts when traversing from user
+      const publishedPosts = await db.getRelated<Post>('users', localId(aliceId), 'posts', {
+        filter: { status: 'published' }
+      })
+
+      // Traverse further from only published posts
+      const visitedFromPublished = new Set<string>()
+      for (const post of publishedPosts.items) {
+        expect(post.status).toBe('published')
+        visitedFromPublished.add(post.$id)
+
+        const comments = await db.getRelated<Comment>('posts', localId(post.$id), 'comments')
+        for (const comment of comments.items) {
+          visitedFromPublished.add(comment.$id)
+        }
+      }
+
+      // Draft post should not be visited
+      expect(visitedFromPublished.has(post3Id)).toBe(false)
+      // Published posts and their comments should be visited
+      expect(visitedFromPublished.has(post1Id)).toBe(true)
+      expect(visitedFromPublished.has(post2Id)).toBe(true)
+    })
+
+    it('should apply different filters at different levels', async () => {
+      // Level 1: Get only published posts
+      const publishedPosts = await db.getRelated<Post>('users', localId(aliceId), 'posts', {
+        filter: { status: 'published' }
+      })
+
+      // Level 2: Get only high-rated comments
+      const highRatedComments: Entity<Comment>[] = []
+      for (const post of publishedPosts.items) {
+        const comments = await db.getRelated<Comment>('posts', localId(post.$id), 'comments', {
+          filter: { rating: { $gte: 5 } }
+        })
+        highRatedComments.push(...comments.items)
+      }
+
+      // All returned comments should be high-rated
+      for (const comment of highRatedComments) {
+        expect(comment.rating).toBeGreaterThanOrEqual(5)
+      }
+    })
+  })
+
+  // =============================================================================
+  // Test Suite: Breadth-First vs Depth-First Traversal
+  // =============================================================================
+
+  describe('Traversal order', () => {
+    it('should perform BFS traversal correctly (level by level)', async () => {
+      const bfsOrder: string[] = []
+      const visited = new Set<string>()
+      const queue: { entityId: string; ns: string }[] = [{ entityId: aliceId, ns: 'users' }]
+
+      while (queue.length > 0) {
+        const current = queue.shift()! // BFS uses shift (FIFO)
+        if (visited.has(current.entityId)) continue
+        visited.add(current.entityId)
+        bfsOrder.push(current.entityId)
+
+        if (current.ns === 'users') {
+          const posts = await db.getRelated<Post>('users', localId(current.entityId), 'posts')
+          for (const post of posts.items) {
+            if (!visited.has(post.$id)) {
+              queue.push({ entityId: post.$id, ns: 'posts' })
+            }
+          }
+        } else if (current.ns === 'posts') {
+          const comments = await db.getRelated<Comment>('posts', localId(current.entityId), 'comments')
+          for (const comment of comments.items) {
+            if (!visited.has(comment.$id)) {
+              queue.push({ entityId: comment.$id, ns: 'comments' })
+            }
+          }
+        }
+      }
+
+      // BFS should visit all users first, then all posts, then all comments
+      // First element should be Alice
+      expect(bfsOrder[0]).toBe(aliceId)
+
+      // Alice's posts should come before any comments
+      const postIndices = [post1Id, post2Id, post3Id]
+        .filter(id => bfsOrder.includes(id))
+        .map(id => bfsOrder.indexOf(id))
+      const commentIndices = [comment1Id, comment2Id, comment3Id]
+        .filter(id => bfsOrder.includes(id))
+        .map(id => bfsOrder.indexOf(id))
+
+      // All posts should appear before any comments (BFS property)
+      if (postIndices.length > 0 && commentIndices.length > 0) {
+        expect(Math.max(...postIndices)).toBeLessThan(Math.min(...commentIndices))
+      }
+    })
+
+    it('should perform DFS traversal correctly (depth first)', async () => {
+      const dfsOrder: string[] = []
+      const visited = new Set<string>()
+      const stack: { entityId: string; ns: string }[] = [{ entityId: aliceId, ns: 'users' }]
+
+      while (stack.length > 0) {
+        const current = stack.pop()! // DFS uses pop (LIFO)
+        if (visited.has(current.entityId)) continue
+        visited.add(current.entityId)
+        dfsOrder.push(current.entityId)
+
+        if (current.ns === 'users') {
+          const posts = await db.getRelated<Post>('users', localId(current.entityId), 'posts')
+          // Push in reverse order so first post is processed first
+          for (let i = posts.items.length - 1; i >= 0; i--) {
+            const post = posts.items[i]
+            if (!visited.has(post.$id)) {
+              stack.push({ entityId: post.$id, ns: 'posts' })
+            }
+          }
+        } else if (current.ns === 'posts') {
+          const comments = await db.getRelated<Comment>('posts', localId(current.entityId), 'comments')
+          for (let i = comments.items.length - 1; i >= 0; i--) {
+            const comment = comments.items[i]
+            if (!visited.has(comment.$id)) {
+              stack.push({ entityId: comment.$id, ns: 'comments' })
+            }
+          }
+        }
+      }
+
+      // DFS should visit deeply before broadly
+      // First element should be Alice
+      expect(dfsOrder[0]).toBe(aliceId)
+
+      // In DFS, comments from a post should appear right after that post
+      // (unlike BFS where all posts appear before any comments)
+      // This is harder to assert definitively without knowing exact order of posts.items
+      // But we can verify the traversal completes without issues
+      expect(dfsOrder.length).toBeGreaterThan(0)
+      expect(visited.has(aliceId)).toBe(true)
+    })
+
+    it('should visit same nodes in BFS and DFS, just different order', async () => {
+      // BFS traversal
+      const bfsVisited = new Set<string>()
+      const bfsQueue: { entityId: string; ns: string }[] = [{ entityId: aliceId, ns: 'users' }]
+
+      while (bfsQueue.length > 0) {
+        const current = bfsQueue.shift()!
+        if (bfsVisited.has(current.entityId)) continue
+        bfsVisited.add(current.entityId)
+
+        if (current.ns === 'users') {
+          const posts = await db.getRelated<Post>('users', localId(current.entityId), 'posts')
+          for (const post of posts.items) {
+            if (!bfsVisited.has(post.$id)) {
+              bfsQueue.push({ entityId: post.$id, ns: 'posts' })
+            }
+          }
+        }
+      }
+
+      // DFS traversal
+      const dfsVisited = new Set<string>()
+      const dfsStack: { entityId: string; ns: string }[] = [{ entityId: aliceId, ns: 'users' }]
+
+      while (dfsStack.length > 0) {
+        const current = dfsStack.pop()!
+        if (dfsVisited.has(current.entityId)) continue
+        dfsVisited.add(current.entityId)
+
+        if (current.ns === 'users') {
+          const posts = await db.getRelated<Post>('users', localId(current.entityId), 'posts')
+          for (const post of posts.items) {
+            if (!dfsVisited.has(post.$id)) {
+              dfsStack.push({ entityId: post.$id, ns: 'posts' })
+            }
+          }
+        }
+      }
+
+      // Both should visit the same nodes
+      expect(bfsVisited.size).toBe(dfsVisited.size)
+      for (const node of bfsVisited) {
+        expect(dfsVisited.has(node)).toBe(true)
+      }
+    })
   })
 
   // =============================================================================

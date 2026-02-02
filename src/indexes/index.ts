@@ -11,7 +11,12 @@ export * from './types'
 export * from './errors'
 
 // Index Manager
-export { IndexManager, type SelectedIndex } from './manager'
+export {
+  IndexManager,
+  type SelectedIndex,
+  type IndexManagerOptions,
+  type IndexManagerErrorHandler,
+} from './manager'
 
 // Secondary Indexes
 export * from './secondary'

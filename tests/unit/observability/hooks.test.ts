@@ -824,3 +824,168 @@ describe('Integration', () => {
     expect(customHook.onQueryEnd).toHaveBeenCalled()
   })
 })
+
+// =============================================================================
+// Observed Storage Backend Tests
+// =============================================================================
+
+describe('ObservedBackend', () => {
+  let backend: import('../../../src/storage').MemoryBackend
+  let observedBackend: import('../../../src/storage').ObservedBackend
+
+  beforeEach(async () => {
+    globalHookRegistry.clearHooks()
+    const { MemoryBackend, ObservedBackend } = await import('../../../src/storage')
+    backend = new MemoryBackend()
+    observedBackend = new ObservedBackend(backend)
+  })
+
+  it('should dispatch read hook on read', async () => {
+    const hook = { onRead: vi.fn() }
+    globalHookRegistry.registerStorageHook(hook)
+
+    // Write some data first
+    await backend.write('test.txt', new Uint8Array([1, 2, 3]))
+
+    // Read through observed backend
+    await observedBackend.read('test.txt')
+
+    expect(hook.onRead).toHaveBeenCalledTimes(1)
+    expect(hook.onRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationType: 'read',
+        path: 'test.txt',
+      }),
+      expect.objectContaining({
+        bytesTransferred: 3,
+        durationMs: expect.any(Number),
+      })
+    )
+  })
+
+  it('should dispatch write hook on write', async () => {
+    const hook = { onWrite: vi.fn() }
+    globalHookRegistry.registerStorageHook(hook)
+
+    await observedBackend.write('test.txt', new Uint8Array([1, 2, 3, 4, 5]))
+
+    expect(hook.onWrite).toHaveBeenCalledTimes(1)
+    expect(hook.onWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationType: 'write',
+        path: 'test.txt',
+      }),
+      expect.objectContaining({
+        bytesTransferred: 5,
+        durationMs: expect.any(Number),
+      })
+    )
+  })
+
+  it('should dispatch delete hook on delete', async () => {
+    const hook = { onDelete: vi.fn() }
+    globalHookRegistry.registerStorageHook(hook)
+
+    // Write some data first
+    await backend.write('test.txt', new Uint8Array([1, 2, 3]))
+
+    // Delete through observed backend
+    await observedBackend.delete('test.txt')
+
+    expect(hook.onDelete).toHaveBeenCalledTimes(1)
+    expect(hook.onDelete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationType: 'delete',
+        path: 'test.txt',
+      }),
+      expect.objectContaining({
+        durationMs: expect.any(Number),
+        fileCount: 1,
+      })
+    )
+  })
+
+  it('should dispatch error hook on read error', async () => {
+    const hook = { onStorageError: vi.fn() }
+    globalHookRegistry.registerStorageHook(hook)
+
+    // Try to read non-existent file
+    await expect(observedBackend.read('nonexistent.txt')).rejects.toThrow()
+
+    expect(hook.onStorageError).toHaveBeenCalledTimes(1)
+    expect(hook.onStorageError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationType: 'read',
+        path: 'nonexistent.txt',
+      }),
+      expect.any(Error)
+    )
+  })
+
+  it('should dispatch read hook for list operation', async () => {
+    const hook = { onRead: vi.fn() }
+    globalHookRegistry.registerStorageHook(hook)
+
+    // Write some data first
+    await backend.write('data/test1.txt', new Uint8Array([1]))
+    await backend.write('data/test2.txt', new Uint8Array([2]))
+
+    // List through observed backend
+    await observedBackend.list('data/')
+
+    expect(hook.onRead).toHaveBeenCalledTimes(1)
+    expect(hook.onRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationType: 'list',
+        path: 'data/',
+      }),
+      expect.objectContaining({
+        fileCount: 2,
+      })
+    )
+  })
+
+  it('should dispatch write hook for append operation', async () => {
+    const hook = { onWrite: vi.fn() }
+    globalHookRegistry.registerStorageHook(hook)
+
+    await observedBackend.append('log.txt', new Uint8Array([1, 2, 3]))
+
+    expect(hook.onWrite).toHaveBeenCalledTimes(1)
+    expect(hook.onWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationType: 'append',
+        path: 'log.txt',
+      }),
+      expect.objectContaining({
+        bytesTransferred: 3,
+      })
+    )
+  })
+
+  it('should work with withObservability helper', async () => {
+    const { withObservability, MemoryBackend } = await import('../../../src/storage')
+    const memory = new MemoryBackend()
+    const observed = withObservability(memory)
+
+    expect(observed.type).toBe('observed:memory')
+
+    const hook = { onWrite: vi.fn() }
+    globalHookRegistry.registerStorageHook(hook)
+
+    await observed.write('test.txt', new Uint8Array([1]))
+
+    expect(hook.onWrite).toHaveBeenCalled()
+  })
+
+  it('should not double-wrap an already observed backend', async () => {
+    const { withObservability, MemoryBackend, ObservedBackend } = await import('../../../src/storage')
+    const memory = new MemoryBackend()
+    const observed = withObservability(memory)
+    const doubleObserved = withObservability(observed)
+
+    // Should be the same instance
+    expect(doubleObserved).toBe(observed)
+    expect(doubleObserved.type).toBe('observed:memory')
+  })
+})

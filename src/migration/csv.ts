@@ -6,23 +6,26 @@
  * - Type inference
  * - Custom delimiters
  * - Streaming large files
+ * - Async iterators for memory-efficient processing
  */
 
 import type { ParqueDB } from '../ParqueDB'
 import type { CreateInput, EntityId } from '../types/entity'
-import type { CsvImportOptions, MigrationResult, MigrationError } from './types'
+import type { CsvImportOptions, MigrationResult, MigrationError, StreamingDocument, CsvStreamingOptions } from './types'
 import { fileExists, parseCsvLine, inferType } from './utils'
+import { MAX_BATCH_SIZE } from '../constants'
 
 /**
  * Default CSV import options
  */
 const DEFAULT_OPTIONS: Required<Omit<CsvImportOptions, 'onProgress' | 'transform' | 'entityType' | 'columnTypes' | 'nameColumn' | 'headers'>> = {
-  batchSize: 1000,
+  batchSize: MAX_BATCH_SIZE,
   skipValidation: false,
   actor: 'system/migration',
   delimiter: ',',
   skipEmptyLines: true,
   inferTypes: true,
+  streaming: false,
 }
 
 /**
@@ -351,5 +354,139 @@ async function* readLines(path: string): AsyncGenerator<string> {
 
   for await (const line of rl) {
     yield line
+  }
+}
+
+/**
+ * Stream documents from a CSV file
+ *
+ * Returns an async iterator that yields documents one at a time,
+ * enabling memory-efficient processing of large CSV files.
+ *
+ * @param path - Path to CSV file
+ * @param options - CSV streaming options
+ * @returns Async iterator yielding StreamingDocument objects
+ *
+ * @example
+ * // Process CSV rows one at a time
+ * for await (const { document, lineNumber, error } of streamFromCsv('./data.csv')) {
+ *   if (error) {
+ *     console.error(`Error at line ${lineNumber}: ${error}`)
+ *     continue
+ *   }
+ *   await processRow(document)
+ * }
+ *
+ * @example
+ * // With custom options
+ * const stream = streamFromCsv('./data.csv', {
+ *   delimiter: ';',
+ *   headers: ['id', 'name', 'value'],
+ *   columnTypes: { id: 'number', value: 'number' },
+ *   transform: (doc) => ({ ...doc, processed: true }),
+ * })
+ * for await (const { document } of stream) {
+ *   console.log(document)
+ * }
+ */
+export async function* streamFromCsv(
+  path: string,
+  options?: CsvStreamingOptions
+): AsyncGenerator<StreamingDocument> {
+  const opts = {
+    skipErrors: false,
+    delimiter: ',',
+    skipEmptyLines: true,
+    inferTypes: true,
+    headers: true as boolean | string[],
+    ...options,
+  }
+
+  // Check if file exists
+  if (!await fileExists(path)) {
+    throw new Error(`File not found: ${path}`)
+  }
+
+  // Determine headers
+  let headers: string[] = []
+  let isFirstDataLine = true
+  let lineNumber = 0
+
+  for await (const line of readLines(path)) {
+    lineNumber++
+
+    // Skip empty lines
+    if (opts.skipEmptyLines && !line.trim()) {
+      continue
+    }
+
+    // Parse CSV line
+    const fields = parseCsvLine(line, opts.delimiter)
+
+    // Handle headers
+    if (isFirstDataLine) {
+      isFirstDataLine = false
+
+      if (opts.headers === true) {
+        // Use first row as headers
+        headers = fields.map(h => normalizeHeader(h))
+        continue
+      } else if (Array.isArray(opts.headers)) {
+        // Use provided headers
+        headers = opts.headers
+      } else {
+        // No headers - generate column names
+        headers = fields.map((_, i) => `column${i + 1}`)
+      }
+    }
+
+    // Skip if we're still reading headers
+    if (headers.length === 0) {
+      continue
+    }
+
+    // Convert row to document
+    let doc: Record<string, unknown> = {}
+
+    for (let i = 0; i < fields.length; i++) {
+      const header = headers[i] || `column${i + 1}`
+      let value: unknown = fields[i]
+
+      // Apply type conversion
+      if (opts.columnTypes && header in opts.columnTypes) {
+        value = convertToType(fields[i] || '', opts.columnTypes[header]!)
+      } else if (opts.inferTypes) {
+        value = inferType(fields[i] || '')
+      }
+
+      doc[header] = value
+    }
+
+    // Apply transform
+    if (opts.transform) {
+      try {
+        doc = opts.transform(doc) as Record<string, unknown>
+      } catch (err) {
+        if (opts.skipErrors) {
+          continue
+        }
+        yield {
+          document: null as unknown as Record<string, unknown>,
+          lineNumber,
+          error: `Transform failed: ${(err as Error).message}`,
+        }
+        continue
+      }
+    }
+
+    // Skip null/undefined documents
+    if (doc == null) {
+      continue
+    }
+
+    yield {
+      document: doc,
+      lineNumber,
+    }
   }
 }

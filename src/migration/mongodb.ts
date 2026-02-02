@@ -4,29 +4,36 @@
  * Supports importing from:
  * - MongoDB Extended JSON (mongoexport output)
  * - BSON dump files (mongodump output)
+ *
+ * Features:
+ * - Streaming support for large files
+ * - Automatic format detection (JSON array vs JSONL)
  */
 
 import type { ParqueDB } from '../ParqueDB'
 import type { CreateInput, EntityId } from '../types/entity'
-import type { BsonImportOptions, MigrationResult, MigrationError } from './types'
+import type { BsonImportOptions, MigrationResult, MigrationError, StreamingDocument, StreamingOptions } from './types'
 import { fileExists, convertBsonValue, generateName } from './utils'
+import { MAX_BATCH_SIZE } from '../constants'
 
 /**
  * Default BSON import options
  */
 const DEFAULT_OPTIONS: Required<Omit<BsonImportOptions, 'onProgress' | 'transform' | 'entityType' | 'idField' | 'nameField'>> = {
-  batchSize: 1000,
+  batchSize: MAX_BATCH_SIZE,
   skipValidation: false,
   actor: 'system/migration',
   preserveMongoId: false,
   convertObjectIds: true,
   convertDates: true,
+  streaming: false,
 }
 
 /**
  * Import documents from a MongoDB Extended JSON file
  *
  * This handles the output of `mongoexport --jsonArray` or JSONL format.
+ * When options.streaming is true, uses streaming for JSONL files.
  *
  * @param db - ParqueDB instance
  * @param ns - Namespace to import into
@@ -37,6 +44,13 @@ const DEFAULT_OPTIONS: Required<Omit<BsonImportOptions, 'onProgress' | 'transfor
  * @example
  * // Import from mongoexport --jsonArray output
  * const result = await importFromMongodb(db, 'users', './users.json')
+ *
+ * @example
+ * // Import with streaming for large JSONL files
+ * const result = await importFromMongodb(db, 'products', './products.jsonl', {
+ *   streaming: true,
+ *   onProgress: (count) => console.log(`Processed ${count} documents`),
+ * })
  *
  * @example
  * // Import with custom options
@@ -66,6 +80,15 @@ export async function importFromMongodb(
   // Check if file exists
   if (!await fileExists(path)) {
     throw new Error(`File not found: ${path}`)
+  }
+
+  // Get collection
+  const collection = db.collection(ns)
+
+  // Check if streaming mode is enabled
+  if (opts.streaming) {
+    // Use streaming for JSONL files
+    return importFromMongodbStreaming(db, ns, path, opts)
   }
 
   // Read file content to determine format
@@ -106,9 +129,6 @@ export async function importFromMongodb(
       }
     }
   }
-
-  // Get collection
-  const collection = db.collection(ns)
 
   // Process documents in batches
   const batch: CreateInput<Record<string, unknown>>[] = []
@@ -182,6 +202,115 @@ export async function importFromMongodb(
 }
 
 /**
+ * Import from MongoDB using streaming (for JSONL files)
+ */
+async function importFromMongodbStreaming(
+  db: ParqueDB,
+  ns: string,
+  path: string,
+  opts: Required<Omit<BsonImportOptions, 'onProgress' | 'transform' | 'entityType' | 'idField' | 'nameField'>> & BsonImportOptions
+): Promise<MigrationResult> {
+  const startTime = Date.now()
+  const errors: MigrationError[] = []
+  let imported = 0
+  let skipped = 0
+  let failed = 0
+  let lineNumber = 0
+
+  // Get collection
+  const collection = db.collection(ns)
+
+  // Process lines using async iteration
+  const batch: CreateInput<Record<string, unknown>>[] = []
+
+  for await (const line of readLines(path)) {
+    lineNumber++
+
+    // Skip empty lines
+    if (!line.trim()) {
+      continue
+    }
+
+    // Parse JSON
+    let doc: Record<string, unknown>
+    try {
+      doc = JSON.parse(line)
+    } catch (err) {
+      errors.push({
+        index: lineNumber,
+        message: `Invalid JSON at line ${lineNumber}: ${(err as Error).message}`,
+        document: line,
+      })
+      failed++
+      continue
+    }
+
+    // Convert BSON extended JSON values
+    if (opts.convertObjectIds || opts.convertDates) {
+      doc = convertBsonDocument(doc, opts)
+    }
+
+    // Apply transform
+    if (opts.transform) {
+      try {
+        doc = opts.transform(doc) as Record<string, unknown>
+      } catch (err) {
+        errors.push({
+          index: lineNumber,
+          message: `Transform failed at line ${lineNumber}: ${(err as Error).message}`,
+          document: doc,
+        })
+        failed++
+        continue
+      }
+    }
+
+    // Skip null/undefined documents
+    if (doc == null) {
+      skipped++
+      continue
+    }
+
+    // Prepare document
+    const createInput = prepareMongoDocument(doc, ns, opts)
+    batch.push(createInput)
+
+    // Process batch when full
+    if (batch.length >= opts.batchSize) {
+      const batchResult = await processBatch(collection, batch, opts, errors, lineNumber - batch.length)
+      imported += batchResult.imported
+      failed += batchResult.failed
+      batch.length = 0
+
+      // Report progress
+      if (opts.onProgress) {
+        opts.onProgress(imported + skipped + failed)
+      }
+    }
+  }
+
+  // Process remaining batch
+  if (batch.length > 0) {
+    const batchResult = await processBatch(collection, batch, opts, errors, lineNumber - batch.length)
+    imported += batchResult.imported
+    failed += batchResult.failed
+
+    // Report final progress
+    if (opts.onProgress) {
+      opts.onProgress(imported + skipped + failed)
+    }
+  }
+
+  return {
+    imported,
+    skipped,
+    failed,
+    errors,
+    duration: Date.now() - startTime,
+  }
+}
+
+/**
  * Import documents from a MongoDB BSON dump file
  *
  * This handles the output of `mongodump` (binary BSON format).
@@ -216,8 +345,7 @@ export async function importFromBson(
   let BSON: BsonModule
   try {
     // Dynamic import - bson is an optional dependency
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    BSON = await (Function('return import("bson")')()) as BsonModule
+    BSON = await import('bson')
   } catch {
     throw new Error(
       'BSON import requires the "bson" package. Please install it: npm install bson'
@@ -461,4 +589,148 @@ function capitalizeNamespace(ns: string): string {
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join('')
     .replace(/s$/, '')
+}
+
+/**
+ * Read lines from a file using async iteration
+ */
+async function* readLines(path: string): AsyncGenerator<string> {
+  const fs = await import('fs')
+  const readline = await import('readline')
+
+  const fileStream = fs.createReadStream(path, { encoding: 'utf-8' })
+  const rl = readline.createInterface({
+    input: fileStream,
+    crlfDelay: Infinity,
+  })
+
+  for await (const line of rl) {
+    yield line
+  }
+}
+
+/**
+ * MongoDB Extended JSON streaming options
+ */
+export interface MongoStreamingOptions extends StreamingOptions {
+  /**
+   * Whether to convert MongoDB ObjectIds to strings
+   * @default true
+   */
+  convertObjectIds?: boolean
+
+  /**
+   * Whether to convert MongoDB dates to JS Date objects
+   * @default true
+   */
+  convertDates?: boolean
+}
+
+/**
+ * Stream documents from a MongoDB Extended JSON (JSONL) file
+ *
+ * Returns an async iterator that yields documents one at a time,
+ * enabling memory-efficient processing of large MongoDB export files.
+ *
+ * Note: This function only supports JSONL format (one JSON object per line).
+ * For JSON array format, the file must be loaded into memory.
+ *
+ * @param path - Path to JSONL file
+ * @param options - Streaming options
+ * @returns Async iterator yielding StreamingDocument objects
+ *
+ * @example
+ * // Process MongoDB documents one at a time
+ * for await (const { document, lineNumber, error } of streamFromMongodbJsonl('./data.jsonl')) {
+ *   if (error) {
+ *     console.error(`Error at line ${lineNumber}: ${error}`)
+ *     continue
+ *   }
+ *   // document has BSON values converted
+ *   await processDocument(document)
+ * }
+ *
+ * @example
+ * // With options
+ * const stream = streamFromMongodbJsonl('./data.jsonl', {
+ *   convertObjectIds: true,
+ *   convertDates: true,
+ *   transform: (doc) => ({ ...doc, imported: true }),
+ *   skipErrors: true,
+ * })
+ */
+export async function* streamFromMongodbJsonl(
+  path: string,
+  options?: MongoStreamingOptions
+): AsyncGenerator<StreamingDocument> {
+  const opts = {
+    skipErrors: false,
+    convertObjectIds: true,
+    convertDates: true,
+    ...options,
+  }
+
+  // Check if file exists
+  if (!await fileExists(path)) {
+    throw new Error(`File not found: ${path}`)
+  }
+
+  let lineNumber = 0
+
+  for await (const line of readLines(path)) {
+    lineNumber++
+
+    // Skip empty lines
+    if (!line.trim()) {
+      continue
+    }
+
+    // Parse JSON
+    let doc: Record<string, unknown>
+    try {
+      doc = JSON.parse(line)
+    } catch (err) {
+      if (opts.skipErrors) {
+        continue
+      }
+      yield {
+        document: null as unknown as Record<string, unknown>,
+        lineNumber,
+        error: `Invalid JSON: ${(err as Error).message}`,
+      }
+      continue
+    }
+
+    // Convert BSON extended JSON values
+    if (opts.convertObjectIds || opts.convertDates) {
+      doc = convertBsonDocument(doc, opts)
+    }
+
+    // Apply transform
+    if (opts.transform) {
+      try {
+        doc = opts.transform(doc) as Record<string, unknown>
+      } catch (err) {
+        if (opts.skipErrors) {
+          continue
+        }
+        yield {
+          document: null as unknown as Record<string, unknown>,
+          lineNumber,
+          error: `Transform failed: ${(err as Error).message}`,
+        }
+        continue
+      }
+    }
+
+    // Skip null/undefined documents (filtered by transform)
+    if (doc == null) {
+      continue
+    }
+
+    yield {
+      document: doc,
+      lineNumber,
+    }
+  }
 }

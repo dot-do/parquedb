@@ -32,6 +32,8 @@ import {
   createMutationContext,
   MutationOperationError,
   MutationErrorCodes,
+  type PreMutationHandler,
+  type PostMutationHandler,
 } from './types'
 import { executeCreate, validateNamespace, normalizeNamespace, SchemaValidatorInterface } from './create'
 import { executeUpdate, VersionConflictError } from './update'
@@ -39,6 +41,12 @@ import { executeDelete, applySoftDelete, applyRestore } from './delete'
 import { validateUpdateOperators } from './operators'
 import { generateId } from '../utils'
 import { entityTarget } from '../types/entity'
+import {
+  globalHookRegistry,
+  createMutationContext as createObservabilityMutationContext,
+  type MutationContext as ObservabilityMutationContext,
+  type MutationResult as ObservabilityMutationResult,
+} from '../observability'
 
 // =============================================================================
 // Mutation Executor
@@ -145,6 +153,7 @@ export class MutationExecutor {
     store: EntityStore,
     options?: CreateOptions
   ): Promise<Entity<T>> {
+    const startTime = Date.now()
     validateNamespace(namespace)
 
     const context = createMutationContext(namespace, {
@@ -154,28 +163,56 @@ export class MutationExecutor {
         (options?.validateOnWrite === true ? 'strict' : options?.validateOnWrite || 'strict'),
     })
 
-    // Execute pre-mutation hooks
-    await this.executeHooks('preMutation', context, 'create', data)
-    await this.executeHooks('preCreate', context, 'create', data)
+    // Create observability context
+    const observabilityContext = createObservabilityMutationContext(
+      'create',
+      namespace,
+      undefined,
+      data as CreateInput<unknown>
+    )
 
-    // Execute create
-    const result = executeCreate<T>(context, data, {
-      schema: this.schema,
-      schemaValidator: this.schemaValidator,
-      generateId,
-    })
+    // Dispatch observability hook: mutation start
+    await globalHookRegistry.dispatchMutationStart(observabilityContext)
 
-    // Store entity
-    store.set(result.entityId, result.entity as Entity)
+    try {
+      // Execute pre-mutation hooks
+      await this.executeHooks('preMutation', context, 'create', data)
+      await this.executeHooks('preCreate', context, 'create', data)
 
-    // Record events
-    await this.recordEvents(result.events)
+      // Execute create
+      const result = executeCreate<T>(context, data, {
+        schema: this.schema,
+        schemaValidator: this.schemaValidator,
+        generateId,
+      })
 
-    // Execute post-mutation hooks
-    await this.executeHooks('postCreate', context, 'create', result.entity, result.events)
-    await this.executeHooks('postMutation', context, 'create', result.entity, result.events)
+      // Store entity
+      store.set(result.entityId, result.entity as Entity)
 
-    return result.entity
+      // Record events
+      await this.recordEvents(result.events)
+
+      // Execute post-mutation hooks
+      await this.executeHooks('postCreate', context, 'create', result.entity, result.events)
+      await this.executeHooks('postMutation', context, 'create', result.entity, result.events)
+
+      // Dispatch observability hook: mutation end
+      await globalHookRegistry.dispatchMutationEnd(observabilityContext, {
+        affectedCount: 1,
+        generatedIds: [result.entityId],
+        durationMs: Date.now() - startTime,
+        newVersion: (result.entity as Entity).version,
+      })
+
+      return result.entity
+    } catch (error) {
+      // Dispatch observability hook: mutation error
+      await globalHookRegistry.dispatchMutationError(
+        observabilityContext,
+        error instanceof Error ? error : new Error(String(error))
+      )
+      throw error
+    }
   }
 
   // ===========================================================================
@@ -199,6 +236,7 @@ export class MutationExecutor {
     store: EntityStore,
     options?: UpdateOptions
   ): Promise<Entity<T> | null> {
+    const startTime = Date.now()
     validateNamespace(namespace)
     validateUpdateOperators(update)
 
@@ -211,48 +249,82 @@ export class MutationExecutor {
         (options?.validateOnWrite === true ? 'strict' : options?.validateOnWrite || 'strict'),
     })
 
-    // Execute pre-mutation hooks
-    await this.executeHooks('preMutation', context, 'update', { id: fullId, update })
-    await this.executeHooks('preUpdate', context, 'update', { id: fullId, update })
+    // Create observability context
+    const observabilityContext = createObservabilityMutationContext(
+      'update',
+      namespace,
+      fullId,
+      update as UpdateInput<unknown>
+    )
 
-    const existingEntity = store.get(fullId)
+    // Dispatch observability hook: mutation start
+    await globalHookRegistry.dispatchMutationStart(observabilityContext)
 
-    // Execute update
-    const result = executeUpdate<T>(context, fullId, update, existingEntity, {
-      schema: this.schema,
-      expectedVersion: options?.expectedVersion,
-      upsert: options?.upsert,
-      returnDocument: options?.returnDocument,
-      getEntity: (entityId) => store.get(entityId),
-      setEntity: (entityId, entity) => store.set(entityId, entity),
-    })
+    try {
+      // Execute pre-mutation hooks
+      await this.executeHooks('preMutation', context, 'update', { id: fullId, update })
+      await this.executeHooks('preUpdate', context, 'update', { id: fullId, update })
 
-    if (!result.modified) {
-      return result.entity
-    }
+      const existingEntity = store.get(fullId)
 
-    // Store updated entity
-    if (result.entity) {
-      // Get the actual updated entity (not the before version if returnDocument is 'before')
-      const entityToStore = options?.returnDocument === 'before' && existingEntity
-        ? store.get(fullId) // Get from result events
-        : result.entity
+      // Execute update
+      const result = executeUpdate<T>(context, fullId, update, existingEntity, {
+        schema: this.schema,
+        expectedVersion: options?.expectedVersion,
+        upsert: options?.upsert,
+        returnDocument: options?.returnDocument,
+        getEntity: (entityId) => store.get(entityId),
+        setEntity: (entityId, entity) => store.set(entityId, entity),
+      })
 
-      // Actually, we need to reconstruct from the events
-      const createEvent = result.events.find(e => e.op === 'CREATE' || e.op === 'UPDATE')
-      if (createEvent?.after) {
-        store.set(fullId, createEvent.after as Entity)
+      if (!result.modified) {
+        // Dispatch observability hook: mutation end (no changes)
+        await globalHookRegistry.dispatchMutationEnd(observabilityContext, {
+          affectedCount: 0,
+          durationMs: Date.now() - startTime,
+        })
+        return result.entity
       }
+
+      // Store updated entity
+      if (result.entity) {
+        // Get the actual updated entity (not the before version if returnDocument is 'before')
+        const entityToStore = options?.returnDocument === 'before' && existingEntity
+          ? store.get(fullId) // Get from result events
+          : result.entity
+
+        // Actually, we need to reconstruct from the events
+        const createEvent = result.events.find(e => e.op === 'CREATE' || e.op === 'UPDATE')
+        if (createEvent?.after) {
+          store.set(fullId, createEvent.after as Entity)
+        }
+      }
+
+      // Record events
+      await this.recordEvents(result.events)
+
+      // Execute post-mutation hooks
+      await this.executeHooks('postUpdate', context, 'update', result.entity, result.events)
+      await this.executeHooks('postMutation', context, 'update', result.entity, result.events)
+
+      // Dispatch observability hook: mutation end
+      const updatedEntity = result.entity as Entity | null
+      await globalHookRegistry.dispatchMutationEnd(observabilityContext, {
+        affectedCount: result.modified ? 1 : 0,
+        generatedIds: result.upserted ? [fullId] : undefined,
+        durationMs: Date.now() - startTime,
+        newVersion: updatedEntity?.version,
+      })
+
+      return result.entity
+    } catch (error) {
+      // Dispatch observability hook: mutation error
+      await globalHookRegistry.dispatchMutationError(
+        observabilityContext,
+        error instanceof Error ? error : new Error(String(error))
+      )
+      throw error
     }
-
-    // Record events
-    await this.recordEvents(result.events)
-
-    // Execute post-mutation hooks
-    await this.executeHooks('postUpdate', context, 'update', result.entity, result.events)
-    await this.executeHooks('postMutation', context, 'update', result.entity, result.events)
-
-    return result.entity
   }
 
   // ===========================================================================
@@ -274,6 +346,7 @@ export class MutationExecutor {
     store: EntityStore,
     options?: DeleteOptions
   ): Promise<{ deletedCount: number }> {
+    const startTime = Date.now()
     validateNamespace(namespace)
 
     const fullId = id.includes('/') ? id : `${namespace}/${id}`
@@ -282,36 +355,62 @@ export class MutationExecutor {
       actor: options?.actor || this.defaultActor,
     })
 
-    // Execute pre-mutation hooks
-    await this.executeHooks('preMutation', context, 'delete', { id: fullId })
-    await this.executeHooks('preDelete', context, 'delete', { id: fullId })
+    // Create observability context
+    const observabilityContext = createObservabilityMutationContext(
+      'delete',
+      namespace,
+      fullId
+    )
+    observabilityContext.hard = options?.hard
 
-    const existingEntity = store.get(fullId)
+    // Dispatch observability hook: mutation start
+    await globalHookRegistry.dispatchMutationStart(observabilityContext)
 
-    // Execute delete
-    const result = executeDelete(context, fullId, existingEntity, {
-      expectedVersion: options?.expectedVersion,
-      hard: options?.hard,
-    })
+    try {
+      // Execute pre-mutation hooks
+      await this.executeHooks('preMutation', context, 'delete', { id: fullId })
+      await this.executeHooks('preDelete', context, 'delete', { id: fullId })
 
-    // Apply deletion to store
-    if (result.deletedCount > 0 && existingEntity) {
-      if (options?.hard) {
-        store.delete(fullId)
-      } else {
-        const softDeleted = applySoftDelete({ ...existingEntity }, context)
-        store.set(fullId, softDeleted)
+      const existingEntity = store.get(fullId)
+
+      // Execute delete
+      const result = executeDelete(context, fullId, existingEntity, {
+        expectedVersion: options?.expectedVersion,
+        hard: options?.hard,
+      })
+
+      // Apply deletion to store
+      if (result.deletedCount > 0 && existingEntity) {
+        if (options?.hard) {
+          store.delete(fullId)
+        } else {
+          const softDeleted = applySoftDelete({ ...existingEntity }, context)
+          store.set(fullId, softDeleted)
+        }
       }
+
+      // Record events
+      await this.recordEvents(result.events)
+
+      // Execute post-mutation hooks
+      await this.executeHooks('postDelete', context, 'delete', result, result.events)
+      await this.executeHooks('postMutation', context, 'delete', result, result.events)
+
+      // Dispatch observability hook: mutation end
+      await globalHookRegistry.dispatchMutationEnd(observabilityContext, {
+        affectedCount: result.deletedCount,
+        durationMs: Date.now() - startTime,
+      })
+
+      return { deletedCount: result.deletedCount }
+    } catch (error) {
+      // Dispatch observability hook: mutation error
+      await globalHookRegistry.dispatchMutationError(
+        observabilityContext,
+        error instanceof Error ? error : new Error(String(error))
+      )
+      throw error
     }
-
-    // Record events
-    await this.recordEvents(result.events)
-
-    // Execute post-mutation hooks
-    await this.executeHooks('postDelete', context, 'delete', result, result.events)
-    await this.executeHooks('postMutation', context, 'delete', result, result.events)
-
-    return { deletedCount: result.deletedCount }
   }
 
   // ===========================================================================
@@ -391,32 +490,61 @@ export class MutationExecutor {
     matchFilter: (entity: Entity, filter: Filter) => boolean,
     options?: DeleteOptions
   ): Promise<{ deletedCount: number }> {
+    const startTime = Date.now()
     validateNamespace(namespace)
 
-    let deletedCount = 0
+    // Create observability context
+    const observabilityContext = createObservabilityMutationContext(
+      'deleteMany',
+      namespace
+    )
+    observabilityContext.hard = options?.hard
+    observabilityContext.metadata = { filter }
 
-    store.forEach((entity, id) => {
-      if (id.startsWith(`${namespace}/`)) {
-        if (!entity.deletedAt && matchFilter(entity, filter)) {
-          // Delete each matching entity
-          // This is simplified - the actual implementation would batch these
-          const context = createMutationContext(namespace, {
-            actor: options?.actor || this.defaultActor,
-          })
+    // Dispatch observability hook: mutation start
+    await globalHookRegistry.dispatchMutationStart(observabilityContext)
 
-          if (options?.hard) {
-            store.delete(id)
-          } else {
-            applySoftDelete(entity, context)
-            store.set(id, entity)
+    try {
+      let deletedCount = 0
+      const deletedIds: string[] = []
+
+      store.forEach((entity, id) => {
+        if (id.startsWith(`${namespace}/`)) {
+          if (!entity.deletedAt && matchFilter(entity, filter)) {
+            // Delete each matching entity
+            // This is simplified - the actual implementation would batch these
+            const context = createMutationContext(namespace, {
+              actor: options?.actor || this.defaultActor,
+            })
+
+            if (options?.hard) {
+              store.delete(id)
+            } else {
+              applySoftDelete(entity, context)
+              store.set(id, entity)
+            }
+
+            deletedCount++
+            deletedIds.push(id)
           }
-
-          deletedCount++
         }
-      }
-    })
+      })
 
-    return { deletedCount }
+      // Dispatch observability hook: mutation end
+      await globalHookRegistry.dispatchMutationEnd(observabilityContext, {
+        affectedCount: deletedCount,
+        durationMs: Date.now() - startTime,
+      })
+
+      return { deletedCount }
+    } catch (error) {
+      // Dispatch observability hook: mutation error
+      await globalHookRegistry.dispatchMutationError(
+        observabilityContext,
+        error instanceof Error ? error : new Error(String(error))
+      )
+      throw error
+    }
   }
 
   // ===========================================================================
@@ -435,9 +563,9 @@ export class MutationExecutor {
 
     for (const hook of hooks) {
       if (events) {
-        await (hook as any)(context, operation, data, events)
+        await (hook as PostMutationHandler)(context, operation, data, events)
       } else {
-        await hook(context, operation, data)
+        await (hook as PreMutationHandler)(context, operation, data)
       }
     }
   }

@@ -15,10 +15,22 @@
  *
  * Handles:
  * - Primitives (strict equality)
- * - null/undefined (treated as equal)
+ * - null/undefined (treated as equal - see note below)
  * - Dates (compared by timestamp)
  * - Arrays (element-wise comparison)
  * - Objects (key-value comparison)
+ *
+ * **Null/Undefined Behavior:**
+ * For deep equality (used by $eq, $ne, $in, $nin operators), null and undefined
+ * are treated as equivalent. This follows MongoDB's behavior where missing fields
+ * are treated the same as fields explicitly set to null for equality comparisons.
+ *
+ * Examples:
+ * - `deepEqual(null, null)` => true
+ * - `deepEqual(undefined, undefined)` => true
+ * - `deepEqual(null, undefined)` => true (equivalent for equality)
+ * - `deepEqual(null, 0)` => false
+ * - `deepEqual(undefined, '')` => false
  *
  * @param a - First value
  * @param b - Second value
@@ -67,12 +79,24 @@ export function deepEqual(a: unknown, b: unknown): boolean {
  * Compare two values for ordering
  *
  * Handles:
- * - null/undefined (sort first)
+ * - null/undefined (sort first, treated as equal to each other)
  * - Numbers (numeric comparison)
- * - Strings (locale-aware comparison)
+ * - Strings (lexicographic comparison)
  * - Dates (timestamp comparison)
  * - Booleans (false < true)
  * - Cross-type (string conversion fallback)
+ *
+ * **Null/Undefined Behavior for Sorting:**
+ * For ordering/sorting purposes, null and undefined are treated as equivalent
+ * and sort before all other values. This ensures consistent sort order
+ * regardless of whether a field is missing or explicitly set to null.
+ *
+ * Examples:
+ * - `compareValues(null, null)` => 0 (equal)
+ * - `compareValues(undefined, undefined)` => 0 (equal)
+ * - `compareValues(null, undefined)` => 0 (equivalent for sorting)
+ * - `compareValues(null, 0)` => -1 (nullish sorts first)
+ * - `compareValues(1, null)` => 1 (values sort after nullish)
  *
  * @param a - First value
  * @param b - Second value
@@ -191,6 +215,14 @@ export function deepClone<T>(obj: T): T {
 
 /**
  * Get the type of a value (matching MongoDB's $type operator)
+ *
+ * **Null/Undefined Behavior:**
+ * Both null and undefined return 'null' as the type. This matches MongoDB's
+ * $type operator behavior where undefined/missing fields are treated as null type.
+ *
+ * Examples:
+ * - `getValueType(null)` => 'null'
+ * - `getValueType(undefined)` => 'null'
  *
  * @param value - Value to check
  * @returns Type string: 'null', 'array', 'date', 'boolean', 'number', 'string', 'object'

@@ -24,16 +24,16 @@ import type {
 } from './types'
 import { encodeVariant } from './variant'
 import { writeCompressors, compressors } from './compression'
+import {
+  DEFAULT_ROW_GROUP_SIZE,
+  DEFAULT_PARQUET_PAGE_SIZE,
+} from '../constants'
 
 // =============================================================================
 // Writer Configuration
 // =============================================================================
 
-/** Default row group size */
-const DEFAULT_ROW_GROUP_SIZE = 10000
-
-/** Default page size in bytes */
-const DEFAULT_PAGE_SIZE = 1024 * 1024 // 1MB
+// Row group and page size constants imported from constants.ts
 
 /** Compression codec mapping */
 const COMPRESSION_MAP: Record<string, CompressionCodec> = {
@@ -90,7 +90,7 @@ export class ParquetWriter {
     this.compression = COMPRESSION_MAP[options.compression ?? 'lz4'] ?? 'LZ4'
     this.rowGroupSize = options.rowGroupSize ?? DEFAULT_ROW_GROUP_SIZE
     this.useDictionary = options.dictionary ?? true
-    this.pageSize = options.pageSize ?? DEFAULT_PAGE_SIZE
+    this.pageSize = options.pageSize ?? DEFAULT_PARQUET_PAGE_SIZE
     this.enableStatistics = options.statistics ?? true
     this.defaultMetadata = options.metadata ?? {}
   }

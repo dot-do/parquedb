@@ -339,6 +339,84 @@ export {
 } from './mutation'
 
 // =============================================================================
+// Constants
+// =============================================================================
+
+export {
+  // Limits
+  DEFAULT_MAX_INBOUND,
+  DEFAULT_PAGE_SIZE,
+  MAX_BATCH_SIZE,
+  // Concurrency
+  DEFAULT_CONCURRENCY,
+  // Storage
+  MIN_PART_SIZE,
+  DEFAULT_PART_SIZE,
+  MAX_PARTS,
+  // Cache
+  DEFAULT_CACHE_TTL,
+  MAX_CACHE_SIZE,
+  // Parquet
+  DEFAULT_ROW_GROUP_SIZE,
+  DEFAULT_PARQUET_PAGE_SIZE,
+  // Bloom Filters
+  DEFAULT_BLOOM_SIZE,
+  DEFAULT_NUM_HASH_FUNCTIONS,
+  ROW_GROUP_BLOOM_SIZE,
+  // HNSW Vector Index
+  DEFAULT_HNSW_M,
+  DEFAULT_HNSW_EF_CONSTRUCTION,
+  DEFAULT_HNSW_EF_SEARCH,
+  // Events
+  DEFAULT_MAX_EVENTS,
+  DEFAULT_MAX_EVENT_AGE,
+  DEFAULT_EVENT_BUFFER_SIZE,
+  DEFAULT_EVENT_BUFFER_BYTES,
+  DEFAULT_FLUSH_INTERVAL_MS,
+  DEFAULT_R2_THRESHOLD_BYTES,
+  // Retry
+  DEFAULT_MAX_RETRIES,
+  DEFAULT_RETRY_BASE_DELAY,
+  DEFAULT_RETRY_MAX_DELAY,
+  DEFAULT_RETRY_MULTIPLIER,
+  DEFAULT_RETRY_JITTER_FACTOR,
+} from './constants'
+
+// =============================================================================
+// Integrations (Iceberg, etc.)
+// =============================================================================
+
+export {
+  // Iceberg Metadata (Basic)
+  IcebergMetadataManager,
+  IcebergStorageAdapter,
+  createIcebergMetadataManager,
+  enableIcebergMetadata,
+  parqueDBTypeToIceberg,
+  icebergTypeToParqueDB,
+  // Iceberg Metadata (Native - requires @dotdo/iceberg)
+  NativeIcebergMetadataManager,
+  NativeIcebergStorageAdapter,
+  createNativeIcebergManager,
+  enableNativeIcebergMetadata,
+  // Types (Basic)
+  type IcebergMetadataOptions,
+  type IcebergSnapshotRef,
+  type IcebergDataFile,
+  type IcebergSchema,
+  type IcebergField,
+  type IcebergType,
+  type IcebergCommitResult,
+  // Types (Native)
+  type NativeIcebergOptions,
+  type IcebergNativeSchema,
+  type PartitionSpecDefinition,
+  type SortOrderDefinition,
+  type NativeDataFile,
+  type NativeCommitResult,
+} from './integrations'
+
+// =============================================================================
 // Version
 // =============================================================================
 

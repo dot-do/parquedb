@@ -5,20 +5,26 @@
  * - JSON array files
  * - JSON objects with nested arrays
  * - JSONL (JSON Lines) files
+ *
+ * Features:
+ * - Streaming support for large files
+ * - Async iterators for memory-efficient processing
  */
 
 import type { ParqueDB } from '../ParqueDB'
 import type { CreateInput, EntityId } from '../types/entity'
-import type { JsonImportOptions, MigrationResult, MigrationError } from './types'
+import type { JsonImportOptions, MigrationResult, MigrationError, StreamingDocument, StreamingOptions } from './types'
 import { getNestedValue, fileExists } from './utils'
+import { MAX_BATCH_SIZE } from '../constants'
 
 /**
  * Default migration options
  */
 const DEFAULT_OPTIONS: Required<Omit<JsonImportOptions, 'onProgress' | 'transform' | 'entityType' | 'arrayPath'>> = {
-  batchSize: 1000,
+  batchSize: MAX_BATCH_SIZE,
   skipValidation: false,
   actor: 'system/migration',
+  streaming: false,
 }
 
 /**
@@ -406,5 +412,203 @@ async function* readLines(path: string): AsyncGenerator<string> {
 
   for await (const line of rl) {
     yield line
+  }
+}
+
+/**
+ * Stream documents from a JSONL (JSON Lines) file
+ *
+ * Returns an async iterator that yields documents one at a time,
+ * enabling memory-efficient processing of large files.
+ *
+ * @param path - Path to JSONL file
+ * @param options - Streaming options
+ * @returns Async iterator yielding StreamingDocument objects
+ *
+ * @example
+ * // Process documents one at a time
+ * for await (const { document, lineNumber, error } of streamFromJsonl('./data.jsonl')) {
+ *   if (error) {
+ *     console.error(`Error at line ${lineNumber}: ${error}`)
+ *     continue
+ *   }
+ *   await processDocument(document)
+ * }
+ *
+ * @example
+ * // With transform and error handling
+ * const stream = streamFromJsonl('./data.jsonl', {
+ *   transform: (doc) => ({ ...doc, processed: true }),
+ *   skipErrors: true,
+ * })
+ * for await (const { document } of stream) {
+ *   console.log(document)
+ * }
+ */
+export async function* streamFromJsonl(
+  path: string,
+  options?: StreamingOptions
+): AsyncGenerator<StreamingDocument> {
+  const opts = { skipErrors: false, ...options }
+
+  // Check if file exists
+  if (!await fileExists(path)) {
+    throw new Error(`File not found: ${path}`)
+  }
+
+  let lineNumber = 0
+
+  for await (const line of readLines(path)) {
+    lineNumber++
+
+    // Skip empty lines
+    if (!line.trim()) {
+      continue
+    }
+
+    // Parse JSON
+    let doc: unknown
+    try {
+      doc = JSON.parse(line)
+    } catch (err) {
+      if (opts.skipErrors) {
+        continue
+      }
+      yield {
+        document: null as unknown as Record<string, unknown>,
+        lineNumber,
+        error: `Invalid JSON: ${(err as Error).message}`,
+      }
+      continue
+    }
+
+    // Apply transform
+    if (opts.transform) {
+      try {
+        doc = opts.transform(doc)
+      } catch (err) {
+        if (opts.skipErrors) {
+          continue
+        }
+        yield {
+          document: null as unknown as Record<string, unknown>,
+          lineNumber,
+          error: `Transform failed: ${(err as Error).message}`,
+        }
+        continue
+      }
+    }
+
+    // Skip null/undefined documents (filtered by transform)
+    if (doc == null) {
+      continue
+    }
+
+    yield {
+      document: doc as Record<string, unknown>,
+      lineNumber,
+    }
+  }
+}
+
+/**
+ * Stream documents from a JSON array file
+ *
+ * For JSON array files, this function reads and parses the entire file
+ * but yields documents one at a time for consistent API with streaming.
+ * For truly streaming large files, use JSONL format with streamFromJsonl().
+ *
+ * When options.streaming is true and the file is a JSON object with arrayPath,
+ * it attempts to stream the array elements.
+ *
+ * @param path - Path to JSON file
+ * @param options - Streaming options with optional arrayPath
+ * @returns Async iterator yielding StreamingDocument objects
+ *
+ * @example
+ * for await (const { document, error } of streamFromJson('./data.json')) {
+ *   if (!error) {
+ *     await processDocument(document)
+ *   }
+ * }
+ */
+export async function* streamFromJson(
+  path: string,
+  options?: StreamingOptions & { arrayPath?: string }
+): AsyncGenerator<StreamingDocument> {
+  const opts = { skipErrors: false, ...options }
+
+  // Check if file exists
+  if (!await fileExists(path)) {
+    throw new Error(`File not found: ${path}`)
+  }
+
+  // Read and parse JSON file
+  const content = await readFile(path)
+  let data: unknown
+
+  try {
+    data = JSON.parse(content)
+  } catch (err) {
+    throw new Error(`Invalid JSON in file ${path}: ${(err as Error).message}`)
+  }
+
+  // Extract array from data
+  let documents: unknown[]
+
+  if (Array.isArray(data)) {
+    documents = data
+  } else if (typeof data === 'object' && data !== null) {
+    if (opts.arrayPath) {
+      const nested = getNestedValue(data as Record<string, unknown>, opts.arrayPath)
+      if (!Array.isArray(nested)) {
+        throw new Error(`Path '${opts.arrayPath}' does not contain an array`)
+      }
+      documents = nested
+    } else {
+      // Try to find an array in the object
+      const arrays = Object.values(data).filter(Array.isArray)
+      if (arrays.length === 1) {
+        documents = arrays[0] as unknown[]
+      } else if (arrays.length > 1) {
+        throw new Error('Multiple arrays found in JSON object. Please specify arrayPath option.')
+      } else {
+        throw new Error('No array found in JSON object. Please specify arrayPath option.')
+      }
+    }
+  } else {
+    throw new Error('JSON root must be an array or object')
+  }
+
+  // Yield documents one at a time
+  for (let i = 0; i < documents.length; i++) {
+    let doc = documents[i]
+
+    // Apply transform
+    if (opts.transform) {
+      try {
+        doc = opts.transform(doc)
+      } catch (err) {
+        if (opts.skipErrors) {
+          continue
+        }
+        yield {
+          document: null as unknown as Record<string, unknown>,
+          lineNumber: i + 1,
+          error: `Transform failed: ${(err as Error).message}`,
+        }
+        continue
+      }
+    }
+
+    // Skip null/undefined documents
+    if (doc == null) {
+      continue
+    }
+
+    yield {
+      document: doc as Record<string, unknown>,
+      lineNumber: i + 1,
+    }
   }
 }

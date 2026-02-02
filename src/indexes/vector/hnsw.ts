@@ -21,14 +21,19 @@ import type {
 } from '../types'
 import { getDistanceFunction, distanceToScore } from './distance'
 import { logger } from '../../utils/logger'
+import {
+  DEFAULT_HNSW_M,
+  DEFAULT_HNSW_EF_CONSTRUCTION,
+  DEFAULT_HNSW_EF_SEARCH,
+} from '../../constants'
 
 // =============================================================================
 // Constants
 // =============================================================================
 
-const DEFAULT_M = 16 // Number of connections per layer
-const DEFAULT_EF_CONSTRUCTION = 200 // Size of dynamic candidate list during construction
-const DEFAULT_EF_SEARCH = 50 // Size of dynamic candidate list during search
+const DEFAULT_M = DEFAULT_HNSW_M // Number of connections per layer
+const DEFAULT_EF_CONSTRUCTION = DEFAULT_HNSW_EF_CONSTRUCTION // Size of dynamic candidate list during construction
+const DEFAULT_EF_SEARCH = DEFAULT_HNSW_EF_SEARCH // Size of dynamic candidate list during search
 const DEFAULT_METRIC: VectorMetric = 'cosine'
 const ML = 1 / Math.log(DEFAULT_M) // Level generation factor
 

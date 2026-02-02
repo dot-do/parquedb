@@ -11,6 +11,8 @@ import {
   setField,
   unsetField,
   validateUpdateOperators,
+  isUnsafePath,
+  validatePath,
 } from '../../../src/mutation/operators'
 
 // =============================================================================
@@ -443,5 +445,165 @@ describe('validateUpdateOperators', () => {
         $inc: { count: 1 },
       })
     ).toThrow(/Conflicting operators/)
+  })
+})
+
+// =============================================================================
+// Prototype Pollution Protection Tests
+// =============================================================================
+
+describe('Prototype Pollution Protection', () => {
+  describe('isUnsafePath', () => {
+    it('detects __proto__ as unsafe', () => {
+      expect(isUnsafePath('__proto__')).toBe(true)
+      expect(isUnsafePath('data.__proto__')).toBe(true)
+      expect(isUnsafePath('__proto__.polluted')).toBe(true)
+      expect(isUnsafePath('nested.__proto__.value')).toBe(true)
+    })
+
+    it('detects constructor as unsafe', () => {
+      expect(isUnsafePath('constructor')).toBe(true)
+      expect(isUnsafePath('data.constructor')).toBe(true)
+      expect(isUnsafePath('constructor.prototype')).toBe(true)
+    })
+
+    it('detects prototype as unsafe', () => {
+      expect(isUnsafePath('prototype')).toBe(true)
+      expect(isUnsafePath('data.prototype')).toBe(true)
+      expect(isUnsafePath('prototype.polluted')).toBe(true)
+    })
+
+    it('allows safe paths', () => {
+      expect(isUnsafePath('name')).toBe(false)
+      expect(isUnsafePath('user.profile.name')).toBe(false)
+      expect(isUnsafePath('items.0.value')).toBe(false)
+      expect(isUnsafePath('data_proto')).toBe(false)
+      expect(isUnsafePath('myConstructor')).toBe(false)
+      expect(isUnsafePath('prototypeVersion')).toBe(false)
+    })
+  })
+
+  describe('validatePath', () => {
+    it('throws on unsafe paths', () => {
+      expect(() => validatePath('__proto__')).toThrow(/prototype pollution/)
+      expect(() => validatePath('constructor')).toThrow(/prototype pollution/)
+      expect(() => validatePath('prototype')).toThrow(/prototype pollution/)
+      expect(() => validatePath('data.__proto__.polluted')).toThrow(/prototype pollution/)
+    })
+
+    it('does not throw on safe paths', () => {
+      expect(() => validatePath('name')).not.toThrow()
+      expect(() => validatePath('user.profile.email')).not.toThrow()
+    })
+  })
+
+  describe('setField rejects prototype pollution', () => {
+    it('throws when setting __proto__', () => {
+      const obj = { name: 'test' }
+      expect(() => setField(obj, '__proto__', { polluted: true })).toThrow(/prototype pollution/)
+    })
+
+    it('throws when setting nested __proto__', () => {
+      const obj = { data: {} }
+      expect(() => setField(obj, 'data.__proto__.polluted', true)).toThrow(/prototype pollution/)
+    })
+
+    it('throws when setting constructor', () => {
+      const obj = { name: 'test' }
+      expect(() => setField(obj, 'constructor', {})).toThrow(/prototype pollution/)
+    })
+
+    it('throws when setting constructor.prototype', () => {
+      const obj = { name: 'test' }
+      expect(() => setField(obj, 'constructor.prototype.polluted', true)).toThrow(/prototype pollution/)
+    })
+
+    it('throws when setting prototype', () => {
+      const obj = { name: 'test' }
+      expect(() => setField(obj, 'prototype', {})).toThrow(/prototype pollution/)
+    })
+  })
+
+  describe('getField rejects prototype pollution', () => {
+    it('throws when getting __proto__', () => {
+      const obj = { name: 'test' }
+      expect(() => getField(obj, '__proto__')).toThrow(/prototype pollution/)
+    })
+
+    it('throws when getting nested __proto__', () => {
+      const obj = { data: { value: 1 } }
+      expect(() => getField(obj, 'data.__proto__')).toThrow(/prototype pollution/)
+    })
+  })
+
+  describe('unsetField rejects prototype pollution', () => {
+    it('throws when unsetting __proto__', () => {
+      const obj = { name: 'test' }
+      expect(() => unsetField(obj, '__proto__')).toThrow(/prototype pollution/)
+    })
+
+    it('throws when unsetting nested __proto__', () => {
+      const obj = { data: { value: 1 } }
+      expect(() => unsetField(obj, 'data.__proto__')).toThrow(/prototype pollution/)
+    })
+  })
+
+  describe('applyOperators rejects prototype pollution', () => {
+    it('throws when $set uses __proto__ path', () => {
+      const doc = { name: 'test' }
+      expect(() => applyOperators(doc, { $set: { '__proto__.polluted': true } }))
+        .toThrow(/prototype pollution/)
+    })
+
+    it('throws when $set uses constructor path', () => {
+      const doc = { name: 'test' }
+      expect(() => applyOperators(doc, { $set: { 'constructor.prototype.polluted': true } }))
+        .toThrow(/prototype pollution/)
+    })
+
+    it('throws when $unset uses __proto__ path', () => {
+      const doc = { name: 'test' }
+      // Use JSON.parse to create an object where __proto__ is a real property
+      // (object literals handle __proto__ specially)
+      const update = JSON.parse('{"$unset": {"__proto__": ""}}')
+      expect(() => applyOperators(doc, update))
+        .toThrow(/prototype pollution/)
+    })
+
+    it('throws when $inc uses __proto__ path', () => {
+      const doc = { count: 1 }
+      expect(() => applyOperators(doc, { $inc: { '__proto__.count': 1 } }))
+        .toThrow(/prototype pollution/)
+    })
+
+    it('throws when $rename source uses __proto__ path', () => {
+      const doc = { name: 'test' }
+      // Use JSON.parse to create an object where __proto__ is a real property
+      const update = JSON.parse('{"$rename": {"__proto__": "newName"}}')
+      expect(() => applyOperators(doc, update))
+        .toThrow(/prototype pollution/)
+    })
+
+    it('throws when $rename target uses __proto__ path', () => {
+      const doc = { name: 'test' }
+      expect(() => applyOperators(doc, { $rename: { name: '__proto__' } }))
+        .toThrow(/prototype pollution/)
+    })
+
+    it('does not pollute Object.prototype', () => {
+      // This test verifies that even if our protection fails somehow,
+      // the test itself checks that Object.prototype was not modified
+      const beforeKeys = Object.keys(Object.prototype)
+
+      try {
+        applyOperators({}, { $set: { '__proto__.polluted': true } })
+      } catch {
+        // Expected to throw
+      }
+
+      const afterKeys = Object.keys(Object.prototype)
+      expect(afterKeys).toEqual(beforeKeys)
+      expect((Object.prototype as any).polluted).toBeUndefined()
+    })
   })
 })

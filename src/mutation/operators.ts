@@ -12,9 +12,41 @@
  * - Bitwise: $bit
  */
 
-import type { UpdateInput, Filter } from '../types'
+import type { UpdateInput, Filter, EntityId } from '../types'
 import type { ApplyOperatorsOptions, ApplyOperatorsResult, RelationshipOperation } from './types'
 import { compareValues, deepEqual } from '../utils'
+
+// =============================================================================
+// Path Security
+// =============================================================================
+
+/**
+ * Dangerous path segments that could lead to prototype pollution
+ */
+const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/**
+ * Check if a dot-notation path contains unsafe segments that could lead to prototype pollution
+ *
+ * @param path - The dot-notation path to check
+ * @returns true if the path contains unsafe segments
+ */
+export function isUnsafePath(path: string): boolean {
+  const parts = path.split('.')
+  return parts.some(part => UNSAFE_PATH_SEGMENTS.has(part))
+}
+
+/**
+ * Validate that a path is safe, throwing an error if it contains unsafe segments
+ *
+ * @param path - The dot-notation path to validate
+ * @throws Error if the path is unsafe
+ */
+export function validatePath(path: string): void {
+  if (isUnsafePath(path)) {
+    throw new Error(`Unsafe path detected: "${path}" contains a prototype pollution attempt`)
+  }
+}
 
 // =============================================================================
 // Main Operator Application
@@ -262,7 +294,7 @@ export function applyOperators<T extends Record<string, unknown>>(
       relationshipOps.push({
         type: 'link',
         predicate,
-        targets: targets as string[],
+        targets: targets as EntityId[],
       })
     }
   }
@@ -281,7 +313,7 @@ export function applyOperators<T extends Record<string, unknown>>(
         relationshipOps.push({
           type: 'unlink',
           predicate,
-          targets: targets as string[],
+          targets: targets as EntityId[],
         })
       }
     }
@@ -300,8 +332,10 @@ export function applyOperators<T extends Record<string, unknown>>(
 
 /**
  * Get a field value using dot notation
+ * @throws Error if path contains unsafe segments (prototype pollution attempt)
  */
 export function getField(obj: unknown, path: string): unknown {
+  validatePath(path)
   if (obj === null || obj === undefined) {
     return undefined
   }
@@ -334,8 +368,10 @@ export function getField(obj: unknown, path: string): unknown {
 
 /**
  * Set a field value using dot notation (immutable)
+ * @throws Error if path contains unsafe segments (prototype pollution attempt)
  */
 export function setField<T>(obj: T, path: string, value: unknown): T {
+  validatePath(path)
   const parts = path.split('.')
 
   if (parts.length === 1) {
@@ -411,8 +447,10 @@ export function setField<T>(obj: T, path: string, value: unknown): T {
 
 /**
  * Remove a field using dot notation (immutable)
+ * @throws Error if path contains unsafe segments (prototype pollution attempt)
  */
 export function unsetField<T>(obj: T, path: string): T {
+  validatePath(path)
   const parts = path.split('.')
 
   if (parts.length === 1) {

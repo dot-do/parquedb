@@ -49,6 +49,7 @@
     "load:all": "tsx scripts/load-all.ts"
   },
   "dependencies": {
+    "@dotdo/iceberg": "file:../iceberg/core",
     "@graphdl/core": "^0.3.0",
     "@icetype/core": "^0.2.0",
     "@icetype/iceberg": "^0.2.0",

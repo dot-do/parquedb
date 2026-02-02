@@ -45,7 +45,7 @@ export {
 } from './executor'
 
 // Types
-export {
+export type {
   MutationContext,
   CreateResult,
   UpdateResult,
@@ -54,14 +54,16 @@ export {
   MutationEvent,
   MutationError,
   MutationErrorCode,
-  MutationErrorCodes,
-  MutationOperationError,
   MutationHooks,
   PreMutationHandler,
   PostMutationHandler,
   ApplyOperatorsOptions,
   ApplyOperatorsResult,
   RelationshipOperation,
+} from './types'
+export {
+  MutationErrorCodes,
+  MutationOperationError,
   createMutationContext,
 } from './types'
 

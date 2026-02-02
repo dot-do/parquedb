@@ -44,6 +44,13 @@ export interface MigrationOptions {
    * @default 'system/migration'
    */
   actor?: string
+
+  /**
+   * Enable streaming mode for large files
+   * When enabled, files are processed line by line instead of loading entirely into memory
+   * @default false
+   */
+  streaming?: boolean
 }
 
 /**
@@ -174,4 +181,70 @@ export interface MigrationError {
  */
 export interface JsonLinesReader {
   [Symbol.asyncIterator](): AsyncIterator<unknown>
+}
+
+/**
+ * Streaming result for async iteration
+ * Used by streamFromJsonl and streamFromCsv
+ */
+export interface StreamingDocument<T = Record<string, unknown>> {
+  /** The parsed document */
+  document: T
+  /** Line number in source file (1-indexed) */
+  lineNumber: number
+  /** Any parse error (document will be null) */
+  error?: string
+}
+
+/**
+ * Streaming options for async iterators
+ */
+export interface StreamingOptions {
+  /**
+   * Transform function applied to each document
+   * Return null/undefined to skip a document
+   */
+  transform?: (doc: unknown) => unknown
+
+  /**
+   * Skip documents that fail to parse (instead of yielding error)
+   * @default false
+   */
+  skipErrors?: boolean
+}
+
+/**
+ * CSV streaming options
+ */
+export interface CsvStreamingOptions extends StreamingOptions {
+  /**
+   * CSV delimiter character
+   * @default ','
+   */
+  delimiter?: string
+
+  /**
+   * Whether the first row contains column headers
+   * @default true
+   */
+  headers?: boolean | string[]
+
+  /**
+   * Skip empty lines
+   * @default true
+   */
+  skipEmptyLines?: boolean
+
+  /**
+   * Type inference for columns
+   * If true, attempts to parse numbers, booleans, and dates
+   * @default true
+   */
+  inferTypes?: boolean
+
+  /**
+   * Custom column type mappings
+   * e.g., { age: 'number', active: 'boolean', createdAt: 'date' }
+   */
+  columnTypes?: Record<string, 'string' | 'number' | 'boolean' | 'date' | 'json'>
 }

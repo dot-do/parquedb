@@ -950,6 +950,472 @@ describe('Concurrency and Race Conditions', () => {
   })
 
   // ===========================================================================
+  // Concurrent Writes to Same Entity
+  // ===========================================================================
+
+  describe('Concurrent Writes to Same Entity', () => {
+    it('should handle multiple simultaneous $set operations on the same entity', async () => {
+      const entity = await postsCollection.create({
+        $type: 'Post',
+        name: 'concurrent-set',
+        title: 'Original',
+        content: 'Original content',
+        status: 'draft',
+        views: 0,
+        likes: 0,
+        tags: [],
+      })
+      const localId = (entity.$id as string).split('/')[1]
+
+      // Fire multiple concurrent $set operations on the same entity
+      const updatePromises = [
+        postsCollection.update(localId, { $set: { status: 'published' } }),
+        postsCollection.update(localId, { $set: { title: 'Updated Title' } }),
+        postsCollection.update(localId, { $set: { content: 'Updated content' } }),
+        postsCollection.update(localId, { $set: { likes: 10 } }),
+      ]
+
+      const results = await Promise.all(updatePromises)
+
+      // All updates should succeed
+      expect(results.every(r => r.modifiedCount === 1)).toBe(true)
+
+      // Final entity should have all updates applied (though order may vary)
+      const final = await postsCollection.get(localId)
+      expect(final.status).toBe('published')
+      expect(final.title).toBe('Updated Title')
+      expect(final.content).toBe('Updated content')
+      expect((final.likes as number)).toBe(10)
+    })
+
+    it('should maintain version consistency with rapid sequential writes', async () => {
+      const entity = await postsCollection.create({
+        $type: 'Post',
+        name: 'version-test',
+        title: 'Original',
+        content: 'Content',
+        status: 'draft',
+        views: 0,
+        likes: 0,
+        tags: [],
+      })
+      const localId = (entity.$id as string).split('/')[1]
+
+      // Perform 20 sequential updates
+      for (let i = 0; i < 20; i++) {
+        await postsCollection.update(localId, { $set: { views: i } })
+      }
+
+      const final = await postsCollection.get(localId)
+      // Version should be 21 (1 initial + 20 updates)
+      expect(final.version).toBe(21)
+      expect((final.views as number)).toBe(19)
+    })
+
+    it('should handle concurrent $inc operations accurately on same field', async () => {
+      const counter = await countersCollection.create({
+        $type: 'Counter',
+        name: 'accurate-counter',
+        value: 0,
+      })
+      const localId = (counter.$id as string).split('/')[1]
+
+      // Fire 50 concurrent increments of 2 each
+      const incrementPromises = Array.from({ length: 50 }, () =>
+        countersCollection.update(localId, { $inc: { value: 2 } })
+      )
+
+      await Promise.all(incrementPromises)
+
+      const result = await countersCollection.get(localId)
+      // Total should be 100 (50 * 2)
+      expect((result.value as number)).toBe(100)
+    })
+
+    it('should handle mixed $inc and $set operations on same entity', async () => {
+      const entity = await postsCollection.create({
+        $type: 'Post',
+        name: 'mixed-ops',
+        title: 'Original',
+        content: 'Content',
+        status: 'draft',
+        views: 0,
+        likes: 0,
+        tags: [],
+      })
+      const localId = (entity.$id as string).split('/')[1]
+
+      // Mix $inc and $set concurrently
+      const operations = [
+        postsCollection.update(localId, { $inc: { views: 10 } }),
+        postsCollection.update(localId, { $set: { status: 'published' } }),
+        postsCollection.update(localId, { $inc: { likes: 5 } }),
+        postsCollection.update(localId, { $set: { title: 'New Title' } }),
+        postsCollection.update(localId, { $inc: { views: 20 } }),
+        postsCollection.update(localId, { $inc: { likes: 3 } }),
+      ]
+
+      await Promise.all(operations)
+
+      const final = await postsCollection.get(localId)
+      expect(final.status).toBe('published')
+      expect(final.title).toBe('New Title')
+      // Total views: 10 + 20 = 30, likes: 5 + 3 = 8
+      expect((final.views as number)).toBe(30)
+      expect((final.likes as number)).toBe(8)
+    })
+  })
+
+  // ===========================================================================
+  // Version Conflicts Under High Contention
+  // ===========================================================================
+
+  describe('Version Conflicts Under High Contention', () => {
+    it('should detect all conflicts when many updates use same expectedVersion', async () => {
+      const entity = await postsCollection.create({
+        $type: 'Post',
+        name: 'high-contention',
+        title: 'Original',
+        content: 'Content',
+        status: 'draft',
+        views: 0,
+        likes: 0,
+        tags: [],
+      })
+      const localId = (entity.$id as string).split('/')[1]
+      const initialVersion = entity.version as number
+
+      // Fire 10 concurrent updates all expecting the same version
+      const updatePromises = Array.from({ length: 10 }, (_, i) =>
+        postsCollection.update(localId, {
+          $set: { title: `Update ${i}` },
+        }, { expectedVersion: initialVersion })
+      )
+
+      const results = await Promise.allSettled(updatePromises)
+
+      // At most one should succeed, rest should fail with version mismatch
+      const successes = results.filter(r => r.status === 'fulfilled')
+      const failures = results.filter(r => r.status === 'rejected')
+
+      expect(successes.length).toBe(1) // Exactly one should succeed
+      expect(failures.length).toBe(9) // Rest should fail
+
+      // All failures should be version mismatch errors
+      for (const failure of failures) {
+        if (failure.status === 'rejected') {
+          expect(failure.reason.message).toContain('Version mismatch')
+        }
+      }
+    })
+
+    it('should allow retry after version conflict', async () => {
+      const entity = await postsCollection.create({
+        $type: 'Post',
+        name: 'retry-test',
+        title: 'Original',
+        content: 'Content',
+        status: 'draft',
+        views: 0,
+        likes: 0,
+        tags: [],
+      })
+      const localId = (entity.$id as string).split('/')[1]
+
+      // First update succeeds
+      await postsCollection.update(localId, {
+        $set: { title: 'First Update' },
+      }, { expectedVersion: 1 })
+
+      // Second update with stale version fails
+      await expect(
+        postsCollection.update(localId, {
+          $set: { title: 'Stale Update' },
+        }, { expectedVersion: 1 })
+      ).rejects.toThrow('Version mismatch')
+
+      // Re-read and retry with correct version
+      const current = await postsCollection.get(localId)
+      await postsCollection.update(localId, {
+        $set: { title: 'Retried Update' },
+      }, { expectedVersion: current.version })
+
+      const final = await postsCollection.get(localId)
+      expect(final.title).toBe('Retried Update')
+      expect(final.version).toBe(3)
+    })
+
+    it('should handle version conflict during concurrent delete and update', async () => {
+      const entity = await postsCollection.create({
+        $type: 'Post',
+        name: 'delete-update-conflict',
+        title: 'Original',
+        content: 'Content',
+        status: 'draft',
+        views: 0,
+        likes: 0,
+        tags: [],
+      })
+      const localId = (entity.$id as string).split('/')[1]
+
+      // Try to update and delete with same version concurrently
+      const results = await Promise.allSettled([
+        postsCollection.update(localId, {
+          $set: { title: 'Updated' },
+        }, { expectedVersion: 1 }),
+        postsCollection.delete(localId, { expectedVersion: 1 }),
+      ])
+
+      // One should succeed, one should fail or both succeed if processed sequentially
+      const successes = results.filter(r => r.status === 'fulfilled')
+      expect(successes.length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
+  // ===========================================================================
+  // Race Conditions Between Create and Update
+  // ===========================================================================
+
+  describe('Race Conditions Between Create and Update', () => {
+    it('should handle update immediately after create', async () => {
+      // Create entity
+      const entity = await postsCollection.create({
+        $type: 'Post',
+        name: 'create-update-race',
+        title: 'Initial',
+        content: 'Content',
+        status: 'draft',
+        views: 0,
+        likes: 0,
+        tags: [],
+      })
+      const localId = (entity.$id as string).split('/')[1]
+
+      // Immediately start an update (no await on create)
+      const updateResult = await postsCollection.update(localId, {
+        $set: { title: 'Updated' },
+      })
+
+      expect(updateResult.modifiedCount).toBe(1)
+
+      const final = await postsCollection.get(localId)
+      expect(final.title).toBe('Updated')
+    })
+
+    it('should handle concurrent creates with updates on newly created entities', async () => {
+      const operations: Promise<string>[] = []
+
+      // Create 10 entities and immediately update each
+      for (let i = 0; i < 10; i++) {
+        const createAndUpdate = async (): Promise<string> => {
+          const created = await postsCollection.create({
+            $type: 'Post',
+            name: `rapid-${i}`,
+            title: `Initial ${i}`,
+            content: 'Content',
+            status: 'draft',
+            views: 0,
+            likes: 0,
+            tags: [],
+          })
+          const localId = (created.$id as string).split('/')[1]
+          await postsCollection.update(localId, {
+            $set: { status: 'published' },
+            $inc: { views: 100 },
+          })
+          return localId
+        }
+        operations.push(createAndUpdate())
+      }
+
+      const localIds = await Promise.all(operations)
+
+      // Verify all entities exist and were updated
+      expect(localIds).toHaveLength(10)
+
+      for (const localId of localIds) {
+        const entity = await postsCollection.get(localId)
+        expect(entity.status).toBe('published')
+        expect((entity.views as number)).toBe(100)
+      }
+    })
+
+    it('should handle update to non-existent entity gracefully', async () => {
+      // Try to update entity that does not exist
+      const result = await postsCollection.update('non-existent-id', {
+        $set: { title: 'Updated' },
+      })
+
+      expect(result.matchedCount).toBe(0)
+      expect(result.modifiedCount).toBe(0)
+    })
+
+    it('should handle upsert during concurrent operations', async () => {
+      // Multiple upserts to different IDs
+      const upsertPromises = Array.from({ length: 5 }, (_, i) =>
+        postsCollection.update(`upsert-test-${i}`, {
+          $set: {
+            $type: 'Post',
+            name: `upsert-test-${i}`,
+            title: `Upserted ${i}`,
+            content: 'Content',
+            status: 'draft',
+            views: 0,
+            likes: 0,
+            tags: [],
+          },
+        }, { upsert: true })
+      )
+
+      const results = await Promise.all(upsertPromises)
+
+      // All upserts should succeed
+      expect(results.every(r => r.modifiedCount === 1)).toBe(true)
+
+      // Verify all entities exist by finding them by name
+      const allPosts = await postsCollection.find({})
+      const upsertedPosts = allPosts.filter(p => p.name?.startsWith('upsert-test-'))
+      expect(upsertedPosts).toHaveLength(5)
+
+      for (let i = 0; i < 5; i++) {
+        const post = upsertedPosts.find(p => p.name === `upsert-test-${i}`)
+        expect(post).toBeDefined()
+        expect(post?.title).toBe(`Upserted ${i}`)
+      }
+    })
+  })
+
+  // ===========================================================================
+  // Lost Update Detection
+  // ===========================================================================
+
+  describe('Lost Update Detection', () => {
+    it('should demonstrate lost update problem without version checking', async () => {
+      // This test demonstrates the read-modify-write anti-pattern
+      const entity = await postsCollection.create({
+        $type: 'Post',
+        name: 'lost-update-demo',
+        title: 'Original',
+        content: 'Content',
+        status: 'draft',
+        views: 100,
+        likes: 0,
+        tags: [],
+      })
+      const localId = (entity.$id as string).split('/')[1]
+
+      // Simulate two "users" reading the entity at the same time
+      const user1Read = await postsCollection.get(localId)
+      const user2Read = await postsCollection.get(localId)
+
+      // Both users modify and write back (without version check)
+      // User 1 adds 10 views, User 2 adds 20 views
+      // Without proper concurrency control, one update could be lost
+
+      await Promise.all([
+        postsCollection.update(localId, {
+          $set: { views: (user1Read.views as number) + 10 },
+        }),
+        postsCollection.update(localId, {
+          $set: { views: (user2Read.views as number) + 20 },
+        }),
+      ])
+
+      const final = await postsCollection.get(localId)
+      // Result could be 110, 120, or 130 depending on order
+      // This demonstrates why $inc should be used for atomic operations
+      expect([110, 120, 130]).toContain(final.views as number)
+    })
+
+    it('should prevent lost updates using $inc atomic operator', async () => {
+      const entity = await postsCollection.create({
+        $type: 'Post',
+        name: 'atomic-update',
+        title: 'Original',
+        content: 'Content',
+        status: 'draft',
+        views: 100,
+        likes: 0,
+        tags: [],
+      })
+      const localId = (entity.$id as string).split('/')[1]
+
+      // Use atomic $inc to ensure both updates are applied
+      await Promise.all([
+        postsCollection.update(localId, { $inc: { views: 10 } }),
+        postsCollection.update(localId, { $inc: { views: 20 } }),
+      ])
+
+      const final = await postsCollection.get(localId)
+      // With atomic $inc, result should always be 130
+      expect((final.views as number)).toBe(130)
+    })
+
+    it('should prevent lost updates using expectedVersion', async () => {
+      const entity = await postsCollection.create({
+        $type: 'Post',
+        name: 'version-protected',
+        title: 'Original',
+        content: 'Content',
+        status: 'draft',
+        views: 100,
+        likes: 0,
+        tags: [],
+      })
+      const localId = (entity.$id as string).split('/')[1]
+
+      // Both users read with version
+      const user1Read = await postsCollection.get(localId)
+      const user2Read = await postsCollection.get(localId)
+
+      // Both try to update with their read version
+      const results = await Promise.allSettled([
+        postsCollection.update(localId, {
+          $set: { views: (user1Read.views as number) + 10 },
+        }, { expectedVersion: user1Read.version }),
+        postsCollection.update(localId, {
+          $set: { views: (user2Read.views as number) + 20 },
+        }, { expectedVersion: user2Read.version }),
+      ])
+
+      // Exactly one should succeed, one should fail
+      const successes = results.filter(r => r.status === 'fulfilled')
+      const failures = results.filter(r => r.status === 'rejected')
+
+      expect(successes.length).toBe(1)
+      expect(failures.length).toBe(1)
+
+      // The failed one was caught before causing data loss
+      if (failures[0] && failures[0].status === 'rejected') {
+        expect(failures[0].reason.message).toContain('Version mismatch')
+      }
+    })
+
+    it('should handle lost update scenario with large number of concurrent writers', async () => {
+      const entity = await countersCollection.create({
+        $type: 'Counter',
+        name: 'stress-counter',
+        value: 0,
+      })
+      const localId = (entity.$id as string).split('/')[1]
+
+      // 100 concurrent increments
+      const numWriters = 100
+      const incrementAmount = 1
+
+      const writePromises = Array.from({ length: numWriters }, () =>
+        countersCollection.update(localId, { $inc: { value: incrementAmount } })
+      )
+
+      await Promise.all(writePromises)
+
+      const final = await countersCollection.get(localId)
+      // With proper atomic $inc, value should be exactly numWriters * incrementAmount
+      expect((final.value as number)).toBe(numWriters * incrementAmount)
+    })
+  })
+
+  // ===========================================================================
   // Data Consistency After Concurrent Operations
   // ===========================================================================
 

@@ -6,6 +6,12 @@
  */
 
 import type { Event, Variant } from '../types/entity'
+import {
+  DEFAULT_EVENT_BUFFER_SIZE,
+  DEFAULT_EVENT_BUFFER_BYTES,
+  DEFAULT_FLUSH_INTERVAL_MS,
+  DEFAULT_R2_THRESHOLD_BYTES,
+} from '../constants'
 
 // Re-export core Event type
 export type { Event } from '../types/entity'
@@ -137,10 +143,10 @@ export interface EventWriterConfig {
  * Default writer configuration
  */
 export const DEFAULT_WRITER_CONFIG: Required<EventWriterConfig> = {
-  maxBufferSize: 1000,
-  maxBufferBytes: 1024 * 1024, // 1MB
-  flushIntervalMs: 5000,
-  r2ThresholdBytes: 512 * 1024, // 512KB
+  maxBufferSize: DEFAULT_EVENT_BUFFER_SIZE,
+  maxBufferBytes: DEFAULT_EVENT_BUFFER_BYTES,
+  flushIntervalMs: DEFAULT_FLUSH_INTERVAL_MS,
+  r2ThresholdBytes: DEFAULT_R2_THRESHOLD_BYTES,
 }
 
 // =============================================================================

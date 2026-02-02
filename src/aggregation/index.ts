@@ -49,7 +49,7 @@ export {
   // Union type
   type AggregationStage,
 
-  // Type guards
+  // Stage type guards
   isMatchStage,
   isGroupStage,
   isSortStage,
@@ -67,6 +67,22 @@ export {
   isBucketStage,
   isSampleStage,
 
+  // Accumulator type guards
+  isSumAccumulator,
+  isAvgAccumulator,
+  isMinAccumulator,
+  isMaxAccumulator,
+  isCountAccumulator,
+  isFirstAccumulator,
+  isLastAccumulator,
+  isPushAccumulator,
+  isAddToSetAccumulator,
+  isFieldRef,
+
+  // Document type
+  type Document,
+  type FieldRef,
+
   // Options
   type AggregationOptions,
   type AggregationExplain,
@@ -75,5 +91,6 @@ export {
 // Executor
 export {
   executeAggregation,
+  executeAggregationWithIndex,
   AggregationExecutor,
 } from './executor'

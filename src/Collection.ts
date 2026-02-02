@@ -28,7 +28,7 @@ import { normalizeSortDirection } from './types'
 import { deepClone, getNestedValue, compareValues, generateId, getValueType } from './utils'
 import { matchesFilter as canonicalMatchesFilter } from './query/filter'
 import { QueryBuilder } from './query/builder'
-import { executeAggregation, type AggregationStage } from './aggregation'
+import { executeAggregation, executeAggregationWithIndex, type AggregationStage } from './aggregation'
 
 // Re-export AggregationStage for backwards compatibility
 export type { AggregationStage } from './aggregation'
@@ -1118,7 +1118,7 @@ export class Collection<T = Record<string, unknown>> {
    * Execute aggregation pipeline
    *
    * @param pipeline - Array of aggregation stages
-   * @param options - Aggregation options
+   * @param options - Aggregation options (includes optional indexManager for index-aware execution)
    * @returns Aggregation results
    */
   async aggregate<R = unknown>(pipeline: AggregationStage[], options?: AggregateOptions): Promise<R[]> {
@@ -1130,7 +1130,19 @@ export class Collection<T = Record<string, unknown>> {
       data = data.filter(e => !(e as Record<string, unknown>).deletedAt)
     }
 
-    // Execute aggregation pipeline using the executor
+    // If indexManager is provided, use the index-aware executor
+    if (options?.indexManager) {
+      return executeAggregationWithIndex<R>(
+        data as import('./aggregation/types').Document[],
+        pipeline,
+        {
+          ...options,
+          namespace: this.namespace,
+        }
+      )
+    }
+
+    // Execute aggregation pipeline using the sync executor
     return executeAggregation<R>(data, pipeline, options)
   }
 

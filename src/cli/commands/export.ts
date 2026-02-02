@@ -25,8 +25,10 @@ import type { Filter, FindOptions, Entity } from '../../types'
 // Constants
 // =============================================================================
 
+import { MAX_BATCH_SIZE } from '../../constants'
+
 const CONFIG_FILENAME = 'parquedb.json'
-const BATCH_SIZE = 1000 // Fetch in batches for large exports
+const BATCH_SIZE = MAX_BATCH_SIZE // Fetch in batches for large exports
 
 // =============================================================================
 // Export Command
