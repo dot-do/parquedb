@@ -1,13 +1,13 @@
 /**
  * Secondary Index Exports
  *
- * Hash indexes for ParqueDB
+ * NOTE: Hash and SST indexes have been removed - native parquet predicate pushdown
+ * on $index_* columns is now faster than secondary indexes for equality and range queries.
  *
- * NOTE: SST indexes have been removed - native parquet predicate pushdown
- * on $index_* columns is now faster than secondary indexes for range queries.
+ * Key encoder utilities are still exported for backward compatibility.
  */
 
-// Key Encoder
+// Key Encoder (kept for backward compatibility with existing serialized data)
 export {
   encodeKey,
   decodeKey,
@@ -19,14 +19,3 @@ export {
   encodeCompositeKey,
   decodeCompositeKey,
 } from './key-encoder'
-
-// Hash Index
-export { HashIndex, buildHashIndex } from './hash'
-
-// Sharded Hash Index
-export {
-  ShardedHashIndex,
-  loadShardedHashIndex,
-  type ShardManifest,
-  type ShardInfo,
-} from './sharded-hash'

@@ -198,7 +198,7 @@ export interface QueryPlan {
   /** Secondary index that would be used (if any) */
   secondaryIndex?: {
     name: string
-    type: 'hash' | 'fts'
+    type: 'fts'
     field: string
   } | null
   /** Number of index catalog entries for this dataset */
@@ -744,32 +744,18 @@ export class QueryExecutor {
       let targetRowGroups: number[] = []
 
       // Execute index lookup based on type
-      // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown on $index_* columns
-      switch (selected.type) {
-        case 'hash': {
-          const result = await this.indexCache.executeHashLookup(
-            datasetId,
-            selected.entry,
-            selected.condition
-          )
-          candidateDocIds = result.docIds
-          targetRowGroups = result.rowGroups
-          break
-        }
-
-        case 'fts': {
-          const textCondition = selected.condition as { $search: string; $language?: string }
-          const ftsResults = await this.indexCache.executeFTSSearch(
-            datasetId,
-            selected.entry,
-            textCondition,
-            { limit: options.limit }
-          )
-          candidateDocIds = ftsResults.map(r => r.docId)
-          // FTS doesn't return row groups, will need to scan all
-          targetRowGroups = []
-          break
-        }
+      // NOTE: Hash and SST indexes removed - equality and range queries now use native parquet predicate pushdown on $index_* columns
+      if (selected.type === 'fts') {
+        const textCondition = selected.condition as { $search: string; $language?: string }
+        const ftsResults = await this.indexCache.executeFTSSearch(
+          datasetId,
+          selected.entry,
+          textCondition,
+          { limit: options.limit }
+        )
+        candidateDocIds = ftsResults.map(r => r.docId)
+        // FTS doesn't return row groups, will need to scan all
+        targetRowGroups = []
       }
 
       extendedStats.indexLookupMs = performance.now() - indexLookupStart

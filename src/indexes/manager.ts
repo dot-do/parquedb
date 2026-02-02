@@ -357,71 +357,26 @@ export class IndexManager {
       }
     }
 
-    // Extract field conditions for secondary indexes
-    // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown
-    const candidates: Array<{
-      index: IndexDefinition
-      type: 'hash'
-      field: string
-      condition: unknown
-      selectivity: number
-    }> = []
+    // NOTE: Hash and SST indexes removed - equality and range queries now use
+    // native parquet predicate pushdown on $index_* columns
 
-    for (const [field, condition] of Object.entries(filter)) {
-      if (field.startsWith('$')) continue
-
-      // Find indexes that cover this field
-      const indexesForField = this.findIndexesForField(ns, field)
-
-      for (const index of indexesForField) {
-        const selectivity = this.estimateSelectivity(condition)
-
-        if (index.type === 'hash' && this.isEqualityCondition(condition)) {
-          candidates.push({
-            index,
-            type: 'hash',
-            field,
-            condition,
-            selectivity,
-          })
-        }
-        // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown
-      }
-    }
-
-    // Select the most selective index
-    if (candidates.length === 0) {
-      return null
-    }
-
-    candidates.sort((a, b) => a.selectivity - b.selectivity)
-    const best = candidates[0]!  // candidates has at least 1 element from earlier checks
-
-    return {
-      index: best.index,
-      type: best.type,
-      field: best.field,
-      condition: best.condition,
-    }
+    return null
   }
 
   /**
    * Execute a lookup using a hash index
    *
-   * @param ns - Namespace
-   * @param indexName - Index name
-   * @param value - Value to look up
-   * @returns Lookup result
+   * @deprecated Hash indexes have been removed - use native parquet predicate pushdown instead
+   * @param _ns - Namespace (unused)
+   * @param _indexName - Index name (unused)
+   * @param _value - Value to look up (unused)
+   * @returns Never - this method is deprecated
    */
-  async hashLookup(ns: string, indexName: string, value: unknown): Promise<IndexLookupResult> {
-    await this.load()
-
-    // TODO(parquedb-poif): Wire up to HashIndex class similar to VectorIndex
-    // For now, throw to make it clear this is not implemented
+  async hashLookup(_ns: string, _indexName: string, _value: unknown): Promise<IndexLookupResult> {
     throw new Error(
-      `Method not implemented: hashLookup. ` +
-      `IndexManager needs to be wired up to HashIndex for namespace '${ns}', index '${indexName}'. ` +
-      `See vectorSearch() for reference implementation.`
+      `Hash indexes have been removed. Equality queries now use native parquet predicate pushdown ` +
+      `on $index_* columns, which is faster than secondary indexes. ` +
+      `Use parquet filters with $eq/$in operators directly.`
     )
   }
 
@@ -713,8 +668,6 @@ export class IndexManager {
     const base = this.basePath ? `${this.basePath}/` : ''
 
     switch (definition.type) {
-      case 'hash':
-        return `${base}indexes/secondary/${ns}.${definition.name}.idx.parquet`
       case 'fts':
         return `${base}indexes/fts/${ns}/`
       case 'bloom':
@@ -848,58 +801,6 @@ export class IndexManager {
     return null
   }
 
-  private findIndexesForField(ns: string, field: string): IndexDefinition[] {
-    const nsIndexes = this.indexes.get(ns)
-    if (!nsIndexes) return []
-
-    const result: IndexDefinition[] = []
-
-    for (const definition of nsIndexes.values()) {
-      if (definition.fields.some(f => f.path === field)) {
-        result.push(definition)
-      }
-    }
-
-    return result
-  }
-
-  private isEqualityCondition(condition: unknown): boolean {
-    if (condition === null || typeof condition !== 'object') {
-      return true // Direct value comparison
-    }
-
-    const obj = condition as Record<string, unknown>
-    if ('$eq' in obj) return true
-    if ('$in' in obj) return true
-
-    // Check if it has range operators
-    if ('$gt' in obj || '$gte' in obj || '$lt' in obj || '$lte' in obj) {
-      return false
-    }
-
-    return true
-  }
-
-  private estimateSelectivity(condition: unknown): number {
-    // Lower is better (more selective)
-    if (condition === null || typeof condition !== 'object') {
-      return 0.1 // Direct equality is very selective
-    }
-
-    const obj = condition as Record<string, unknown>
-
-    if ('$eq' in obj) return 0.1
-    if ('$in' in obj) {
-      const values = obj.$in as unknown[]
-      return Math.min(0.5, 0.1 * values.length)
-    }
-    if ('$gt' in obj || '$gte' in obj || '$lt' in obj || '$lte' in obj) {
-      return 0.3 // Range queries are less selective
-    }
-
-    return 0.5 // Default moderate selectivity
-  }
-
   private getFieldValue(obj: Record<string, unknown>, path: string): unknown {
     const parts = path.split('.')
     let current: unknown = obj
@@ -951,13 +852,14 @@ interface IndexCatalogEntry {
 /**
  * Result of index selection
  *
- * NOTE: SST indexes have been removed - range queries now use native parquet predicate pushdown
+ * NOTE: Hash and SST indexes have been removed - equality and range queries now use
+ * native parquet predicate pushdown on $index_* columns
  */
 export interface SelectedIndex {
   /** Selected index definition */
   index: IndexDefinition
   /** Index type */
-  type: 'hash' | 'fts' | 'vector'
+  type: 'fts' | 'vector'
   /** Field being queried (for secondary indexes) */
   field?: string
   /** Query condition */

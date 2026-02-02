@@ -185,8 +185,6 @@ export {
 export {
   // Index Manager
   IndexManager,
-  // Secondary Indexes
-  HashIndex,
   // Full-Text Search
   FTSIndex,
   InvertedIndex,
@@ -194,7 +192,7 @@ export {
   tokenize,
   tokenizeQuery,
   porterStem,
-  // Key Encoding
+  // Key Encoding (kept for backward compatibility)
   encodeKey,
   decodeKey,
   compareKeys,

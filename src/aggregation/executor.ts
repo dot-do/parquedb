@@ -839,19 +839,8 @@ async function executeIndexedMatch(
   let candidateDocIds: string[] = []
 
   // Execute index lookup based on type
+  // NOTE: Hash and SST indexes removed - equality and range queries now use native parquet predicate pushdown
   switch (selectedIndex.type) {
-    case 'hash': {
-      const result = await indexManager.hashLookup(
-        namespace,
-        selectedIndex.index.name,
-        selectedIndex.condition
-      )
-      candidateDocIds = result.docIds
-      break
-    }
-
-    // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown
-
     case 'fts': {
       const textCondition = filter.$text as { $search: string } | undefined
       if (textCondition?.$search) {

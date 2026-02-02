@@ -71,7 +71,7 @@ export interface QueryStats {
   /** Index used (if any) */
   indexUsed?: string
   /** Index type used */
-  indexType?: 'hash' | 'sst' | 'fts' | 'vector'
+  indexType?: 'fts' | 'vector'
 }
 
 /**
@@ -107,7 +107,7 @@ export interface QueryPlan {
     /** Index name */
     name: string
     /** Index type */
-    type: 'hash' | 'sst' | 'fts' | 'vector'
+    type: 'fts' | 'vector'
     /** Field being queried */
     field?: string
     /** Whether index will be used */
@@ -272,19 +272,8 @@ export class QueryExecutor {
       let usedFTS = false
 
       // Execute index lookup based on type
+      // NOTE: Hash and SST indexes removed - equality and range queries now use native parquet predicate pushdown
       switch (indexPlan.type) {
-        case 'hash': {
-          const result = await this.indexManager!.hashLookup(
-            ns,
-            indexPlan.index.name,
-            indexPlan.condition
-          )
-          candidateDocIds = result.docIds
-          break
-        }
-
-        // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown
-
         case 'fts': {
           const searchQuery = (filter.$text as { $search: string })?.$search
           if (searchQuery) {

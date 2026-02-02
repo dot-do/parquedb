@@ -2,11 +2,11 @@
  * Tests for Index-Aware Aggregation $match Stage
  *
  * Verifies that aggregation pipelines with $match as the first stage
- * can leverage secondary indexes (hash, fts, vector) for efficient
+ * can leverage secondary indexes (fts, vector) for efficient
  * filtering instead of full collection scans.
  *
- * NOTE: SST indexes have been removed - native parquet predicate pushdown
- * on $index_* columns is now faster than secondary indexes for range queries.
+ * NOTE: Hash and SST indexes have been removed - native parquet predicate pushdown
+ * on $index_* columns is now faster than secondary indexes for equality and range queries.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -97,24 +97,11 @@ function createTestData(): Product[] {
 
 function createMockIndexManager(config: {
   selectedIndex?: SelectedIndex | null
-  hashLookupResults?: string[]
-  rangeLookupResults?: string[]
   ftsResults?: { docId: string; score: number }[]
 }) {
   return {
     selectIndex: vi.fn().mockResolvedValue(config.selectedIndex ?? null),
-    hashLookup: vi.fn().mockResolvedValue({
-      docIds: config.hashLookupResults ?? [],
-      rowGroups: [],
-      exact: true,
-      entriesScanned: 0,
-    }),
-    rangeQuery: vi.fn().mockResolvedValue({
-      docIds: config.rangeLookupResults ?? [],
-      rowGroups: [],
-      exact: true,
-      entriesScanned: 0,
-    }),
+    hashLookup: vi.fn().mockRejectedValue(new Error('Hash indexes have been removed')),
     ftsSearch: vi.fn().mockResolvedValue(config.ftsResults ?? []),
     vectorSearch: vi.fn().mockResolvedValue({
       docIds: [],
@@ -215,87 +202,6 @@ describe('Index-Aware Aggregation $match', () => {
   })
 
   // ===========================================================================
-  // Hash Index Usage
-  // ===========================================================================
-
-  describe('Hash Index Usage', () => {
-    it('should use hash index for equality match', async () => {
-      const hashIndex: IndexDefinition = {
-        name: 'category_hash',
-        type: 'hash',
-        fields: [{ path: 'category' }],
-      }
-
-      const mockIndexManager = createMockIndexManager({
-        selectedIndex: {
-          index: hashIndex,
-          type: 'hash',
-          field: 'category',
-          condition: 'electronics',
-        },
-        hashLookupResults: ['products/1', 'products/2', 'products/4'],
-      })
-
-      const pipeline: AggregationStage[] = [
-        { $match: { category: 'electronics' } },
-      ]
-
-      const results = await executeAggregationWithIndex(testData, pipeline, {
-        indexManager: mockIndexManager,
-        namespace: 'products',
-      })
-
-      expect(mockIndexManager.hashLookup).toHaveBeenCalledWith(
-        expect.any(String),
-        'category_hash',
-        'electronics'
-      )
-
-      expect(results).toHaveLength(3)
-      expect(results.map((r: any) => r.$id).sort()).toEqual([
-        'products/1',
-        'products/2',
-        'products/4',
-      ])
-    })
-
-    it('should use hash index for $eq match', async () => {
-      const hashIndex: IndexDefinition = {
-        name: 'category_hash',
-        type: 'hash',
-        fields: [{ path: 'category' }],
-      }
-
-      const mockIndexManager = createMockIndexManager({
-        selectedIndex: {
-          index: hashIndex,
-          type: 'hash',
-          field: 'category',
-          condition: { $eq: 'furniture' },
-        },
-        hashLookupResults: ['products/3', 'products/5'],
-      })
-
-      const pipeline: AggregationStage[] = [
-        { $match: { category: { $eq: 'furniture' } } },
-      ]
-
-      const results = await executeAggregationWithIndex(testData, pipeline, {
-        indexManager: mockIndexManager,
-        namespace: 'products',
-      })
-
-      expect(results).toHaveLength(2)
-    })
-  })
-
-  // ===========================================================================
-  // SST Index Usage for Range Queries - REMOVED
-  // ===========================================================================
-
-  // NOTE: SST indexes have been removed - range queries now use native parquet predicate pushdown
-
-  // ===========================================================================
   // FTS Index Usage
   // ===========================================================================
 
@@ -361,21 +267,10 @@ describe('Index-Aware Aggregation $match', () => {
       expect(results).toHaveLength(3)
     })
 
-    it('should fall back to full scan when index lookup returns empty', async () => {
-      const hashIndex: IndexDefinition = {
-        name: 'category_hash',
-        type: 'hash',
-        fields: [{ path: 'category' }],
-      }
-
+    it('should perform equality filter via full scan (hash indexes removed)', async () => {
+      // Hash indexes have been removed - equality queries now use native parquet predicate pushdown
       const mockIndexManager = createMockIndexManager({
-        selectedIndex: {
-          index: hashIndex,
-          type: 'hash',
-          field: 'category',
-          condition: 'nonexistent',
-        },
-        hashLookupResults: [],
+        selectedIndex: null, // No index available
       })
 
       const pipeline: AggregationStage[] = [
@@ -396,27 +291,26 @@ describe('Index-Aware Aggregation $match', () => {
   // ===========================================================================
 
   describe('Complex Pipelines', () => {
-    it('should use index for $match then execute remaining stages', async () => {
-      const hashIndex: IndexDefinition = {
-        name: 'category_hash',
-        type: 'hash',
-        fields: [{ path: 'category' }],
+    it('should use FTS index for $match then execute remaining stages', async () => {
+      const ftsIndex: IndexDefinition = {
+        name: 'description_fts',
+        type: 'fts',
+        fields: [{ path: 'description' }],
       }
 
       const mockIndexManager = createMockIndexManager({
         selectedIndex: {
-          index: hashIndex,
-          type: 'hash',
-          field: 'category',
-          condition: 'electronics',
+          index: ftsIndex,
+          type: 'fts',
+          condition: { $search: 'desk' },
         },
-        hashLookupResults: ['products/1', 'products/2', 'products/4'],
+        ftsResults: [
+          { docId: 'products/3', score: 0.95 },
+        ],
       })
 
       const pipeline: AggregationStage[] = [
-        { $match: { category: 'electronics' } },
-        { $sort: { price: -1 } },
-        { $limit: 2 },
+        { $match: { $text: { $search: 'desk' } } },
         { $project: { name: 1, price: 1 } },
       ]
 
@@ -425,26 +319,14 @@ describe('Index-Aware Aggregation $match', () => {
         namespace: 'products',
       })
 
-      expect(results).toHaveLength(2)
-      expect((results[0] as any).price).toBe(1299) // Laptop Pro
-      expect((results[1] as any).price).toBe(49)   // Wireless Mouse
+      expect(results).toHaveLength(1)
+      expect((results[0] as any).name).toBe('Office Desk')
     })
 
-    it('should use index for $match then $group', async () => {
-      const hashIndex: IndexDefinition = {
-        name: 'category_hash',
-        type: 'hash',
-        fields: [{ path: 'category' }],
-      }
-
+    it('should fall back to full scan for equality then $group', async () => {
+      // Hash indexes removed - equality queries use full scan or parquet pushdown
       const mockIndexManager = createMockIndexManager({
-        selectedIndex: {
-          index: hashIndex,
-          type: 'hash',
-          field: 'category',
-          condition: 'electronics',
-        },
-        hashLookupResults: ['products/1', 'products/2', 'products/4'],
+        selectedIndex: null,
       })
 
       const pipeline: AggregationStage[] = [
@@ -491,21 +373,20 @@ describe('AggregationExecutor with Index Support', () => {
     expect(results).toHaveLength(3)
   })
 
-  it('should include index info in explain output', () => {
-    const hashIndex: IndexDefinition = {
-      name: 'category_hash',
-      type: 'hash',
-      fields: [{ path: 'category' }],
+  it('should include stage info in explain output', () => {
+    const ftsIndex: IndexDefinition = {
+      name: 'description_fts',
+      type: 'fts',
+      fields: [{ path: 'description' }],
     }
 
     const mockIndexManager = createMockIndexManager({
       selectedIndex: {
-        index: hashIndex,
-        type: 'hash',
-        field: 'category',
-        condition: 'electronics',
+        index: ftsIndex,
+        type: 'fts',
+        condition: { $search: 'wireless' },
       },
-      hashLookupResults: ['products/1', 'products/2', 'products/4'],
+      ftsResults: [{ docId: 'products/2', score: 0.95 }],
     })
 
     const executor = new AggregationExecutor(testData, [

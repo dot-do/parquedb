@@ -10,9 +10,10 @@
 
 /**
  * Type of index
- * NOTE: 'sst' removed - native parquet predicate pushdown on $index_* columns is now faster for range queries
+ * NOTE: 'hash' and 'sst' removed - native parquet predicate pushdown on $index_* columns
+ * is now faster than secondary indexes for equality and range queries
  */
-export type IndexType = 'hash' | 'fts' | 'bloom' | 'vector'
+export type IndexType = 'fts' | 'bloom' | 'vector'
 
 /**
  * Index field definition
@@ -107,6 +108,7 @@ export interface IndexEntry {
 
 /**
  * Entry stored in a hash index
+ * @deprecated Hash indexes have been removed - use parquet predicate pushdown instead
  */
 export interface HashIndexEntry {
   /** The indexed value (encoded as key) */

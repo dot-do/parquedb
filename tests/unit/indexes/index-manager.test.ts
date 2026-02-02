@@ -43,7 +43,7 @@ describe('IndexManager', () => {
   describe('event listener error handling', () => {
     const definition: IndexDefinition = {
       name: 'test_index',
-      type: 'hash',
+      type: 'fts',
       fields: [{ path: 'status' }],
     }
 
@@ -229,7 +229,7 @@ describe('IndexManager', () => {
 
       await manager.createIndex('test', {
         name: 'test_index',
-        type: 'hash',
+        type: 'fts',
         fields: [{ path: 'status' }],
       })
 
@@ -238,10 +238,11 @@ describe('IndexManager', () => {
   })
 
   describe('unimplemented methods throw errors', () => {
-    it('hashLookup throws not implemented error', async () => {
+    it('hashLookup throws deprecation error', async () => {
+      // Hash indexes have been removed - equality queries now use native parquet predicate pushdown
       const manager = new IndexManager(storage)
       await expect(manager.hashLookup('test', 'idx', 'value')).rejects.toThrow(
-        /Method not implemented: hashLookup/
+        /Hash indexes have been removed/
       )
     })
 
