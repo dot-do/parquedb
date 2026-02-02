@@ -115,6 +115,8 @@ export interface IndexedBenchmarkResult {
     datasets: string[]
     totalQueries: number
     durationMs: number
+    /** Datasets skipped due to size limits */
+    skippedDatasets?: string[]
   }
   /** Per-query results */
   queries: QueryBenchmarkResult[]
@@ -198,6 +200,15 @@ export async function runIndexedBenchmark(
     queries = queries.filter(q => config.datasets!.includes(q.dataset))
   }
 
+  // Skip large datasets that exceed Worker memory limits
+  // The imdb-1m dataset (47MB parquet + 224MB FTS index) causes OOM
+  const LARGE_DATASETS = ['imdb-1m']
+  const skippedDatasetNames = [...new Set(queries.filter(q => LARGE_DATASETS.includes(q.dataset)).map(q => q.dataset))]
+  if (skippedDatasetNames.length > 0) {
+    logger.warn(`Skipping queries from large datasets (${skippedDatasetNames.join(', ')}) - exceeds Worker memory limits`)
+    queries = queries.filter(q => !LARGE_DATASETS.includes(q.dataset))
+  }
+
   // Filter by category
   if (config.categories) {
     queries = queries.filter(q => config.categories!.includes(q.category))
@@ -240,6 +251,7 @@ export async function runIndexedBenchmark(
       datasets: [...new Set(queries.map(q => q.dataset))],
       totalQueries: queries.length,
       durationMs: Math.round(durationMs),
+      skippedDatasets: skippedDatasetNames.length > 0 ? skippedDatasetNames : undefined,
     },
     queries: results,
     datasetSummaries,
@@ -428,6 +440,27 @@ function calculateDatasetSummaries(results: QueryBenchmarkResult[]): DatasetBenc
  * Calculate overall summary
  */
 function calculateOverallSummary(results: QueryBenchmarkResult[]): IndexedBenchmarkResult['summary'] {
+  // Handle empty results
+  if (results.length === 0) {
+    return {
+      avgSpeedup: 0,
+      medianSpeedup: 0,
+      bestOverall: { queryId: 'none', speedup: 0 },
+      indexBeneficialRate: 0,
+      byIndexType: {
+        hash: { count: 0, avgSpeedup: 0 },
+        sst: { count: 0, avgSpeedup: 0 },
+        fts: { count: 0, avgSpeedup: 0 },
+      },
+      byCategory: {
+        equality: { count: 0, avgSpeedup: 0 },
+        range: { count: 0, avgSpeedup: 0 },
+        compound: { count: 0, avgSpeedup: 0 },
+        fts: { count: 0, avgSpeedup: 0 },
+      },
+    }
+  }
+
   const speedups = results.map(r => r.speedup).sort((a, b) => a - b)
   const avgSpeedup = speedups.reduce((a, b) => a + b, 0) / speedups.length
   const medianSpeedup = speedups[Math.floor(speedups.length / 2)] ?? 0
