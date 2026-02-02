@@ -1,13 +1,14 @@
 /**
- * Indexed Benchmark Runner for ParqueDB
+ * Native Pushdown Benchmark Runner for ParqueDB
  *
- * Comprehensive benchmarks comparing indexed vs scan query performance
- * across IMDB, O*NET, and UNSPSC datasets.
+ * Benchmarks for native Parquet predicate pushdown performance
+ * using $index_* columns with row group statistics across
+ * IMDB, O*NET, and UNSPSC datasets.
  */
 
 import type { Filter } from '../types/filter'
 import type { BenchmarkQuery } from './benchmark-queries'
-import { ALL_QUERIES, getQueriesForDataset, QUERY_STATS } from './benchmark-queries'
+import { ALL_QUERIES, QUERY_STATS } from './benchmark-queries'
 import { QueryExecutor, type FindResult, type QueryStats } from './QueryExecutor'
 import { ReadPath } from './ReadPath'
 import { DEFAULT_CACHE_CONFIG } from './CacheStrategy'
@@ -28,34 +29,29 @@ type R2Bucket = {
 
 /**
  * Individual query benchmark result
+ *
+ * Measures native Parquet predicate pushdown performance on $index_* columns.
+ * Row group skipping is achieved via min/max statistics in Parquet metadata.
  */
 export interface QueryBenchmarkResult {
   /** Query definition */
   query: BenchmarkQuery
-  /** Indexed execution metrics */
-  indexed: {
+  /** Query execution metrics */
+  execution: {
     /** Latency percentiles */
     latencyMs: { p50: number; p95: number; avg: number }
     /** Raw latency values for debugging */
     rawLatencies?: number[]
-    /** Index lookup time */
-    indexLookupMs?: number
-    /** Rows scanned */
+    /** Rows scanned after pushdown */
     rowsScanned: number
-    /** Rows returned */
+    /** Rows returned after filtering */
     rowsReturned: number
-    /** Index type actually used */
-    indexUsed?: string
     /** Total row groups in the file */
     rowGroupsTotal?: number
-    /** Row groups actually read (after index filtering) */
+    /** Row groups read (after statistics filtering) */
     rowGroupsRead?: number
-    /** Row groups skipped due to index or predicate pushdown */
+    /** Row groups skipped via statistics pushdown */
     rowGroupsSkipped?: number
-    /** Whether index execution fell back to full scan */
-    indexFallback?: boolean
-    /** Error from index execution (if fell back) */
-    indexError?: string
     /** Success flag */
     success: boolean
     /** Error message if failed */
@@ -63,23 +59,17 @@ export interface QueryBenchmarkResult {
     /** Number of iterations that completed */
     iterations?: number
   }
-  /** Scan execution metrics (baseline) */
-  scan: {
-    /** Latency percentiles */
-    latencyMs: { p50: number; p95: number; avg: number }
-    /** Rows scanned */
-    rowsScanned: number
-    /** Rows returned */
-    rowsReturned: number
-    /** Success flag */
-    success: boolean
-    /** Error message if failed */
-    error?: string
+  /** Pushdown effectiveness metrics */
+  pushdown: {
+    /** Whether filter uses $index_* columns (eligible for pushdown) */
+    usesPushdownColumns: boolean
+    /** Columns used for pushdown */
+    pushdownColumns: string[]
+    /** Selectivity: ratio of rows returned to rows scanned (0-1, lower = more selective) */
+    selectivity: number
+    /** Row group skip ratio (0-1, higher = better pushdown) */
+    rowGroupSkipRatio: number
   }
-  /** Performance comparison */
-  speedup: number
-  /** Whether index provided speedup */
-  indexBeneficial: boolean
 }
 
 /**
@@ -90,24 +80,24 @@ export interface DatasetBenchmarkSummary {
   dataset: string
   /** Number of queries run */
   queryCount: number
-  /** Average speedup across queries */
-  avgSpeedup: number
-  /** Best speedup achieved */
-  bestSpeedup: { queryId: string; speedup: number }
-  /** Worst speedup (or slowdown) */
-  worstSpeedup: { queryId: string; speedup: number }
-  /** Queries where index helped */
-  indexBeneficialCount: number
-  /** Average indexed latency */
-  avgIndexedLatencyMs: number
-  /** Average scan latency */
-  avgScanLatencyMs: number
+  /** Average latency across queries */
+  avgLatencyMs: number
+  /** Best latency achieved */
+  bestLatency: { queryId: string; latencyMs: number }
+  /** Worst latency */
+  worstLatency: { queryId: string; latencyMs: number }
+  /** Queries that successfully used pushdown */
+  pushdownUsedCount: number
+  /** Average row group skip ratio */
+  avgRowGroupSkipRatio: number
+  /** Average selectivity */
+  avgSelectivity: number
 }
 
 /**
  * Full benchmark result
  */
-export interface IndexedBenchmarkResult {
+export interface PushdownBenchmarkResult {
   /** Benchmark metadata */
   metadata: {
     timestamp: string
@@ -124,23 +114,34 @@ export interface IndexedBenchmarkResult {
   datasetSummaries: DatasetBenchmarkSummary[]
   /** Overall summary */
   summary: {
-    avgSpeedup: number
-    medianSpeedup: number
-    bestOverall: { queryId: string; speedup: number }
-    indexBeneficialRate: number
-    byIndexType: {
-      hash: { count: number; avgSpeedup: number }
-      sst: { count: number; avgSpeedup: number }
-      fts: { count: number; avgSpeedup: number }
-    }
+    /** Average latency across all queries */
+    avgLatencyMs: number
+    /** Median latency */
+    medianLatencyMs: number
+    /** Best performing query */
+    bestLatency: { queryId: string; latencyMs: number }
+    /** Percentage of queries that used pushdown */
+    pushdownUsageRate: number
+    /** Average row group skip ratio */
+    avgRowGroupSkipRatio: number
+    /** By query category */
     byCategory: {
-      equality: { count: number; avgSpeedup: number }
-      range: { count: number; avgSpeedup: number }
-      compound: { count: number; avgSpeedup: number }
-      fts: { count: number; avgSpeedup: number }
+      equality: { count: number; avgLatencyMs: number; avgSkipRatio: number }
+      range: { count: number; avgLatencyMs: number; avgSkipRatio: number }
+      compound: { count: number; avgLatencyMs: number; avgSkipRatio: number }
+      fts: { count: number; avgLatencyMs: number; avgSkipRatio: number }
+    }
+    /** By selectivity level */
+    bySelectivity: {
+      high: { count: number; avgLatencyMs: number }
+      medium: { count: number; avgLatencyMs: number }
+      low: { count: number; avgLatencyMs: number }
     }
   }
 }
+
+// Legacy alias for backwards compatibility
+export type IndexedBenchmarkResult = PushdownBenchmarkResult
 
 /**
  * Benchmark configuration
@@ -156,8 +157,6 @@ export interface BenchmarkConfig {
   datasets?: Array<'imdb' | 'imdb-1m' | 'onet-full' | 'unspsc-full'>
   /** Query categories to include */
   categories?: BenchmarkQuery['category'][]
-  /** Include scan baselines */
-  includeScanBaselines: boolean
 }
 
 // =============================================================================
@@ -165,22 +164,24 @@ export interface BenchmarkConfig {
 // =============================================================================
 
 /**
- * Run indexed benchmarks
+ * Run native pushdown benchmarks
  *
- * @param bucket - R2 bucket containing datasets and indexes
+ * Measures query performance using native Parquet predicate pushdown
+ * on $index_* columns. Row groups are skipped based on min/max statistics.
+ *
+ * @param bucket - R2 bucket containing datasets
  * @param cache - Cache API for metadata caching
  * @param config - Benchmark configuration
  * @returns Full benchmark results
  */
-export async function runIndexedBenchmark(
+export async function runPushdownBenchmark(
   bucket: R2Bucket,
   cache: Cache,
   config: BenchmarkConfig = {
     iterations: 5,
     warmupIterations: 1,
-    includeScanBaselines: true,
   }
-): Promise<IndexedBenchmarkResult> {
+): Promise<PushdownBenchmarkResult> {
   const startTime = performance.now()
 
   // Initialize query executor - cast bucket to global R2Bucket for compatibility
@@ -212,11 +213,6 @@ export async function runIndexedBenchmark(
   // Filter by category
   if (config.categories) {
     queries = queries.filter(q => config.categories!.includes(q.category))
-  }
-
-  // Skip scan baselines if not requested
-  if (!config.includeScanBaselines) {
-    queries = queries.filter(q => q.category !== 'scan')
   }
 
   // Limit queries per dataset
@@ -259,6 +255,9 @@ export async function runIndexedBenchmark(
   }
 }
 
+// Legacy alias for backwards compatibility
+export const runIndexedBenchmark = runPushdownBenchmark
+
 /**
  * R2 prefix for benchmark data files
  */
@@ -272,22 +271,44 @@ function getBenchmarkNamespace(query: BenchmarkQuery): string {
 }
 
 /**
- * Benchmark a single query
+ * Extract $index_* columns from a filter for pushdown analysis
+ */
+function extractPushdownColumns(filter: Filter): string[] {
+  const columns: string[] = []
+
+  for (const [key, value] of Object.entries(filter)) {
+    if (key === '$id' || key.startsWith('$index_')) {
+      columns.push(key)
+    }
+    // Handle $and
+    if (key === '$and' && Array.isArray(value)) {
+      for (const cond of value) {
+        columns.push(...extractPushdownColumns(cond as Filter))
+      }
+    }
+  }
+
+  return [...new Set(columns)]
+}
+
+/**
+ * Benchmark a single query using native pushdown
  */
 async function benchmarkQuery(
   executor: QueryExecutor,
   query: BenchmarkQuery,
   config: BenchmarkConfig
 ): Promise<QueryBenchmarkResult> {
-  const indexedLatencies: number[] = []
-  const scanLatencies: number[] = []
-  let indexedResult: FindResult<unknown> | null = null
-  let scanResult: FindResult<unknown> | null = null
-  let indexedError: string | undefined
-  let scanError: string | undefined
+  const latencies: number[] = []
+  let queryResult: FindResult<unknown> | null = null
+  let queryError: string | undefined
 
   // Namespace with benchmark-data prefix for R2 paths
   const ns = getBenchmarkNamespace(query)
+
+  // Analyze filter for pushdown columns
+  const pushdownColumns = extractPushdownColumns(query.filter)
+  const usesPushdownColumns = pushdownColumns.length > 0
 
   // Clear cache before benchmarking to ensure we measure cold query performance
   executor.clearCache()
@@ -306,83 +327,57 @@ async function benchmarkQuery(
   // Clear cache before measured iterations
   executor.clearCache()
 
-  // Indexed execution (uses secondary index if available)
+  // Execute query (uses native pushdown on $index_* columns)
   for (let i = 0; i < config.iterations; i++) {
     try {
       executor.clearCache() // Clear between iterations for cold measurements
       const start = performance.now()
-      indexedResult = await executor.find(ns, query.filter, { limit: 100 })
+      queryResult = await executor.find(ns, query.filter, { limit: 100 })
       const elapsed = performance.now() - start
-      indexedLatencies.push(elapsed)
+      latencies.push(elapsed)
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error)
-      indexedError = `${errorMessage} (ns=${ns}, filter=${JSON.stringify(query.filter)})`
-      logger.warn('Benchmark query error', indexedError)
+      queryError = `${errorMessage} (ns=${ns}, filter=${JSON.stringify(query.filter)})`
+      logger.warn('Benchmark query error', queryError)
     }
-  }
-
-  // Scan baseline (force scan by using non-indexed field names)
-  // Only run for non-scan queries (scan queries are already baselines)
-  if (query.category !== 'scan' && query.scanFilter) {
-    for (let i = 0; i < config.iterations; i++) {
-      try {
-        const start = performance.now()
-        scanResult = await executor.find(ns, query.scanFilter, { limit: 100 })
-        scanLatencies.push(performance.now() - start)
-      } catch (error: unknown) {
-        scanError = error instanceof Error ? error.message : String(error)
-      }
-    }
-  } else if (query.category === 'scan') {
-    // For scan baseline queries, use the same filter
-    scanLatencies.push(...indexedLatencies)
-    scanResult = indexedResult
   }
 
   // Calculate percentiles
-  const indexedPercentiles = calculatePercentiles(indexedLatencies)
-  const scanPercentiles = calculatePercentiles(scanLatencies.length > 0 ? scanLatencies : indexedLatencies)
+  const percentiles = calculatePercentiles(latencies)
 
-  // Calculate speedup
-  const speedup = scanPercentiles.p50 > 0 ? scanPercentiles.p50 / indexedPercentiles.p50 : 1
-
-  // Extract index metadata from stats (extended stats from executeWithIndex)
-  const indexStats = indexedResult?.stats as QueryStats & {
-    indexUsed?: string
-    indexLookupMs?: number
-    rowGroupsTotal?: number
-    rowGroupsRead?: number
-    indexFallback?: boolean
-    indexError?: string
+  // Extract stats
+  const stats = queryResult?.stats ?? {
+    rowsScanned: 0,
+    rowsReturned: 0,
+    rowGroupsSkipped: 0,
+    rowGroupsScanned: 0,
   }
+
+  // Calculate pushdown metrics
+  const rowGroupsTotal = (stats.rowGroupsSkipped ?? 0) + (stats.rowGroupsScanned ?? 0)
+  const rowGroupSkipRatio = rowGroupsTotal > 0 ? (stats.rowGroupsSkipped ?? 0) / rowGroupsTotal : 0
+  const selectivity = stats.rowsScanned > 0 ? stats.rowsReturned / stats.rowsScanned : 0
 
   return {
     query,
-    indexed: {
-      latencyMs: indexedPercentiles,
-      rawLatencies: indexedLatencies,
-      indexLookupMs: indexStats?.indexLookupMs,
-      rowsScanned: indexedResult?.stats?.rowsScanned ?? 0,
-      rowsReturned: indexedResult?.stats?.rowsReturned ?? 0,
-      indexUsed: indexStats?.indexUsed,
-      rowGroupsTotal: indexStats?.rowGroupsTotal,
-      rowGroupsRead: indexStats?.rowGroupsRead,
-      rowGroupsSkipped: indexedResult?.stats?.rowGroupsSkipped,
-      indexFallback: indexStats?.indexFallback,
-      indexError: indexStats?.indexError,
-      success: !indexedError,
-      error: indexedError,
-      iterations: indexedLatencies.length,
+    execution: {
+      latencyMs: percentiles,
+      rawLatencies: latencies,
+      rowsScanned: stats.rowsScanned,
+      rowsReturned: stats.rowsReturned,
+      rowGroupsTotal: rowGroupsTotal > 0 ? rowGroupsTotal : undefined,
+      rowGroupsRead: stats.rowGroupsScanned,
+      rowGroupsSkipped: stats.rowGroupsSkipped,
+      success: !queryError,
+      error: queryError,
+      iterations: latencies.length,
     },
-    scan: {
-      latencyMs: scanPercentiles,
-      rowsScanned: scanResult?.stats?.rowsScanned ?? 0,
-      rowsReturned: scanResult?.stats?.rowsReturned ?? 0,
-      success: !scanError,
-      error: scanError,
+    pushdown: {
+      usesPushdownColumns,
+      pushdownColumns,
+      selectivity: Math.round(selectivity * 1000) / 1000,
+      rowGroupSkipRatio: Math.round(rowGroupSkipRatio * 1000) / 1000,
     },
-    speedup: Math.round(speedup * 10) / 10,
-    indexBeneficial: speedup > 1.1, // Consider beneficial if >10% faster
   }
 }
 
@@ -414,24 +409,29 @@ function calculateDatasetSummaries(results: QueryBenchmarkResult[]): DatasetBenc
 
   return datasets.map(dataset => {
     const datasetResults = results.filter(r => r.query.dataset === dataset)
-    const speedups = datasetResults.map(r => r.speedup)
-    const avgSpeedup = speedups.reduce((a, b) => a + b, 0) / speedups.length
 
-    const best = datasetResults.reduce((a, b) => a.speedup > b.speedup ? a : b)
-    const worst = datasetResults.reduce((a, b) => a.speedup < b.speedup ? a : b)
+    // Find best/worst latency
+    const best = datasetResults.reduce((a, b) =>
+      a.execution.latencyMs.p50 < b.execution.latencyMs.p50 ? a : b
+    )
+    const worst = datasetResults.reduce((a, b) =>
+      a.execution.latencyMs.p50 > b.execution.latencyMs.p50 ? a : b
+    )
 
-    const avgIndexedLatency = datasetResults.reduce((sum, r) => sum + r.indexed.latencyMs.avg, 0) / datasetResults.length
-    const avgScanLatency = datasetResults.reduce((sum, r) => sum + r.scan.latencyMs.avg, 0) / datasetResults.length
+    // Calculate averages
+    const avgLatency = datasetResults.reduce((sum, r) => sum + r.execution.latencyMs.avg, 0) / datasetResults.length
+    const avgSkipRatio = datasetResults.reduce((sum, r) => sum + r.pushdown.rowGroupSkipRatio, 0) / datasetResults.length
+    const avgSelectivity = datasetResults.reduce((sum, r) => sum + r.pushdown.selectivity, 0) / datasetResults.length
 
     return {
       dataset,
       queryCount: datasetResults.length,
-      avgSpeedup: Math.round(avgSpeedup * 10) / 10,
-      bestSpeedup: { queryId: best.query.id, speedup: best.speedup },
-      worstSpeedup: { queryId: worst.query.id, speedup: worst.speedup },
-      indexBeneficialCount: datasetResults.filter(r => r.indexBeneficial).length,
-      avgIndexedLatencyMs: Math.round(avgIndexedLatency),
-      avgScanLatencyMs: Math.round(avgScanLatency),
+      avgLatencyMs: Math.round(avgLatency),
+      bestLatency: { queryId: best.query.id, latencyMs: best.execution.latencyMs.p50 },
+      worstLatency: { queryId: worst.query.id, latencyMs: worst.execution.latencyMs.p50 },
+      pushdownUsedCount: datasetResults.filter(r => r.pushdown.usesPushdownColumns).length,
+      avgRowGroupSkipRatio: Math.round(avgSkipRatio * 1000) / 1000,
+      avgSelectivity: Math.round(avgSelectivity * 1000) / 1000,
     }
   })
 }
@@ -439,71 +439,101 @@ function calculateDatasetSummaries(results: QueryBenchmarkResult[]): DatasetBenc
 /**
  * Calculate overall summary
  */
-function calculateOverallSummary(results: QueryBenchmarkResult[]): IndexedBenchmarkResult['summary'] {
+function calculateOverallSummary(results: QueryBenchmarkResult[]): PushdownBenchmarkResult['summary'] {
   // Handle empty results
   if (results.length === 0) {
     return {
-      avgSpeedup: 0,
-      medianSpeedup: 0,
-      bestOverall: { queryId: 'none', speedup: 0 },
-      indexBeneficialRate: 0,
-      byIndexType: {
-        hash: { count: 0, avgSpeedup: 0 },
-        sst: { count: 0, avgSpeedup: 0 },
-        fts: { count: 0, avgSpeedup: 0 },
-      },
+      avgLatencyMs: 0,
+      medianLatencyMs: 0,
+      bestLatency: { queryId: 'none', latencyMs: 0 },
+      pushdownUsageRate: 0,
+      avgRowGroupSkipRatio: 0,
       byCategory: {
-        equality: { count: 0, avgSpeedup: 0 },
-        range: { count: 0, avgSpeedup: 0 },
-        compound: { count: 0, avgSpeedup: 0 },
-        fts: { count: 0, avgSpeedup: 0 },
+        equality: { count: 0, avgLatencyMs: 0, avgSkipRatio: 0 },
+        range: { count: 0, avgLatencyMs: 0, avgSkipRatio: 0 },
+        compound: { count: 0, avgLatencyMs: 0, avgSkipRatio: 0 },
+        fts: { count: 0, avgLatencyMs: 0, avgSkipRatio: 0 },
+      },
+      bySelectivity: {
+        high: { count: 0, avgLatencyMs: 0 },
+        medium: { count: 0, avgLatencyMs: 0 },
+        low: { count: 0, avgLatencyMs: 0 },
       },
     }
   }
 
-  const speedups = results.map(r => r.speedup).sort((a, b) => a - b)
-  const avgSpeedup = speedups.reduce((a, b) => a + b, 0) / speedups.length
-  const medianSpeedup = speedups[Math.floor(speedups.length / 2)] ?? 0
+  // Calculate latency stats
+  const latencies = results.map(r => r.execution.latencyMs.p50).sort((a, b) => a - b)
+  const avgLatency = latencies.reduce((a, b) => a + b, 0) / latencies.length
+  const medianLatency = latencies[Math.floor(latencies.length / 2)] ?? 0
 
-  const best = results.reduce((a, b) => a.speedup > b.speedup ? a : b)
+  const best = results.reduce((a, b) =>
+    a.execution.latencyMs.p50 < b.execution.latencyMs.p50 ? a : b
+  )
 
-  // By index type
-  const byIndexType = {
-    hash: calculateGroupStats(results.filter(r => r.query.expectedIndex === 'hash')),
-    sst: calculateGroupStats(results.filter(r => r.query.expectedIndex === 'sst')),
-    fts: calculateGroupStats(results.filter(r => r.query.expectedIndex === 'fts')),
-  }
+  // Calculate pushdown stats
+  const pushdownUsageRate = Math.round(
+    results.filter(r => r.pushdown.usesPushdownColumns).length / results.length * 100
+  )
+  const avgSkipRatio = results.reduce((sum, r) => sum + r.pushdown.rowGroupSkipRatio, 0) / results.length
 
   // By category
   const byCategory = {
-    equality: calculateGroupStats(results.filter(r => r.query.category === 'equality')),
-    range: calculateGroupStats(results.filter(r => r.query.category === 'range')),
-    compound: calculateGroupStats(results.filter(r => r.query.category === 'compound')),
-    fts: calculateGroupStats(results.filter(r => r.query.category === 'fts')),
+    equality: calculateCategoryStats(results.filter(r => r.query.category === 'equality')),
+    range: calculateCategoryStats(results.filter(r => r.query.category === 'range')),
+    compound: calculateCategoryStats(results.filter(r => r.query.category === 'compound')),
+    fts: calculateCategoryStats(results.filter(r => r.query.category === 'fts')),
+  }
+
+  // By selectivity
+  const bySelectivity = {
+    high: calculateSelectivityStats(results.filter(r => r.query.selectivity === 'high')),
+    medium: calculateSelectivityStats(results.filter(r => r.query.selectivity === 'medium')),
+    low: calculateSelectivityStats(results.filter(r => r.query.selectivity === 'low')),
   }
 
   return {
-    avgSpeedup: Math.round(avgSpeedup * 10) / 10,
-    medianSpeedup: Math.round(medianSpeedup * 10) / 10,
-    bestOverall: { queryId: best.query.id, speedup: best.speedup },
-    indexBeneficialRate: Math.round(results.filter(r => r.indexBeneficial).length / results.length * 100),
-    byIndexType,
+    avgLatencyMs: Math.round(avgLatency),
+    medianLatencyMs: Math.round(medianLatency),
+    bestLatency: { queryId: best.query.id, latencyMs: best.execution.latencyMs.p50 },
+    pushdownUsageRate,
+    avgRowGroupSkipRatio: Math.round(avgSkipRatio * 1000) / 1000,
     byCategory,
+    bySelectivity,
   }
 }
 
 /**
- * Calculate stats for a group of results
+ * Calculate stats for a category of results
  */
-function calculateGroupStats(results: QueryBenchmarkResult[]): { count: number; avgSpeedup: number } {
+function calculateCategoryStats(results: QueryBenchmarkResult[]): { count: number; avgLatencyMs: number; avgSkipRatio: number } {
   if (results.length === 0) {
-    return { count: 0, avgSpeedup: 0 }
+    return { count: 0, avgLatencyMs: 0, avgSkipRatio: 0 }
   }
 
-  const avgSpeedup = results.reduce((sum, r) => sum + r.speedup, 0) / results.length
+  const avgLatency = results.reduce((sum, r) => sum + r.execution.latencyMs.avg, 0) / results.length
+  const avgSkipRatio = results.reduce((sum, r) => sum + r.pushdown.rowGroupSkipRatio, 0) / results.length
+
   return {
     count: results.length,
-    avgSpeedup: Math.round(avgSpeedup * 10) / 10,
+    avgLatencyMs: Math.round(avgLatency),
+    avgSkipRatio: Math.round(avgSkipRatio * 1000) / 1000,
+  }
+}
+
+/**
+ * Calculate stats for a selectivity group
+ */
+function calculateSelectivityStats(results: QueryBenchmarkResult[]): { count: number; avgLatencyMs: number } {
+  if (results.length === 0) {
+    return { count: 0, avgLatencyMs: 0 }
+  }
+
+  const avgLatency = results.reduce((sum, r) => sum + r.execution.latencyMs.avg, 0) / results.length
+
+  return {
+    count: results.length,
+    avgLatencyMs: Math.round(avgLatency),
   }
 }
 
@@ -512,9 +542,11 @@ function calculateGroupStats(results: QueryBenchmarkResult[]): { count: number; 
 // =============================================================================
 
 /**
- * Handle /benchmark-indexed HTTP request
+ * Handle /benchmark-pushdown HTTP request
+ *
+ * Measures native Parquet predicate pushdown performance on $index_* columns.
  */
-export async function handleIndexedBenchmarkRequest(
+export async function handlePushdownBenchmarkRequest(
   request: Request,
   bucket: R2Bucket
 ): Promise<Response> {
@@ -538,38 +570,36 @@ export async function handleIndexedBenchmarkRequest(
     ? categoriesParam.split(',') as BenchmarkQuery['category'][]
     : undefined
 
-  const includeScans = url.searchParams.get('includeScans') !== 'false'
-
   try {
     // Open cache
     const cache = await caches.open('parquedb-benchmark')
 
-    const result = await runIndexedBenchmark(bucket, cache, {
+    const result = await runPushdownBenchmark(bucket, cache, {
       iterations,
       warmupIterations: warmup,
       maxQueriesPerDataset: maxQueries,
       datasets,
       categories,
-      includeScanBaselines: includeScans,
     })
 
     const totalTime = Math.round(performance.now() - startTime)
 
     return Response.json({
-      benchmark: 'Secondary Index Performance',
-      description: 'Real-world R2 benchmarks comparing indexed vs scan queries',
+      benchmark: 'Native Parquet Pushdown Performance',
+      description: 'Measures query performance using native Parquet predicate pushdown on $index_* columns',
       totalTimeMs: totalTime,
       queryStats: QUERY_STATS,
       ...result,
       interpretation: {
-        avgSpeedup: `Indexed queries are ${result.summary.avgSpeedup}x faster on average`,
-        indexBeneficial: `${result.summary.indexBeneficialRate}% of queries benefit from indexes`,
-        bestCase: `Best: ${result.summary.bestOverall.queryId} (${result.summary.bestOverall.speedup}x speedup)`,
-        recommendation: result.summary.avgSpeedup > 5
-          ? 'Secondary indexes provide significant performance benefits'
-          : result.summary.avgSpeedup > 2
-          ? 'Secondary indexes provide moderate performance benefits'
-          : 'Consider reviewing index coverage and query patterns',
+        avgLatency: `Average query latency: ${result.summary.avgLatencyMs}ms`,
+        pushdownUsage: `${result.summary.pushdownUsageRate}% of queries use pushdown columns`,
+        rowGroupSkipping: `Average ${Math.round(result.summary.avgRowGroupSkipRatio * 100)}% of row groups skipped via statistics`,
+        bestCase: `Best: ${result.summary.bestLatency.queryId} (${result.summary.bestLatency.latencyMs}ms)`,
+        recommendation: result.summary.avgRowGroupSkipRatio > 0.5
+          ? 'Native pushdown is effectively skipping row groups'
+          : result.summary.avgRowGroupSkipRatio > 0.2
+          ? 'Moderate row group skipping - consider data organization'
+          : 'Low row group skipping - data may benefit from sorting by filter columns',
       },
     }, {
       headers: {
@@ -588,3 +618,6 @@ export async function handleIndexedBenchmarkRequest(
     }, { status: 500 })
   }
 }
+
+// Legacy alias for backwards compatibility
+export const handleIndexedBenchmarkRequest = handlePushdownBenchmarkRequest

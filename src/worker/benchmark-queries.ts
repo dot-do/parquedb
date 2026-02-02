@@ -1,11 +1,11 @@
 /**
  * Benchmark Query Definitions for ParqueDB
  *
- * 60+ real-world query patterns across IMDB, O*NET, and UNSPSC datasets
- * for comprehensive secondary index benchmarking.
+ * 50+ real-world query patterns across IMDB, O*NET, and UNSPSC datasets
+ * for measuring native Parquet predicate pushdown performance on $index_* columns.
  *
- * scanFilter uses $or wrapper to force full scan while using correct column names.
- * The $or prevents secondary index usage but still matches the same data.
+ * All queries use $index_* columns which have Parquet min/max statistics,
+ * enabling row group skipping during query execution.
  */
 
 import type { Filter } from '../types/filter'
@@ -27,36 +27,30 @@ export interface BenchmarkQuery {
   /** Collection within the dataset */
   collection: string
   /** Query category */
-  category: 'equality' | 'range' | 'compound' | 'fts' | 'scan'
-  /** Index type expected to be used */
-  expectedIndex: 'hash' | 'sst' | 'fts' | 'none'
-  /** MongoDB-style filter */
+  category: 'equality' | 'range' | 'compound' | 'fts'
+  /** MongoDB-style filter using $index_* columns for native pushdown */
   filter: Filter
-  /** Expected selectivity (0-1, lower = fewer results) */
+  /** Expected selectivity (high = few results, medium, low = many results) */
   selectivity: 'high' | 'medium' | 'low'
   /** Description of what the query tests */
   description: string
-  /** Equivalent scan filter (for comparison baseline) - uses $or to force scan */
-  scanFilter?: Filter
 }
 
 // =============================================================================
-// IMDB Queries (20)
+// IMDB Queries (18) - Using native pushdown on $index_* columns
 // =============================================================================
 
 export const IMDB_QUERIES: BenchmarkQuery[] = [
-  // Equality queries (hash index)
+  // Equality queries - use $index_* columns with min/max statistics
   {
     id: 'imdb-eq-movie',
     name: 'Movies only',
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_titleType: 'movie' },
-    scanFilter: { $or: [{ $index_titleType: 'movie' }] },
     selectivity: 'low',
-    description: 'Filter titles to movies only using hash index on titleType',
+    description: 'Filter titles to movies only using native pushdown on titleType',
   },
   {
     id: 'imdb-eq-tvseries',
@@ -64,11 +58,9 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_titleType: 'tvSeries' },
-    scanFilter: { $or: [{ $index_titleType: 'tvSeries' }] },
     selectivity: 'low',
-    description: 'Filter titles to TV series only using hash index',
+    description: 'Filter titles to TV series only using native pushdown',
   },
   {
     id: 'imdb-eq-short',
@@ -76,11 +68,9 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_titleType: 'short' },
-    scanFilter: { $or: [{ $index_titleType: 'short' }] },
     selectivity: 'medium',
-    description: 'Filter to short films using hash index',
+    description: 'Filter to short films using native pushdown',
   },
   {
     id: 'imdb-eq-tvmovie',
@@ -88,25 +78,21 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_titleType: 'tvMovie' },
-    scanFilter: { $or: [{ $index_titleType: 'tvMovie' }] },
     selectivity: 'high',
-    description: 'Filter to TV movies using hash index',
+    description: 'Filter to TV movies using native pushdown',
   },
 
-  // Range queries (SST index)
+  // Range queries - use $index_* columns with min/max statistics for row group skipping
   {
     id: 'imdb-range-recent',
     name: 'Recent titles (2020-2025)',
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_startYear: { $gte: 2020, $lte: 2025 } },
-    scanFilter: { $or: [{ $index_startYear: { $gte: 2020, $lte: 2025 } }] },
     selectivity: 'high',
-    description: 'Range query for recent titles using SST index on startYear',
+    description: 'Range query for recent titles using native pushdown on startYear',
   },
   {
     id: 'imdb-range-2010s',
@@ -114,11 +100,9 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_startYear: { $gte: 2010, $lt: 2020 } },
-    scanFilter: { $or: [{ $index_startYear: { $gte: 2010, $lt: 2020 } }] },
     selectivity: 'medium',
-    description: 'Range query for 2010s decade using SST index',
+    description: 'Range query for 2010s decade using native pushdown',
   },
   {
     id: 'imdb-range-2000s',
@@ -126,11 +110,9 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_startYear: { $gte: 2000, $lt: 2010 } },
-    scanFilter: { $or: [{ $index_startYear: { $gte: 2000, $lt: 2010 } }] },
     selectivity: 'medium',
-    description: 'Range query for 2000s decade using SST index',
+    description: 'Range query for 2000s decade using native pushdown',
   },
   {
     id: 'imdb-range-classic',
@@ -138,11 +120,9 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_startYear: { $lt: 2000 } },
-    scanFilter: { $or: [{ $index_startYear: { $lt: 2000 } }] },
     selectivity: 'low',
-    description: 'Range query for classic titles using SST index',
+    description: 'Range query for classic titles using native pushdown',
   },
   {
     id: 'imdb-range-top-rated',
@@ -150,11 +130,9 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_averageRating: { $gte: 8.0 } },
-    scanFilter: { $or: [{ $index_averageRating: { $gte: 8.0 } }] },
     selectivity: 'high',
-    description: 'Range query for highly rated titles using SST index',
+    description: 'Range query for highly rated titles using native pushdown',
   },
   {
     id: 'imdb-range-good',
@@ -162,11 +140,9 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_averageRating: { $gte: 7.0 } },
-    scanFilter: { $or: [{ $index_averageRating: { $gte: 7.0 } }] },
     selectivity: 'medium',
-    description: 'Range query for good titles using SST index',
+    description: 'Range query for good titles using native pushdown',
   },
   {
     id: 'imdb-range-average',
@@ -174,11 +150,9 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_averageRating: { $gte: 6.0, $lt: 7.0 } },
-    scanFilter: { $or: [{ $index_averageRating: { $gte: 6.0, $lt: 7.0 } }] },
     selectivity: 'low',
-    description: 'Range query for average-rated titles using SST index',
+    description: 'Range query for average-rated titles using native pushdown',
   },
   {
     id: 'imdb-range-popular',
@@ -186,23 +160,19 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_numVotes: { $gte: 10000 } },
-    scanFilter: { $or: [{ $index_numVotes: { $gte: 10000 } }] },
     selectivity: 'high',
     description: 'Range query for popular titles by vote count',
   },
 
-  // Compound queries (hash + range)
+  // Compound queries - combine multiple $index_* columns
   {
     id: 'imdb-compound-movie-recent',
     name: 'Recent movies',
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'compound',
-    expectedIndex: 'hash',
     filter: { $index_titleType: 'movie', $index_startYear: { $gte: 2020 } },
-    scanFilter: { $or: [{ $index_titleType: 'movie', $index_startYear: { $gte: 2020 } }] },
     selectivity: 'high',
     description: 'Compound: movies from 2020 onwards',
   },
@@ -212,9 +182,7 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'compound',
-    expectedIndex: 'hash',
     filter: { $index_titleType: 'movie', $index_averageRating: { $gte: 8.0 } },
-    scanFilter: { $or: [{ $index_titleType: 'movie', $index_averageRating: { $gte: 8.0 } }] },
     selectivity: 'high',
     description: 'Compound: movies with rating >= 8.0',
   },
@@ -224,21 +192,18 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'compound',
-    expectedIndex: 'hash',
     filter: { $index_titleType: 'tvSeries', $index_startYear: { $gte: 2010, $lt: 2020 } },
-    scanFilter: { $or: [{ $index_titleType: 'tvSeries', $index_startYear: { $gte: 2010, $lt: 2020 } }] },
     selectivity: 'medium',
     description: 'Compound: TV series from 2010s decade',
   },
 
-  // FTS queries (no scanFilter - FTS has no scan equivalent)
+  // FTS queries - full-text search
   {
     id: 'imdb-fts-dark-knight',
     name: 'Search: dark knight',
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'dark knight' } },
     selectivity: 'high',
     description: 'Full-text search for "dark knight"',
@@ -249,7 +214,6 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'star wars' } },
     selectivity: 'high',
     description: 'Full-text search for "star wars"',
@@ -260,54 +224,27 @@ export const IMDB_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb-1m',
     collection: 'titles',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'lord rings' } },
     selectivity: 'high',
     description: 'Full-text search for "lord rings"',
   },
-
-  // Scan baselines - use $or to ensure no index is used
-  {
-    id: 'imdb-scan-movie',
-    name: 'Scan: movies (baseline)',
-    dataset: 'imdb-1m',
-    collection: 'titles',
-    category: 'scan',
-    expectedIndex: 'none',
-    filter: { $or: [{ $index_titleType: 'movie' }] },
-    selectivity: 'low',
-    description: 'Baseline scan without index - $or forces full scan',
-  },
-  {
-    id: 'imdb-scan-recent',
-    name: 'Scan: recent (baseline)',
-    dataset: 'imdb-1m',
-    collection: 'titles',
-    category: 'scan',
-    expectedIndex: 'none',
-    filter: { $or: [{ $index_startYear: { $gte: 2020 } }] },
-    selectivity: 'high',
-    description: 'Baseline scan without index - $or forces full scan',
-  },
 ]
 
 // =============================================================================
-// IMDB 100K Queries (10) - Smaller dataset that fits in Worker limits
+// IMDB 100K Queries (9) - Smaller dataset that fits in Worker limits
 // =============================================================================
 
 export const IMDB_100K_QUERIES: BenchmarkQuery[] = [
-  // Equality queries (hash index)
+  // Equality queries
   {
     id: 'imdb100k-eq-movie',
     name: 'Movies only',
     dataset: 'imdb',
     collection: 'titles',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_titleType: 'movie' },
-    scanFilter: { $or: [{ $index_titleType: 'movie' }] },
     selectivity: 'low',
-    description: 'Filter titles to movies only using hash index on titleType',
+    description: 'Filter titles to movies only using native pushdown on titleType',
   },
   {
     id: 'imdb100k-eq-tvseries',
@@ -315,24 +252,20 @@ export const IMDB_100K_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb',
     collection: 'titles',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_titleType: 'tvSeries' },
-    scanFilter: { $or: [{ $index_titleType: 'tvSeries' }] },
     selectivity: 'low',
-    description: 'Filter titles to TV series only using hash index',
+    description: 'Filter titles to TV series only using native pushdown',
   },
-  // Range queries (SST index)
+  // Range queries
   {
     id: 'imdb100k-range-year-2020s',
     name: 'Year 2020-2025',
     dataset: 'imdb',
     collection: 'titles',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_startYear: { $gte: 2020, $lte: 2025 } },
-    scanFilter: { $or: [{ $index_startYear: { $gte: 2020, $lte: 2025 } }] },
     selectivity: 'high',
-    description: 'Recent titles (2020-2025) using SST range index',
+    description: 'Recent titles (2020-2025) using native pushdown',
   },
   {
     id: 'imdb100k-range-rating-high',
@@ -340,11 +273,9 @@ export const IMDB_100K_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb',
     collection: 'titles',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_averageRating: { $gte: 8.0 } },
-    scanFilter: { $or: [{ $index_averageRating: { $gte: 8.0 } }] },
     selectivity: 'high',
-    description: 'High-rated titles using SST range index',
+    description: 'High-rated titles using native pushdown',
   },
   {
     id: 'imdb100k-range-votes-popular',
@@ -352,11 +283,9 @@ export const IMDB_100K_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb',
     collection: 'titles',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_numVotes: { $gte: 10000 } },
-    scanFilter: { $or: [{ $index_numVotes: { $gte: 10000 } }] },
     selectivity: 'high',
-    description: 'Popular titles by vote count using SST range index',
+    description: 'Popular titles by vote count using native pushdown',
   },
   // Compound queries
   {
@@ -365,9 +294,7 @@ export const IMDB_100K_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb',
     collection: 'titles',
     category: 'compound',
-    expectedIndex: 'hash',
     filter: { $index_titleType: 'movie', $index_startYear: { $gte: 2020 } },
-    scanFilter: { $or: [{ $index_titleType: 'movie', $index_startYear: { $gte: 2020 } }] },
     selectivity: 'high',
     description: 'Compound query: movies from 2020 onwards',
   },
@@ -377,20 +304,17 @@ export const IMDB_100K_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb',
     collection: 'titles',
     category: 'compound',
-    expectedIndex: 'hash',
     filter: { $index_titleType: 'movie', $index_averageRating: { $gte: 8.0 } },
-    scanFilter: { $or: [{ $index_titleType: 'movie', $index_averageRating: { $gte: 8.0 } }] },
     selectivity: 'high',
     description: 'Compound query: movies with rating >= 8.0',
   },
-  // FTS queries (no scanFilter - FTS has no scan equivalent)
+  // FTS queries
   {
     id: 'imdb100k-fts-star',
     name: 'Search: star',
     dataset: 'imdb',
     collection: 'titles',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'star' } },
     selectivity: 'medium',
     description: 'Full-text search for "star" in title',
@@ -401,40 +325,25 @@ export const IMDB_100K_QUERIES: BenchmarkQuery[] = [
     dataset: 'imdb',
     collection: 'titles',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'love' } },
     selectivity: 'medium',
     description: 'Full-text search for "love" in title',
   },
-  // Scan baseline
-  {
-    id: 'imdb100k-scan-year',
-    name: 'Scan: recent (baseline)',
-    dataset: 'imdb',
-    collection: 'titles',
-    category: 'scan',
-    expectedIndex: 'none',
-    filter: { $or: [{ $index_startYear: { $gte: 2020 } }] },
-    selectivity: 'high',
-    description: 'Baseline scan without index - $or forces full scan',
-  },
 ]
 
 // =============================================================================
-// O*NET Queries (20)
+// O*NET Queries (18) - Using native pushdown on $index_* columns
 // =============================================================================
 
 export const ONET_QUERIES: BenchmarkQuery[] = [
-  // Equality queries (hash index)
+  // Equality queries
   {
     id: 'onet-eq-jobzone-1',
     name: 'Job Zone 1',
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_jobZone: 1 },
-    scanFilter: { $or: [{ $index_jobZone: 1 }] },
     selectivity: 'medium',
     description: 'Filter occupations by Job Zone 1 (little preparation)',
   },
@@ -444,9 +353,7 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_jobZone: 4 },
-    scanFilter: { $or: [{ $index_jobZone: 4 }] },
     selectivity: 'medium',
     description: 'Filter occupations by Job Zone 4 (considerable preparation)',
   },
@@ -456,9 +363,7 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_jobZone: 5 },
-    scanFilter: { $or: [{ $index_jobZone: 5 }] },
     selectivity: 'high',
     description: 'Filter occupations by Job Zone 5 (extensive preparation)',
   },
@@ -468,9 +373,7 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_scaleId: 'IM' },
-    scanFilter: { $or: [{ $index_scaleId: 'IM' }] },
     selectivity: 'low',
     description: 'Filter data values by Importance scale',
   },
@@ -480,23 +383,19 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_scaleId: 'LV' },
-    scanFilter: { $or: [{ $index_scaleId: 'LV' }] },
     selectivity: 'low',
     description: 'Filter data values by Level scale',
   },
 
-  // Range queries (SST index)
+  // Range queries
   {
     id: 'onet-range-soc-15',
     name: 'Computer occupations (15-*)',
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_socCode: { $gte: '15-0000.00', $lt: '16-0000.00' } },
-    scanFilter: { $or: [{ $index_socCode: { $gte: '15-0000.00', $lt: '16-0000.00' } }] },
     selectivity: 'medium',
     description: 'Range query for computer and IT occupations (SOC 15-xxxx)',
   },
@@ -506,9 +405,7 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_socCode: { $gte: '29-0000.00', $lt: '30-0000.00' } },
-    scanFilter: { $or: [{ $index_socCode: { $gte: '29-0000.00', $lt: '30-0000.00' } }] },
     selectivity: 'medium',
     description: 'Range query for healthcare occupations (SOC 29-xxxx)',
   },
@@ -518,9 +415,7 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_socCode: { $gte: '11-0000.00', $lt: '12-0000.00' } },
-    scanFilter: { $or: [{ $index_socCode: { $gte: '11-0000.00', $lt: '12-0000.00' } }] },
     selectivity: 'medium',
     description: 'Range query for management occupations (SOC 11-xxxx)',
   },
@@ -530,9 +425,7 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_dataValue: { $gte: 4.0 } },
-    scanFilter: { $or: [{ $index_dataValue: { $gte: 4.0 } }] },
     selectivity: 'medium',
     description: 'Range query for high importance values',
   },
@@ -542,9 +435,7 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_dataValue: { $gte: 4.5 } },
-    scanFilter: { $or: [{ $index_dataValue: { $gte: 4.5 } }] },
     selectivity: 'high',
     description: 'Range query for critical importance values',
   },
@@ -554,9 +445,7 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_dataValue: { $gte: 5.0 } },
-    scanFilter: { $or: [{ $index_dataValue: { $gte: 5.0 } }] },
     selectivity: 'high',
     description: 'Range query for high level requirements',
   },
@@ -568,9 +457,7 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'compound',
-    expectedIndex: 'hash',
     filter: { $index_jobZone: 5, $index_dataValue: { $gte: 4.0 } },
-    scanFilter: { $or: [{ $index_jobZone: 5, $index_dataValue: { $gte: 4.0 } }] },
     selectivity: 'high',
     description: 'Compound: JZ5 occupations with high importance skills',
   },
@@ -580,9 +467,7 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'compound',
-    expectedIndex: 'sst',
     filter: { $index_socCode: { $gte: '15-0000.00', $lt: '16-0000.00' }, $index_scaleId: 'IM' },
-    scanFilter: { $or: [{ $index_socCode: { $gte: '15-0000.00', $lt: '16-0000.00' }, $index_scaleId: 'IM' }] },
     selectivity: 'high',
     description: 'Compound: Computer occupations with importance scale',
   },
@@ -592,21 +477,18 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'compound',
-    expectedIndex: 'hash',
     filter: { $index_jobZone: 4, $index_dataValue: { $gte: 5.0 } },
-    scanFilter: { $or: [{ $index_jobZone: 4, $index_dataValue: { $gte: 5.0 } }] },
     selectivity: 'high',
     description: 'Compound: JZ4 occupations with high level requirements',
   },
 
-  // FTS queries (no scanFilter - FTS has no scan equivalent)
+  // FTS queries
   {
     id: 'onet-fts-software',
     name: 'Search: software',
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'software' } },
     selectivity: 'high',
     description: 'Full-text search for software-related occupations',
@@ -617,7 +499,6 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'nursing' } },
     selectivity: 'high',
     description: 'Full-text search for nursing occupations',
@@ -628,7 +509,6 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'management' } },
     selectivity: 'medium',
     description: 'Full-text search for management occupations',
@@ -639,52 +519,25 @@ export const ONET_QUERIES: BenchmarkQuery[] = [
     dataset: 'onet-full',
     collection: 'occupations',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'engineer' } },
     selectivity: 'medium',
     description: 'Full-text search for engineering occupations',
   },
-
-  // Scan baselines - use $or to ensure no index is used
-  {
-    id: 'onet-scan-jobzone5',
-    name: 'Scan: Job Zone 5 (baseline)',
-    dataset: 'onet-full',
-    collection: 'occupations',
-    category: 'scan',
-    expectedIndex: 'none',
-    filter: { $or: [{ $index_jobZone: 5 }] },
-    selectivity: 'high',
-    description: 'Baseline scan without index - $or forces full scan',
-  },
-  {
-    id: 'onet-scan-importance',
-    name: 'Scan: high importance (baseline)',
-    dataset: 'onet-full',
-    collection: 'occupations',
-    category: 'scan',
-    expectedIndex: 'none',
-    filter: { $or: [{ $index_dataValue: { $gte: 4.0 } }] },
-    selectivity: 'medium',
-    description: 'Baseline scan without index - $or forces full scan',
-  },
 ]
 
 // =============================================================================
-// UNSPSC Queries (20)
+// UNSPSC Queries (18) - Using native pushdown on $index_* columns
 // =============================================================================
 
 export const UNSPSC_QUERIES: BenchmarkQuery[] = [
-  // Equality queries (hash index)
+  // Equality queries
   {
     id: 'unspsc-eq-segment-43',
     name: 'Segment 43 (IT)',
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_segmentCode: '43' },
-    scanFilter: { $or: [{ $index_segmentCode: '43' }] },
     selectivity: 'medium',
     description: 'Filter to IT equipment and supplies (segment 43)',
   },
@@ -694,9 +547,7 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_segmentCode: '44' },
-    scanFilter: { $or: [{ $index_segmentCode: '44' }] },
     selectivity: 'medium',
     description: 'Filter to office equipment and supplies (segment 44)',
   },
@@ -706,9 +557,7 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_segmentCode: '50' },
-    scanFilter: { $or: [{ $index_segmentCode: '50' }] },
     selectivity: 'medium',
     description: 'Filter to food and beverage products (segment 50)',
   },
@@ -718,9 +567,7 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_segmentCode: '72' },
-    scanFilter: { $or: [{ $index_segmentCode: '72' }] },
     selectivity: 'medium',
     description: 'Filter to building and construction (segment 72)',
   },
@@ -730,23 +577,19 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'equality',
-    expectedIndex: 'hash',
     filter: { $index_segmentCode: '80' },
-    scanFilter: { $or: [{ $index_segmentCode: '80' }] },
     selectivity: 'medium',
     description: 'Filter to management and business services (segment 80)',
   },
 
-  // Range queries (SST index) - codes are strings in the data
+  // Range queries - codes are strings in the data
   {
     id: 'unspsc-range-it',
     name: 'IT range (43000000-43999999)',
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_code: { $gte: '43000000', $lt: '44000000' } },
-    scanFilter: { $or: [{ $index_code: { $gte: '43000000', $lt: '44000000' } }] },
     selectivity: 'medium',
     description: 'Range query for IT category codes',
   },
@@ -756,9 +599,7 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_code: { $gte: '44000000', $lt: '45000000' } },
-    scanFilter: { $or: [{ $index_code: { $gte: '44000000', $lt: '45000000' } }] },
     selectivity: 'medium',
     description: 'Range query for office category codes',
   },
@@ -768,9 +609,7 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_code: { $gte: '50000000', $lt: '51000000' } },
-    scanFilter: { $or: [{ $index_code: { $gte: '50000000', $lt: '51000000' } }] },
     selectivity: 'medium',
     description: 'Range query for food category codes',
   },
@@ -780,9 +619,7 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_code: { $gte: '43210000', $lt: '43220000' } },
-    scanFilter: { $or: [{ $index_code: { $gte: '43210000', $lt: '43220000' } }] },
     selectivity: 'high',
     description: 'Range query for computer hardware family',
   },
@@ -792,9 +629,7 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_code: { $gte: '43230000', $lt: '43240000' } },
-    scanFilter: { $or: [{ $index_code: { $gte: '43230000', $lt: '43240000' } }] },
     selectivity: 'high',
     description: 'Range query for software family',
   },
@@ -806,9 +641,7 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_code: { $gte: '43100000', $lt: '43110000' } },
-    scanFilter: { $or: [{ $index_code: { $gte: '43100000', $lt: '43110000' } }] },
     selectivity: 'high',
     description: 'Drill down to networking equipment family',
   },
@@ -818,9 +651,7 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'range',
-    expectedIndex: 'sst',
     filter: { $index_code: { $gte: '43101500', $lt: '43101600' } },
-    scanFilter: { $or: [{ $index_code: { $gte: '43101500', $lt: '43101600' } }] },
     selectivity: 'high',
     description: 'Drill down to router class',
   },
@@ -832,9 +663,7 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'compound',
-    expectedIndex: 'hash',
     filter: { $index_segmentCode: '43', status: 'active' },
-    scanFilter: { $or: [{ $index_segmentCode: '43', status: 'active' }] },
     selectivity: 'medium',
     description: 'Compound: IT segment + active status',
   },
@@ -844,21 +673,18 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'compound',
-    expectedIndex: 'hash',
     filter: { $index_segmentCode: '80', $index_code: { $gte: '80100000', $lt: '80200000' } },
-    scanFilter: { $or: [{ $index_segmentCode: '80', $index_code: { $gte: '80100000', $lt: '80200000' } }] },
     selectivity: 'high',
     description: 'Compound: Services segment + professional range',
   },
 
-  // FTS queries (no scanFilter - FTS has no scan equivalent)
+  // FTS queries
   {
     id: 'unspsc-fts-computer',
     name: 'Search: computer',
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'computer' } },
     selectivity: 'medium',
     description: 'Full-text search for computer products',
@@ -869,7 +695,6 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'office supplies' } },
     selectivity: 'medium',
     description: 'Full-text search for office supplies',
@@ -880,7 +705,6 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'printer' } },
     selectivity: 'high',
     description: 'Full-text search for printers',
@@ -891,34 +715,9 @@ export const UNSPSC_QUERIES: BenchmarkQuery[] = [
     dataset: 'unspsc-full',
     collection: 'commodities',
     category: 'fts',
-    expectedIndex: 'fts',
     filter: { $text: { $search: 'software' } },
     selectivity: 'medium',
     description: 'Full-text search for software products',
-  },
-
-  // Scan baselines - use $or to ensure no index is used
-  {
-    id: 'unspsc-scan-segment43',
-    name: 'Scan: IT segment (baseline)',
-    dataset: 'unspsc-full',
-    collection: 'commodities',
-    category: 'scan',
-    expectedIndex: 'none',
-    filter: { $or: [{ $index_segmentCode: '43' }] },
-    selectivity: 'medium',
-    description: 'Baseline scan without index - $or forces full scan',
-  },
-  {
-    id: 'unspsc-scan-range',
-    name: 'Scan: code range (baseline)',
-    dataset: 'unspsc-full',
-    collection: 'commodities',
-    category: 'scan',
-    expectedIndex: 'none',
-    filter: { $or: [{ $index_code: { $gte: '43000000', $lt: '44000000' } }] },
-    selectivity: 'medium',
-    description: 'Baseline scan without index - $or forces full scan',
   },
 ]
 
@@ -939,7 +738,7 @@ export const ALL_QUERIES: BenchmarkQuery[] = [
 /**
  * Get queries for a specific dataset
  */
-export function getQueriesForDataset(dataset: 'imdb-1m' | 'onet-full' | 'unspsc-full'): BenchmarkQuery[] {
+export function getQueriesForDataset(dataset: 'imdb' | 'imdb-1m' | 'onet-full' | 'unspsc-full'): BenchmarkQuery[] {
   return ALL_QUERIES.filter(q => q.dataset === dataset)
 }
 
@@ -948,13 +747,6 @@ export function getQueriesForDataset(dataset: 'imdb-1m' | 'onet-full' | 'unspsc-
  */
 export function getQueriesByCategory(category: BenchmarkQuery['category']): BenchmarkQuery[] {
   return ALL_QUERIES.filter(q => q.category === category)
-}
-
-/**
- * Get queries by expected index type
- */
-export function getQueriesByIndexType(indexType: BenchmarkQuery['expectedIndex']): BenchmarkQuery[] {
-  return ALL_QUERIES.filter(q => q.expectedIndex === indexType)
 }
 
 /**
@@ -973,12 +765,10 @@ export const QUERY_STATS = {
     range: ALL_QUERIES.filter(q => q.category === 'range').length,
     compound: ALL_QUERIES.filter(q => q.category === 'compound').length,
     fts: ALL_QUERIES.filter(q => q.category === 'fts').length,
-    scan: ALL_QUERIES.filter(q => q.category === 'scan').length,
   },
-  byIndexType: {
-    hash: ALL_QUERIES.filter(q => q.expectedIndex === 'hash').length,
-    sst: ALL_QUERIES.filter(q => q.expectedIndex === 'sst').length,
-    fts: ALL_QUERIES.filter(q => q.expectedIndex === 'fts').length,
-    none: ALL_QUERIES.filter(q => q.expectedIndex === 'none').length,
+  bySelectivity: {
+    high: ALL_QUERIES.filter(q => q.selectivity === 'high').length,
+    medium: ALL_QUERIES.filter(q => q.selectivity === 'medium').length,
+    low: ALL_QUERIES.filter(q => q.selectivity === 'low').length,
   },
 }

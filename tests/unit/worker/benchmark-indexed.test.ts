@@ -1,8 +1,8 @@
 /**
- * Benchmark Indexed Tests
+ * Native Pushdown Benchmark Tests
  *
- * TDD tests for benchmark error handling - exceptions should be caught
- * and returned as JSON errors, not crash the worker.
+ * TDD tests for benchmark error handling and query validation.
+ * Tests ensure proper error handling without crashing the worker.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -21,25 +21,23 @@ describe('Benchmark Error Handling', () => {
     it('should have error info when query fails', () => {
       // A failed query should have success: false and error message
       const failedResult: Partial<QueryBenchmarkResult> = {
-        indexed: {
+        execution: {
           latencyMs: { p50: 0, p95: 0, avg: 0 },
           rowsScanned: 0,
           rowsReturned: 0,
           success: false,
           error: 'Query failed: out of memory',
         },
-        scan: {
-          latencyMs: { p50: 0, p95: 0, avg: 0 },
-          rowsScanned: 0,
-          rowsReturned: 0,
-          success: true,
+        pushdown: {
+          usesPushdownColumns: true,
+          pushdownColumns: ['$index_titleType'],
+          selectivity: 0,
+          rowGroupSkipRatio: 0,
         },
-        speedup: 1,
-        indexBeneficial: false,
       }
 
-      expect(failedResult.indexed?.success).toBe(false)
-      expect(failedResult.indexed?.error).toContain('out of memory')
+      expect(failedResult.execution?.success).toBe(false)
+      expect(failedResult.execution?.error).toContain('out of memory')
     })
 
     it('should continue benchmark after individual query failure', () => {
@@ -57,7 +55,7 @@ describe('Benchmark Error Handling', () => {
     })
   })
 
-  describe('handleIndexedBenchmarkRequest error response', () => {
+  describe('handlePushdownBenchmarkRequest error response', () => {
     it('should return 500 status for errors', () => {
       // Error responses should have status 500
       const errorResponse = Response.json(
@@ -82,88 +80,135 @@ describe('Benchmark Error Handling', () => {
 })
 
 // =============================================================================
-// Integration test: benchmark queries definition validation
+// Query Definition Validation Tests
 // =============================================================================
 
 describe('Benchmark Query Definitions', () => {
-  it('all queries with scanFilter should use $or wrapper', async () => {
+  it('all queries should use $index_* columns or $text for pushdown', async () => {
     // Import the actual queries
     const { ALL_QUERIES } = await import('../../../src/worker/benchmark-queries')
 
     for (const query of ALL_QUERIES) {
-      if (query.scanFilter && query.category !== 'scan') {
-        // scanFilter should use $or to force full scan
-        expect(query.scanFilter).toHaveProperty('$or')
+      const filterStr = JSON.stringify(query.filter)
 
-        // The $or array should contain the filter conditions
-        const orArray = (query.scanFilter as { $or: unknown[] }).$or
-        expect(Array.isArray(orArray)).toBe(true)
-        expect(orArray.length).toBeGreaterThan(0)
-      }
+      // Each query should either use $index_* columns or $text (for FTS)
+      const usesPushdown = filterStr.includes('$index_') || filterStr.includes('$text')
+      expect(usesPushdown).toBe(true)
     }
   })
 
-  it('all scanFilters should use $index_* column names', async () => {
+  it('all queries should have valid category', async () => {
     const { ALL_QUERIES } = await import('../../../src/worker/benchmark-queries')
+
+    const validCategories = ['equality', 'range', 'compound', 'fts']
 
     for (const query of ALL_QUERIES) {
-      if (query.scanFilter) {
-        const filterStr = JSON.stringify(query.scanFilter)
-
-        // Should NOT have non-indexed field names like 'titleType', 'startYear'
-        // without the $index_ prefix (except for special fields like 'status')
-        const nonIndexedPatterns = [
-          /"titleType":/,
-          /"startYear":/,
-          /"averageRating":/,
-          /"numVotes":/,
-          /"jobZone":/,
-          /"scaleId":/,
-          /"socCode":/,
-          /"dataValue":/,
-          /"segmentCode":/,
-          /"code":/,
-        ]
-
-        for (const pattern of nonIndexedPatterns) {
-          // If the field exists, it should be $index_ prefixed or inside $or
-          if (pattern.test(filterStr) && !filterStr.includes('$index_')) {
-            // Allow 'status' as it's a non-indexed field intentionally
-            if (!filterStr.includes('"status"')) {
-              throw new Error(
-                `Query ${query.id} scanFilter uses non-indexed field name: ${filterStr}`
-              )
-            }
-          }
-        }
-      }
+      expect(validCategories).toContain(query.category)
     }
   })
 
-  it('scan category queries should use $or wrapper in filter', async () => {
+  it('all queries should have valid selectivity', async () => {
     const { ALL_QUERIES } = await import('../../../src/worker/benchmark-queries')
 
-    const scanQueries = ALL_QUERIES.filter(q => q.category === 'scan')
+    const validSelectivities = ['high', 'medium', 'low']
 
-    for (const query of scanQueries) {
-      // Scan baseline queries should use $or in their main filter to force scan
-      expect(query.filter).toHaveProperty('$or')
+    for (const query of ALL_QUERIES) {
+      expect(validSelectivities).toContain(query.selectivity)
     }
   })
 
-  it('FTS queries should not have scanFilter (no scan equivalent)', async () => {
+  it('FTS queries should use $text operator', async () => {
     const { ALL_QUERIES } = await import('../../../src/worker/benchmark-queries')
 
     const ftsQueries = ALL_QUERIES.filter(q => q.category === 'fts')
 
     for (const query of ftsQueries) {
-      expect(query.scanFilter).toBeUndefined()
+      expect(query.filter).toHaveProperty('$text')
+    }
+  })
+
+  it('equality queries should use direct $index_* column matches', async () => {
+    const { ALL_QUERIES } = await import('../../../src/worker/benchmark-queries')
+
+    const equalityQueries = ALL_QUERIES.filter(q => q.category === 'equality')
+
+    for (const query of equalityQueries) {
+      const filterKeys = Object.keys(query.filter)
+      const hasIndexColumn = filterKeys.some(k => k.startsWith('$index_'))
+      expect(hasIndexColumn).toBe(true)
+    }
+  })
+
+  it('range queries should use comparison operators', async () => {
+    const { ALL_QUERIES } = await import('../../../src/worker/benchmark-queries')
+
+    const rangeQueries = ALL_QUERIES.filter(q => q.category === 'range')
+
+    for (const query of rangeQueries) {
+      const filterStr = JSON.stringify(query.filter)
+      // Should contain $gte, $gt, $lte, $lt, or similar
+      const hasRangeOp = /\$gte|\$gt|\$lte|\$lt/.test(filterStr)
+      expect(hasRangeOp).toBe(true)
+    }
+  })
+
+  it('compound queries should have multiple filter conditions', async () => {
+    const { ALL_QUERIES } = await import('../../../src/worker/benchmark-queries')
+
+    const compoundQueries = ALL_QUERIES.filter(q => q.category === 'compound')
+
+    for (const query of compoundQueries) {
+      const filterKeys = Object.keys(query.filter)
+      // Compound queries should have more than one condition
+      expect(filterKeys.length).toBeGreaterThan(1)
     }
   })
 })
 
 // =============================================================================
-// Large dataset handling tests
+// Pushdown Metrics Tests
+// =============================================================================
+
+describe('Pushdown Metrics', () => {
+  it('should calculate selectivity correctly', () => {
+    // Selectivity = rowsReturned / rowsScanned
+    const rowsReturned = 50
+    const rowsScanned = 1000
+    const selectivity = rowsScanned > 0 ? rowsReturned / rowsScanned : 0
+
+    expect(selectivity).toBe(0.05) // 5% selectivity
+  })
+
+  it('should calculate row group skip ratio correctly', () => {
+    // Skip ratio = rowGroupsSkipped / (rowGroupsSkipped + rowGroupsRead)
+    const rowGroupsSkipped = 8
+    const rowGroupsRead = 2
+    const total = rowGroupsSkipped + rowGroupsRead
+    const skipRatio = total > 0 ? rowGroupsSkipped / total : 0
+
+    expect(skipRatio).toBe(0.8) // 80% skip ratio
+  })
+
+  it('should handle zero scans gracefully', () => {
+    const rowsReturned = 0
+    const rowsScanned = 0
+    const selectivity = rowsScanned > 0 ? rowsReturned / rowsScanned : 0
+
+    expect(selectivity).toBe(0)
+  })
+
+  it('should handle zero row groups gracefully', () => {
+    const rowGroupsSkipped = 0
+    const rowGroupsRead = 0
+    const total = rowGroupsSkipped + rowGroupsRead
+    const skipRatio = total > 0 ? rowGroupsSkipped / total : 0
+
+    expect(skipRatio).toBe(0)
+  })
+})
+
+// =============================================================================
+// Large Dataset Handling Tests
 // =============================================================================
 
 describe('Large Dataset Handling', () => {
@@ -180,5 +225,31 @@ describe('Large Dataset Handling', () => {
     // When processing large datasets, should hit timeout before OOM
     // and return a proper error response
     expect(true).toBe(true) // Placeholder
+  })
+})
+
+// =============================================================================
+// Query Stats Tests
+// =============================================================================
+
+describe('Query Stats', () => {
+  it('should have correct query counts', async () => {
+    const { QUERY_STATS, ALL_QUERIES } = await import('../../../src/worker/benchmark-queries')
+
+    expect(QUERY_STATS.total).toBe(ALL_QUERIES.length)
+  })
+
+  it('should have consistent category counts', async () => {
+    const { QUERY_STATS, ALL_QUERIES } = await import('../../../src/worker/benchmark-queries')
+
+    const categoryTotal = Object.values(QUERY_STATS.byCategory).reduce((a, b) => a + b, 0)
+    expect(categoryTotal).toBe(ALL_QUERIES.length)
+  })
+
+  it('should have consistent selectivity counts', async () => {
+    const { QUERY_STATS, ALL_QUERIES } = await import('../../../src/worker/benchmark-queries')
+
+    const selectivityTotal = Object.values(QUERY_STATS.bySelectivity).reduce((a, b) => a + b, 0)
+    expect(selectivityTotal).toBe(ALL_QUERIES.length)
   })
 })
