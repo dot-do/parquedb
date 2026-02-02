@@ -571,30 +571,30 @@ export class QueryExecutor {
           }
         }
 
-        // Check if we can use predicate pushdown on $id column
-        // Extract $id filter if present for pushdown
-        const idFilter = this.extractIdFilter(filter)
+        // Extract pushdown filters ($id and $index_* columns with parquet statistics)
+        // These enable row-group skipping based on min/max column statistics
+        const pushdownFilter = this.extractPushdownFilter(filter)
 
-        type DataRow = { $id: string; data: T | string }
+        type DataRow = { $id: string; data: T | string; [key: string]: unknown }
         let rows: DataRow[]
 
-        if (idFilter && this.storageAdapter) {
-          // Use parquetQuery with predicate pushdown on $id
-          // This uses row-group statistics and column indexes to skip data
+        if (pushdownFilter && this.storageAdapter) {
+          // Use parquetQuery with predicate pushdown
+          // hyparquet uses min/max statistics to skip row groups that can't match
           const asyncBuffer = await this.createAsyncBuffer(path)
           try {
             rows = await parquetQuery({
               file: asyncBuffer,
-              filter: idFilter,
+              filter: pushdownFilter,
               columns: ['$id', 'data'],
               compressors,
             }) as DataRow[]
             stats.rowsScanned = rows.length
-            // Row groups were skipped via predicate pushdown
-            stats.rowGroupsSkipped = 1 // Approximate - actual count in metadata
+            // Log pushdown filter for debugging
+            logger.debug(`Pushdown filter applied: ${JSON.stringify(pushdownFilter)}`)
           } catch (error: unknown) {
-            // Fall back to full read if parquetQuery fails (e.g. unsupported filter type)
-            logger.debug('parquetQuery failed, falling back to full read', error)
+            // Fall back to full read if parquetQuery fails (e.g. column not found)
+            logger.debug('parquetQuery with pushdown failed, falling back to full read', error)
             rows = await this.parquetReader.read<DataRow>(path)
             stats.rowsScanned = rows.length
           }
@@ -614,7 +614,7 @@ export class QueryExecutor {
         })
 
         // Cache the unpacked data for subsequent requests (only for full reads)
-        if (!idFilter) {
+        if (!pushdownFilter) {
           this.dataCache.set(path, results as unknown[])
         }
 
@@ -1758,52 +1758,96 @@ export class QueryExecutor {
   }
 
   /**
-   * Extract $id filter for predicate pushdown
+   * Extract filters that can be pushed down to Parquet
+   * Includes $id and $index_* column filters which have min/max statistics
    * Returns the filter portion that can be pushed down to Parquet
    */
-  private extractIdFilter(filter: Filter): Filter | null {
-    // Direct $id filter
-    if ('$id' in filter) {
-      return { $id: filter.$id }
-    }
+  private extractPushdownFilter(filter: Filter): Filter | null {
+    const pushdownFilter: Filter = {}
 
-    // $or with $id conditions (common for get() with multiple ID patterns)
-    if (filter.$or) {
-      const idConditions = filter.$or.filter(f => '$id' in f)
-      if (idConditions.length > 0) {
-        return { $or: idConditions }
+    // Extract direct column filters that can use statistics
+    for (const [key, value] of Object.entries(filter)) {
+      // Push down $id and $index_* columns (these have parquet statistics)
+      if (key === '$id' || key.startsWith('$index_')) {
+        pushdownFilter[key] = value
       }
     }
 
-    // $and with $id condition
-    if (filter.$and) {
-      const idCondition = filter.$and.find(f => '$id' in f)
-      if (idCondition) {
-        return idCondition
+    // Handle $and - extract pushable conditions
+    if (filter.$and && Array.isArray(filter.$and)) {
+      const pushableConditions: Filter[] = []
+      for (const cond of filter.$and) {
+        const extracted = this.extractPushdownFilter(cond as Filter)
+        if (extracted && Object.keys(extracted).length > 0) {
+          pushableConditions.push(extracted)
+        }
+      }
+      if (pushableConditions.length > 0) {
+        // If we have existing pushdown filters and AND conditions, combine them
+        if (Object.keys(pushdownFilter).length > 0) {
+          return { $and: [pushdownFilter, ...pushableConditions] }
+        }
+        if (pushableConditions.length === 1 && pushableConditions[0]) {
+          return pushableConditions[0]
+        }
+        return { $and: pushableConditions }
       }
     }
 
-    return null
+    // Return null if no pushable filters found
+    if (Object.keys(pushdownFilter).length === 0) {
+      return null
+    }
+
+    return pushdownFilter
   }
 
   /**
-   * Remove $id filter from original filter
+   * Extract $id filter for predicate pushdown (legacy method for compatibility)
+   * Returns the filter portion that can be pushed down to Parquet
+   */
+  private extractIdFilter(filter: Filter): Filter | null {
+    return this.extractPushdownFilter(filter)
+  }
+
+  /**
+   * Check if a key is a pushdown column ($id or $index_*)
+   */
+  private isPushdownColumn(key: string): boolean {
+    return key === '$id' || key.startsWith('$index_')
+  }
+
+  /**
+   * Remove pushed-down filters from original filter
    * Returns remaining filters to apply after predicate pushdown
    */
   private removeIdFilter(filter: Filter): Filter {
     const result: Filter = {}
 
     for (const [key, value] of Object.entries(filter)) {
-      if (key === '$id') continue
+      // Skip pushdown columns - they're handled by parquet statistics
+      if (this.isPushdownColumn(key)) continue
+
       if (key === '$or' && Array.isArray(value)) {
-        const nonIdConditions = value.filter(f => !('$id' in f))
-        if (nonIdConditions.length > 0) {
-          result.$or = nonIdConditions
+        // For $or, keep conditions that aren't purely pushdown
+        const nonPushdownConditions = value.filter(f => {
+          const keys = Object.keys(f)
+          return keys.some(k => !this.isPushdownColumn(k))
+        })
+        if (nonPushdownConditions.length > 0) {
+          result.$or = nonPushdownConditions
         }
       } else if (key === '$and' && Array.isArray(value)) {
-        const nonIdConditions = value.filter(f => !('$id' in f))
-        if (nonIdConditions.length > 0) {
-          result.$and = nonIdConditions
+        // For $and, filter out conditions that were pushed down
+        const remainingConditions: Filter[] = []
+        for (const cond of value) {
+          const remaining = this.removeIdFilter(cond as Filter)
+          if (Object.keys(remaining).length > 0) {
+            remainingConditions.push(remaining)
+          }
+        }
+        if (remainingConditions.length > 0) {
+          result.$and = remainingConditions
         }
       } else {
         (result as Record<string, unknown>)[key] = value
