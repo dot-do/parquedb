@@ -219,6 +219,7 @@ export function isRegexSafe(
     validateRegexPattern(source, options)
     return true
   } catch {
+    // Intentionally ignored: validation failure means the regex pattern is unsafe
     return false
   }
 }

@@ -54,6 +54,7 @@ export async function exportCommand(parsed: ParsedArgs): Promise<number> {
   try {
     await fs.access(configPath)
   } catch {
+    // Intentionally ignored: fs.access throws when config doesn't exist, meaning DB is not initialized
     printError(`ParqueDB is not initialized in ${directory}`)
     print('Run "parquedb init" to initialize a database.')
     return 1

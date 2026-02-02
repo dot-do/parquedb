@@ -55,6 +55,7 @@ export async function importCommand(parsed: ParsedArgs): Promise<number> {
   try {
     await fs.access(configPath)
   } catch {
+    // Intentionally ignored: fs.access throws when config doesn't exist, meaning DB is not initialized
     printError(`ParqueDB is not initialized in ${directory}`)
     print('Run "parquedb init" to initialize a database.')
     return 1
@@ -64,6 +65,7 @@ export async function importCommand(parsed: ParsedArgs): Promise<number> {
   try {
     await fs.access(filePath)
   } catch {
+    // Intentionally ignored: fs.access throws when file doesn't exist
     printError(`File not found: ${filePath}`)
     return 1
   }
@@ -251,7 +253,7 @@ function parseValue(value: string): unknown {
     try {
       return JSON.parse(value)
     } catch {
-      // Not valid JSON, return as string
+      // Intentionally ignored: not valid JSON, return original string value
     }
   }
 
@@ -325,8 +327,10 @@ async function importNdjson(
           process.stdout.write(`\rImported ${imported} entities...`)
         }
       }
-    } catch {
+    } catch (error: unknown) {
       errors++
+      // Log the error context for debugging import failures
+      console.error(`Import error: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 

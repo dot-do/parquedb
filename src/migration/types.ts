@@ -188,8 +188,8 @@ export interface JsonLinesReader {
  * Used by streamFromJsonl and streamFromCsv
  */
 export interface StreamingDocument<T = Record<string, unknown>> {
-  /** The parsed document */
-  document: T
+  /** The parsed document (null when error is present) */
+  document: T | null
   /** Line number in source file (1-indexed) */
   lineNumber: number
   /** Any parse error (document will be null) */

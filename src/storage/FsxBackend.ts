@@ -10,6 +10,7 @@
  * @see https://github.com/dot-do/fsx
  */
 
+import { logger } from '../utils/logger'
 import type {
   StorageBackend,
   FileStat,
@@ -240,8 +241,9 @@ export class FsxBackend implements StorageBackend {
       try {
         await this.fsx.unlink(file)
         deleted++
-      } catch {
+      } catch (error: unknown) {
         // Continue even if some files fail to delete
+        logger.debug(`Failed to delete file ${file} during deletePrefix`, error)
       }
     }
 

@@ -51,6 +51,7 @@ export async function queryCommand(parsed: ParsedArgs): Promise<number> {
     try {
       filter = JSON.parse(filterArg) as Filter
     } catch {
+      // Intentionally ignored: JSON.parse failure means user provided invalid filter syntax
       printError(`Invalid JSON filter: ${filterArg}`)
       return 1
     }
@@ -61,6 +62,7 @@ export async function queryCommand(parsed: ParsedArgs): Promise<number> {
   try {
     await fs.access(configPath)
   } catch {
+    // Intentionally ignored: fs.access throws when config doesn't exist, meaning DB is not initialized
     printError(`ParqueDB is not initialized in ${directory}`)
     print('Run "parquedb init" to initialize a database.')
     return 1

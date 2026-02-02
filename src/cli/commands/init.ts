@@ -73,7 +73,7 @@ export async function initCommand(parsed: ParsedArgs): Promise<number> {
     print(`Config file exists: ${configPath}`)
     return 1
   } catch {
-    // Config doesn't exist, we can proceed
+    // Intentionally ignored: fs.access throws when config doesn't exist, meaning we can proceed with init
   }
 
   try {

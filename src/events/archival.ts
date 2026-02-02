@@ -17,6 +17,7 @@
 import type { EventSegment } from './types'
 import type { SegmentStorage } from './segment'
 import type { ManifestManager } from './manifest'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types
@@ -374,7 +375,7 @@ export class EventArchiver {
           if (event.ts > maxTs) maxTs = event.ts
         }
       } catch {
-        // Skip invalid lines
+        // Intentionally ignored: invalid JSON lines in event segments are skipped during timestamp parsing
       }
     }
 

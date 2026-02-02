@@ -10,6 +10,7 @@
  */
 
 import type { StorageBackend } from '../../types/storage'
+import { logger } from '../../utils/logger'
 import type {
   IndexDefinition,
   IndexStats,
@@ -115,7 +116,8 @@ export class ShardedHashIndex {
 
       this.loaded = true
     } catch (error: unknown) {
-      // Manifest corrupted or invalid
+      // Manifest corrupted or invalid - start fresh with no manifest
+      logger.warn(`Sharded hash index manifest corrupted or invalid at ${manifestPath}, starting fresh`, error)
       this.manifest = null
       this.loaded = true
     }

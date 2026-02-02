@@ -72,6 +72,7 @@ export async function statsCommand(parsed: ParsedArgs): Promise<number> {
   try {
     await fs.access(configPath)
   } catch {
+    // Intentionally ignored: fs.access throws when config doesn't exist, meaning DB is not initialized
     printError(`ParqueDB is not initialized in ${directory}`)
     print('Run "parquedb init" to initialize a database.')
     return 1
@@ -139,7 +140,7 @@ async function gatherStats(
       totalEntities += stats.entities
     }
   } catch {
-    // No data directory or empty
+    // Intentionally ignored: no data directory or empty - report zero stats
   }
 
   // Get event log size
@@ -153,7 +154,7 @@ async function gatherStats(
       }
     }
   } catch {
-    // No events directory
+    // Intentionally ignored: no events directory means zero event log size
   }
 
   return {
@@ -196,7 +197,7 @@ async function getNamespaceStats(
     // A more accurate count would require reading the parquet metadata
     entities = await estimateEntityCount(storage, prefix, result.files)
   } catch {
-    // Namespace directory doesn't exist or is empty
+    // Intentionally ignored: namespace directory doesn't exist or is empty, report zero stats
   }
 
   return {
@@ -253,7 +254,7 @@ async function estimateEntityCount(
           }
         }
       } catch {
-        // Skip files that can't be read
+        // Intentionally ignored: skip files that can't be read (e.g. corrupted parquet footers)
       }
     }
   }

@@ -11,6 +11,7 @@
 import { promises as fs } from 'node:fs'
 import { join, dirname, normalize, resolve } from 'node:path'
 import type { Stats } from 'node:fs'
+import { logger } from '../utils/logger'
 import type {
   StorageBackend,
   FileStat,
@@ -163,6 +164,7 @@ export class FsBackend implements StorageBackend {
       await fs.access(fullPath)
       return true
     } catch {
+      // Intentionally ignored: fs.access throws when file does not exist, which is the expected false case
       return false
     }
   }
@@ -256,7 +258,9 @@ export class FsBackend implements StorageBackend {
     let entries: import('node:fs').Dirent[]
     try {
       entries = await fs.readdir(dirPath, { withFileTypes: true })
-    } catch {
+    } catch (error: unknown) {
+      // Directory does not exist or is not readable - silently return empty
+      logger.debug(`Failed to read directory ${dirPath} during list`, error)
       return
     }
 
@@ -290,8 +294,9 @@ export class FsBackend implements StorageBackend {
           try {
             const fileStat = await fs.stat(entryPath)
             stats.push(this.toFileStat(relativePath, fileStat))
-          } catch {
-            // Skip files that can't be stat'd
+          } catch (error: unknown) {
+            // Skip files that can't be stat'd (e.g. race condition where file was deleted)
+            logger.debug(`Failed to stat file ${entryPath} during list`, error)
           }
         }
       }
@@ -372,7 +377,7 @@ export class FsBackend implements StorageBackend {
       try {
         await fs.unlink(tempPath)
       } catch {
-        // Ignore cleanup errors
+        // Intentionally ignored: temp file cleanup is best-effort; file may already be removed
       }
       throw error
     }
@@ -415,7 +420,9 @@ export class FsBackend implements StorageBackend {
       let entries: import('node:fs').Dirent[]
       try {
         entries = await fs.readdir(dirPath, { withFileTypes: true })
-      } catch {
+      } catch (error: unknown) {
+        // Directory does not exist or is not readable during prefix deletion
+        logger.debug(`Failed to read directory ${dirPath} during deletePrefix`, error)
         return
       }
 
@@ -470,7 +477,7 @@ export class FsBackend implements StorageBackend {
             }
           }
         } catch {
-          // Parent directory doesn't exist
+          // Intentionally ignored: parent directory doesn't exist, so nothing to delete
           return 0
         }
       } else {
@@ -483,8 +490,9 @@ export class FsBackend implements StorageBackend {
       try {
         await fs.unlink(file)
         count++
-      } catch {
-        // Ignore errors for individual files
+      } catch (error: unknown) {
+        // File may have been deleted between collection and deletion (race condition)
+        logger.debug(`Failed to delete file ${file} during deletePrefix`, error)
       }
     }
 

@@ -424,6 +424,7 @@ export class SchemaValidator {
           try {
             new URL(value as string)
           } catch {
+            // Intentionally ignored: URL constructor throws for invalid URLs, which is the validation check
             errors.push({
               path,
               message: `Invalid URL format: '${value}'`,

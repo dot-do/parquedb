@@ -4,6 +4,7 @@
  * Provides storage operations using Cloudflare R2 object storage.
  */
 
+import { logger } from '../utils/logger'
 import type {
   StorageBackend,
   FileStat,
@@ -23,7 +24,7 @@ import type {
   R2UploadedPart,
 } from './types/r2'
 import { validateRange, InvalidRangeError } from './validation'
-import { MIN_PART_SIZE, DEFAULT_PART_SIZE, MAX_PARTS } from '../constants'
+import { MIN_PART_SIZE, DEFAULT_PART_SIZE, MAX_PARTS, DEFAULT_MULTIPART_UPLOAD_TTL } from '../constants'
 
 /**
  * Error thrown when an R2 operation fails
@@ -80,6 +81,8 @@ export class R2NotFoundError extends Error {
 export interface R2BackendOptions {
   /** Prefix for all keys (optional) */
   prefix?: string
+  /** TTL for multipart uploads in milliseconds (default: 30 minutes). Uploads older than this are cleaned up automatically. */
+  multipartUploadTTL?: number
 }
 
 /**
@@ -89,12 +92,14 @@ export class R2Backend implements StorageBackend, MultipartBackend {
   readonly type = 'r2'
   private readonly bucket: R2Bucket
   private readonly prefix: string
+  private readonly multipartUploadTTL: number
 
   constructor(bucket: R2Bucket, options?: R2BackendOptions) {
     this.bucket = bucket
     // Normalize prefix: ensure it ends with / if provided
     const rawPrefix = options?.prefix ?? ''
     this.prefix = rawPrefix && !rawPrefix.endsWith('/') ? rawPrefix + '/' : rawPrefix
+    this.multipartUploadTTL = options?.multipartUploadTTL ?? DEFAULT_MULTIPART_UPLOAD_TTL
   }
 
   /**
@@ -619,9 +624,9 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
   /**
    * Track active multipart uploads by uploadId
-   * Maps uploadId -> R2MultipartUpload instance
+   * Maps uploadId -> { upload, createdAt } for TTL-based cleanup
    */
-  private activeUploads = new Map<string, R2MultipartUpload>()
+  private activeUploads = new Map<string, { upload: R2MultipartUpload; createdAt: number }>()
 
   /**
    * Create a multipart upload session
@@ -633,9 +638,15 @@ export class R2Backend implements StorageBackend, MultipartBackend {
   async startMultipartUpload(path: string): Promise<string> {
     const key = this.withPrefix(path)
 
+    // Lazily clean up stale uploads before creating a new one
+    this.cleanupStaleUploads()
+
     try {
       const r2Upload = await this.bucket.createMultipartUpload(key, undefined)
-      this.activeUploads.set(r2Upload.uploadId, r2Upload)
+      this.activeUploads.set(r2Upload.uploadId, {
+        upload: r2Upload,
+        createdAt: Date.now(),
+      })
       return r2Upload.uploadId
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error))
@@ -664,8 +675,8 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     partNumber: number,
     data: Uint8Array
   ): Promise<{ etag: string }> {
-    const upload = this.activeUploads.get(uploadId)
-    if (!upload) {
+    const entry = this.activeUploads.get(uploadId)
+    if (!entry) {
       throw new R2OperationError(
         `No active upload found with ID ${uploadId}`,
         'uploadPart',
@@ -674,7 +685,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     }
 
     try {
-      const part = await upload.uploadPart(partNumber, data)
+      const part = await entry.upload.uploadPart(partNumber, data)
       return { etag: part.etag }
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error))
@@ -699,8 +710,8 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     uploadId: string,
     parts: Array<{ partNumber: number; etag: string }>
   ): Promise<void> {
-    const upload = this.activeUploads.get(uploadId)
-    if (!upload) {
+    const entry = this.activeUploads.get(uploadId)
+    if (!entry) {
       throw new R2OperationError(
         `No active upload found with ID ${uploadId}`,
         'completeMultipartUpload',
@@ -709,7 +720,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     }
 
     try {
-      await upload.complete(parts)
+      await entry.upload.complete(parts)
       this.activeUploads.delete(uploadId)
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error))
@@ -729,8 +740,8 @@ export class R2Backend implements StorageBackend, MultipartBackend {
    * @param uploadId - The upload ID from startMultipartUpload
    */
   async abortMultipartUpload(path: string, uploadId: string): Promise<void> {
-    const upload = this.activeUploads.get(uploadId)
-    if (!upload) {
+    const entry = this.activeUploads.get(uploadId)
+    if (!entry) {
       throw new R2OperationError(
         `No active upload found with ID ${uploadId}`,
         'abortMultipartUpload',
@@ -739,7 +750,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     }
 
     try {
-      await upload.abort()
+      await entry.upload.abort()
       this.activeUploads.delete(uploadId)
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error))
@@ -750,6 +761,45 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         err
       )
     }
+  }
+
+  // ===========================================================================
+  // Stale Upload Cleanup
+  // ===========================================================================
+
+  /**
+   * Remove stale multipart uploads that have exceeded the TTL.
+   * Called lazily on each new startMultipartUpload, and can also be
+   * called explicitly for periodic cleanup.
+   *
+   * Attempts to abort the R2 upload on the server side (best-effort),
+   * then removes the entry from the local tracking map regardless.
+   *
+   * @returns The number of stale uploads that were cleaned up
+   */
+  cleanupStaleUploads(): number {
+    const now = Date.now()
+    const cutoff = now - this.multipartUploadTTL
+    let cleaned = 0
+
+    for (const [uploadId, entry] of this.activeUploads) {
+      if (entry.createdAt <= cutoff) {
+        // Best-effort abort on the server side; fire-and-forget
+        entry.upload.abort().catch(() => {})
+        this.activeUploads.delete(uploadId)
+        cleaned++
+      }
+    }
+
+    return cleaned
+  }
+
+  /**
+   * Get the number of currently tracked active uploads.
+   * Useful for monitoring and diagnostics.
+   */
+  get activeUploadCount(): number {
+    return this.activeUploads.size
   }
 
   // ===========================================================================
@@ -846,8 +896,9 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         // Attempt to abort on failure
         try {
           await upload.abort()
-        } catch {
-          // Ignore abort errors
+        } catch (abortError: unknown) {
+          // Best-effort abort: multipart upload abort failure is non-critical
+          logger.debug('Failed to abort multipart upload after error', abortError)
         }
         throw error
       }

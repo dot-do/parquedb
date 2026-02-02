@@ -23,6 +23,7 @@ export function parseQueryFilter(params: URLSearchParams): Filter {
     try {
       return JSON.parse(filterParam)
     } catch {
+      // Intentionally ignored: invalid JSON filter param falls back to empty filter
       return {}
     }
   }
@@ -56,7 +57,7 @@ export function parseQueryOptions(params: URLSearchParams): FindOptions {
     try {
       options.sort = JSON.parse(sort)
     } catch {
-      // Parse simple format: "field:asc,field2:desc"
+      // Intentionally ignored: not JSON, parse as simple format "field:asc,field2:desc" instead
       const sortSpec: Record<string, 1 | -1> = {}
       for (const part of sort.split(',')) {
         const [field, dir] = part.split(':')
@@ -73,7 +74,7 @@ export function parseQueryOptions(params: URLSearchParams): FindOptions {
     try {
       options.project = JSON.parse(project)
     } catch {
-      // Parse simple format: "field1,field2,-field3"
+      // Intentionally ignored: not JSON, parse as simple format "field1,field2,-field3" instead
       const projection: Record<string, 0 | 1> = {}
       for (const field of project.split(',')) {
         if (field.startsWith('-')) {

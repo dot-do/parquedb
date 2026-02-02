@@ -584,8 +584,9 @@ export class QueryExecutor {
             stats.rowsScanned = rows.length
             // Row groups were skipped via predicate pushdown
             stats.rowGroupsSkipped = 1 // Approximate - actual count in metadata
-          } catch {
-            // Fall back to full read if parquetQuery fails
+          } catch (error: unknown) {
+            // Fall back to full read if parquetQuery fails (e.g. unsupported filter type)
+            logger.debug('parquetQuery failed, falling back to full read', error)
             rows = await this.parquetReader.read<DataRow>(path)
             stats.rowsScanned = rows.length
           }
@@ -1095,7 +1096,9 @@ export class QueryExecutor {
           importance: rel.data.importance ?? null,
           level: rel.data.level ?? null,
         }))
-    } catch {
+    } catch (error: unknown) {
+      // Relationship data may not exist or may be malformed - return empty gracefully
+      logger.debug('Failed to load relationships', error)
       return []
     }
   }

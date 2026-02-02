@@ -519,7 +519,7 @@ function parseDefaultValue(value: string): unknown {
   try {
     return JSON.parse(value)
   } catch {
-    // If it fails, return as-is (for unquoted strings like enum values)
+    // Intentionally ignored: value is not JSON, return as-is (for unquoted strings like enum values)
     return value
   }
 }
@@ -1174,6 +1174,7 @@ function parseDefaultValueFromString(value: string): unknown {
   try {
     return JSON.parse(value)
   } catch {
+    // Intentionally ignored: value is not JSON, return as raw string
     return value
   }
 }

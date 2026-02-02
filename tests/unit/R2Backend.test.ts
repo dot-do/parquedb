@@ -1245,3 +1245,273 @@ describe('R2Backend Integration Tests', () => {
     })
   })
 })
+
+// =============================================================================
+// Unit Tests for Stale Upload Cleanup (no credentials required)
+// =============================================================================
+
+/**
+ * Create a minimal mock R2Bucket for unit testing multipart upload cleanup.
+ * Only the multipart-related methods are implemented.
+ */
+function createMockBucket() {
+  let uploadCounter = 0
+  const abortedUploadIds: string[] = []
+
+  const mockBucket: R2Bucket = {
+    async get() { return null },
+    async head() { return null },
+    async put() { return null },
+    async delete() {},
+    async list() {
+      return { objects: [], truncated: false, delimitedPrefixes: [] }
+    },
+    async createMultipartUpload(key: string) {
+      const uploadId = `upload-${++uploadCounter}`
+      return {
+        key,
+        uploadId,
+        async uploadPart(partNumber: number, _value: any) {
+          return { partNumber, etag: `etag-${partNumber}` }
+        },
+        async abort() {
+          abortedUploadIds.push(uploadId)
+        },
+        async complete(_parts: any[]) {
+          return {
+            key,
+            version: 'v1',
+            size: 100,
+            etag: 'final-etag',
+            httpEtag: '"final-etag"',
+            uploaded: new Date(),
+            storageClass: 'Standard' as const,
+            checksums: {},
+            writeHttpMetadata: () => {},
+          }
+        },
+      }
+    },
+    resumeMultipartUpload(key: string, uploadId: string) {
+      return {
+        key,
+        uploadId,
+        async uploadPart(partNumber: number, _value: any) {
+          return { partNumber, etag: `etag-${partNumber}` }
+        },
+        async abort() {
+          abortedUploadIds.push(uploadId)
+        },
+        async complete(_parts: any[]) {
+          return {
+            key,
+            version: 'v1',
+            size: 100,
+            etag: 'final-etag',
+            httpEtag: '"final-etag"',
+            uploaded: new Date(),
+            storageClass: 'Standard' as const,
+            checksums: {},
+            writeHttpMetadata: () => {},
+          }
+        },
+      }
+    },
+  }
+
+  return { mockBucket, abortedUploadIds }
+}
+
+describe('R2Backend Stale Upload Cleanup (Unit Tests)', () => {
+  it('should track active upload count', async () => {
+    const { mockBucket } = createMockBucket()
+    const backend = new R2Backend(mockBucket)
+
+    expect(backend.activeUploadCount).toBe(0)
+
+    const uploadId = await backend.startMultipartUpload('test/file.bin')
+    expect(backend.activeUploadCount).toBe(1)
+
+    await backend.completeMultipartUpload('test/file.bin', uploadId, [])
+    expect(backend.activeUploadCount).toBe(0)
+  })
+
+  it('should remove upload on abort', async () => {
+    const { mockBucket } = createMockBucket()
+    const backend = new R2Backend(mockBucket)
+
+    const uploadId = await backend.startMultipartUpload('test/file.bin')
+    expect(backend.activeUploadCount).toBe(1)
+
+    await backend.abortMultipartUpload('test/file.bin', uploadId)
+    expect(backend.activeUploadCount).toBe(0)
+  })
+
+  it('should clean up stale uploads past the TTL', async () => {
+    const { mockBucket, abortedUploadIds } = createMockBucket()
+    // Use a very short TTL (100ms) for testing
+    const backend = new R2Backend(mockBucket, { multipartUploadTTL: 100 })
+
+    // Start an upload
+    await backend.startMultipartUpload('test/stale.bin')
+    expect(backend.activeUploadCount).toBe(1)
+
+    // Wait for the upload to become stale
+    await new Promise((resolve) => setTimeout(resolve, 150))
+
+    // Cleanup should remove it
+    const cleaned = backend.cleanupStaleUploads()
+    expect(cleaned).toBe(1)
+    expect(backend.activeUploadCount).toBe(0)
+    // Verify abort was called on the R2 upload
+    expect(abortedUploadIds).toHaveLength(1)
+  })
+
+  it('should not clean up uploads within the TTL', async () => {
+    const { mockBucket } = createMockBucket()
+    // Use a long TTL (10 seconds)
+    const backend = new R2Backend(mockBucket, { multipartUploadTTL: 10000 })
+
+    await backend.startMultipartUpload('test/fresh.bin')
+    expect(backend.activeUploadCount).toBe(1)
+
+    const cleaned = backend.cleanupStaleUploads()
+    expect(cleaned).toBe(0)
+    expect(backend.activeUploadCount).toBe(1)
+  })
+
+  it('should lazily clean up stale uploads when starting a new upload', async () => {
+    const { mockBucket, abortedUploadIds } = createMockBucket()
+    const backend = new R2Backend(mockBucket, { multipartUploadTTL: 100 })
+
+    // Start first upload
+    await backend.startMultipartUpload('test/stale.bin')
+    expect(backend.activeUploadCount).toBe(1)
+
+    // Wait for it to become stale
+    await new Promise((resolve) => setTimeout(resolve, 150))
+
+    // Starting a new upload should trigger cleanup of the stale one
+    await backend.startMultipartUpload('test/fresh.bin')
+
+    // The stale one should be cleaned, and the fresh one should exist
+    expect(backend.activeUploadCount).toBe(1)
+    expect(abortedUploadIds).toHaveLength(1)
+  })
+
+  it('should clean up multiple stale uploads at once', async () => {
+    const { mockBucket, abortedUploadIds } = createMockBucket()
+    const backend = new R2Backend(mockBucket, { multipartUploadTTL: 100 })
+
+    // Start three uploads
+    await backend.startMultipartUpload('test/stale1.bin')
+    await backend.startMultipartUpload('test/stale2.bin')
+    await backend.startMultipartUpload('test/stale3.bin')
+    expect(backend.activeUploadCount).toBe(3)
+
+    // Wait for all to become stale
+    await new Promise((resolve) => setTimeout(resolve, 150))
+
+    const cleaned = backend.cleanupStaleUploads()
+    expect(cleaned).toBe(3)
+    expect(backend.activeUploadCount).toBe(0)
+    expect(abortedUploadIds).toHaveLength(3)
+  })
+
+  it('should only clean up stale uploads, leaving fresh ones', async () => {
+    const { mockBucket, abortedUploadIds } = createMockBucket()
+    const backend = new R2Backend(mockBucket, { multipartUploadTTL: 100 })
+
+    // Start first upload (will become stale)
+    await backend.startMultipartUpload('test/stale.bin')
+
+    // Wait for it to become stale
+    await new Promise((resolve) => setTimeout(resolve, 150))
+
+    // Start a fresh upload
+    const freshUploadId = await backend.startMultipartUpload('test/fresh.bin')
+
+    // After lazy cleanup from startMultipartUpload, only the fresh one remains
+    expect(backend.activeUploadCount).toBe(1)
+    expect(abortedUploadIds).toHaveLength(1)
+
+    // The fresh upload should still work
+    const partResult = await backend.uploadPart('test/fresh.bin', freshUploadId, 1, new Uint8Array([1, 2, 3]))
+    expect(partResult.etag).toBeDefined()
+  })
+
+  it('should handle abort errors gracefully during cleanup', async () => {
+    let uploadCounter = 0
+    const mockBucket: R2Bucket = {
+      async get() { return null },
+      async head() { return null },
+      async put() { return null },
+      async delete() {},
+      async list() {
+        return { objects: [], truncated: false, delimitedPrefixes: [] }
+      },
+      async createMultipartUpload(key: string) {
+        const uploadId = `upload-${++uploadCounter}`
+        return {
+          key,
+          uploadId,
+          async uploadPart(partNumber: number) {
+            return { partNumber, etag: `etag-${partNumber}` }
+          },
+          async abort() {
+            throw new Error('R2 abort failed: network error')
+          },
+          async complete() {
+            return {
+              key,
+              version: 'v1',
+              size: 100,
+              etag: 'final-etag',
+              httpEtag: '"final-etag"',
+              uploaded: new Date(),
+              storageClass: 'Standard' as const,
+              checksums: {},
+              writeHttpMetadata: () => {},
+            }
+          },
+        }
+      },
+      resumeMultipartUpload() {
+        throw new Error('not implemented')
+      },
+    }
+
+    const backend = new R2Backend(mockBucket, { multipartUploadTTL: 100 })
+
+    await backend.startMultipartUpload('test/stale.bin')
+
+    await new Promise((resolve) => setTimeout(resolve, 150))
+
+    // Should not throw even though abort fails on the server
+    const cleaned = backend.cleanupStaleUploads()
+    expect(cleaned).toBe(1)
+    expect(backend.activeUploadCount).toBe(0)
+  })
+
+  it('should use default TTL of 30 minutes', async () => {
+    const { mockBucket } = createMockBucket()
+    const backend = new R2Backend(mockBucket)
+
+    // Start an upload
+    await backend.startMultipartUpload('test/file.bin')
+
+    // Immediate cleanup should not remove anything (default TTL is 30 minutes)
+    const cleaned = backend.cleanupStaleUploads()
+    expect(cleaned).toBe(0)
+    expect(backend.activeUploadCount).toBe(1)
+  })
+
+  it('should return 0 when no stale uploads exist', () => {
+    const { mockBucket } = createMockBucket()
+    const backend = new R2Backend(mockBucket)
+
+    const cleaned = backend.cleanupStaleUploads()
+    expect(cleaned).toBe(0)
+    expect(backend.activeUploadCount).toBe(0)
+  })
+})

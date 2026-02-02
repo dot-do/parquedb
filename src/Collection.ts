@@ -1148,6 +1148,7 @@ export class Collection<T = Record<string, unknown>> {
       await this.get(id)
       return true
     } catch {
+      // Intentionally ignored: get() throws when entity doesn't exist, which means exists() should return false
       return false
     }
   }

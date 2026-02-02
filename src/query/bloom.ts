@@ -11,6 +11,7 @@
 
 import type { StorageBackend } from '../types/storage'
 import type { Filter } from '../types/filter'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Bloom Filter Types
@@ -101,8 +102,9 @@ export async function checkBloomFilter(
 
     // Check if value might exist
     return bloomFilterMightContain(fieldFilter, value)
-  } catch {
-    // Error reading bloom filter, assume value might exist
+  } catch (error: unknown) {
+    // Error reading bloom filter - conservatively assume value might exist
+    logger.debug('Bloom filter check failed, assuming value might exist', error)
     return true
   }
 }

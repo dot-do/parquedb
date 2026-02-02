@@ -15,6 +15,7 @@
  * Works across Node.js, browsers, and Cloudflare Workers.
  */
 
+import { logger } from '../utils/logger'
 import type { StorageBackend, WriteResult } from '../types/storage'
 import type {
   ParquetSchema,
@@ -306,9 +307,9 @@ export class ParquetWriter {
 
       const result = parquetWriteBuffer(writeOptions as Parameters<typeof parquetWriteBuffer>[0])
       return new Uint8Array(result)
-    } catch {
-      // Fallback: Use a simple binary format
-      // This should be replaced with actual Parquet encoding
+    } catch (error: unknown) {
+      // Fallback: Use a simple binary format when hyparquet-writer fails
+      logger.debug('Parquet write via hyparquet-writer failed, using fallback format', error)
       return this.buildFallbackBuffer(columns, schema, options)
     }
   }
@@ -460,8 +461,9 @@ export class ParquetWriter {
       }
 
       return { schema, rows }
-    } catch {
-      // Fallback: Parse as our custom format
+    } catch (error: unknown) {
+      // Fallback: Parse as our custom format when hyparquet fails
+      logger.debug('Parquet read via hyparquet failed, using fallback parser', error)
       return this.parseFallbackBuffer(data)
     }
   }

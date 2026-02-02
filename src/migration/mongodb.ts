@@ -347,6 +347,7 @@ export async function importFromBson(
     // Dynamic import - bson is an optional dependency
     BSON = await import('bson')
   } catch {
+    // Intentionally ignored: dynamic import failure means the optional dependency is not installed
     throw new Error(
       'BSON import requires the "bson" package. Please install it: npm install bson'
     )
@@ -694,7 +695,7 @@ export async function* streamFromMongodbJsonl(
         continue
       }
       yield {
-        document: null as unknown as Record<string, unknown>,
+        document: null,
         lineNumber,
         error: `Invalid JSON: ${(err as Error).message}`,
       }
@@ -715,7 +716,7 @@ export async function* streamFromMongodbJsonl(
           continue
         }
         yield {
-          document: null as unknown as Record<string, unknown>,
+          document: null,
           lineNumber,
           error: `Transform failed: ${(err as Error).message}`,
         }

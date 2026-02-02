@@ -30,6 +30,7 @@ import {
 } from '../encoding'
 import { INDEX_PROGRESS_BATCH } from '../../constants'
 import { logger } from '../../utils/logger'
+import { getNestedValue } from '../../utils/comparison'
 
 // =============================================================================
 // Hash Index
@@ -448,13 +449,13 @@ export class HashIndex {
   private extractValue(doc: Record<string, unknown>): unknown {
     const firstField = this.definition.fields[0]
     if (this.definition.fields.length === 1 && firstField) {
-      return this.getNestedValue(doc, firstField.path)
+      return getNestedValue(doc, firstField.path)
     }
 
     // Composite key
     const values: unknown[] = []
     for (const field of this.definition.fields) {
-      const value = this.getNestedValue(doc, field.path)
+      const value = getNestedValue(doc, field.path)
       if (value === undefined && !this.definition.sparse) {
         // Skip documents with missing fields unless sparse
         return undefined
@@ -462,19 +463,6 @@ export class HashIndex {
       values.push(value)
     }
     return values
-  }
-
-  private getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-    const parts = path.split('.')
-    let current: unknown = obj
-
-    for (const part of parts) {
-      if (current === null || current === undefined) return undefined
-      if (typeof current !== 'object') return undefined
-      current = (current as Record<string, unknown>)[part]
-    }
-
-    return current
   }
 
   private keysEqual(a: Uint8Array, b: Uint8Array): boolean {

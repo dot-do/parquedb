@@ -475,7 +475,7 @@ export async function* streamFromJsonl(
         continue
       }
       yield {
-        document: null as unknown as Record<string, unknown>,
+        document: null,
         lineNumber,
         error: `Invalid JSON: ${(err as Error).message}`,
       }
@@ -491,7 +491,7 @@ export async function* streamFromJsonl(
           continue
         }
         yield {
-          document: null as unknown as Record<string, unknown>,
+          document: null,
           lineNumber,
           error: `Transform failed: ${(err as Error).message}`,
         }
@@ -593,7 +593,7 @@ export async function* streamFromJson(
           continue
         }
         yield {
-          document: null as unknown as Record<string, unknown>,
+          document: null,
           lineNumber: i + 1,
           error: `Transform failed: ${(err as Error).message}`,
         }

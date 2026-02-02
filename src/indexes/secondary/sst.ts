@@ -30,6 +30,7 @@ import {
 } from '../encoding'
 import { INDEX_PROGRESS_BATCH } from '../../constants'
 import { logger } from '../../utils/logger'
+import { getNestedValue } from '../../utils/comparison'
 
 // =============================================================================
 // SST Index
@@ -258,16 +259,20 @@ export class SSTIndex {
       return true
     }
 
+    this.ensureSorted()
     const key = this.encodeValue(value)
 
-    // Check if any entry matches the key (excluding the specified docId)
-    for (const entry of this.entries) {
-      if (this.keysEqual(entry.key, key)) {
-        if (excludeDocId && entry.docId === excludeDocId) {
-          continue
-        }
-        return false
+    // Binary search for the range of entries matching this key
+    const startIdx = this.lowerBound(key)
+    const endIdx = this.upperBound(key)
+
+    // Check if any matching entry belongs to a different document
+    for (let i = startIdx; i < endIdx; i++) {
+      const entry = this.entries[i]!  // bounds ensure valid index
+      if (excludeDocId && entry.docId === excludeDocId) {
+        continue
       }
+      return false
     }
 
     return true
@@ -290,11 +295,11 @@ export class SSTIndex {
       // For sparse unique indexes, null/undefined values are allowed to be duplicated
       const isNullish = value === null || value === undefined
       if (!(this.definition.sparse && isNullish)) {
-        // Check if value already exists
-        for (const entry of this.entries) {
-          if (this.keysEqual(entry.key, key)) {
-            throw new UniqueConstraintError(this.definition.name, value, this.namespace)
-          }
+        // Binary search for existing entries with this key
+        this.ensureSorted()
+        const startIdx = this.lowerBound(key)
+        if (startIdx < this.entries.length && this.keysEqual(this.entries[startIdx]!.key, key)) {
+          throw new UniqueConstraintError(this.definition.name, value, this.namespace)
         }
       }
     }
@@ -478,31 +483,18 @@ export class SSTIndex {
   private extractValue(doc: Record<string, unknown>): unknown {
     const firstField = this.definition.fields[0]
     if (this.definition.fields.length === 1 && firstField) {
-      return this.getNestedValue(doc, firstField.path)
+      return getNestedValue(doc, firstField.path)
     }
 
     const values: unknown[] = []
     for (const field of this.definition.fields) {
-      const value = this.getNestedValue(doc, field.path)
+      const value = getNestedValue(doc, field.path)
       if (value === undefined && !this.definition.sparse) {
         return undefined
       }
       values.push(value)
     }
     return values
-  }
-
-  private getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-    const parts = path.split('.')
-    let current: unknown = obj
-
-    for (const part of parts) {
-      if (current === null || current === undefined) return undefined
-      if (typeof current !== 'object') return undefined
-      current = (current as Record<string, unknown>)[part]
-    }
-
-    return current
   }
 
   private keysEqual(a: Uint8Array, b: Uint8Array): boolean {

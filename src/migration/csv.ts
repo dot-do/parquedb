@@ -247,6 +247,7 @@ function convertToType(value: string, type: 'string' | 'number' | 'boolean' | 'd
       try {
         return JSON.parse(trimmed)
       } catch {
+        // Intentionally ignored: not valid JSON, return null to indicate parse failure
         return null
       }
 
@@ -471,7 +472,7 @@ export async function* streamFromCsv(
           continue
         }
         yield {
-          document: null as unknown as Record<string, unknown>,
+          document: null,
           lineNumber,
           error: `Transform failed: ${(err as Error).message}`,
         }

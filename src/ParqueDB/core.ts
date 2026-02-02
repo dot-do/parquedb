@@ -1496,7 +1496,7 @@ export class ParqueDBImpl {
           try {
             defaultValue = JSON.parse(defaultValue as string)
           } catch {
-            // Keep as string
+            // Intentionally ignored: value is not valid JSON, keep as raw string
           }
         }
       } else if (typeof fieldDef === 'object' && fieldDef !== null) {

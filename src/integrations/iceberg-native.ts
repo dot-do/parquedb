@@ -168,12 +168,57 @@ export interface SchemaEvolutionOp {
 // Dynamic Import Helper
 // =============================================================================
 
+/** Iceberg table metadata structure returned by readTableMetadata */
+interface IcebergTableMetadata {
+  'table-uuid': string
+  'format-version': number
+  'current-snapshot-id'?: number | bigint
+  'last-sequence-number'?: number
+  'current-schema-id'?: number
+  schemas?: IcebergSchemaLocal[]
+  snapshots?: IcebergSnapshot[]
+  [key: string]: unknown
+}
+
+/** Options for creating a new Iceberg table */
+interface CreateTableOptions {
+  location: string
+  schema: IcebergSchemaLocal
+  partitionSpec: { 'spec-id': number; fields: unknown[] }
+  properties: Record<string, string>
+  dataFiles: unknown[]
+}
+
+/** Result of creating a new Iceberg table */
+interface CreateTableResult {
+  metadataPath: string
+  [key: string]: unknown
+}
+
+/** Result of a commit operation */
+interface CommitResult {
+  metadata: IcebergTableMetadata
+  metadataPath: string
+  retryCount?: number
+}
+
+/** Options for commit retry */
+interface CommitOptions {
+  maxRetries?: number
+}
+
 interface IcebergLibrary {
-  createTableWithSnapshot: Function
-  readTableMetadata: Function
-  getCurrentSnapshot: Function
-  getSnapshotAtTimestamp: Function
-  getSnapshotById: Function
+  createTableWithSnapshot: (
+    storage: NativeIcebergStorageAdapter,
+    options: CreateTableOptions
+  ) => Promise<CreateTableResult>
+  readTableMetadata: (
+    storage: NativeIcebergStorageAdapter,
+    location: string
+  ) => Promise<IcebergTableMetadata>
+  getCurrentSnapshot: (metadata: IcebergTableMetadata) => IcebergSnapshot | null
+  getSnapshotAtTimestamp: (metadata: IcebergTableMetadata, timestampMs: number) => IcebergSnapshot | null
+  getSnapshotById: (metadata: IcebergTableMetadata, snapshotId: bigint) => IcebergSnapshot | null
   SnapshotBuilder: new (options: unknown) => unknown
   TableMetadataBuilder: new (options: unknown) => { build: () => unknown; addSnapshot: (s: unknown) => void; setSchemas: (s: unknown[]) => void; setCurrentSchemaId: (id: number) => void }
   ManifestGenerator: new (options: unknown) => { addDataFile: (f: unknown) => void }
@@ -182,8 +227,17 @@ interface IcebergLibrary {
   SnapshotManager: new (storage: unknown, location: string) => { expireSnapshots: (opts: unknown) => Promise<{ expiredSnapshots: unknown[]; retainedSnapshots: unknown[] }> }
   FileStatsCollector: new (schema: unknown) => { finalize: () => unknown }
   BloomFilter: new (options: { numItems: number; fpp: number }) => { add: (value: unknown) => void }
-  createAtomicCommitter: Function
-  commitWithCleanup: Function
+  createAtomicCommitter: (
+    storage: NativeIcebergStorageAdapter,
+    location: string,
+    options?: CommitOptions
+  ) => { commit: (updateFn: (metadata: IcebergTableMetadata) => Promise<unknown>) => Promise<CommitResult> }
+  commitWithCleanup: (
+    storage: NativeIcebergStorageAdapter,
+    location: string,
+    updateFn: (currentMetadata: IcebergTableMetadata) => Promise<unknown>,
+    options?: CommitOptions
+  ) => Promise<CommitResult>
   isCommitConflictError: (error: unknown) => boolean
   createDefaultSchema: () => IcebergSchemaLocal
   createUnpartitionedSpec: () => { 'spec-id': number; fields: unknown[] }
@@ -203,6 +257,7 @@ async function loadIcebergLib(): Promise<IcebergLibrary> {
     icebergLib = lib as unknown as IcebergLibrary
     return icebergLib
   } catch {
+    // Intentionally ignored: dynamic import failure means the optional dependency is not installed
     throw new Error(
       '@dotdo/iceberg is not installed. Install it with: pnpm add @dotdo/iceberg\n' +
       'For basic Iceberg metadata support without this dependency, use IcebergMetadataManager instead.'

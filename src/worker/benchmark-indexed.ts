@@ -275,8 +275,9 @@ async function benchmarkQuery(
     try {
       executor.clearCache() // Clear between iterations for consistent warmup
       await executor.find(ns, query.filter, { limit: 100 })
-    } catch {
-      // Ignore warmup errors
+    } catch (error: unknown) {
+      // Warmup errors are expected and non-critical
+      logger.debug('Benchmark warmup iteration error', error)
     }
   }
 

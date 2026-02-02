@@ -281,6 +281,7 @@ export function validateAction(action: LogAction): ValidationResult {
       try {
         JSON.parse(add.stats)
       } catch {
+        // Intentionally ignored: JSON.parse failure means stats is not valid JSON
         errors.push('add.stats must be valid JSON')
       }
     }
@@ -309,6 +310,7 @@ export function validateAction(action: LogAction): ValidationResult {
       try {
         JSON.parse(metaData.schemaString)
       } catch {
+        // Intentionally ignored: JSON.parse failure means schemaString is not valid JSON
         errors.push('metaData.schemaString must be valid JSON')
       }
     }

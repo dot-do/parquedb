@@ -396,8 +396,9 @@ export class QueryExecutor {
           usedBloomFilter: false,
         },
       }
-    } catch {
-      // Index execution failed, fall back to full scan
+    } catch (error: unknown) {
+      // Index execution failed - fall back to full scan
+      logger.debug('Index-based query execution failed, falling back to full scan', error)
       return null
     }
   }
@@ -998,6 +999,7 @@ export class QueryExecutor {
         const sortedBy = JSON.parse(sortingCols.value) as string[]
         return sortFields.every((f, i) => sortedBy[i] === f)
       } catch {
+        // Intentionally ignored: invalid JSON in sorting_columns metadata means data is not pre-sorted
         return false
       }
     }

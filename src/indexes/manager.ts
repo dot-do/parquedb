@@ -682,7 +682,7 @@ export class IndexManager {
           try {
             this.onError(error, event, listener)
           } catch {
-            // Ignore errors from the error handler itself
+            // Intentionally ignored: errors from the user-provided error handler must not propagate
           }
         } else {
           // Default behavior: log a warning

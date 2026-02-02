@@ -57,6 +57,12 @@ export const DEFAULT_PART_SIZE = 8 * 1024 * 1024
  */
 export const MAX_PARTS = 10000
 
+/**
+ * Default TTL for multipart uploads in milliseconds (30 minutes)
+ * Uploads older than this will be cleaned up automatically
+ */
+export const DEFAULT_MULTIPART_UPLOAD_TTL = 30 * 60 * 1000
+
 // =============================================================================
 // Cache
 // =============================================================================

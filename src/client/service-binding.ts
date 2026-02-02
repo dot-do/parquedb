@@ -6,6 +6,7 @@
  */
 
 import type { RpcPromiseChain } from './rpc-promise'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types
@@ -222,7 +223,9 @@ export class ServiceBindingAdapter {
         return response.json()
       }
       return { ok: false }
-    } catch {
+    } catch (error: unknown) {
+      // Health check failure is expected when service is unreachable
+      logger.debug('Service binding health check failed', error)
       return { ok: false }
     }
   }

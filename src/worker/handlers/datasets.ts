@@ -149,7 +149,7 @@ export async function handleCollectionList(
                 predicates.push(predicate)
               }
             } catch {
-              // Not JSON, check if it's an object
+              // Intentionally ignored: not JSON, check if it's already an object
               if (typeof rawValue === 'object') {
                 predicates.push(predicate)
               }
@@ -177,6 +177,7 @@ export async function handleCollectionList(
                 const parsed = typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue
                 return { predicate: p, count: parsed?.$count || 0 }
               } catch {
+                // Intentionally ignored: relationship data not parseable, default to zero count
                 return { predicate: p, count: 0 }
               }
             }),

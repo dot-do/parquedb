@@ -31,6 +31,7 @@ export async function fileExists(path: string): Promise<boolean> {
     await fs.access(path)
     return true
   } catch {
+    // Intentionally ignored: fs.access throws when file doesn't exist
     return false
   }
 }
@@ -112,7 +113,7 @@ export function inferType(value: string): unknown {
     try {
       return JSON.parse(trimmed)
     } catch {
-      // Not valid JSON, return as string
+      // Intentionally ignored: not valid JSON, return original string value
     }
   }
 
