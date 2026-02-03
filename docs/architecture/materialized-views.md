@@ -3,7 +3,7 @@
 ## Overview
 
 Materialized Views (MVs) in ParqueDB combine:
-1. **IceType Projections** - Schema definition with `$projection`, `$from`, `$expand`, `$flatten`
+1. **IceType Directives** - Schema definition with `$from`, `$expand`, `$flatten`, `$compute`
 2. **ClickHouse-style Refresh Modes** - Streaming (CDC-triggered) and Scheduled (cron-based)
 3. **Backend-Agnostic Storage** - MVs work on Native, Iceberg, and Delta Lake backends
 
@@ -32,14 +32,13 @@ $refresh: {
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Materialized View                             │
 ├─────────────────────────────────────────────────────────────────┤
-│  Definition (IceType Projection)                                │
-│  ├── $type: 'OrderAnalyticsView'                                │
-│  ├── $projection: 'olap'                                        │
+│  Definition (IceType Directives)                                │
 │  ├── $from: 'Order'                                             │
 │  ├── $expand: ['customer', 'items.product']                     │
-│  └── $flatten: { 'customer': 'buyer' }                          │
+│  ├── $flatten: { 'customer': 'buyer' }                          │
+│  └── $compute: { totalItems: { $count: 'items' } }              │
 ├─────────────────────────────────────────────────────────────────┤
-│  Storage Table (Iceberg)                                        │
+│  Storage Table (any backend)                                    │
 │  ├── data/*.parquet (precomputed results)                       │
 │  ├── metadata/ (snapshots, manifests)                           │
 │  └── lineage: { sourceSnapshots, refreshVersionId }             │
@@ -55,16 +54,19 @@ $refresh: {
 
 ### Inline in DB(schema, config)
 
-MVs are defined in the schema alongside collections - distinguished by `$projection`:
+MVs are inferred by the presence of `$from` - no special directive needed:
 
 ```typescript
 import { DB } from 'parquedb'
-import { AIRequestsMV, AIUsageMV } from 'parquedb/ai-sdk'
-import { EvalScoresMV } from 'parquedb/evalite'
+
+// Import stream collections from packages
+import { Generations, AIRequests } from 'parquedb/ai-sdk'
+import { EvalRuns, EvalScores } from 'parquedb/evalite'
+import { TailEvents } from 'parquedb/tail'
 
 const db = DB({
   // =========================================================================
-  // Regular Collections (no $projection)
+  // Regular Collections (no $from)
   // =========================================================================
   Customer: {
     name: 'string!',
@@ -92,21 +94,27 @@ const db = DB({
   },
 
   // =========================================================================
-  // Materialized Views (have $projection)
+  // Stream Collections (imported - handle ingestion automatically)
+  // =========================================================================
+  Generations,    // AI-generated text/objects from AI SDK
+  AIRequests,     // AI SDK request/response logs
+  TailEvents,     // Cloudflare Workers tail events
+  EvalRuns,       // Evalite evaluation runs
+  EvalScores,     // Evalite scores
+
+  // =========================================================================
+  // Materialized Views (have $from - computed from other collections)
   // =========================================================================
 
   // Denormalized view of orders with expanded relations
   OrderAnalytics: {
-    $projection: 'olap',
     $from: 'Order',
     $expand: ['customer', 'items.product'],
     $flatten: { 'customer': 'buyer' },
-    $refresh: { mode: 'streaming' },
   },
 
   // Aggregated daily sales
   DailySales: {
-    $projection: 'olap',
     $from: 'Order',
     $groupBy: [{ date: '$createdAt' }, 'status'],
     $compute: {
@@ -117,102 +125,168 @@ const db = DB({
     $refresh: { mode: 'scheduled', schedule: '0 * * * *' },
   },
 
-  // Pre-built views from packages
-  AIRequests: AIRequestsMV,
-  AIUsage: AIUsageMV,
-  EvalScores: EvalScoresMV,
+  // AI usage analytics (MV from imported stream collection)
+  DailyAIUsage: {
+    $from: 'AIRequests',
+    $groupBy: [{ date: '$timestamp' }, 'modelId'],
+    $compute: {
+      requestCount: { $count: '*' },
+      totalTokens: { $sum: 'tokens' },
+      avgLatency: { $avg: 'latencyMs' },
+      errorCount: { $sum: { $cond: [{ $exists: '$error' }, 1, 0] } },
+    },
+  },
+
+  // Worker errors (filtered view of tail events)
+  WorkerErrors: {
+    $from: 'TailEvents',
+    $filter: { outcome: { $ne: 'ok' } },
+  },
+
+  // Request analytics by endpoint
+  EndpointMetrics: {
+    $from: 'TailEvents',
+    $filter: { 'event.request': { $exists: true } },
+    $groupBy: ['scriptName', 'event.request.method', { path: '$event.request.url' }],
+    $compute: {
+      requestCount: { $count: '*' },
+      avgLatency: { $avg: 'duration' },
+      errorRate: { $avg: { $cond: [{ $ne: ['$outcome', 'ok'] }, 1, 0] } },
+    },
+  },
 
 }, {
-  // Config (second argument)
   storage: { type: 'fs', path: './data' },
-  backend: 'native',
 })
 
 // Access collections and views the same way
 const orders = await db.Order.find({ status: 'completed' })
 const analytics = await db.OrderAnalytics.find({ buyer_tier: 'premium' })
 const sales = await db.DailySales.find({ date: '2024-01-15' })
-const aiUsage = await db.AIUsage.find({ modelId: 'gpt-4' })
+const aiUsage = await db.DailyAIUsage.find({ modelId: 'gpt-4' })
+const errors = await db.WorkerErrors.find({ scriptName: 'my-worker' })
 ```
 
 ### How It Works
 
-The `$projection` directive distinguishes MVs from collections:
+The `$from` directive distinguishes MVs from collections:
 
-| Has `$projection`? | Type | Storage | Updates |
-|--------------------|------|---------|---------|
+| Has `$from`? | Type | Storage | Updates |
+|--------------|------|---------|---------|
 | No | Collection | Direct writes | CRUD operations |
 | Yes | Materialized View | Computed from source | Refresh (streaming/scheduled) |
 
-### Stream-based MVs (External Sources)
+### Stream Collections
 
-For MVs populated from external streams (not ParqueDB collections), use `$stream`:
+External data sources (AI SDK, tail events, evalite) are imported as **stream collections**.
+These are regular collections that handle ingestion automatically:
 
 ```typescript
-const db = DB({
-  // Collection-based MV (from ParqueDB data)
-  OrderAnalytics: {
-    $projection: 'olap',
-    $from: 'Order',              // Source is a ParqueDB collection
-    $expand: ['customer'],
-  },
+// parquedb/ai-sdk exports:
+export const Generations = {
+  $type: 'Generation',
+  modelId: 'string!',
+  content: 'variant!',        // Generated text or object
+  contentType: 'string!',     // 'text' | 'object'
+  tokens: 'int?',
+  timestamp: 'timestamp!',
+  // ... internal ingestion wiring
+}
 
-  // Stream-based MV (from external source)
-  WorkerLogs: {
-    $projection: 'olap',
-    $stream: 'tail',             // Source is external stream
-    $schema: {
-      scriptName: 'string!',
-      level: 'string!',
-      message: 'string!',
-      timestamp: 'timestamp!',
-    },
-    $transform: (event) => ({ /* ... */ }),
-    $refresh: { mode: 'streaming' },
-  },
-}, { storage })
+export const AIRequests = {
+  $type: 'AIRequest',
+  modelId: 'string!',
+  providerId: 'string!',
+  requestType: 'string!',     // 'generate' | 'stream'
+  tokens: 'int?',
+  latencyMs: 'int!',
+  cached: 'boolean!',
+  error: 'variant?',
+  timestamp: 'timestamp!',
+}
+
+// parquedb/tail exports:
+export const TailEvents = {
+  $type: 'TailEvent',
+  scriptName: 'string!',
+  outcome: 'string!',
+  event: 'variant?',          // Request/response info
+  logs: 'variant[]',
+  exceptions: 'variant[]',
+  timestamp: 'timestamp!',
+}
 ```
 
-### Pre-built Views
+When you include these in your schema, ParqueDB automatically:
+1. Creates the collection
+2. Wires up ingestion from the source (AI SDK middleware, tail handler, etc.)
+3. Makes the data available for MVs via `$from`
 
-Import views from integration packages:
+### MVs Are Always `$from`
+
+Every MV references a source collection with `$from`:
 
 ```typescript
-// AI SDK observability
-import { AIRequestsMV, AIUsageMV, GeneratedContentMV } from 'parquedb/ai-sdk'
+// MV from your collection
+OrderAnalytics: {
+  $from: 'Order',
+  $expand: ['customer'],
+}
 
-// Evalite analytics
-import { EvalScoresMV, EvalTrendsMV } from 'parquedb/evalite'
+// MV from imported stream collection
+DailyAIUsage: {
+  $from: 'AIRequests',
+  $groupBy: [{ date: '$timestamp' }],
+  $compute: { count: { $count: '*' } },
+}
 
-// Tail worker analytics
-import { WorkerLogsMV, WorkerErrorsMV, WorkerRequestsMV } from 'parquedb/tail'
+// MV from another MV (cascading)
+WeeklyAIUsage: {
+  $from: 'DailyAIUsage',
+  $groupBy: [{ week: '$date' }],
+  $compute: { totalRequests: { $sum: 'requestCount' } },
+}
+```
 
-const db = DB({
-  // Your collections...
-  Order: { /* ... */ },
+### Refresh Modes
 
-  // Pre-built MVs
-  AIRequests: AIRequestsMV,
-  AIUsage: AIUsageMV,
-  EvalScores: EvalScoresMV,
-  WorkerLogs: WorkerLogsMV,
-}, { storage })
+Default is `streaming` (updates on every write to source). Override with `$refresh`:
+
+```typescript
+// Streaming (default) - updates immediately when source changes
+OrderAnalytics: {
+  $from: 'Order',
+  $expand: ['customer'],
+  // $refresh: { mode: 'streaming' }  // implied
+}
+
+// Scheduled - refreshes on cron schedule
+DailySales: {
+  $from: 'Order',
+  $groupBy: [{ date: '$createdAt' }],
+  $compute: { revenue: { $sum: 'total' } },
+  $refresh: { mode: 'scheduled', schedule: '0 * * * *' },  // hourly
+}
+
+// Manual - only refreshes when explicitly called
+AdHocReport: {
+  $from: 'Order',
+  $refresh: { mode: 'manual' },
+}
 ```
 
 ### Standalone defineView()
 
-For reusable definitions or publishing as packages:
+For reusable/shareable MV definitions:
 
 ```typescript
 import { defineView } from 'parquedb'
 
 // Define once
 export const OrderAnalytics = defineView({
-  $projection: 'olap',
   $from: 'Order',
   $expand: ['customer', 'items.product'],
   $flatten: { 'customer': 'buyer' },
-  $refresh: { mode: 'streaming' },
   $compute: {
     totalItems: { $count: 'items' },
     orderValue: { $sum: 'items.price' },
@@ -261,7 +335,6 @@ Triggered automatically on every write to source tables.
 ```typescript
 const RealtimeOrders = defineView({
   $type: 'RealtimeOrdersView',
-  $projection: 'olap',
   $from: 'Order',
   $expand: ['customer'],
 
@@ -292,7 +365,6 @@ Refreshed on a cron schedule.
 ```typescript
 const DailyAnalytics = defineView({
   $type: 'DailyAnalyticsView',
-  $projection: 'olap',
   $from: 'Order',
   $expand: ['customer', 'items.product'],
 
@@ -323,7 +395,6 @@ Refreshed only on explicit command.
 ```typescript
 const AdHocReport = defineView({
   $type: 'AdHocReportView',
-  $projection: 'olap',
   $from: 'Order',
 
   $refresh: {
@@ -479,7 +550,6 @@ $refresh: {
 ```typescript
 const OrderMetrics = defineView({
   $type: 'OrderMetricsView',
-  $projection: 'olap',
   $from: 'Order',
 
   // Group by dimensions
@@ -535,13 +605,13 @@ interface MVMetadata {
   viewId: string
   name: string
 
-  // IceType projection definition
+  // MV definition
   definition: {
     $type: string
-    $projection: 'oltp' | 'olap' | 'both'
-    $from?: string
+    $from: string              // Source collection
     $expand?: string[]
     $flatten?: Record<string, string>
+    $filter?: Filter
     $groupBy?: (string | Record<string, string>)[]
     $compute?: Record<string, AggregateExpr>
   }
@@ -573,7 +643,6 @@ interface MVMetadata {
 // Define and register a view
 const view = db.defineView({
   $type: 'MyView',
-  $projection: 'olap',
   $from: 'MyCollection',
   $refresh: { mode: 'streaming' }
 })
@@ -689,48 +758,44 @@ async alarm() {
 | Streaming refresh (full) | 100ms-10s | Depends on data size |
 | Scheduled refresh | 1s-60s | Background, non-blocking |
 
-## Event Stream MVs (External Sources)
+## Stream Collections (External Sources)
 
-MVs can also be populated from **external event streams** rather than ParqueDB collections.
-This is useful for ingesting data from Cloudflare tail workers, webhooks, queues, etc.
+External data sources (Cloudflare tail events, AI SDK, evalite) are handled by
+**stream collections** - imported types that automatically wire up ingestion.
 
-### Event Stream Definition
+### How Stream Collections Work
 
 ```typescript
-import { defineStreamView } from 'parquedb'
+// parquedb/tail exports the TailEvents stream collection
+export const TailEvents = {
+  $type: 'TailEvent',
+  scriptName: 'string!',
+  outcome: 'string!',         // 'ok' | 'exception' | 'exceededCpu' | ...
+  eventTimestamp: 'timestamp!',
+  event: 'variant?',          // { request, response } for fetch events
+  logs: 'variant[]',          // Console.log messages
+  exceptions: 'variant[]',    // Uncaught exceptions
+  // Internal: wires up tail handler ingestion
+  $ingest: 'tail',
+}
 
-// MV populated from an external event stream (not a ParqueDB collection)
-const WorkerLogs = defineStreamView({
-  $type: 'WorkerLog',
-  $stream: 'tail',  // External stream source
+// Use in your schema - ingestion happens automatically
+const db = DB({
+  TailEvents,  // Import the stream collection
 
-  // Schema for the materialized data
-  $schema: {
-    scriptName: 'string!',
-    level: 'string!',       // debug, info, log, warn, error
-    message: 'string!',
-    timestamp: 'timestamp!',
-    requestId: 'string?',
-    colo: 'string?',
+  // Create MVs from it
+  WorkerErrors: {
+    $from: 'TailEvents',
+    $filter: { outcome: { $ne: 'ok' } },
   },
-
-  // Transform incoming events to the schema
-  $transform: (event: TailItem) => event.logs.map(log => ({
-    scriptName: event.scriptName,
-    level: log.level,
-    message: JSON.stringify(log.message),
-    timestamp: new Date(log.timestamp),
-    requestId: event.event?.request?.headers?.['cf-ray'],
-    colo: event.event?.request?.cf?.colo,
-  })),
-
-  // Storage options
-  $refresh: {
-    mode: 'streaming',
-    backend: 'native',  // Use simple Parquet files (no Iceberg overhead)
-  },
-})
+}, { storage })
 ```
+
+When you include a stream collection in your schema:
+1. ParqueDB creates the collection
+2. The `$ingest` directive wires up the data source
+3. Data flows in automatically (via tail handler, middleware, etc.)
+4. MVs with `$from` can reference it like any other collection
 
 ## Example: Tail Worker Analytics
 
@@ -743,17 +808,17 @@ A concrete example: ingesting Cloudflare tail events into three MVs for observab
 │  Application        │    │  Tail Worker (src/tail/index.ts)             │
 │  Workers            │───▶│                                              │
 │  (producers)        │    │  ┌────────────────────────────────────────┐  │
-└─────────────────────┘    │  │  TailEvent[] batch                     │  │
+└─────────────────────┘    │  │  TailEvent[] batch → TailEvents        │  │
                            │  └────────────────────────────────────────┘  │
                            │              │                                │
                            │    ┌─────────┼─────────┐                     │
                            │    ▼         ▼         ▼                     │
                            │ ┌──────┐ ┌──────┐ ┌──────────┐               │
-                           │ │ Logs │ │Errors│ │ Requests │               │
-                           │ │  MV  │ │  MV  │ │    MV    │               │
+                           │ │ Logs │ │Errors│ │ Requests │  MVs          │
+                           │ │      │ │      │ │          │  ($from)      │
                            │ └──────┘ └──────┘ └──────────┘               │
                            │    │         │         │                     │
-                           │    └─────────┼─────────┘                     │
+                           │    └─────────┴─────────┘                     │
                            │              ▼                                │
                            │  ┌────────────────────────────────────────┐  │
                            │  │  ParqueDB (R2 Parquet files)           │  │
@@ -761,107 +826,81 @@ A concrete example: ingesting Cloudflare tail events into three MVs for observab
                            └──────────────────────────────────────────────┘
 ```
 
-### MV Definitions
+### Schema Definition
 
 ```typescript
-// src/tail/views.ts
-import { defineStreamView } from 'parquedb'
+// src/tail/db.ts
+import { DB } from 'parquedb'
+import { TailEvents } from 'parquedb/tail'
 
-// ============================================================================
-// 1. Worker Logs MV - All console.log messages
-// ============================================================================
-export const WorkerLogs = defineStreamView({
-  $type: 'WorkerLog',
-  $stream: 'tail',
-  $schema: {
-    $id: 'string!',
-    scriptName: 'string!',
-    level: 'string!',
-    message: 'string!',
-    timestamp: 'timestamp!',
-    colo: 'string?',
-    url: 'string?',
-  },
-  $transform: (event: TailItem) => event.logs.map(log => ({
-    $id: `${event.eventTimestamp}-${log.timestamp}`,
-    scriptName: event.scriptName,
-    level: log.level,
-    message: Array.isArray(log.message) ? log.message.join(' ') : String(log.message),
-    timestamp: new Date(log.timestamp),
-    colo: event.event?.request?.cf?.colo,
-    url: event.event?.request?.url,
-  })),
-  $refresh: { mode: 'streaming', backend: 'native' },
-})
+export const db = DB({
+  // Stream collection (imported) - ingests raw tail events
+  TailEvents,
 
-// ============================================================================
-// 2. Errors MV - Exceptions and error outcomes
-// ============================================================================
-export const WorkerErrors = defineStreamView({
-  $type: 'WorkerError',
-  $stream: 'tail',
-  $schema: {
-    $id: 'string!',
-    scriptName: 'string!',
-    outcome: 'string!',
-    exceptionName: 'string?',
-    exceptionMessage: 'string?',
-    timestamp: 'timestamp!',
-    url: 'string?',
-    status: 'int?',
-    colo: 'string?',
+  // MV: Extract logs from tail events
+  WorkerLogs: {
+    $from: 'TailEvents',
+    $unnest: 'logs',  // Flatten the logs array
+    $select: {
+      scriptName: '$scriptName',
+      level: '$logs.level',
+      message: '$logs.message',
+      timestamp: '$logs.timestamp',
+      colo: '$event.request.cf.colo',
+    },
   },
-  $filter: (event: TailItem) =>
-    event.outcome !== 'ok' || event.exceptions.length > 0,
-  $transform: (event: TailItem) => ({
-    $id: `${event.scriptName}-${event.eventTimestamp}`,
-    scriptName: event.scriptName,
-    outcome: event.outcome,
-    exceptionName: event.exceptions[0]?.name,
-    exceptionMessage: event.exceptions[0]?.message,
-    timestamp: new Date(event.eventTimestamp),
-    url: event.event?.request?.url,
-    status: event.event?.response?.status,
-    colo: event.event?.request?.cf?.colo,
-  }),
-  $refresh: { mode: 'streaming', backend: 'native' },
-})
 
-// ============================================================================
-// 3. Requests MV - Web analytics (all requests)
-// ============================================================================
-export const WorkerRequests = defineStreamView({
-  $type: 'WorkerRequest',
-  $stream: 'tail',
-  $schema: {
-    $id: 'string!',
-    scriptName: 'string!',
-    method: 'string!',
-    url: 'string!',
-    pathname: 'string!',
-    status: 'int!',
-    outcome: 'string!',
-    colo: 'string!',
-    country: 'string?',
-    timestamp: 'timestamp!',
+  // MV: Filter to errors only
+  WorkerErrors: {
+    $from: 'TailEvents',
+    $filter: {
+      $or: [
+        { outcome: { $ne: 'ok' } },
+        { 'exceptions.0': { $exists: true } },
+      ],
+    },
+    $select: {
+      scriptName: '$scriptName',
+      outcome: '$outcome',
+      exceptionName: '$exceptions.0.name',
+      exceptionMessage: '$exceptions.0.message',
+      url: '$event.request.url',
+      status: '$event.response.status',
+      colo: '$event.request.cf.colo',
+      timestamp: '$eventTimestamp',
+    },
   },
-  $filter: (event: TailItem) => event.event != null,
-  $transform: (event: TailItem) => {
-    const url = new URL(event.event!.request.url)
-    return {
-      $id: `${event.scriptName}-${event.eventTimestamp}`,
-      scriptName: event.scriptName,
-      method: event.event!.request.method,
-      url: event.event!.request.url,
-      pathname: url.pathname,
-      status: event.event!.response?.status ?? 0,
-      outcome: event.outcome,
-      colo: event.event!.request.cf?.colo ?? 'unknown',
-      country: event.event!.request.cf?.country,
-      timestamp: new Date(event.eventTimestamp),
-    }
+
+  // MV: Request analytics
+  WorkerRequests: {
+    $from: 'TailEvents',
+    $filter: { event: { $exists: true } },
+    $select: {
+      scriptName: '$scriptName',
+      method: '$event.request.method',
+      url: '$event.request.url',
+      status: '$event.response.status',
+      outcome: '$outcome',
+      colo: '$event.request.cf.colo',
+      country: '$event.request.cf.country',
+      timestamp: '$eventTimestamp',
+    },
   },
-  $refresh: { mode: 'streaming', backend: 'native' },
+
+  // MV: Aggregated metrics by endpoint
+  EndpointMetrics: {
+    $from: 'WorkerRequests',  // MV from another MV
+    $groupBy: ['scriptName', 'method', { hour: '$timestamp' }],
+    $compute: {
+      requestCount: { $count: '*' },
+      avgLatency: { $avg: 'latency' },
+      errorRate: { $avg: { $cond: [{ $ne: ['$outcome', 'ok'] }, 1, 0] } },
+    },
+    $refresh: { mode: 'scheduled', schedule: '0 * * * *' },
+  },
+
+}, {
+  storage: { type: 'r2', bucket: env.PARQUEDB },
 })
 ```
 
@@ -869,26 +908,12 @@ export const WorkerRequests = defineStreamView({
 
 ```typescript
 // src/tail/index.ts
-import { ParqueDB } from 'parquedb'
-import { WorkerLogs, WorkerErrors, WorkerRequests } from './views'
-
-export interface Env {
-  PARQUEDB: R2Bucket
-}
+import { db } from './db'
 
 export default {
   async tail(events: TailItem[], env: Env, ctx: ExecutionContext) {
-    const db = new ParqueDB({
-      storage: { type: 'r2', bucket: env.PARQUEDB },
-      backend: 'native',
-    })
-
-    // Process each MV
-    ctx.waitUntil(Promise.all([
-      db.ingestStream(WorkerLogs, events),
-      db.ingestStream(WorkerErrors, events),
-      db.ingestStream(WorkerRequests, events),
-    ]))
+    // Just write to the stream collection - MVs update automatically
+    ctx.waitUntil(db.TailEvents.bulkCreate(events))
   },
 }
 ```
@@ -907,25 +932,22 @@ service = "parquedb-tail"  # The tail worker above
 ### Querying the MVs
 
 ```typescript
-// Query logs
+// Query errors from last hour
 const errors = await db.WorkerErrors.find({
   outcome: 'exception',
-  timestamp: { $gte: new Date(Date.now() - 3600000) }  // Last hour
+  timestamp: { $gte: new Date(Date.now() - 3600000) },
 })
 
-// Analytics query
-const requestsByStatus = await db.WorkerRequests.aggregate([
-  { $match: { timestamp: { $gte: new Date('2024-01-01') } } },
-  { $group: { _id: '$status', count: { $sum: 1 } } },
-])
+// Get endpoint metrics
+const metrics = await db.EndpointMetrics.find({
+  scriptName: 'my-api',
+  hour: { $gte: new Date('2024-01-15') },
+})
 
-// Error rate by worker
+// SQL query across MVs
 const errorRate = await db.sql`
-  SELECT
-    scriptName,
-    COUNT(*) as total,
-    SUM(CASE WHEN outcome != 'ok' THEN 1 ELSE 0 END) as errors,
-    SUM(CASE WHEN outcome != 'ok' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as error_rate
+  SELECT scriptName, COUNT(*) as total,
+         SUM(CASE WHEN outcome != 'ok' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as error_rate
   FROM WorkerRequests
   WHERE timestamp > NOW() - INTERVAL '1 hour'
   GROUP BY scriptName
@@ -993,206 +1015,202 @@ await processor.stop()
 
 ## AI Observability MVs
 
-Pre-built MVs for AI SDK and evalite that auto-materialize analytics.
+Pre-built stream collections and MVs for AI SDK and evalite.
 
-### AI Request Analytics
-
-```typescript
-import { AIRequestsMV, AIErrorsMV, AIUsageMV } from 'parquedb/integrations/ai-sdk'
-
-// These MVs auto-subscribe to AI SDK middleware events
-const db = new ParqueDB({ storage })
-
-// Register the AI MVs
-db.registerView(AIRequestsMV)    // All AI requests with latency, tokens, cost
-db.registerView(AIErrorsMV)      // Failed requests with error details
-db.registerView(AIUsageMV)       // Aggregated usage by model/provider/day
-```
-
-#### AIRequestsMV Schema
+### Schema with AI Observability
 
 ```typescript
-const AIRequestsMV = defineStreamView({
-  $type: 'AIRequest',
-  $stream: 'ai-sdk',
-  $schema: {
-    $id: 'string!',
-    requestType: 'string!',    // 'generate' | 'stream'
-    modelId: 'string!',
-    providerId: 'string!',
-    promptTokens: 'int?',
-    completionTokens: 'int?',
-    totalTokens: 'int?',
-    latencyMs: 'int!',
-    cached: 'boolean!',
-    finishReason: 'string?',
-    timestamp: 'timestamp!',
-    // Cost tracking
-    estimatedCost: 'decimal(10,6)?',
-  },
-  // Auto-populated from AI SDK middleware logs
-})
-```
+import { DB } from 'parquedb'
 
-#### AIUsageMV (Aggregated)
+// Stream collections (handle ingestion automatically)
+import { AIRequests, Generations } from 'parquedb/ai-sdk'
+import { EvalRuns, EvalScores } from 'parquedb/evalite'
 
-```typescript
-const AIUsageMV = defineStreamView({
-  $type: 'AIUsage',
-  $stream: 'ai-sdk',
-  $schema: {
-    modelId: 'string!',
-    providerId: 'string!',
-    date: 'date!',
-    requestCount: 'int!',
-    totalTokens: 'long!',
-    totalLatencyMs: 'long!',
-    cacheHits: 'int!',
-    cacheMisses: 'int!',
-    errorCount: 'int!',
-    estimatedCost: 'decimal(10,4)!',
-  },
-  $groupBy: ['modelId', 'providerId', { date: '$timestamp' }],
-  $compute: {
-    requestCount: { $count: '*' },
-    totalTokens: { $sum: 'totalTokens' },
-    totalLatencyMs: { $sum: 'latencyMs' },
-    cacheHits: { $sum: { $cond: ['$cached', 1, 0] } },
-    cacheMisses: { $sum: { $cond: ['$cached', 0, 1] } },
-    errorCount: { $sum: { $cond: [{ $exists: '$error' }, 1, 0] } },
-    estimatedCost: { $sum: 'estimatedCost' },
-  },
-})
-```
+const db = DB({
+  // =========================================================================
+  // Stream Collections (imported - auto-ingest from AI SDK / evalite)
+  // =========================================================================
+  AIRequests,     // All AI SDK requests (generate/stream)
+  Generations,    // Generated text/objects
 
-### Generated Content Stream
+  EvalRuns,       // Evalite evaluation runs
+  EvalScores,     // Evalite scores
 
-Capture all AI-generated content for analysis, training data, or audit.
+  // =========================================================================
+  // MVs for AI Analytics
+  // =========================================================================
 
-```typescript
-const GeneratedContentMV = defineStreamView({
-  $type: 'GeneratedContent',
-  $stream: 'ai-sdk',
-  $schema: {
-    $id: 'string!',
-    modelId: 'string!',
-    contentType: 'string!',   // 'text' | 'object' | 'embedding'
-    prompt: 'string?',        // Input prompt (verbose mode)
-    content: 'variant!',      // Generated text or structured object
-    schema: 'string?',        // Zod schema name if structured
-    tokens: 'int?',
-    timestamp: 'timestamp!',
-  },
-  $filter: (event) => event.response?.text || event.response?.object,
-  $transform: (event) => ({
-    $id: `gen-${event.timestamp}-${event.modelId}`,
-    modelId: event.modelId,
-    contentType: event.response?.object ? 'object' : 'text',
-    prompt: event.prompt,
-    content: event.response?.object ?? event.response?.text,
-    schema: event.response?.schema?.name,
-    tokens: event.usage?.completionTokens,
-    timestamp: new Date(event.timestamp),
-  }),
-})
-```
-
-### Evalite Integration
-
-Auto-materialize eval analytics from evalite runs.
-
-```typescript
-import { EvalScoresMV, EvalTrendsMV } from 'parquedb/integrations/evalite'
-
-// Track score distributions over time
-const EvalScoresMV = defineStreamView({
-  $type: 'EvalScore',
-  $stream: 'evalite',
-  $schema: {
-    runId: 'int!',
-    suiteName: 'string!',
-    scorerName: 'string!',
-    score: 'decimal(5,4)!',
-    timestamp: 'timestamp!',
-  },
-})
-
-// Aggregate trends by suite/scorer
-const EvalTrendsMV = defineStreamView({
-  $type: 'EvalTrend',
-  $stream: 'evalite',
-  $groupBy: ['suiteName', 'scorerName', { week: '$timestamp' }],
-  $compute: {
-    avgScore: { $avg: 'score' },
-    minScore: { $min: 'score' },
-    maxScore: { $max: 'score' },
-    runCount: { $count: '*' },
-  },
-})
-```
-
-### Wiring It Up Locally
-
-```typescript
-// evalite.config.ts
-import { defineConfig } from 'evalite'
-import { createEvaliteAdapter } from 'parquedb/integrations/evalite'
-import { FsBackend } from 'parquedb/storage'
-
-const storage = new FsBackend('./data')
-
-export default defineConfig({
-  storage: () => createEvaliteAdapter({
-    storage,
-    // Enable streaming MVs
-    mvs: {
-      enabled: true,
-      views: ['EvalScoresMV', 'EvalTrendsMV'],
+  // Daily usage aggregates
+  DailyAIUsage: {
+    $from: 'AIRequests',
+    $groupBy: ['modelId', 'providerId', { date: '$timestamp' }],
+    $compute: {
+      requestCount: { $count: '*' },
+      totalTokens: { $sum: 'tokens' },
+      avgLatency: { $avg: 'latencyMs' },
+      cacheHitRate: { $avg: { $cond: ['$cached', 1, 0] } },
+      errorCount: { $sum: { $cond: [{ $exists: '$error' }, 1, 0] } },
     },
-  }),
+  },
+
+  // AI errors for alerting
+  AIErrors: {
+    $from: 'AIRequests',
+    $filter: { error: { $exists: true } },
+  },
+
+  // Generated content by type
+  GeneratedObjects: {
+    $from: 'Generations',
+    $filter: { contentType: 'object' },
+  },
+
+  // =========================================================================
+  // MVs for Eval Analytics
+  // =========================================================================
+
+  // Score trends over time
+  EvalTrends: {
+    $from: 'EvalScores',
+    $groupBy: ['suiteName', 'scorerName', { week: '$timestamp' }],
+    $compute: {
+      avgScore: { $avg: 'score' },
+      minScore: { $min: 'score' },
+      maxScore: { $max: 'score' },
+      runCount: { $count: '*' },
+    },
+  },
+
+}, {
+  storage: { type: 'fs', path: './data' },
 })
 ```
+
+### Stream Collection Schemas
+
+These are what `parquedb/ai-sdk` and `parquedb/evalite` export:
+
+```typescript
+// parquedb/ai-sdk
+export const AIRequests = {
+  $type: 'AIRequest',
+  modelId: 'string!',
+  providerId: 'string!',
+  requestType: 'string!',     // 'generate' | 'stream'
+  tokens: 'int?',
+  latencyMs: 'int!',
+  cached: 'boolean!',
+  error: 'variant?',
+  timestamp: 'timestamp!',
+  $ingest: 'ai-sdk',          // Wires up middleware ingestion
+}
+
+export const Generations = {
+  $type: 'Generation',
+  modelId: 'string!',
+  contentType: 'string!',     // 'text' | 'object'
+  content: 'variant!',        // The generated text or object
+  prompt: 'string?',
+  tokens: 'int?',
+  timestamp: 'timestamp!',
+  $ingest: 'ai-sdk',
+}
+
+// parquedb/evalite
+export const EvalRuns = {
+  $type: 'EvalRun',
+  runId: 'int!',
+  runType: 'string!',
+  timestamp: 'timestamp!',
+  $ingest: 'evalite',
+}
+
+export const EvalScores = {
+  $type: 'EvalScore',
+  runId: 'int!',
+  suiteName: 'string!',
+  scorerName: 'string!',
+  score: 'decimal(5,4)!',
+  timestamp: 'timestamp!',
+  $ingest: 'evalite',
+}
+```
+
+### Local Usage with AI SDK
 
 ```typescript
 // ai-app.ts
-import { ParqueDB } from 'parquedb'
-import { createParqueDBMiddleware } from 'parquedb/integrations/ai-sdk'
-import { AIRequestsMV, AIUsageMV, GeneratedContentMV } from 'parquedb/integrations/ai-sdk'
-import { wrapLanguageModel } from 'ai'
+import { DB } from 'parquedb'
+import { AIRequests, Generations } from 'parquedb/ai-sdk'
+import { createParqueDBMiddleware } from 'parquedb/ai-sdk'
+import { wrapLanguageModel, generateText, generateObject } from 'ai'
 import { openai } from '@ai-sdk/openai'
 
-const db = new ParqueDB({
+// Define schema with AI stream collections and MVs
+const db = DB({
+  AIRequests,
+  Generations,
+
+  DailyUsage: {
+    $from: 'AIRequests',
+    $groupBy: [{ date: '$timestamp' }, 'modelId'],
+    $compute: { count: { $count: '*' }, tokens: { $sum: 'tokens' } },
+  },
+}, {
   storage: { type: 'fs', path: './data' },
 })
 
-// Register AI MVs
-db.registerView(AIRequestsMV)
-db.registerView(AIUsageMV)
-db.registerView(GeneratedContentMV)
-
-// Create middleware with MV streaming
-const middleware = createParqueDBMiddleware({
-  db,
-  logging: { enabled: true, level: 'verbose' },
-  mvs: { enabled: true },  // Stream to registered MVs
-})
+// Middleware automatically writes to AIRequests and Generations
+const middleware = createParqueDBMiddleware({ db })
 
 const model = wrapLanguageModel({
   model: openai('gpt-4'),
   middleware,
 })
 
-// Use model - all requests auto-stream to MVs
+// Use model - data flows to collections automatically
 const result = await generateText({ model, prompt: 'Hello!' })
 
 // Query the MVs
-const todayUsage = await db.AIUsageMV.find({
-  date: new Date().toISOString().split('T')[0],
+const usage = await db.DailyUsage.find({ date: '2024-01-15' })
+const generations = await db.Generations.find({ contentType: 'object' })
+```
+
+### Local Usage with Evalite
+
+```typescript
+// evalite.config.ts
+import { defineConfig } from 'evalite'
+import { createEvaliteAdapter } from 'parquedb/evalite'
+
+export default defineConfig({
+  storage: () => createEvaliteAdapter({
+    storage: { type: 'fs', path: './data' },
+  }),
 })
 
-const recentContent = await db.GeneratedContentMV.find({
-  contentType: 'object',
-}, { limit: 100, sort: { timestamp: -1 } })
+// Separately, define your analytics DB
+import { DB } from 'parquedb'
+import { EvalRuns, EvalScores } from 'parquedb/evalite'
+
+const analyticsDb = DB({
+  EvalRuns,
+  EvalScores,
+
+  ScoreTrends: {
+    $from: 'EvalScores',
+    $groupBy: ['suiteName', { week: '$timestamp' }],
+    $compute: {
+      avgScore: { $avg: 'score' },
+      runCount: { $count: '*' },
+    },
+  },
+}, {
+  storage: { type: 'fs', path: './data' },
+})
+
+// Query eval analytics
+const trends = await analyticsDb.ScoreTrends.find({ suiteName: 'my-eval' })
 ```
 
 ### Architecture: Local vs Workers
