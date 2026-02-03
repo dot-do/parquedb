@@ -114,6 +114,37 @@ export {
 } from './compression'
 
 // =============================================================================
+// Variant Shredding (Phase 1)
+// =============================================================================
+
+export {
+  // Writer integration
+  prepareShreddedVariantData,
+  getDataShredFields,
+  DEFAULT_DATA_SHRED_FIELDS,
+
+  // Reader integration
+  mapFilterToStatisticsPath,
+  transformFilterForShredding,
+  canPushdownWithShredding,
+
+  // Predicate pushdown
+  createShreddedPredicate,
+  shouldSkipRowGroup,
+
+  // Re-exports from hyparquet-writer
+  createShreddedVariantColumn,
+  getStatisticsPaths,
+  mapFilterPathToStats,
+} from './variant-shredding'
+
+export type {
+  VariantShredWriteConfig,
+  ShreddedEntityData,
+  ShreddedVariantReadConfig,
+} from './variant-shredding'
+
+// =============================================================================
 // Schema Generator (for typed collections)
 // =============================================================================
 

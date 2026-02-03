@@ -99,7 +99,7 @@ function createMockStorage(options?: {
 
     async write(path: string, data: Uint8Array): Promise<WriteResult> {
       if (options?.writeDelay) {
-        // Use real delay for backpressure tests
+        // Use actual delay for backpressure tests that measure timing
         await new Promise((resolve) => setTimeout(resolve, options.writeDelay))
       }
 

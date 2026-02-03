@@ -1600,7 +1600,7 @@ export class MVStreamProcessor<T extends Record<string, unknown> = Record<string
           }
         } catch (metaError) {
           // Non-fatal - log but continue
-          console.warn?.(`Failed to update MV metadata: ${metaError}`)
+          logger.warn(`Failed to update MV metadata: ${metaError}`)
         }
       }
 

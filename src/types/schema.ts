@@ -86,8 +86,19 @@ export type RelationString = ForwardRelation | BackwardRelation | FuzzyForwardRe
 // Field Definition
 // =============================================================================
 
-/** Index type for a field */
-export type IndexType = boolean | 'unique' | 'fts' | 'vector' | 'hash'
+/**
+ * Index type for schema field annotations.
+ *
+ * Note: This is distinct from `IndexType` in `src/indexes/types.ts` which defines
+ * actual index implementation types (fts, bloom, vector, geo).
+ *
+ * - `boolean`: true = indexed (implies shredded), false = no index
+ * - `'unique'`: Unique constraint index
+ * - `'fts'`: Full-text search index
+ * - `'vector'`: Vector similarity index
+ * - `'hash'`: Hash index (O(1) lookups) - deprecated, use parquet predicate pushdown
+ */
+export type SchemaIndexType = boolean | 'unique' | 'fts' | 'vector' | 'hash'
 
 /** Full field definition object */
 export interface FieldDefinition {
@@ -101,7 +112,7 @@ export interface FieldDefinition {
   default?: unknown
 
   /** Index type */
-  index?: IndexType
+  index?: SchemaIndexType
 
   /** Field description */
   description?: string
@@ -273,7 +284,7 @@ export interface ParsedField {
   required: boolean
   isArray: boolean
   default?: unknown
-  index?: IndexType
+  index?: SchemaIndexType
 
   // Relationship info
   isRelation: boolean
@@ -321,6 +332,54 @@ export interface ParsedRelationship {
   mode: 'exact' | 'fuzzy'
 }
 
+/**
+ * Partial parsed relationship returned by parseRelation.
+ *
+ * For forward relations (-> Target.reverse):
+ *   - toType, reverse are populated
+ *   - fromType, fromField, predicate must be filled by caller
+ *
+ * For backward relations (<- Source.field):
+ *   - fromType, fromField, predicate are populated
+ *   - toType, reverse must be filled by caller
+ */
+export interface PartialParsedRelationship {
+  fromType?: string
+  fromField?: string
+  predicate?: string
+  toType?: string
+  reverse?: string
+  isArray: boolean
+  direction: 'forward' | 'backward'
+  mode: 'exact' | 'fuzzy'
+}
+
+/**
+ * Complete a partial parsed relationship with caller context.
+ * Returns a full ParsedRelationship with all required fields.
+ */
+export function completeRelationship(
+  partial: PartialParsedRelationship,
+  context: {
+    fromType?: string
+    fromField?: string
+    predicate?: string
+    toType?: string
+    reverse?: string
+  }
+): ParsedRelationship {
+  return {
+    fromType: context.fromType ?? partial.fromType ?? '',
+    fromField: context.fromField ?? partial.fromField ?? '',
+    predicate: context.predicate ?? partial.predicate ?? '',
+    toType: context.toType ?? partial.toType ?? '',
+    reverse: context.reverse ?? partial.reverse ?? '',
+    isArray: partial.isArray,
+    direction: partial.direction,
+    mode: partial.mode,
+  }
+}
+
 /** Validation result */
 export interface ValidationResult {
   valid: boolean
@@ -338,15 +397,30 @@ export interface ValidationError {
 // Schema Parsing Helpers
 // =============================================================================
 
-/** Parse a relationship string */
-export function parseRelation(value: string): ParsedRelationship | null {
+/**
+ * Parse a relationship string and return a partial relationship object.
+ *
+ * Returns PartialParsedRelationship with only the fields that can be determined
+ * from the relationship string. Callers must use completeRelationship() to fill
+ * in missing context (fromType, fromField, predicate for forward relations;
+ * toType, reverse for backward relations).
+ *
+ * @example
+ * // Forward relation: -> User.posts
+ * const partial = parseRelation('-> User.posts')
+ * // partial.toType = 'User', partial.reverse = 'posts'
+ * // partial.fromType, fromField, predicate are undefined
+ *
+ * // Backward relation: <- Comment.post
+ * const partial = parseRelation('<- Comment.post')
+ * // partial.fromType = 'Comment', partial.fromField = 'post', partial.predicate = 'post'
+ * // partial.toType, reverse are undefined
+ */
+export function parseRelation(value: string): PartialParsedRelationship | null {
   // Forward: -> User.posts or -> User.posts[]
   const forwardMatch = value.match(/^->\s*(\w+)\.(\w+)(\[\])?$/)
   if (forwardMatch) {
     return {
-      fromType: '', // Set by caller
-      fromField: '', // Set by caller
-      predicate: '', // Set by caller
       toType: forwardMatch[1] ?? '',
       reverse: forwardMatch[2] ?? '',
       isArray: !!forwardMatch[3],
@@ -362,8 +436,6 @@ export function parseRelation(value: string): ParsedRelationship | null {
       fromType: backwardMatch[1] ?? '',
       fromField: backwardMatch[2] ?? '',
       predicate: backwardMatch[2] ?? '',
-      toType: '', // Set by caller
-      reverse: '', // Set by caller
       isArray: !!backwardMatch[3],
       direction: 'backward',
       mode: 'exact',
@@ -374,11 +446,8 @@ export function parseRelation(value: string): ParsedRelationship | null {
   const fuzzyForwardMatch = value.match(/^~>\s*(\w+)(?:\.(\w+))?(\[\])?$/)
   if (fuzzyForwardMatch) {
     return {
-      fromType: '',
-      fromField: '',
-      predicate: '',
       toType: fuzzyForwardMatch[1] ?? '',
-      reverse: fuzzyForwardMatch[2] ?? '',
+      reverse: fuzzyForwardMatch[2],
       isArray: !!fuzzyForwardMatch[3],
       direction: 'forward',
       mode: 'fuzzy',
@@ -390,10 +459,7 @@ export function parseRelation(value: string): ParsedRelationship | null {
   if (fuzzyBackwardMatch) {
     return {
       fromType: fuzzyBackwardMatch[1] ?? '',
-      fromField: fuzzyBackwardMatch[2] ?? '',
-      predicate: '',
-      toType: '',
-      reverse: '',
+      fromField: fuzzyBackwardMatch[2],
       isArray: !!fuzzyBackwardMatch[3],
       direction: 'backward',
       mode: 'fuzzy',
@@ -408,13 +474,13 @@ export function parseFieldType(value: string): {
   type: string
   required: boolean
   isArray: boolean
-  index?: IndexType
+  index?: SchemaIndexType
   default?: string
 } {
   let type = value.trim()
   let required = false
   let isArray = false
-  let index: IndexType | undefined
+  let index: SchemaIndexType | undefined
   let defaultValue: string | undefined
 
   // Check for default: "string = 'default'"

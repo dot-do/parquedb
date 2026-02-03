@@ -26,6 +26,7 @@ import { handleEntityDetail } from '@/worker/handlers/entity'
 import { DATASETS } from '@/worker/datasets'
 import type { HandlerContext } from '@/worker/handlers/types'
 import { createMockWorker, createMockCaches, createMockExecutionContext } from '../../mocks'
+import { logger } from '@/utils/logger'
 
 // Mock the Cloudflare caches API for Node.js environment
 const mockCachesObj = createMockCaches()
@@ -730,7 +731,7 @@ describe('handleNsRoute', () => {
     })
 
     it('should warn but still create when type is missing', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
       const worker = createMockWorker()
       const context = createContext('https://test.parquedb.com/ns/posts', {
         method: 'POST',
@@ -747,7 +748,7 @@ describe('handleNsRoute', () => {
     })
 
     it('should warn but still create when name is missing', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
       const worker = createMockWorker()
       const context = createContext('https://test.parquedb.com/ns/posts', {
         method: 'POST',

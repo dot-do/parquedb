@@ -15,6 +15,15 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+/**
+ * Helper to wait for async operations to proceed.
+ * Uses a minimal 5ms delay to allow async I/O operations to complete.
+ * This is a pragmatic approach for tests that need to wait for real async operations.
+ */
+async function tick(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 5))
+}
+
 describe('Flush Race Condition', () => {
   let db: ParqueDB
   let storage: FsBackend
@@ -131,7 +140,7 @@ describe('Flush Race Condition', () => {
       })
 
       // Wait for the first write to be initiated
-      await new Promise(resolve => setTimeout(resolve, 10))
+      await tick()
 
       // Start second create while first flush is blocked
       const promise2 = db.create('posts', {
@@ -142,14 +151,14 @@ describe('Flush Race Condition', () => {
       })
 
       // Now complete all the writes
-      await new Promise(resolve => setTimeout(resolve, 10))
+      await tick()
 
       // Resolve all pending writes
       while (writeResolvers.length > 0) {
         const resolver = writeResolvers.shift()!
         resolver()
         // Allow the next write to be initiated
-        await new Promise(resolve => setTimeout(resolve, 5))
+        await tick()
       }
 
       // Wait for both operations
@@ -226,17 +235,17 @@ describe('Flush Race Condition', () => {
       const promise1 = db.create('posts', { $type: 'Post', name: 'P1', title: 'T1', content: 'C1' })
 
       // Wait for flush to start
-      await new Promise(resolve => setTimeout(resolve, 10))
+      await tick()
 
       // Start second create while first is flushing
       const promise2 = db.create('posts', { $type: 'Post', name: 'P2', title: 'T2', content: 'C2' })
 
       // Complete all writes
-      await new Promise(resolve => setTimeout(resolve, 10))
+      await tick()
       while (writeResolvers.length > 0) {
         const resolver = writeResolvers.shift()!
         resolver()
-        await new Promise(resolve => setTimeout(resolve, 5))
+        await tick()
       }
 
       await Promise.all([promise1, promise2])

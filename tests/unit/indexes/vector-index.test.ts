@@ -325,6 +325,64 @@ describe('VectorIndex', () => {
       expect(index.ready).toBe(true)
       expect(index.size).toBe(0)
     })
+
+    it('throws error on metric mismatch during load', async () => {
+      // Create and save index with cosine metric
+      const cosineDefinition: IndexDefinition = {
+        name: 'idx_embedding',
+        type: 'vector',
+        fields: [{ path: 'embedding' }],
+        vectorOptions: {
+          dimensions: 3,
+          metric: 'cosine',
+        },
+      }
+      const index = new VectorIndex(storage, 'documents', cosineDefinition)
+      index.insert([1.0, 0.0, 0.0], 'doc1', 0, 0)
+      await index.save()
+
+      // Try to load with euclidean metric - should fail
+      const euclideanDefinition: IndexDefinition = {
+        name: 'idx_embedding',
+        type: 'vector',
+        fields: [{ path: 'embedding' }],
+        vectorOptions: {
+          dimensions: 3,
+          metric: 'euclidean',
+        },
+      }
+      const mismatchedIndex = new VectorIndex(storage, 'documents', euclideanDefinition)
+      await expect(mismatchedIndex.load()).rejects.toThrow(/metric mismatch/i)
+    })
+
+    it('throws error when loading dot metric index with cosine metric', async () => {
+      // Create and save index with dot metric
+      const dotDefinition: IndexDefinition = {
+        name: 'idx_embedding',
+        type: 'vector',
+        fields: [{ path: 'embedding' }],
+        vectorOptions: {
+          dimensions: 3,
+          metric: 'dot',
+        },
+      }
+      const index = new VectorIndex(storage, 'documents', dotDefinition)
+      index.insert([1.0, 0.0, 0.0], 'doc1', 0, 0)
+      await index.save()
+
+      // Try to load with cosine metric - should fail
+      const cosineDefinition: IndexDefinition = {
+        name: 'idx_embedding',
+        type: 'vector',
+        fields: [{ path: 'embedding' }],
+        vectorOptions: {
+          dimensions: 3,
+          metric: 'cosine',
+        },
+      }
+      const mismatchedIndex = new VectorIndex(storage, 'documents', cosineDefinition)
+      await expect(mismatchedIndex.load()).rejects.toThrow(/metric mismatch/i)
+    })
   })
 
   describe('search with score filter', () => {

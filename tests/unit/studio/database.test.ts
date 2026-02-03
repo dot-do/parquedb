@@ -612,7 +612,7 @@ describe('database', () => {
       }
 
       const asyncGetStorage = vi.fn().mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve(mockStorage), 10))
+        () => Promise.resolve(mockStorage)
       )
 
       const middleware = databaseMiddleware({

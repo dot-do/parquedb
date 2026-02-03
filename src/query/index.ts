@@ -116,3 +116,40 @@ export {
   type NormalizedVectorQuery,
   type VectorFilterNormalizationResult,
 } from './vector-query'
+
+// Shredded Variant predicate pushdown
+export {
+  // Context and helper functions
+  ShreddedPushdownContext,
+  buildShreddingProperties,
+  extractShreddedFilterPaths,
+  hasShreddedConditions,
+  estimatePushdownEffectiveness,
+
+  // Re-exports from @dotdo/iceberg
+  extractVariantShredConfig,
+  parseShredColumnsProperty,
+  parseShredFieldsProperty,
+  parseFieldTypesProperty,
+  getShredFieldsKey,
+  getFieldTypesKey,
+  VARIANT_SHRED_COLUMNS_KEY,
+  extractVariantFilterColumns,
+  assignShreddedFieldIds,
+  filterDataFiles,
+  filterDataFilesWithStats,
+  shouldSkipDataFile,
+  createRangePredicate,
+  evaluateRangePredicate,
+  combinePredicatesAnd,
+  combinePredicatesOr,
+
+  // Types
+  type ShreddedPushdownConfig,
+  type FilterResult,
+  type ShreddedPushdownOptions,
+  type VariantShredPropertyConfig,
+  type FilterStats,
+  type RangePredicate,
+  type PredicateResult,
+} from './shredded-pushdown'

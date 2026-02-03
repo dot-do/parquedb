@@ -148,6 +148,7 @@ export class ParqueDBImpl {
   private collectionOptions: Map<string, CollectionOptions> = new Map()
   private _embeddingProvider: EmbeddingProvider | null = null
   private _snapshotManager: SnapshotManagerImpl | null = null
+  private _onEvent: ((event: Event) => void | Promise<void>) | null = null
 
   constructor(config: ParqueDBConfig) {
     if (!config.storage) {
@@ -181,6 +182,10 @@ export class ParqueDBImpl {
 
     if (config.embeddingProvider) {
       this._embeddingProvider = config.embeddingProvider
+    }
+
+    if (config.onEvent) {
+      this._onEvent = config.onEvent
     }
   }
 
@@ -241,6 +246,7 @@ export class ParqueDBImpl {
       setFlushPromise: (promise) => { this.flushPromise = promise },
       setPendingEvents: (events) => { this.pendingEvents = events },
       getSnapshotManager: () => this.getSnapshotManager(),
+      onEvent: this._onEvent ?? undefined,
     }
   }
 
@@ -1087,5 +1093,51 @@ export class ParqueDBImpl {
 
   getIndexManager(): IndexManager {
     return this.indexManager
+  }
+
+  // ===========================================================================
+  // Public API - Materialized View Integration
+  // ===========================================================================
+
+  /**
+   * Set the event callback for MV integration.
+   *
+   * This callback is invoked after every event is recorded (CREATE, UPDATE, DELETE,
+   * REL_CREATE, REL_DELETE). The callback is fire-and-forget to avoid blocking writes.
+   *
+   * @param callback - Function to call with each event, or null to disable
+   *
+   * @example
+   * ```typescript
+   * import { createMVIntegration } from 'parquedb/materialized-views'
+   *
+   * const { emitter, engine, bridge } = createMVIntegration()
+   *
+   * // Set up MV integration
+   * db.setEventCallback((event) => emitter.emit(event))
+   *
+   * // Register MV handlers
+   * engine.registerMV({
+   *   name: 'OrderAnalytics',
+   *   sourceNamespaces: ['orders'],
+   *   async process(events) {
+   *     // Update MV based on events
+   *   }
+   * })
+   *
+   * // Start engine and connect bridge
+   * await engine.start()
+   * bridge.connect()
+   * ```
+   */
+  setEventCallback(callback: ((event: Event) => void | Promise<void>) | null): void {
+    this._onEvent = callback
+  }
+
+  /**
+   * Get the current event callback.
+   */
+  getEventCallback(): ((event: Event) => void | Promise<void>) | null {
+    return this._onEvent
   }
 }

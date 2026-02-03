@@ -454,6 +454,7 @@ function createTestHandler(
 
     async refresh(): Promise<void> {
       if (options?.delayMs) {
+        // Use actual delay for tests that measure timing performance
         await new Promise((resolve) => setTimeout(resolve, options.delayMs))
       }
 

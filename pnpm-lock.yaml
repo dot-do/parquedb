@@ -82,6 +82,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^3.2.4
         version: 3.2.4(@vitest/browser@3.2.4)(vitest@3.2.4)
+      ai-database:
+        specifier: ^2.1.3
+        version: 2.1.3(@cloudflare/workers-types@4.20260130.0)(@dotdo/types@0.1.1(typescript@5.9.3))(hono@4.11.7)(jose@6.1.3)(typescript@5.9.3)(vitest@3.2.4)
       csv-parse:
         specifier: ^6.1.0
         version: 6.1.0
@@ -127,6 +130,46 @@ importers:
 
 packages:
 
+  '@ai-sdk/amazon-bedrock@3.0.74':
+    resolution: {integrity: sha512-q83HE3FBb/HPIvjXsehrHOgCuGHPorSMFt6BYnzIYZy8gNnSqV1OWX4oXVsCAuYPPMtYW/KMK35hmoIFV8QKoQ==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/anthropic@2.0.58':
+    resolution: {integrity: sha512-CkNW5L1Arv8gPtPlEmKd+yf/SG9ucJf0XQdpMG8OiYEtEMc2smuCA+tyCp8zI7IBVg/FE7nUfFHntQFaOjRwJQ==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/gateway@2.0.31':
+    resolution: {integrity: sha512-HcglYbIFqKhUYqK5qSNc2RwYxVyuhADy2R/8HMSTaUqHVFfUIFyCyDHeuNBxJcSDtHVMebPdn6Bxa0YogeiwcA==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/google@2.0.52':
+    resolution: {integrity: sha512-2XUnGi3f7TV4ujoAhA+Fg3idUoG/+Y2xjCRg70a1/m0DH1KSQqYaCboJ1C19y6ZHGdf5KNT20eJdswP6TvrY2g==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/openai@2.0.89':
+    resolution: {integrity: sha512-4+qWkBCbL9HPKbgrUO/F2uXZ8GqrYxHa8SWEYIzxEJ9zvWw3ISr3t1/27O1i8MGSym+PzEyHBT48EV4LAwWaEw==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/provider-utils@3.0.20':
+    resolution: {integrity: sha512-iXHVe0apM2zUEzauqJwqmpC37A5rihrStAih5Ks+JE32iTe4LZ58y17UGBjpQQTCRw9YxMeo2UFLxLpBluyvLQ==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/provider@2.0.1':
+    resolution: {integrity: sha512-KCUwswvsC5VsW2PWFqF8eJgSCu5Ysj7m1TxiHTVA6g7k360bk0RNQENT8KTMAYEs+8fWPD3Uu4dEmzGHc+jGng==}
+    engines: {node: '>=18'}
+
   '@ampproject/remapping@2.3.0':
     resolution: {integrity: sha512-30iZtAPgz+LTIYoeivqYo853f02jBYSd5uGnGpkFV0M3xOt9aN73erkgYAmZU43x4VfqcnLxW9Kpg3R5LC4YYw==}
     engines: {node: '>=6.0.0'}
@@ -134,6 +177,12 @@ packages:
   '@apidevtools/json-schema-ref-parser@11.9.3':
     resolution: {integrity: sha512-60vepv88RwcJtSHrD6MjIL6Ta3SOYbgfnkHb+ppAVK+o9mXprRtulx7VlRl3lN3bbvysAfCS7WMVfhUYemB0IQ==}
     engines: {node: '>= 16'}
+
+  '@ark/schema@0.56.0':
+    resolution: {integrity: sha512-ECg3hox/6Z/nLajxXqNhgPtNdHWC9zNsDyskwO28WinoFEnWow4IsERNz9AnXRhTZJnYIlAJ4uGn3nlLk65vZA==}
+
+  '@ark/util@0.56.0':
+    resolution: {integrity: sha512-BghfRC8b9pNs3vBoDJhcta0/c1J1rsoS1+HgVUreMFPdhz/CRAKReAu57YEllNaSy98rWAdY1gE+gFup7OXpgA==}
 
   '@aws-crypto/crc32@5.2.0':
     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
@@ -1247,6 +1296,13 @@ packages:
   '@next/env@15.5.11':
     resolution: {integrity: sha512-g9s5SS9gC7GJCEOR3OV3zqs7C5VddqxP9X+/6BpMbdXRkqsWfFf2CJPBZNvNEtAkKTNuRgRXAgNxSAXzfLdaTg==}
 
+  '@opentelemetry/api@1.9.0':
+    resolution: {integrity: sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg==}
+    engines: {node: '>=8.0.0'}
+
+  '@org.ai/core@2.1.3':
+    resolution: {integrity: sha512-LJjJJsQgOd/KvJOJWPEOpGP4bzCwV0Ybj51zFMY1TRGWKZ/SjqyjnlLah+5ebIY9Osisz2asRCO4m6RZNlqZ6g==}
+
   '@payloadcms/translations@3.74.0':
     resolution: {integrity: sha512-SGzF37i7yQ6av8sTrjBIEd4415hb4Dx66KW+aPsCYaiH5mf6TIXqkdmsteytxV1t1XYMG+jufbv7Gi0NeC3xdw==}
 
@@ -1638,6 +1694,9 @@ packages:
   '@speed-highlight/core@1.2.14':
     resolution: {integrity: sha512-G4ewlBNhUtlLvrJTb88d2mdy2KRijzs4UhnlrOSRT4bmjh/IqNElZa3zkrZ+TC47TwtlDWzVLFADljF1Ijp5hA==}
 
+  '@standard-schema/spec@1.1.0':
+    resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
   '@testing-library/dom@10.4.1':
     resolution: {integrity: sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==}
     engines: {node: '>=18'}
@@ -1700,6 +1759,10 @@ packages:
 
   '@ungap/structured-clone@1.3.0':
     resolution: {integrity: sha512-WmoN8qaIAo7WTYWbAZuG8PYEhn5fkz7dZrqTBZ7dtt//lL2Gwms1IcnQ5yHqjDfX8Ft5j4YzDM23f87zBfDe9g==}
+
+  '@vercel/oidc@3.1.0':
+    resolution: {integrity: sha512-Fw28YZpRnA3cAHHDlkt7xQHiJ0fcL+NRcIqsocZQUSmbzeIKRpwttJjik5ZGanXP+vlA4SbTg+AbA3bP363l+w==}
+    engines: {node: '>= 20'}
 
   '@vitest/browser@3.2.4':
     resolution: {integrity: sha512-tJxiPrWmzH8a+w9nLKlQMzAKX/7VjFs50MWgcAj7p9XQ7AQ9/35fByFYptgPELyLw+0aixTnC4pUWV+APcZ/kw==}
@@ -1767,6 +1830,26 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
+  ai-database@2.1.3:
+    resolution: {integrity: sha512-XOLspP1h/LoDXiOjD99OlQzLPZz83iCvXTRNp5Uc/IDg+UTMSQ2F3XoW/SDyCCmwKPSUiwSa4wIuvcBEXqRR5A==}
+    peerDependencies:
+      vitest: ^2.0.0
+    peerDependenciesMeta:
+      vitest:
+        optional: true
+
+  ai-functions@2.1.3:
+    resolution: {integrity: sha512-DSyAyt67iZjpMaJHK4rhiKiPvq2hC1yKs9eUdf34Lch926k08CBdmy8sOy6JipuFSy+4i9GvHqjRtFGxPopyhA==}
+
+  ai-providers@2.1.3:
+    resolution: {integrity: sha512-r23v4wxWa7upj2CkBZPhXoObXAffaDuY8jAbkLe7F5x4q5zNoQX3rQK7zKXV2d7F2NudRSm1Lt6mf1pt7j8KOg==}
+
+  ai@5.0.125:
+    resolution: {integrity: sha512-M4gVfuxOP7eywi9zKbonVKGYMYV2IMuj9jki5/7FpogzNq+P9u7/ZvBivt4iu5A3z/V5BJojZ8vdBsEqbGnsHA==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
   ajv-formats@3.0.1:
     resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
     peerDependencies:
@@ -1804,6 +1887,12 @@ packages:
   aria-query@5.3.0:
     resolution: {integrity: sha512-b0P0sZPKtyu8HkeRAfCq0IfURZK+SuwMjY1UXGBU27wpAiTwQAIlq56IbIO+ytk/JjS1fMR14ee5WBBfKi5J6A==}
 
+  arkregex@0.0.5:
+    resolution: {integrity: sha512-ncYjBdLlh5/QnVsAA8De16Tc9EqmYM7y/WU9j+236KcyYNUXogpz3sC4ATIZYzzLxwI+0sEOaQLEmLmRleaEXw==}
+
+  arktype@2.1.29:
+    resolution: {integrity: sha512-jyfKk4xIOzvYNayqnD8ZJQqOwcrTOUbIU4293yrzAjA3O1dWh61j71ArMQ6tS/u4pD7vabSPe7nG3RCyoXW6RQ==}
+
   as-table@1.0.55:
     resolution: {integrity: sha512-xvsWESUJn0JN421Xb9MQw6AsMHRCUknCe0Wjlxvjud80mU4E6hQf1A6NzQKcYNmYw62MfzEtXc+badstZP3JpQ==}
 
@@ -1817,6 +1906,9 @@ packages:
   atomic-sleep@1.0.0:
     resolution: {integrity: sha512-kNOjDqAh7px0XWNI+4QbzoiR/nTkHAWNud2uvnJquD1/x5a7EQZMJT0AczqK0Qn67oY/TTQ1LbUKajZpp3I9tQ==}
     engines: {node: '>=8.0.0'}
+
+  aws4fetch@1.0.20:
+    resolution: {integrity: sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g==}
 
   balanced-match@1.0.2:
     resolution: {integrity: sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==}
@@ -2424,6 +2516,9 @@ packages:
   json-schema-typed@8.0.2:
     resolution: {integrity: sha512-fQhoXdcvc3V28x7C7BMs4P5+kNlgUURe2jmUT1T//oBRMDrqy1QPelJimwZGo7Hg9VPV3EQV5Bnq4hbFy2vetA==}
 
+  json-schema@0.4.0:
+    resolution: {integrity: sha512-es94M3nTIfsEPisRafak+HDLfHXnKBhV3vU5eqPcS3flIWqcxJWgXHXiey3YrpaNsanY5ei1VoYEbOzijuq9BA==}
+
   json5@2.2.3:
     resolution: {integrity: sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==}
     engines: {node: '>=6'}
@@ -2435,6 +2530,9 @@ packages:
   kleur@4.1.5:
     resolution: {integrity: sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==}
     engines: {node: '>=6'}
+
+  language-models@2.1.3:
+    resolution: {integrity: sha512-XyDPhbvBmigoUiTs4GC/MZOTenk4ZnGUnIAzcsfmPZoRofyeOmqiPep7PwwnFnNnfXOx+MMpi6A4f/svGIyXQQ==}
 
   lodash@4.17.23:
     resolution: {integrity: sha512-LgVTMpQtIopCi79SJeDiP0TfWi5CNEc/L/aRdTh3yIvmZXTnheWpKjSZhnvMl8iXbC1tFg9gdHHDMLoV7CnG+w==}
@@ -2476,6 +2574,21 @@ packages:
 
   mdast-util-to-hast@13.2.1:
     resolution: {integrity: sha512-cctsq2wp5vTsLIcaymblUriiTcZd0CwWtCbLvrOzYCDZoWyMNV8sZ7krj09FSnsiJi3WVsHLM4k6Dq/yaPyCXA==}
+
+  mdxld@1.9.1:
+    resolution: {integrity: sha512-Ec9yGhCSPU0Ek3TMsFCx2vJXSfoUI04kUEYwTFcdmgLrzlOc+wLOymm44dWldLjDzl82dzxeDs/+UXUMW9x/rA==}
+    hasBin: true
+    peerDependencies:
+      ai-database: '>=2.0.0'
+      ai-functions: '>=2.0.0'
+      ai-workflows: '>=2.0.0'
+    peerDependenciesMeta:
+      ai-database:
+        optional: true
+      ai-functions:
+        optional: true
+      ai-workflows:
+        optional: true
 
   media-typer@1.1.0:
     resolution: {integrity: sha512-aisnrDP4GNe06UcKFnV5bfMNPBUw4jsLGaWwWfnH3v02GnBuXX2MCVn5RbrWo0j3pczUilYblq7fQ7Nw2t5XKw==}
@@ -3367,6 +3480,54 @@ packages:
 
 snapshots:
 
+  '@ai-sdk/amazon-bedrock@3.0.74(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/anthropic': 2.0.58(zod@3.25.76)
+      '@ai-sdk/provider': 2.0.1
+      '@ai-sdk/provider-utils': 3.0.20(zod@3.25.76)
+      '@smithy/eventstream-codec': 4.2.8
+      '@smithy/util-utf8': 4.2.0
+      aws4fetch: 1.0.20
+      zod: 3.25.76
+
+  '@ai-sdk/anthropic@2.0.58(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider': 2.0.1
+      '@ai-sdk/provider-utils': 3.0.20(zod@3.25.76)
+      zod: 3.25.76
+
+  '@ai-sdk/gateway@2.0.31(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider': 2.0.1
+      '@ai-sdk/provider-utils': 3.0.20(zod@3.25.76)
+      '@vercel/oidc': 3.1.0
+      zod: 3.25.76
+
+  '@ai-sdk/google@2.0.52(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider': 2.0.1
+      '@ai-sdk/provider-utils': 3.0.20(zod@3.25.76)
+      zod: 3.25.76
+    optional: true
+
+  '@ai-sdk/openai@2.0.89(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider': 2.0.1
+      '@ai-sdk/provider-utils': 3.0.20(zod@3.25.76)
+      zod: 3.25.76
+    optional: true
+
+  '@ai-sdk/provider-utils@3.0.20(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider': 2.0.1
+      '@standard-schema/spec': 1.1.0
+      eventsource-parser: 3.0.6
+      zod: 3.25.76
+
+  '@ai-sdk/provider@2.0.1':
+    dependencies:
+      json-schema: 0.4.0
+
   '@ampproject/remapping@2.3.0':
     dependencies:
       '@jridgewell/gen-mapping': 0.3.13
@@ -3378,12 +3539,17 @@ snapshots:
       '@types/json-schema': 7.0.15
       js-yaml: 4.1.1
 
+  '@ark/schema@0.56.0':
+    dependencies:
+      '@ark/util': 0.56.0
+
+  '@ark/util@0.56.0': {}
+
   '@aws-crypto/crc32@5.2.0':
     dependencies:
       '@aws-crypto/util': 5.2.0
       '@aws-sdk/types': 3.973.1
       tslib: 2.8.1
-    optional: true
 
   '@aws-crypto/crc32c@5.2.0':
     dependencies:
@@ -3430,7 +3596,6 @@ snapshots:
       '@aws-sdk/types': 3.973.1
       '@smithy/util-utf8': 2.3.0
       tslib: 2.8.1
-    optional: true
 
   '@aws-sdk/client-s3@3.980.0':
     dependencies:
@@ -3856,7 +4021,6 @@ snapshots:
     dependencies:
       '@smithy/types': 4.12.0
       tslib: 2.8.1
-    optional: true
 
   '@aws-sdk/util-arn-parser@3.972.2':
     dependencies:
@@ -4527,6 +4691,16 @@ snapshots:
 
   '@next/env@15.5.11': {}
 
+  '@opentelemetry/api@1.9.0': {}
+
+  '@org.ai/core@2.1.3':
+    dependencies:
+      ai: 5.0.125(zod@3.25.76)
+      ai-providers: 2.1.3(zod@3.25.76)
+      language-models: 2.1.3
+      yaml: 2.8.2
+      zod: 3.25.76
+
   '@payloadcms/translations@3.74.0':
     dependencies:
       date-fns: 4.1.0
@@ -4718,7 +4892,6 @@ snapshots:
       '@smithy/types': 4.12.0
       '@smithy/util-hex-encoding': 4.2.0
       tslib: 2.8.1
-    optional: true
 
   '@smithy/eventstream-serde-browser@4.2.8':
     dependencies:
@@ -4788,12 +4961,10 @@ snapshots:
   '@smithy/is-array-buffer@2.2.0':
     dependencies:
       tslib: 2.8.1
-    optional: true
 
   '@smithy/is-array-buffer@4.2.0':
     dependencies:
       tslib: 2.8.1
-    optional: true
 
   '@smithy/md5-js@4.2.8':
     dependencies:
@@ -4926,7 +5097,6 @@ snapshots:
   '@smithy/types@4.12.0':
     dependencies:
       tslib: 2.8.1
-    optional: true
 
   '@smithy/url-parser@4.2.8':
     dependencies:
@@ -4956,13 +5126,11 @@ snapshots:
     dependencies:
       '@smithy/is-array-buffer': 2.2.0
       tslib: 2.8.1
-    optional: true
 
   '@smithy/util-buffer-from@4.2.0':
     dependencies:
       '@smithy/is-array-buffer': 4.2.0
       tslib: 2.8.1
-    optional: true
 
   '@smithy/util-config-provider@4.2.0':
     dependencies:
@@ -4998,7 +5166,6 @@ snapshots:
   '@smithy/util-hex-encoding@4.2.0':
     dependencies:
       tslib: 2.8.1
-    optional: true
 
   '@smithy/util-middleware@4.2.8':
     dependencies:
@@ -5034,13 +5201,11 @@ snapshots:
     dependencies:
       '@smithy/util-buffer-from': 2.2.0
       tslib: 2.8.1
-    optional: true
 
   '@smithy/util-utf8@4.2.0':
     dependencies:
       '@smithy/util-buffer-from': 4.2.0
       tslib: 2.8.1
-    optional: true
 
   '@smithy/util-waiter@4.2.8':
     dependencies:
@@ -5055,6 +5220,8 @@ snapshots:
     optional: true
 
   '@speed-highlight/core@1.2.14': {}
+
+  '@standard-schema/spec@1.1.0': {}
 
   '@testing-library/dom@10.4.1':
     dependencies:
@@ -5123,6 +5290,8 @@ snapshots:
   '@types/unist@3.0.3': {}
 
   '@ungap/structured-clone@1.3.0': {}
+
+  '@vercel/oidc@3.1.0': {}
 
   '@vitest/browser@3.2.4(playwright@1.58.1)(vite@7.3.1(@types/node@25.1.0)(tsx@4.21.0)(yaml@2.8.2))(vitest@3.2.4)':
     dependencies:
@@ -5215,6 +5384,60 @@ snapshots:
 
   acorn@8.14.0: {}
 
+  ai-database@2.1.3(@cloudflare/workers-types@4.20260130.0)(@dotdo/types@0.1.1(typescript@5.9.3))(hono@4.11.7)(jose@6.1.3)(typescript@5.9.3)(vitest@3.2.4):
+    dependencies:
+      ai-functions: 2.1.3(@cloudflare/workers-types@4.20260130.0)(@dotdo/types@0.1.1(typescript@5.9.3))(hono@4.11.7)(jose@6.1.3)(typescript@5.9.3)
+      mdxld: 1.9.1(ai-database@2.1.3(@cloudflare/workers-types@4.20260130.0)(@dotdo/types@0.1.1(typescript@5.9.3))(hono@4.11.7)(jose@6.1.3)(typescript@5.9.3)(vitest@3.2.4))(ai-functions@2.1.3(@cloudflare/workers-types@4.20260130.0)(@dotdo/types@0.1.1(typescript@5.9.3))(hono@4.11.7)(jose@6.1.3)(typescript@5.9.3))
+    optionalDependencies:
+      vitest: 3.2.4(@types/node@25.1.0)(@vitest/browser@3.2.4)(tsx@4.21.0)(yaml@2.8.2)
+    transitivePeerDependencies:
+      - '@cloudflare/workers-types'
+      - '@dotdo/types'
+      - ai-workflows
+      - hono
+      - itty-router
+      - jose
+      - typescript
+
+  ai-functions@2.1.3(@cloudflare/workers-types@4.20260130.0)(@dotdo/types@0.1.1(typescript@5.9.3))(hono@4.11.7)(jose@6.1.3)(typescript@5.9.3):
+    dependencies:
+      '@ai-sdk/amazon-bedrock': 3.0.74(zod@3.25.76)
+      '@org.ai/core': 2.1.3
+      ai: 5.0.125(zod@3.25.76)
+      ai-providers: 2.1.3(zod@3.25.76)
+      language-models: 2.1.3
+      yaml: 2.8.2
+      zod: 3.25.76
+    optionalDependencies:
+      oauth.do: 0.2.6(@cloudflare/workers-types@4.20260130.0)(@dotdo/types@0.1.1(typescript@5.9.3))(hono@4.11.7)(jose@6.1.3)(typescript@5.9.3)
+    transitivePeerDependencies:
+      - '@cloudflare/workers-types'
+      - '@dotdo/types'
+      - hono
+      - itty-router
+      - jose
+      - typescript
+
+  ai-providers@2.1.3(zod@3.25.76):
+    dependencies:
+      ai: 5.0.125(zod@3.25.76)
+      language-models: 2.1.3
+    optionalDependencies:
+      '@ai-sdk/amazon-bedrock': 3.0.74(zod@3.25.76)
+      '@ai-sdk/anthropic': 2.0.58(zod@3.25.76)
+      '@ai-sdk/google': 2.0.52(zod@3.25.76)
+      '@ai-sdk/openai': 2.0.89(zod@3.25.76)
+    transitivePeerDependencies:
+      - zod
+
+  ai@5.0.125(zod@3.25.76):
+    dependencies:
+      '@ai-sdk/gateway': 2.0.31(zod@3.25.76)
+      '@ai-sdk/provider': 2.0.1
+      '@ai-sdk/provider-utils': 3.0.20(zod@3.25.76)
+      '@opentelemetry/api': 1.9.0
+      zod: 3.25.76
+
   ajv-formats@3.0.1(ajv@8.17.1):
     optionalDependencies:
       ajv: 8.17.1
@@ -5244,6 +5467,16 @@ snapshots:
     dependencies:
       dequal: 2.0.3
 
+  arkregex@0.0.5:
+    dependencies:
+      '@ark/util': 0.56.0
+
+  arktype@2.1.29:
+    dependencies:
+      '@ark/schema': 0.56.0
+      '@ark/util': 0.56.0
+      arkregex: 0.0.5
+
   as-table@1.0.55:
     dependencies:
       printable-characters: 1.0.42
@@ -5257,6 +5490,8 @@ snapshots:
       js-tokens: 10.0.0
 
   atomic-sleep@1.0.0: {}
+
+  aws4fetch@1.0.20: {}
 
   balanced-match@1.0.2: {}
 
@@ -5898,6 +6133,8 @@ snapshots:
 
   json-schema-typed@8.0.2: {}
 
+  json-schema@0.4.0: {}
+
   json5@2.2.3: {}
 
   keytar@7.9.0:
@@ -5906,6 +6143,8 @@ snapshots:
       prebuild-install: 7.1.3
 
   kleur@4.1.5: {}
+
+  language-models@2.1.3: {}
 
   lodash@4.17.23: {}
 
@@ -5955,6 +6194,13 @@ snapshots:
       unist-util-position: 5.0.0
       unist-util-visit: 5.1.0
       vfile: 6.0.3
+
+  mdxld@1.9.1(ai-database@2.1.3(@cloudflare/workers-types@4.20260130.0)(@dotdo/types@0.1.1(typescript@5.9.3))(hono@4.11.7)(jose@6.1.3)(typescript@5.9.3)(vitest@3.2.4))(ai-functions@2.1.3(@cloudflare/workers-types@4.20260130.0)(@dotdo/types@0.1.1(typescript@5.9.3))(hono@4.11.7)(jose@6.1.3)(typescript@5.9.3)):
+    dependencies:
+      arktype: 2.1.29
+    optionalDependencies:
+      ai-database: 2.1.3(@cloudflare/workers-types@4.20260130.0)(@dotdo/types@0.1.1(typescript@5.9.3))(hono@4.11.7)(jose@6.1.3)(typescript@5.9.3)(vitest@3.2.4)
+      ai-functions: 2.1.3(@cloudflare/workers-types@4.20260130.0)(@dotdo/types@0.1.1(typescript@5.9.3))(hono@4.11.7)(jose@6.1.3)(typescript@5.9.3)
 
   media-typer@1.1.0: {}
 
@@ -6700,8 +6946,7 @@ snapshots:
       '@ts-morph/common': 0.28.1
       code-block-writer: 13.0.3
 
-  tslib@2.8.1:
-    optional: true
+  tslib@2.8.1: {}
 
   tsx@4.21.0:
     dependencies:

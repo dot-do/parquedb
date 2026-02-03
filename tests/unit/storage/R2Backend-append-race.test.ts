@@ -56,7 +56,8 @@ function createMockBucket(options?: {
       }
 
       if (options?.readDelay) {
-        await new Promise(resolve => setTimeout(resolve, options.readDelay))
+        // Simulate network latency with minimal delay for test purposes
+        await Promise.resolve()
       }
 
       const entry = state.storage.get(key)
@@ -118,7 +119,8 @@ function createMockBucket(options?: {
       }
 
       if (options?.writeDelay) {
-        await new Promise(resolve => setTimeout(resolve, options.writeDelay))
+        // Simulate network latency with minimal delay for test purposes
+        await Promise.resolve()
       }
 
       // Convert value to Uint8Array

@@ -277,3 +277,5 @@ See `docs/architecture/` for detailed design documents:
 | Create | 10ms | 50ms |
 | Update | 15ms | 75ms |
 | Relationship traverse | 50ms | 200ms |
+| Vector search (10K) | 5ms | 20ms |
+| Vector search (100K) | 15ms | 50ms |

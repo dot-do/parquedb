@@ -583,9 +583,7 @@ describe('Edge Cases', () => {
     clearNonceCache()
   })
 
-  // TODO: Fix sync-token.ts to handle Unicode paths properly
-  // btoa() doesn't support non-ASCII characters; need to use encodeURIComponent or Buffer
-  it.skip('handles unicode paths', async () => {
+  it('handles unicode paths', async () => {
     const payload = createValidPayload({
       path: 'data/\u4e2d\u6587/test.parquet', // Chinese characters
     })

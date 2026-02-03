@@ -1,0 +1,78 @@
+# ParqueDB Test Search Worker
+#
+# Deploys to cdn.workers.do/test-search/* for debugging and optimization
+# before Snippet deployment.
+#
+# This is a full Worker with observability enabled for measuring
+# real CPU time via tail worker.
+#
+# Routes:
+# - /test-search/* (this Worker - full debugging capabilities)
+# - /search/* (future Snippet deployment - free tier)
+#
+# Deploy: wrangler deploy --config snippets/worker/wrangler-test-search.toml
+# Dev:    wrangler dev --config snippets/worker/wrangler-test-search.toml
+
+name = "parquedb-test-search"
+main = "search.ts"
+compatibility_date = "2024-09-02"
+compatibility_flags = ["nodejs_compat"]
+
+# Account ID for .do account
+account_id = "b6641681fe423910342b9ffa1364c76d"
+
+# ==============================================================================
+# Route Configuration
+# ==============================================================================
+# Routes to cdn.workers.do/test-search/* for debugging
+
+[[routes]]
+pattern = "cdn.workers.do/test-search/*"
+zone_id = "7cdc309f5238b228485fc7e4ff29772b"
+
+# ==============================================================================
+# Tail Consumer Configuration
+# ==============================================================================
+# Enable tail worker to receive execution traces with cpuTime
+# This allows measuring REAL CPU time, not wall-clock time
+
+[[tail_consumers]]
+service = "parquedb-tail"
+
+# ==============================================================================
+# Observability
+# ==============================================================================
+# Full logging enabled for debugging
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+# ==============================================================================
+# R2 Bucket Binding
+# ==============================================================================
+# Direct R2 access for data files (avoids routing issues with subrequests)
+
+[[r2_buckets]]
+binding = "DATA"
+bucket_name = "parquedb-search-data"
+
+# ==============================================================================
+# Environment Variables
+# ==============================================================================
+
+[vars]
+# CDN base URL for data files (fallback)
+CDN_BASE = "https://cdn.workers.do/parquedb-benchmarks/snippets"
+# Enable debug mode for extra logging
+DEBUG = "true"
+
+# ==============================================================================
+# Build Configuration
+# ==============================================================================
+
+[build]
+command = ""

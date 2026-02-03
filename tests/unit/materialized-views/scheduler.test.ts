@@ -699,9 +699,8 @@ describe('MVScheduler', () => {
 
   describe('isProcessing', () => {
     it('returns true during refresh', async () => {
-      // Use real timers for this test since we need to track processing state
-      vi.useRealTimers()
-
+      // This test verifies isProcessing returns true while refresh is in progress
+      // We use a deferred promise to control when the refresh completes
       let isProcessingDuringRefresh = false
       let resolveRefresh: () => void
 
@@ -721,24 +720,20 @@ describe('MVScheduler', () => {
       // Schedule view with immediate refresh (nextRefreshAt in the past)
       await localScheduler.scheduleView('my_view', { intervalMs: 1 })
 
-      // Wait a small amount using real time for the view to become due
-      await new Promise(resolve => setTimeout(resolve, 10))
+      // Advance time to make the view due
+      vi.advanceTimersByTime(10)
 
       // Start processing (will be blocked by refreshPromise)
       const processPromise = localScheduler.processAlarm()
 
-      // Give the processing a moment to start
-      await new Promise(resolve => setTimeout(resolve, 10))
+      // Allow the promise to start execution
+      await vi.advanceTimersByTimeAsync(0)
 
       // Now resolve the refresh to complete
       resolveRefresh!()
       await processPromise
 
       expect(isProcessingDuringRefresh).toBe(true)
-
-      // Restore fake timers for other tests
-      vi.useFakeTimers()
-      vi.setSystemTime(new Date('2024-01-15T10:00:00Z'))
     })
 
     it('returns false when not processing', async () => {

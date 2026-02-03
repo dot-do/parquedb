@@ -126,6 +126,41 @@ export interface MockWorkerOptions {
    * Custom storage stats
    */
   storageStats?: Partial<MockStorageStats>
+
+  /**
+   * Override for get method
+   */
+  get?: Mock
+
+  /**
+   * Override for find method
+   */
+  find?: Mock
+
+  /**
+   * Override for create method
+   */
+  create?: Mock
+
+  /**
+   * Override for update method
+   */
+  update?: Mock
+
+  /**
+   * Override for delete method
+   */
+  delete?: Mock
+
+  /**
+   * Override for getRelationships method
+   */
+  getRelationships?: Mock
+
+  /**
+   * Override for getStorageStats method
+   */
+  getStorageStats?: Mock
 }
 
 // =============================================================================
@@ -293,7 +328,7 @@ export function createMockWorker(options?: MockWorkerOptions): MockParqueDBWorke
     }
   }
 
-  // Spy-based mock with sensible defaults
+  // Spy-based mock with sensible defaults (can be overridden via options)
   return {
     _entities: entities,
     _relationships: relationships,
@@ -302,17 +337,17 @@ export function createMockWorker(options?: MockWorkerOptions): MockParqueDBWorke
       relationships.length = 0
     },
 
-    get: vi.fn().mockResolvedValue(null),
-    find: vi.fn().mockResolvedValue({ items: [], stats: {}, hasMore: false }),
-    create: vi.fn().mockImplementation(async (_ns: string, data: Record<string, unknown>) => ({
+    get: options?.get ?? vi.fn().mockResolvedValue(null),
+    find: options?.find ?? vi.fn().mockResolvedValue({ items: [], stats: {}, hasMore: false }),
+    create: options?.create ?? vi.fn().mockImplementation(async (_ns: string, data: Record<string, unknown>) => ({
       $id: data.$id ?? 'test/1',
       name: data.name ?? 'Test',
       ...data,
     })),
-    update: vi.fn().mockResolvedValue({ matched: 1, modified: 1 }),
-    delete: vi.fn().mockResolvedValue({ deleted: 1 }),
-    getRelationships: vi.fn().mockResolvedValue([]),
-    getStorageStats: vi.fn().mockReturnValue(storageStats),
+    update: options?.update ?? vi.fn().mockResolvedValue({ matched: 1, modified: 1 }),
+    delete: options?.delete ?? vi.fn().mockResolvedValue({ deleted: 1 }),
+    getRelationships: options?.getRelationships ?? vi.fn().mockResolvedValue([]),
+    getStorageStats: options?.getStorageStats ?? vi.fn().mockReturnValue(storageStats),
   }
 }
 

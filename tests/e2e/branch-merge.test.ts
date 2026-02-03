@@ -362,9 +362,9 @@ describe('Checkout Operations', () => {
 
   describe('Checkout with uncommitted changes', () => {
     // Note: The current implementation does not track uncommitted changes,
-    // so this test documents expected behavior for future implementation
+    // so this test documents expected behavior for future implementation.
+    // See issue parquedb-kpnj for tracking.
     it.skip('should warn/fail when there are uncommitted changes', async () => {
-      // TODO: Implement uncommitted changes detection
       // When implemented:
       // 1. Make changes to data files
       // 2. Attempt checkout

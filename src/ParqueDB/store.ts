@@ -3,6 +3,18 @@
  *
  * Global shared state management for ParqueDB instances.
  * Uses WeakMap with storage backend reference as key for shared state.
+ *
+ * DEPRECATION NOTICE:
+ * This in-memory store pattern is being replaced by EventSourcedBackend,
+ * which provides consistent event-sourcing semantics across all environments.
+ * See: src/storage/EventSourcedBackend.ts
+ * See: docs/architecture/entity-storage.md
+ *
+ * For new code, prefer using EventSourcedBackend:
+ * ```typescript
+ * import { withEventSourcing, MemoryBackend } from '@parquedb/storage'
+ * const storage = withEventSourcing(new MemoryBackend())
+ * ```
  */
 
 import type { Entity, StorageBackend, Event } from '../types'

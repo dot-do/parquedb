@@ -52,6 +52,17 @@ export const _ML = 1 / Math.log(DEFAULT_M)
 const MAGIC = new Uint8Array([0x50, 0x51, 0x56, 0x49]) // "PQVI"
 const VERSION = 2 // Bumped for incremental update support
 
+/**
+ * Error thrown when index configuration doesn't match serialized data.
+ * This error should not be silently caught - it indicates a configuration problem.
+ */
+export class VectorIndexConfigError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'VectorIndexConfigError'
+  }
+}
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -456,6 +467,10 @@ export class VectorIndex {
       this.deserialize(data)
       this.loaded = true
     } catch (error: unknown) {
+      // Re-throw configuration errors - these should not be silently caught
+      if (error instanceof VectorIndexConfigError) {
+        throw error
+      }
       logger.warn(`Vector index load failed for ${path}, starting fresh`, error)
       this.clear()
       this.loaded = true
@@ -1929,7 +1944,7 @@ export class VectorIndex {
     const dimensions = view.getUint32(offset, false)
     offset += 4
     if (dimensions !== this.dimensions) {
-      throw new Error(
+      throw new VectorIndexConfigError(
         `Dimension mismatch: index has ${dimensions}, expected ${this.dimensions}`
       )
     }
@@ -1948,9 +1963,17 @@ export class VectorIndex {
     this.maxLayerInGraph = view.getInt8(offset)
     offset += 1
 
-    const __metricCode = view.getUint8(offset)
+    const serializedMetricCode = view.getUint8(offset)
     offset += 1
-    void __metricCode // Reserved field for future use
+    // Validate metric code matches (0 = cosine, 1 = euclidean, 2 = dot)
+    const expectedMetricCode = this.metric === 'euclidean' ? 1 : this.metric === 'dot' ? 2 : 0
+    if (serializedMetricCode !== expectedMetricCode) {
+      const metricNames = ['cosine', 'euclidean', 'dot'] as const
+      const serializedMetric = metricNames[serializedMetricCode] ?? `unknown(${serializedMetricCode})`
+      throw new VectorIndexConfigError(
+        `Metric mismatch: index was serialized with '${serializedMetric}' but loaded with '${this.metric}'`
+      )
+    }
 
     // V2: Read incremental update metadata
     if (version >= 2) {

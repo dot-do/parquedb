@@ -1,16 +1,107 @@
 ---
 title: Entity Storage Architecture
-description: Dual storage architecture for ParqueDB with Node.js/testing using in-memory globalEntityStore and Cloudflare Workers using SQLite for writes and R2 Parquet files for reads.
+description: Unified event-sourced storage architecture for ParqueDB across Node.js and Cloudflare Workers environments.
 ---
 
 ## Overview
 
-ParqueDB has two distinct storage implementations depending on the runtime environment:
+ParqueDB uses an **event-sourced architecture** as the unified storage model across all environments. This eliminates the previous divergence between Node.js (globalEntityStore) and Workers (SQLite) implementations.
 
-1. **Node.js/Testing**: `ParqueDB.ts` with in-memory `globalEntityStore`
-2. **Cloudflare Workers**: `ParqueDBDO.ts` with SQLite + `QueryExecutor` with R2
+### Key Principle: Events as Source of Truth
 
-This document explains why both exist, when to use each, and future consolidation plans.
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Event-Sourced Core                           │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │               EventSourcedBackend                        │   │
+│  │  ┌─────────────────┐  ┌─────────────────┐               │   │
+│  │  │   Event Log     │  │   Snapshots     │               │   │
+│  │  │  (source of     │  │  (performance   │               │   │
+│  │  │   truth)        │  │   checkpoints)  │               │   │
+│  │  └────────┬────────┘  └────────┬────────┘               │   │
+│  │           │                    │                         │   │
+│  │           └──────────┬─────────┘                         │   │
+│  │                      │                                   │   │
+│  │           ┌──────────▼──────────┐                        │   │
+│  │           │  Entity Reconstruction │                     │   │
+│  │           │  (snapshot + replay)   │                     │   │
+│  │           └──────────┬──────────┘                        │   │
+│  │                      │                                   │   │
+│  │           ┌──────────▼──────────┐                        │   │
+│  │           │   Entity Cache      │                        │   │
+│  │           │   (derived state)   │                        │   │
+│  │           └─────────────────────┘                        │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                           │                                     │
+│                           ▼                                     │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              StorageBackend (pluggable)                  │   │
+│  │  MemoryBackend │ FsBackend │ R2Backend │ DOSqliteBackend │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+This unified model provides:
+
+1. **Consistency**: Same behavior in Node.js tests and Workers production
+2. **Simplicity**: Single codebase for storage logic
+3. **Time-travel**: Built-in history from event log
+4. **Auditability**: Complete change tracking
+
+## Unified Architecture
+
+### EventSourcedBackend
+
+The `EventSourcedBackend` class (`src/storage/EventSourcedBackend.ts`) provides a unified interface:
+
+```typescript
+import { EventSourcedBackend, withEventSourcing } from '@parquedb/storage'
+
+// Wrap any StorageBackend with event-sourcing semantics
+const storage = withEventSourcing(new MemoryBackend(), {
+  autoSnapshotThreshold: 100,
+  maxCachedEntities: 1000,
+})
+
+// All operations go through the event log
+await storage.appendEvent(event)
+const entity = await storage.reconstructEntity('users', 'abc123')
+```
+
+### How It Works
+
+1. **Writes**: All mutations append events to the event log
+2. **Reads**: Entity state is reconstructed from last snapshot + replayed events
+3. **Snapshots**: Periodic checkpoints for fast reconstruction
+4. **Caching**: Derived entity state is cached with TTL
+
+## Legacy Architecture (Deprecated)
+
+The previous dual architecture is deprecated but still documented for reference:
+
+### Node.js / Testing Environment (Legacy)
+
+```
++-----------------------------------------------------+
+|                  ParqueDB.ts                        |
+|                                                     |
+|  +----------------------------------------------+   |
+|  |         globalEntityStore (WeakMap)          |   |
+|  |  +---------------------------------------+   |   |
+|  |  |   Map<StorageBackend, Map<$id, Entity>> | |   |
+|  |  +---------------------------------------+   |   |
+|  +----------------------------------------------+   |
+|                        |                            |
+|                        v                            |
+|  +----------------------------------------------+   |
+|  |            StorageBackend                    |   |
+|  |  (FsBackend, MemoryBackend, R2Backend, etc.) |   |
+|  +----------------------------------------------+   |
++-----------------------------------------------------+
+```
+
+### Cloudflare Workers Environment (Legacy)
 
 ## Current Architecture
 
@@ -120,42 +211,66 @@ This document explains why both exist, when to use each, and future consolidatio
 
 ## Migration Path
 
-### Current State (v0.x)
-- Two separate implementations
-- `globalEntityStore` for Node.js
-- SQLite for Workers
+### Current State (v1.0)
 
-### Future State (v1.0)
-Options under consideration:
+**Unified Event-Sourced Core (Implemented)**:
+- `EventSourcedBackend` wraps any StorageBackend with event-sourcing semantics
+- Events are the single source of truth
+- Entity state is derived by replaying events from snapshots
+- Same behavior across Node.js and Workers environments
 
-**Option A: Unified Storage Abstraction**
-- ParqueDB.ts delegates all storage to backend
-- StorageBackend gets transactional write methods
-- In-memory caching layer on top of storage
+### Migration Steps
 
-**Option B: Event-Sourced Core**
-- Both environments use event log as source of truth
-- Materialized views (in-memory, SQLite, or Parquet)
-- Snapshots for fast reconstruction
+1. **New Code**: Use `EventSourcedBackend` directly
+2. **Existing Node.js Code**: Wrap existing StorageBackend with `withEventSourcing()`
+3. **Existing Workers Code**: ParqueDBDO already uses event sourcing internally
 
-**Option C: Storage-Specific Optimizations**
-- Keep current architecture
-- Better document the differences
-- Provide migration tools between environments
+```typescript
+// Before (legacy)
+const db = new ParqueDB({ storage: new MemoryBackend() })
+
+// After (unified)
+import { withEventSourcing, MemoryBackend } from '@parquedb/storage'
+const storage = withEventSourcing(new MemoryBackend())
+const db = new ParqueDB({ storage })
+```
 
 ## Recommendations
 
-### For New Code
+### For All Environments
 
-1. **Node.js applications**: Use `ParqueDB` class directly
-2. **Workers**: Use `ParqueDBWorker` (reads) + `ParqueDBDO` (writes)
-3. **Tests**: Use `MemoryBackend` with `ParqueDB`
+1. **Use EventSourcedBackend**: Wrap your storage with `withEventSourcing()` for consistent behavior
+2. **Configure Snapshots**: Set `autoSnapshotThreshold` based on your read/write ratio
+3. **Monitor Event Log Size**: Implement retention policies for event archival
 
-### For Existing Code
+### For Node.js Applications
 
-1. Don't mix Node.js and Workers code paths
-2. Be aware that Workers reads come from R2, not SQLite
-3. Allow time for R2 propagation after writes
+```typescript
+import { FsBackend, withEventSourcing } from '@parquedb/storage'
+
+const storage = withEventSourcing(new FsBackend('/data'), {
+  autoSnapshotThreshold: 50,  // Snapshot every 50 events
+  maxCachedEntities: 5000,    // Cache up to 5000 entities
+})
+```
+
+### For Cloudflare Workers
+
+```typescript
+// ParqueDBDO already uses event sourcing internally
+// For reads, continue using QueryExecutor with R2
+// The unified model ensures consistency between environments
+```
+
+### For Tests
+
+```typescript
+import { MemoryBackend, withEventSourcing } from '@parquedb/storage'
+
+const storage = withEventSourcing(new MemoryBackend(), {
+  autoSnapshotThreshold: 10,  // More frequent snapshots for testing
+})
+```
 
 ## Related Documentation
 

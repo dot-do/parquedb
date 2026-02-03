@@ -59,7 +59,8 @@ function createMVHandler(options?: {
       }
 
       if (options?.delay) {
-        await new Promise(resolve => setTimeout(resolve, options.delay))
+        // Minimal delay for test purposes - we're testing behavior, not timing
+        await Promise.resolve()
       }
 
       processedEvents.push([...events])

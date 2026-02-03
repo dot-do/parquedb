@@ -228,6 +228,40 @@ export function getNonceCacheSize(): number {
 }
 
 // =============================================================================
+// Unicode-safe Base64 Encoding/Decoding
+// =============================================================================
+
+/**
+ * Encode a string to base64url, supporting Unicode characters.
+ * Uses TextEncoder to convert to UTF-8 bytes first.
+ */
+function encodeBase64Url(str: string): string {
+  const encoder = new TextEncoder()
+  const bytes = encoder.encode(str)
+  let binary = ''
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/**
+ * Decode a base64url string back to a Unicode string.
+ * Uses TextDecoder to interpret the bytes as UTF-8.
+ */
+function decodeBase64Url(base64url: string): string {
+  const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+  const binary = atob(padded)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  const decoder = new TextDecoder()
+  return decoder.decode(bytes)
+}
+
+// =============================================================================
 // HMAC Key Management
 // =============================================================================
 
@@ -319,7 +353,7 @@ export async function signUploadToken(payload: TokenPayload, env: TokenEnv): Pro
   })
 
   const key = await getHmacKey(env)
-  const payloadEncoded = btoa(data).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const payloadEncoded = encodeBase64Url(data)
   const signature = await hmacSign(data, key)
 
   return `${payloadEncoded}.${signature}`
@@ -336,7 +370,7 @@ export async function signDownloadToken(payload: TokenPayload, env: TokenEnv): P
   })
 
   const key = await getHmacKey(env)
-  const payloadEncoded = btoa(data).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const payloadEncoded = encodeBase64Url(data)
   const signature = await hmacSign(data, key)
 
   return `${payloadEncoded}.${signature}`
@@ -401,10 +435,8 @@ async function verifyToken(
 
     const [payloadEncoded, signature] = parts as [string, string]
 
-    // Decode payload
-    const base64 = payloadEncoded.replace(/-/g, '+').replace(/_/g, '/')
-    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
-    const jsonStr = atob(padded)
+    // Decode payload using Unicode-safe decoding
+    const jsonStr = decodeBase64Url(payloadEncoded)
     const data = JSON.parse(jsonStr) as TokenData
 
     // Verify type

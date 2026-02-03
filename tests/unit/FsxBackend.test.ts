@@ -294,138 +294,143 @@ describe('FsxBackend', () => {
   // ===========================================================================
   // Tests Requiring fsx Environment
   // ===========================================================================
+  // NOTE: These tests are placeholders that document expected FsxBackend behavior.
+  // They are automatically skipped when fsx is not available (isFsxAvailable() returns false).
+  // Implementations should be added when testing in a Cloudflare Workers environment
+  // where the fsx module is present.
+  // ===========================================================================
 
   describe.skipIf(!isFsxAvailable())('read operations (requires fsx)', () => {
     it('should read entire file contents', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should read file with root path prefix', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should throw FileNotFoundError when file does not exist', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should read byte range from file', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
   })
 
   describe.skipIf(!isFsxAvailable())('write operations (requires fsx)', () => {
     it('should write data to file', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should create parent directories automatically', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should write atomically using temp file + rename', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should write conditionally with version check', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should append data to file', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should delete file', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
   })
 
   describe.skipIf(!isFsxAvailable())('directory operations (requires fsx)', () => {
     it('should create directory', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should create nested directories', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should remove empty directory', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should remove non-empty directory with recursive option', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
   })
 
   describe.skipIf(!isFsxAvailable())('list operations (requires fsx)', () => {
     it('should list files with prefix', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should support pagination', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should support glob patterns', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should include metadata when requested', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
   })
 
   describe.skipIf(!isFsxAvailable())('tiered storage operations (requires fsx)', () => {
     it('should get storage tier for file', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should set storage tier for file', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should promote file to hot tier', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should demote file to cold tier', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
   })
 
   describe.skipIf(!isFsxAvailable())('error handling (requires fsx)', () => {
     it('should handle ENOENT (file not found)', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should handle EEXIST (file exists)', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should handle EACCES (permission denied)', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should handle EIO (I/O error)', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should handle ENOTEMPTY (directory not empty)', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
   })
 
   describe.skipIf(!isFsxAvailable())('path handling (requires fsx)', () => {
     it('should prefix all paths with root', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should handle paths with special characters', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
 
     it('should handle unicode paths', async () => {
-      // TODO: Implement when fsx is available
+      // Placeholder: implement when fsx is available
     })
   })
 

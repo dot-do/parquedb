@@ -18,6 +18,7 @@ import {
 // checkBloomFilter reserved for future bloom filter optimization
 export { checkBloomFilter as _checkBloomFilter } from './bloom'
 import type { IndexManager, SelectedIndex } from '../indexes/manager'
+import type { MVRouter } from './optimizer'
 // Re-export index types for consumers
 export type { IndexLookupResult, FTSSearchResult } from '../indexes/types'
 import { logger } from '../utils/logger'
@@ -196,14 +197,17 @@ export interface BloomFilterReader {
  */
 export class QueryExecutor {
   private indexManager?: IndexManager
+  private mvRouter?: MVRouter
 
   constructor(
     private reader: ParquetReader,
     _storage: StorageBackend,
-    indexManager?: IndexManager
+    indexManager?: IndexManager,
+    mvRouter?: MVRouter
   ) {
     void _storage // Reserved for future direct storage access
     this.indexManager = indexManager
+    this.mvRouter = mvRouter
   }
 
   /**
@@ -211,6 +215,13 @@ export class QueryExecutor {
    */
   setIndexManager(indexManager: IndexManager): void {
     this.indexManager = indexManager
+  }
+
+  /**
+   * Set the MV router for materialized view-aware query execution
+   */
+  setMVRouter(mvRouter: MVRouter): void {
+    this.mvRouter = mvRouter
   }
 
   /**
@@ -235,7 +246,24 @@ export class QueryExecutor {
     try {
       let result: QueryResult<T>
 
-      // Check for applicable indexes first
+      // Check for applicable materialized views first
+      if (this.mvRouter) {
+        const mvResult = await this.executeWithMV<T>(ns, filter, options, startTime)
+        if (mvResult) {
+          result = mvResult
+          // Dispatch query end hook
+          await globalHookRegistry.dispatchQueryEnd(hookContext, {
+            rowCount: result.rows.length,
+            durationMs: result.stats.executionTimeMs,
+            indexUsed: result.stats.indexUsed,
+            rowGroupsScanned: result.stats.scannedRowGroups,
+            rowGroupsSkipped: result.stats.skippedRowGroups,
+          })
+          return result
+        }
+      }
+
+      // Check for applicable indexes
       if (this.indexManager) {
         const indexPlan = await this.indexManager.selectIndex(ns, filter)
         if (indexPlan) {
@@ -277,6 +305,86 @@ export class QueryExecutor {
         error instanceof Error ? error : new Error(String(error))
       )
       throw error
+    }
+  }
+
+  /**
+   * Execute query using a materialized view
+   */
+  private async executeWithMV<T>(
+    ns: string,
+    filter: Filter,
+    options: FindOptions<T>,
+    startTime: number
+  ): Promise<QueryResult<T> | null> {
+    if (!this.mvRouter) {
+      return null
+    }
+
+    try {
+      // Route query to find applicable MV
+      const routingResult = await this.mvRouter.route(ns, filter, options)
+
+      if (!routingResult.canUseMV || !routingResult.mvName) {
+        return null
+      }
+
+      // Read from the MV instead of the source collection
+      const mvPath = `data/${routingResult.mvName}/data.parquet`
+      const metadata = await this.reader.readMetadata(mvPath)
+      const stats = extractRowGroupStats(metadata)
+
+      // Apply post-filter if needed, otherwise empty filter
+      const mvFilter = routingResult.postFilter ?? {}
+      const selectedRowGroups = selectRowGroups(mvFilter, stats)
+
+      // Determine columns to read
+      const columns = this.selectColumns(mvFilter, options)
+
+      // Read row groups
+      const rowBatches = await this.readRowGroupsParallel<T>(
+        mvPath,
+        selectedRowGroups,
+        columns
+      )
+
+      // Flatten row batches
+      const allRows = rowBatches.flat()
+
+      // Apply post-filter if needed
+      let filtered = allRows
+      if (routingResult.needsPostFilter && routingResult.postFilter) {
+        const predicate = toPredicate(routingResult.postFilter)
+        filtered = allRows.filter(row => predicate(row))
+      }
+
+      // Apply sort, limit, skip
+      const result = this.postProcess(filtered, options)
+
+      // Build statistics
+      const executionStats: QueryStats = {
+        totalRowGroups: stats.length,
+        scannedRowGroups: selectedRowGroups.length,
+        skippedRowGroups: stats.length - selectedRowGroups.length,
+        rowsScanned: allRows.length,
+        rowsMatched: filtered.length,
+        executionTimeMs: Date.now() - startTime,
+        columnsRead: columns,
+        usedBloomFilter: false,
+        indexUsed: `mv:${routingResult.mvName}`,
+      }
+
+      return {
+        rows: result.rows,
+        totalCount: result.totalCount,
+        nextCursor: result.nextCursor,
+        hasMore: result.hasMore,
+        stats: executionStats,
+      }
+    } catch (error) {
+      // MV execution failed - log and fall back to regular execution
+      logger.debug('MV-based query execution failed, falling back to full scan', error)
+      return null
     }
   }
 

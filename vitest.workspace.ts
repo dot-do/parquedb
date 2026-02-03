@@ -10,11 +10,24 @@
  * - Real Durable Objects (PARQUEDB) with SQLite storage
  *
  * Configuration is loaded from wrangler.jsonc with environment: 'test'
+ *
+ * Performance optimization notes:
+ * - Tests are parallelized at the file level (fileParallelism: true)
+ * - Each fork process has isolated module state (isolate: true)
+ * - Tests within a file run sequentially (maxConcurrency: 1) to prevent intra-file race conditions
+ * - Most tests use fresh MemoryBackend instances or call clearGlobalStorage() in beforeEach
+ * - The forks pool provides process isolation, resetting module-level globals per fork
  */
 
 import { defineWorkspace } from 'vitest/config'
 import { defineWorkersConfig } from '@cloudflare/vitest-pool-workers/config'
 import { resolve } from 'node:path'
+import os from 'node:os'
+
+// Calculate optimal fork count based on available CPUs
+// Use 50% of cores to balance parallelism vs memory pressure
+const cpuCount = os.cpus().length
+const optimalForks = Math.max(4, Math.min(cpuCount / 2, 12))
 
 // Shared resolve configuration for path aliases
 const sharedResolve = {
@@ -43,16 +56,15 @@ export default defineWorkspace([
       pool: 'forks',
       poolOptions: {
         forks: {
-          maxForks: 2,
-          minForks: 1,
-          isolate: true,
+          maxForks: optimalForks,
+          minForks: 2,
+          isolate: true, // Each fork has fresh module state
         },
       },
-      fileParallelism: false,
-      maxConcurrency: 1, // Run tests sequentially to prevent shared state issues
+      fileParallelism: true, // Run test files in parallel across forks
+      maxConcurrency: 5, // Allow some parallelism within files for independent tests
       sequence: {
-        shuffle: false,
-        concurrent: false, // Ensure tests run sequentially within files
+        shuffle: false, // Keep deterministic order for debugging
       },
       setupFiles: ['tests/setup.ts'],
       testTimeout: 30000,
@@ -71,16 +83,15 @@ export default defineWorkspace([
       pool: 'forks',
       poolOptions: {
         forks: {
-          maxForks: 2,
-          minForks: 1,
+          maxForks: Math.max(2, optimalForks / 2), // Fewer forks for heavier tests
+          minForks: 2,
           isolate: true,
         },
       },
-      fileParallelism: false,
-      maxConcurrency: 1, // Run tests sequentially to prevent shared state issues
+      fileParallelism: true,
+      maxConcurrency: 3, // More conservative for integration tests
       sequence: {
         shuffle: false,
-        concurrent: false, // Ensure tests run sequentially within files
       },
       setupFiles: ['tests/setup.ts'],
       testTimeout: 30000,
@@ -99,16 +110,15 @@ export default defineWorkspace([
       pool: 'forks',
       poolOptions: {
         forks: {
-          maxForks: 2,
-          minForks: 1,
+          maxForks: Math.max(2, optimalForks / 2),
+          minForks: 2,
           isolate: true,
         },
       },
-      fileParallelism: false,
-      maxConcurrency: 1, // Run tests sequentially to prevent shared state issues
+      fileParallelism: true,
+      maxConcurrency: 2, // Conservative for e2e tests
       sequence: {
         shuffle: false,
-        concurrent: false, // Ensure tests run sequentially within files
       },
       setupFiles: ['tests/setup.ts'],
       testTimeout: 60000,

@@ -259,6 +259,43 @@ export interface ParqueDBConfig {
    * ```
    */
   embeddingProvider?: EmbeddingProvider
+
+  /**
+   * Event callback for materialized view integration
+   *
+   * When configured, this callback is invoked after every event is recorded
+   * (CREATE, UPDATE, DELETE, REL_CREATE, REL_DELETE). This enables automatic
+   * MV updates when data changes.
+   *
+   * @example
+   * ```typescript
+   * import { createMVIntegration } from 'parquedb/materialized-views'
+   *
+   * const { emitter, engine, bridge, mutationHook } = createMVIntegration()
+   *
+   * const db = new ParqueDB({
+   *   storage,
+   *   onEvent: (event) => emitter.emit(event)
+   * })
+   *
+   * // Register MV handlers
+   * engine.registerMV({
+   *   name: 'OrderAnalytics',
+   *   sourceNamespaces: ['orders'],
+   *   async process(events) {
+   *     // Update MV based on events
+   *   }
+   * })
+   *
+   * // Start engine and connect bridge
+   * await engine.start()
+   * bridge.connect()
+   *
+   * // Now all ParqueDB mutations automatically trigger MV updates
+   * await db.create('orders', { total: 100 })
+   * ```
+   */
+  onEvent?: (event: Event) => void | Promise<void>
 }
 
 // =============================================================================

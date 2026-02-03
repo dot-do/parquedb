@@ -17,8 +17,43 @@ export {
   tokenize,
   tokenizeQuery,
   porterStem,
+  getStopwords,
   ENGLISH_STOPWORDS,
+  SPANISH_STOPWORDS,
+  FRENCH_STOPWORDS,
+  GERMAN_STOPWORDS,
+  ITALIAN_STOPWORDS,
+  PORTUGUESE_STOPWORDS,
+  DUTCH_STOPWORDS,
+  RUSSIAN_STOPWORDS,
+  SWEDISH_STOPWORDS,
+  NORWEGIAN_STOPWORDS,
+  DANISH_STOPWORDS,
+  FINNISH_STOPWORDS,
+  TURKISH_STOPWORDS,
+  ARABIC_STOPWORDS,
+  STOPWORDS_BY_LANGUAGE,
 } from './tokenizer'
+
+// Multi-language Stemmers
+export {
+  getStemmer,
+  spanishStem,
+  frenchStem,
+  germanStem,
+  italianStem,
+  portugueseStem,
+  dutchStem,
+  russianStem,
+  swedishStem,
+  norwegianStem,
+  danishStem,
+  finnishStem,
+  turkishStem,
+  arabicStem,
+  type SupportedLanguage,
+  type Stemmer,
+} from './stemmers'
 
 // Inverted Index
 export { InvertedIndex } from './inverted-index'

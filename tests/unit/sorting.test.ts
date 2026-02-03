@@ -127,7 +127,7 @@ describe('Sorting', () => {
   }
 
   // ===========================================================================
-  // Single Field Sort - TODO: Implement sorting in ParqueDB.find()
+  // Single Field Sort
   // ===========================================================================
 
   describe('single field sort', () => {

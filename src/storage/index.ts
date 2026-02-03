@@ -171,6 +171,20 @@ export {
   type RouterSchema,
   type StorageRouterOptions,
   type CollectionSchema,
+  // Sharding types
+  type ShardStrategy,
+  type ShardConfig,
+  type TypeShardConfig,
+  type TimeShardConfig,
+  type HashShardConfig,
+  type ShardingConfig,
+  type ShardingThresholds,
+  DEFAULT_SHARDING_THRESHOLDS,
+  // Storage path helpers
+  NAMESPACE_FILES,
+  STORAGE_PATHS,
+  formatTimePeriod,
+  calculateHashShard,
 } from './router'
 
 // RemoteBackend - HTTP-based read-only storage for remote databases
@@ -179,6 +193,44 @@ export {
   createRemoteBackend,
   type RemoteBackendOptions,
 } from './RemoteBackend'
+
+// =============================================================================
+// Event-Sourced Storage (Unified Architecture)
+// =============================================================================
+
+/**
+ * EventSourcedBackend - Unified event-sourced storage abstraction
+ *
+ * This provides a consistent storage model across Node.js and Workers:
+ * - Events are the single source of truth
+ * - Entity state is derived by replaying events from snapshots
+ * - Same behavior in all environments
+ *
+ * @example
+ * ```typescript
+ * import { MemoryBackend, withEventSourcing } from '@parquedb/storage'
+ *
+ * const storage = withEventSourcing(new MemoryBackend(), {
+ *   autoSnapshotThreshold: 100,
+ *   maxCachedEntities: 1000,
+ * })
+ *
+ * // All writes go through event log
+ * await storage.appendEvent(event)
+ *
+ * // Reads reconstruct from events
+ * const entity = await storage.reconstructEntity('users', 'abc123')
+ * ```
+ */
+export {
+  EventSourcedBackend,
+  createEventSourcedBackend,
+  withEventSourcing,
+  type EventBatch,
+  type EntitySnapshot,
+  type EventSourcedConfig,
+  type EventSourcedOperations,
+} from './EventSourcedBackend'
 
 // =============================================================================
 // Test Utilities

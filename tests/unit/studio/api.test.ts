@@ -2,6 +2,7 @@
  * Tests for src/studio/api.ts
  *
  * Tests API route handlers for database management.
+ * Uses mock factories from tests/mocks for consistent test doubles.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -12,6 +13,19 @@ import {
   requireActor,
 } from '../../../src/studio/api'
 import type { Context } from 'hono'
+import {
+  createMockDatabaseIndex,
+  createTestDatabase,
+  type MockDatabaseIndex,
+} from '../../mocks/database-index'
+import {
+  createTestUser,
+  TEST_USERS,
+} from '../../mocks/auth'
+
+// =============================================================================
+// Mock Setup
+// =============================================================================
 
 // Mock the external dependencies
 vi.mock('../../../src/integrations/hono/auth', () => ({
@@ -30,6 +44,55 @@ import { getUser } from '../../../src/integrations/hono/auth'
 import { getUserDatabaseIndex } from '../../../src/worker/DatabaseIndexDO'
 import { validateCsrf } from '../../../src/security/csrf'
 
+// =============================================================================
+// Test Helpers
+// =============================================================================
+
+/**
+ * Configure mocks for authenticated user with database index
+ */
+function setupAuthenticatedUser(
+  user = TEST_USERS.regular,
+  index?: MockDatabaseIndex
+): MockDatabaseIndex {
+  const dbIndex = index ?? createMockDatabaseIndex()
+  vi.mocked(getUser).mockReturnValue(user)
+  vi.mocked(getUserDatabaseIndex).mockReturnValue(dbIndex as any)
+  return dbIndex
+}
+
+/**
+ * Configure mocks for unauthenticated user
+ */
+function setupUnauthenticatedUser(): void {
+  vi.mocked(getUser).mockReturnValue(null)
+}
+
+/**
+ * Configure CSRF validation
+ */
+function setupCsrf(valid: boolean, reason?: string): void {
+  vi.mocked(validateCsrf).mockReturnValue(valid ? { valid: true } : { valid: false, reason })
+}
+
+/**
+ * Create a test app with actor middleware
+ */
+function createTestApp(app: ReturnType<typeof createDatabaseRoutes>, actor = 'users/user_123'): Hono {
+  const testApp = new Hono<{ Bindings: { DEFAULT_BUCKET?: string } }>()
+  testApp.use('*', (c, next) => {
+    c.set('actor' as never, actor)
+    ;(c.env as any) = { DEFAULT_BUCKET: 'test-bucket' }
+    return next()
+  })
+  testApp.route('/', app)
+  return testApp
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
 describe('api', () => {
   let app: ReturnType<typeof createDatabaseRoutes>
 
@@ -40,11 +103,9 @@ describe('api', () => {
 
   describe('GET /', () => {
     it('returns 401 when not authenticated', async () => {
-      vi.mocked(getUser).mockReturnValue(null)
+      setupUnauthenticatedUser()
 
-      const res = await app.request('/', {
-        method: 'GET',
-      })
+      const res = await app.request('/', { method: 'GET' })
 
       expect(res.status).toBe(401)
       const body = await res.json()
@@ -53,33 +114,31 @@ describe('api', () => {
 
     it('returns list of databases', async () => {
       const mockDatabases = [
-        { id: 'db_1', name: 'Database 1' },
-        { id: 'db_2', name: 'Database 2' },
+        createTestDatabase({ id: 'db_1', name: 'Database 1' }),
+        createTestDatabase({ id: 'db_2', name: 'Database 2' }),
       ]
 
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        list: vi.fn().mockResolvedValue(mockDatabases),
-      } as any)
+      const index = createMockDatabaseIndex()
+      index.list.mockResolvedValue(mockDatabases)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
-      const res = await app.request('/', {
-        method: 'GET',
-      })
+      const res = await app.request('/', { method: 'GET' })
 
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.databases).toEqual(mockDatabases)
+      expect(body.databases).toHaveLength(2)
+      expect(body.databases[0].id).toBe('db_1')
+      expect(body.databases[0].name).toBe('Database 1')
+      expect(body.databases[1].id).toBe('db_2')
+      expect(body.databases[1].name).toBe('Database 2')
     })
 
     it('returns 500 on error', async () => {
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        list: vi.fn().mockRejectedValue(new Error('Database error')),
-      } as any)
+      const index = createMockDatabaseIndex()
+      index.list.mockRejectedValue(new Error('Database error'))
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
-      const res = await app.request('/', {
-        method: 'GET',
-      })
+      const res = await app.request('/', { method: 'GET' })
 
       expect(res.status).toBe(500)
       const body = await res.json()
@@ -87,14 +146,11 @@ describe('api', () => {
     })
 
     it('returns 500 with generic message for non-Error exceptions', async () => {
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        list: vi.fn().mockRejectedValue('not an error'),
-      } as any)
+      const index = createMockDatabaseIndex()
+      index.list.mockRejectedValue('not an error')
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
-      const res = await app.request('/', {
-        method: 'GET',
-      })
+      const res = await app.request('/', { method: 'GET' })
 
       expect(res.status).toBe(500)
       const body = await res.json()
@@ -104,7 +160,7 @@ describe('api', () => {
 
   describe('POST /create', () => {
     it('returns 403 when CSRF validation fails', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: false, reason: 'Missing header' })
+      setupCsrf(false, 'Missing header')
 
       const res = await app.request('/create', {
         method: 'POST',
@@ -118,8 +174,8 @@ describe('api', () => {
     })
 
     it('returns 401 when not authenticated', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue(null)
+      setupCsrf(true)
+      setupUnauthenticatedUser()
 
       const res = await app.request('/create', {
         method: 'POST',
@@ -131,16 +187,9 @@ describe('api', () => {
     })
 
     it('returns 400 for invalid JSON', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-
-      // Create test app with actor middleware to avoid 401
-      const testApp = new Hono()
-      testApp.use('*', (c, next) => {
-        c.set('actor' as never, 'users/user_123')
-        return next()
-      })
-      testApp.route('/', app)
+      setupCsrf(true)
+      setupAuthenticatedUser()
+      const testApp = createTestApp(app)
 
       const res = await testApp.request('/create', {
         method: 'POST',
@@ -154,15 +203,9 @@ describe('api', () => {
     })
 
     it('returns 400 when name is missing', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-
-      const testApp = new Hono()
-      testApp.use('*', (c, next) => {
-        c.set('actor' as never, 'users/user_123')
-        return next()
-      })
-      testApp.route('/', app)
+      setupCsrf(true)
+      setupAuthenticatedUser()
+      const testApp = createTestApp(app)
 
       const res = await testApp.request('/create', {
         method: 'POST',
@@ -176,15 +219,9 @@ describe('api', () => {
     })
 
     it('returns 400 when name is empty', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-
-      const testApp = new Hono()
-      testApp.use('*', (c, next) => {
-        c.set('actor' as never, 'users/user_123')
-        return next()
-      })
-      testApp.route('/', app)
+      setupCsrf(true)
+      setupAuthenticatedUser()
+      const testApp = createTestApp(app)
 
       const res = await testApp.request('/create', {
         method: 'POST',
@@ -198,24 +235,13 @@ describe('api', () => {
     })
 
     it('creates database with actor context', async () => {
-      const mockDatabase = { id: 'db_new', name: 'Test DB' }
-      const mockRegister = vi.fn().mockResolvedValue(mockDatabase)
+      const mockDatabase = createTestDatabase({ id: 'db_new', name: 'Test DB' })
+      const index = createMockDatabaseIndex()
+      index.register.mockResolvedValue(mockDatabase)
 
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        register: mockRegister,
-      } as any)
-
-      // Need to set up context with actor and env
-      const testApp = new Hono<{ Bindings: { DEFAULT_BUCKET?: string } }>()
-      testApp.use('*', (c, next) => {
-        c.set('actor' as never, 'users/user_123')
-        // Set env.DEFAULT_BUCKET
-        ;(c.env as any) = { DEFAULT_BUCKET: 'test-bucket' }
-        return next()
-      })
-      testApp.route('/', app)
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
+      const testApp = createTestApp(app)
 
       const res = await testApp.request('/create', {
         method: 'POST',
@@ -225,23 +251,17 @@ describe('api', () => {
 
       expect(res.status).toBe(201)
       const body = await res.json()
-      expect(body).toEqual(mockDatabase)
+      expect(body.id).toBe('db_new')
+      expect(body.name).toBe('Test DB')
     })
 
     it('returns 409 for duplicate slug', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        register: vi.fn().mockRejectedValue(new Error('Slug already exists')),
-      } as any)
+      const index = createMockDatabaseIndex()
+      index.register.mockRejectedValue(new Error('Slug already exists'))
 
-      const testApp = new Hono<{ Bindings: { DEFAULT_BUCKET?: string } }>()
-      testApp.use('*', (c, next) => {
-        c.set('actor' as never, 'users/user_123')
-        ;(c.env as any) = { DEFAULT_BUCKET: 'test-bucket' }
-        return next()
-      })
-      testApp.route('/', app)
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
+      const testApp = createTestApp(app)
 
       const res = await testApp.request('/create', {
         method: 'POST',
@@ -255,42 +275,34 @@ describe('api', () => {
 
   describe('GET /:id', () => {
     it('returns 401 when not authenticated', async () => {
-      vi.mocked(getUser).mockReturnValue(null)
+      setupUnauthenticatedUser()
 
-      const res = await app.request('/db_123', {
-        method: 'GET',
-      })
+      const res = await app.request('/db_123', { method: 'GET' })
 
       expect(res.status).toBe(401)
     })
 
     it('returns database by ID', async () => {
-      const mockDatabase = { id: 'db_123', name: 'Test DB' }
+      const mockDatabase = createTestDatabase({ id: 'db_123', name: 'Test DB' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(mockDatabase)
+      index.recordAccess.mockResolvedValue(undefined)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue(mockDatabase),
-        recordAccess: vi.fn().mockResolvedValue(undefined),
-      } as any)
-
-      const res = await app.request('/db_123', {
-        method: 'GET',
-      })
+      const res = await app.request('/db_123', { method: 'GET' })
 
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body).toEqual(mockDatabase)
+      expect(body.id).toBe('db_123')
+      expect(body.name).toBe('Test DB')
     })
 
     it('returns 404 when database not found', async () => {
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue(null),
-      } as any)
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(null)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
-      const res = await app.request('/db_nonexistent', {
-        method: 'GET',
-      })
+      const res = await app.request('/db_nonexistent', { method: 'GET' })
 
       expect(res.status).toBe(404)
       const body = await res.json()
@@ -298,23 +310,21 @@ describe('api', () => {
     })
 
     it('records access when database found', async () => {
-      const mockRecordAccess = vi.fn().mockResolvedValue(undefined)
-
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123', name: 'Test' }),
-        recordAccess: mockRecordAccess,
-      } as any)
+      const mockDatabase = createTestDatabase({ id: 'db_123', name: 'Test' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(mockDatabase)
+      index.recordAccess.mockResolvedValue(undefined)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
       await app.request('/db_123', { method: 'GET' })
 
-      expect(mockRecordAccess).toHaveBeenCalledWith('db_123')
+      expect(index.recordAccess).toHaveBeenCalledWith('db_123')
     })
   })
 
   describe('PATCH /:id', () => {
     it('returns 403 when CSRF validation fails', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: false, reason: 'Missing header' })
+      setupCsrf(false, 'Missing header')
 
       const res = await app.request('/db_123', {
         method: 'PATCH',
@@ -326,8 +336,8 @@ describe('api', () => {
     })
 
     it('returns 401 when not authenticated', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue(null)
+      setupCsrf(true)
+      setupUnauthenticatedUser()
 
       const res = await app.request('/db_123', {
         method: 'PATCH',
@@ -339,8 +349,8 @@ describe('api', () => {
     })
 
     it('returns 400 for invalid JSON', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
+      setupCsrf(true)
+      setupAuthenticatedUser()
 
       const res = await app.request('/db_123', {
         method: 'PATCH',
@@ -352,11 +362,10 @@ describe('api', () => {
     })
 
     it('returns 404 when database not found', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue(null),
-      } as any)
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(null)
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
       const res = await app.request('/db_123', {
         method: 'PATCH',
@@ -368,14 +377,14 @@ describe('api', () => {
     })
 
     it('updates database', async () => {
-      const mockUpdate = vi.fn().mockResolvedValue({ id: 'db_123', name: 'New Name' })
+      const existingDb = createTestDatabase({ id: 'db_123', name: 'Old Name' })
+      const updatedDb = createTestDatabase({ id: 'db_123', name: 'New Name' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.update.mockResolvedValue(updatedDb)
 
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123', name: 'Old Name' }),
-        update: mockUpdate,
-      } as any)
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
       const res = await app.request('/db_123', {
         method: 'PATCH',
@@ -384,18 +393,17 @@ describe('api', () => {
       })
 
       expect(res.status).toBe(200)
-      expect(mockUpdate).toHaveBeenCalledWith('db_123', { name: 'New Name' })
+      expect(index.update).toHaveBeenCalledWith('db_123', { name: 'New Name' })
     })
 
     it('handles update options correctly', async () => {
-      const mockUpdate = vi.fn().mockResolvedValue({ id: 'db_123' })
+      const existingDb = createTestDatabase({ id: 'db_123' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.update.mockResolvedValue(existingDb)
 
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123' }),
-        update: mockUpdate,
-      } as any)
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
       await app.request('/db_123', {
         method: 'PATCH',
@@ -410,7 +418,7 @@ describe('api', () => {
         }),
       })
 
-      expect(mockUpdate).toHaveBeenCalledWith('db_123', {
+      expect(index.update).toHaveBeenCalledWith('db_123', {
         name: 'Test',
         description: 'Desc',
         visibility: 'public',
@@ -421,12 +429,13 @@ describe('api', () => {
     })
 
     it('returns 409 for duplicate slug', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123' }),
-        update: vi.fn().mockRejectedValue(new Error('Slug already exists')),
-      } as any)
+      const existingDb = createTestDatabase({ id: 'db_123' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.update.mockRejectedValue(new Error('Slug already exists'))
+
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
       const res = await app.request('/db_123', {
         method: 'PATCH',
@@ -438,12 +447,13 @@ describe('api', () => {
     })
 
     it('returns 400 for invalid visibility', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123' }),
-        update: vi.fn().mockRejectedValue(new Error('Invalid visibility value')),
-      } as any)
+      const existingDb = createTestDatabase({ id: 'db_123' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.update.mockRejectedValue(new Error('Invalid visibility value'))
+
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
       const res = await app.request('/db_123', {
         method: 'PATCH',
@@ -455,12 +465,13 @@ describe('api', () => {
     })
 
     it('returns 400 for invalid slug', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123' }),
-        update: vi.fn().mockRejectedValue(new Error('Invalid slug: must be lowercase alphanumeric')),
-      } as any)
+      const existingDb = createTestDatabase({ id: 'db_123' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.update.mockRejectedValue(new Error('Invalid slug: must be lowercase alphanumeric'))
+
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
       const res = await app.request('/db_123', {
         method: 'PATCH',
@@ -474,12 +485,13 @@ describe('api', () => {
     })
 
     it('returns 404 when update returns null', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123' }),
-        update: vi.fn().mockResolvedValue(null),
-      } as any)
+      const existingDb = createTestDatabase({ id: 'db_123' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.update.mockResolvedValue(null)
+
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
       const res = await app.request('/db_123', {
         method: 'PATCH',
@@ -493,12 +505,13 @@ describe('api', () => {
     })
 
     it('returns 500 for unexpected errors', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123' }),
-        update: vi.fn().mockRejectedValue(new Error('Unexpected database error')),
-      } as any)
+      const existingDb = createTestDatabase({ id: 'db_123' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.update.mockRejectedValue(new Error('Unexpected database error'))
+
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
       const res = await app.request('/db_123', {
         method: 'PATCH',
@@ -512,12 +525,13 @@ describe('api', () => {
     })
 
     it('returns 500 with generic message for non-Error exceptions', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123' }),
-        update: vi.fn().mockRejectedValue('not an error object'),
-      } as any)
+      const existingDb = createTestDatabase({ id: 'db_123' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.update.mockRejectedValue('not an error object')
+
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
       const res = await app.request('/db_123', {
         method: 'PATCH',
@@ -533,51 +547,43 @@ describe('api', () => {
 
   describe('DELETE /:id', () => {
     it('returns 403 when CSRF validation fails', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: false, reason: 'Missing header' })
+      setupCsrf(false, 'Missing header')
 
-      const res = await app.request('/db_123', {
-        method: 'DELETE',
-      })
+      const res = await app.request('/db_123', { method: 'DELETE' })
 
       expect(res.status).toBe(403)
     })
 
     it('returns 401 when not authenticated', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue(null)
+      setupCsrf(true)
+      setupUnauthenticatedUser()
 
-      const res = await app.request('/db_123', {
-        method: 'DELETE',
-      })
+      const res = await app.request('/db_123', { method: 'DELETE' })
 
       expect(res.status).toBe(401)
     })
 
     it('returns 404 when database not found', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue(null),
-      } as any)
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(null)
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
 
-      const res = await app.request('/db_123', {
-        method: 'DELETE',
-      })
+      const res = await app.request('/db_123', { method: 'DELETE' })
 
       expect(res.status).toBe(404)
     })
 
     it('deletes database', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123' }),
-        unregister: vi.fn().mockResolvedValue(true),
-      } as any)
+      const existingDb = createTestDatabase({ id: 'db_123' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.unregister.mockResolvedValue(true)
 
-      const res = await app.request('/db_123', {
-        method: 'DELETE',
-      })
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
+
+      const res = await app.request('/db_123', { method: 'DELETE' })
 
       expect(res.status).toBe(200)
       const body = await res.json()
@@ -585,31 +591,29 @@ describe('api', () => {
     })
 
     it('returns 404 when unregister returns false', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123' }),
-        unregister: vi.fn().mockResolvedValue(false),
-      } as any)
+      const existingDb = createTestDatabase({ id: 'db_123' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.unregister.mockResolvedValue(false)
 
-      const res = await app.request('/db_123', {
-        method: 'DELETE',
-      })
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
+
+      const res = await app.request('/db_123', { method: 'DELETE' })
 
       expect(res.status).toBe(404)
     })
 
     it('returns 500 on error', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123' }),
-        unregister: vi.fn().mockRejectedValue(new Error('Database connection error')),
-      } as any)
+      const existingDb = createTestDatabase({ id: 'db_123' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.unregister.mockRejectedValue(new Error('Database connection error'))
 
-      const res = await app.request('/db_123', {
-        method: 'DELETE',
-      })
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
+
+      const res = await app.request('/db_123', { method: 'DELETE' })
 
       expect(res.status).toBe(500)
       const body = await res.json()
@@ -617,16 +621,15 @@ describe('api', () => {
     })
 
     it('returns 500 with generic message for non-Error exceptions', async () => {
-      vi.mocked(validateCsrf).mockReturnValue({ valid: true })
-      vi.mocked(getUser).mockReturnValue({ id: 'user_123', email: 'test@example.com' })
-      vi.mocked(getUserDatabaseIndex).mockReturnValue({
-        get: vi.fn().mockResolvedValue({ id: 'db_123' }),
-        unregister: vi.fn().mockRejectedValue('string error'),
-      } as any)
+      const existingDb = createTestDatabase({ id: 'db_123' })
+      const index = createMockDatabaseIndex()
+      index.get.mockResolvedValue(existingDb)
+      index.unregister.mockRejectedValue('string error')
 
-      const res = await app.request('/db_123', {
-        method: 'DELETE',
-      })
+      setupCsrf(true)
+      setupAuthenticatedUser(TEST_USERS.regular, index)
+
+      const res = await app.request('/db_123', { method: 'DELETE' })
 
       expect(res.status).toBe(500)
       const body = await res.json()
@@ -636,11 +639,10 @@ describe('api', () => {
 
   describe('requireAuthUser', () => {
     it('returns user when authenticated', () => {
-      const mockUser = { id: 'user_123', email: 'test@example.com' }
+      const mockUser = createTestUser({ id: 'user_123', email: 'test@example.com' })
       vi.mocked(getUser).mockReturnValue(mockUser)
 
       const mockContext = {} as Context
-
       const result = requireAuthUser(mockContext)
 
       expect(result).toEqual(mockUser)

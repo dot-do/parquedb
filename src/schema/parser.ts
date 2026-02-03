@@ -9,7 +9,7 @@ import type {
   TypeDefinition,
   FieldDef,
   FieldDefinition,
-  IndexType,
+  SchemaIndexType,
   ParsedSchema,
   ParsedType,
   ParsedField,
@@ -57,7 +57,7 @@ const PRIMITIVE_TYPES = new Set([
 const PARAMETRIC_TYPES = ['decimal', 'varchar', 'char', 'vector', 'enum']
 
 /** Valid index types */
-const VALID_INDEX_TYPES: (IndexType | undefined)[] = [true, false, 'unique', 'fts', 'vector', 'hash', undefined]
+const VALID_INDEX_TYPES: (SchemaIndexType | undefined)[] = [true, false, 'unique', 'fts', 'vector', 'hash', undefined]
 
 /** Reserved metadata field prefixes (only known $-fields are allowed) */
 const KNOWN_META_FIELDS = new Set([

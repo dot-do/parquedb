@@ -17,6 +17,7 @@ import {
   isValidRelationString,
 } from '../../src/parser'
 import type { Schema, TypeDefinition } from '../../src/types/schema'
+import { completeRelationship } from '../../src/types/schema'
 
 // =============================================================================
 // parseFieldType Tests
@@ -483,7 +484,7 @@ describe('parseRelation', () => {
       const result = parseRelation('~> Topic')
       expect(result).not.toBeNull()
       expect(result!.toType).toBe('Topic')
-      expect(result!.reverse).toBe('')
+      expect(result!.reverse).toBeUndefined() // No reverse specified in fuzzy relation
       expect(result!.isArray).toBe(false)
       expect(result!.direction).toBe('forward')
       expect(result!.mode).toBe('fuzzy')
@@ -520,7 +521,7 @@ describe('parseRelation', () => {
       const result = parseRelation('<~ Source')
       expect(result).not.toBeNull()
       expect(result!.fromType).toBe('Source')
-      expect(result!.fromField).toBe('')
+      expect(result!.fromField).toBeUndefined() // No fromField specified in fuzzy relation
       expect(result!.isArray).toBe(false)
       expect(result!.direction).toBe('backward')
       expect(result!.mode).toBe('fuzzy')
@@ -584,6 +585,112 @@ describe('parseRelation', () => {
     it('should return null for missing target', () => {
       const result = parseRelation('->')
       expect(result).toBeNull()
+    })
+  })
+})
+
+// =============================================================================
+// completeRelationship Tests
+// =============================================================================
+
+describe('completeRelationship', () => {
+  describe('completing forward relations', () => {
+    it('should complete a forward relation with caller context', () => {
+      const partial = parseRelation('-> User.posts')!
+      const complete = completeRelationship(partial, {
+        fromType: 'Post',
+        fromField: 'author',
+        predicate: 'author',
+      })
+
+      expect(complete.fromType).toBe('Post')
+      expect(complete.fromField).toBe('author')
+      expect(complete.predicate).toBe('author')
+      expect(complete.toType).toBe('User')
+      expect(complete.reverse).toBe('posts')
+      expect(complete.direction).toBe('forward')
+      expect(complete.isArray).toBe(false)
+    })
+
+    it('should preserve array status when completing', () => {
+      const partial = parseRelation('-> Category.items[]')!
+      const complete = completeRelationship(partial, {
+        fromType: 'Item',
+        fromField: 'category',
+        predicate: 'category',
+      })
+
+      expect(complete.isArray).toBe(true)
+      expect(complete.toType).toBe('Category')
+    })
+  })
+
+  describe('completing backward relations', () => {
+    it('should complete a backward relation with caller context', () => {
+      const partial = parseRelation('<- Comment.post')!
+      const complete = completeRelationship(partial, {
+        toType: 'Post',
+        reverse: 'comments',
+      })
+
+      expect(complete.fromType).toBe('Comment')
+      expect(complete.fromField).toBe('post')
+      expect(complete.predicate).toBe('post')
+      expect(complete.toType).toBe('Post')
+      expect(complete.reverse).toBe('comments')
+      expect(complete.direction).toBe('backward')
+    })
+  })
+
+  describe('completing fuzzy relations', () => {
+    it('should complete a fuzzy forward relation', () => {
+      const partial = parseRelation('~> Topic')!
+      const complete = completeRelationship(partial, {
+        fromType: 'Article',
+        fromField: 'topics',
+        predicate: 'topics',
+      })
+
+      expect(complete.fromType).toBe('Article')
+      expect(complete.toType).toBe('Topic')
+      expect(complete.reverse).toBe('') // No reverse specified, defaults to empty
+      expect(complete.mode).toBe('fuzzy')
+    })
+
+    it('should complete a fuzzy backward relation', () => {
+      const partial = parseRelation('<~ Source')!
+      const complete = completeRelationship(partial, {
+        toType: 'Reference',
+        reverse: 'sources',
+      })
+
+      expect(complete.fromType).toBe('Source')
+      expect(complete.fromField).toBe('') // No fromField specified, defaults to empty
+      expect(complete.toType).toBe('Reference')
+      expect(complete.reverse).toBe('sources')
+      expect(complete.mode).toBe('fuzzy')
+    })
+  })
+
+  describe('default values', () => {
+    it('should use empty string for missing context fields', () => {
+      const partial = parseRelation('-> User.posts')!
+      const complete = completeRelationship(partial, {})
+
+      expect(complete.fromType).toBe('')
+      expect(complete.fromField).toBe('')
+      expect(complete.predicate).toBe('')
+    })
+
+    it('should preserve partial fields when no context provided', () => {
+      const partial = parseRelation('<- Comment.post')!
+      const complete = completeRelationship(partial, {})
+
+      expect(complete.fromType).toBe('Comment')
+      expect(complete.fromField).toBe('post')
+      expect(complete.predicate).toBe('post')
+      expect(complete.toType).toBe('')
+      expect(complete.reverse).toBe('')
     })
   })
 })

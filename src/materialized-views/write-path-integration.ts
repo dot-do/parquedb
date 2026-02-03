@@ -611,3 +611,87 @@ export function createMVIntegration(options?: {
     eventSourceAdapter,
   }
 }
+
+/**
+ * Result of attaching MV integration to ParqueDB
+ */
+export interface AttachMVResult {
+  /** The MV integration components */
+  integration: ReturnType<typeof createMVIntegration>
+  /** Function to detach the integration */
+  detach: () => void
+  /** Function to start the MV engine */
+  start: () => Promise<void>
+  /** Function to stop the MV engine */
+  stop: () => Promise<void>
+}
+
+/**
+ * Attach MV integration to a ParqueDB instance.
+ *
+ * This is a convenience function that:
+ * 1. Creates the full MV integration (emitter, engine, bridge)
+ * 2. Wires up the ParqueDB event callback to emit events to the MV system
+ * 3. Connects the bridge
+ * 4. Returns controls for starting/stopping the engine
+ *
+ * @param db - ParqueDB instance with setEventCallback method
+ * @param options - MV integration options
+ * @returns Integration components and control functions
+ *
+ * @example
+ * ```typescript
+ * import { attachMVIntegration } from 'parquedb/materialized-views'
+ *
+ * const { integration, start, stop, detach } = attachMVIntegration(db)
+ *
+ * // Register MV handlers before starting
+ * integration.engine.registerMV({
+ *   name: 'OrderAnalytics',
+ *   sourceNamespaces: ['orders'],
+ *   async process(events) {
+ *     // Update MV based on events
+ *   }
+ * })
+ *
+ * // Start the MV engine
+ * await start()
+ *
+ * // Now all ParqueDB mutations automatically trigger MV updates
+ * await db.create('orders', { total: 100 })
+ *
+ * // Later, when shutting down
+ * await stop()
+ * detach()
+ * ```
+ */
+export function attachMVIntegration(
+  db: { setEventCallback: (cb: ((event: Event) => void | Promise<void>) | null) => void },
+  options?: {
+    emitterOptions?: MVEventEmitterOptions
+    engineOptions?: Parameters<typeof StreamingRefreshEngine>[0]
+  }
+): AttachMVResult {
+  const integration = createMVIntegration(options)
+  const { emitter, engine, bridge } = integration
+
+  // Wire up ParqueDB to emit events to the MV system
+  db.setEventCallback((event) => emitter.emit(event))
+
+  // Connect the bridge
+  bridge.connect()
+
+  return {
+    integration,
+    detach: () => {
+      bridge.disconnect()
+      db.setEventCallback(null)
+    },
+    start: async () => {
+      await engine.start()
+    },
+    stop: async () => {
+      await engine.stop()
+    },
+  }
+}

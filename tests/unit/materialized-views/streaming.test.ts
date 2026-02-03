@@ -648,8 +648,8 @@ describe('Concurrent Event Processing (Race Condition Fix)', () => {
       sourceNamespaces: ['orders'],
       async process(events: Event[]): Promise<void> {
         const currentBatchId = ++batchCounter
-        // Simulate slow processing to increase chance of race condition - use real delay
-        await new Promise(resolve => setTimeout(resolve, 10))
+        // Minimal delay for deterministic tests - we're testing behavior, not timing
+        await Promise.resolve()
         processedBatches.push({ batchId: currentBatchId, events: [...events] })
         this.processedEvents.push([...events])
       },

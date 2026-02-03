@@ -12,6 +12,7 @@
 
 export {
   VectorIndex,
+  VectorIndexConfigError,
   type VectorIndexMemoryOptions,
   type RowGroupMetadata,
   type IncrementalUpdateResult,
