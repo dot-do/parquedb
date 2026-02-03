@@ -18,11 +18,11 @@
  */
 
 import type { ParqueDB } from '../../ParqueDB.js'
+import type { EntityId } from '../../types/entity.js'
 import type {
   DrizzleProxyCallback,
   DrizzleProxyResult,
   DrizzleMethod,
-  SQLSelect,
 } from './types.js'
 import { parseSQL } from './parser.js'
 import { translateSelect, translateInsert, translateUpdate, translateDelete } from './translator.js'
@@ -49,7 +49,7 @@ export function createDrizzleProxy(
   db: ParqueDB,
   options: DrizzleProxyOptions = {}
 ): DrizzleProxyCallback {
-  const { debug = false, actor = 'drizzle' } = options
+  const { debug = false, actor = 'system/drizzle' } = options
 
   return async (sql: string, params: unknown[], method: DrizzleMethod): Promise<DrizzleProxyResult> => {
     if (debug) {
@@ -66,14 +66,18 @@ export function createDrizzleProxy(
           const query = translateSelect(stmt, params)
           const collection = db.collection(query.collection)
 
-          const results = await collection.find(query.filter, {
+          const result = await collection.find(query.filter, {
             limit: query.limit,
             skip: query.offset,
             sort: query.orderBy ? { [query.orderBy]: query.desc ? -1 : 1 } : undefined,
           })
 
-          // Format results for Drizzle
-          const rows = formatResultsForDrizzle(results, query.columns, method)
+          // Format results for Drizzle (PaginatedResult has .items)
+          const rows = formatResultsForDrizzle(
+            result.items as Record<string, unknown>[],
+            query.columns,
+            method
+          )
           return { rows }
         }
 
@@ -81,7 +85,15 @@ export function createDrizzleProxy(
           const mutation = translateInsert(stmt, params)
           const collection = db.collection(mutation.collection)
 
-          const result = await collection.create(mutation.data!, { actor })
+          // Derive $type and name from collection and data
+          const $type = capitalize(mutation.collection)
+          const data = mutation.data || {}
+          const name = (data.name as string) || (data.title as string) || generateName()
+
+          const result = await collection.create(
+            { ...data, $type, name } as Parameters<typeof collection.create>[0],
+            { actor: actor as EntityId }
+          )
 
           // Handle RETURNING
           const rows = mutation.returning
@@ -96,13 +108,18 @@ export function createDrizzleProxy(
           const collection = db.collection(mutation.collection)
 
           // Find entities matching filter, then update each
-          const entities = await collection.find(mutation.filter || {})
+          const findResult = await collection.find(mutation.filter || {})
           const results: Record<string, unknown>[] = []
 
-          for (const entity of entities) {
-            const updated = await collection.update(entity.$id, { $set: mutation.data }, { actor })
+          for (const entity of findResult.items) {
+            const localId = extractLocalId(entity.$id)
+            const updated = await collection.update(
+              localId,
+              { $set: mutation.data } as Parameters<typeof collection.update>[1],
+              { actor: actor as EntityId }
+            )
             if (updated) {
-              results.push(updated)
+              results.push(updated as Record<string, unknown>)
             }
           }
 
@@ -119,12 +136,13 @@ export function createDrizzleProxy(
           const collection = db.collection(mutation.collection)
 
           // Find entities matching filter
-          const entities = await collection.find(mutation.filter || {})
+          const findResult = await collection.find(mutation.filter || {})
           const results: Record<string, unknown>[] = []
 
-          for (const entity of entities) {
-            await collection.delete(entity.$id, { actor })
-            results.push(entity)
+          for (const entity of findResult.items) {
+            const localId = extractLocalId(entity.$id)
+            await collection.delete(localId, { actor: actor as EntityId })
+            results.push(entity as Record<string, unknown>)
           }
 
           // Handle RETURNING
@@ -136,7 +154,7 @@ export function createDrizzleProxy(
         }
 
         default:
-          throw new Error(`Unsupported statement type: ${(stmt as any).type}`)
+          throw new Error(`Unsupported statement type: ${(stmt as { type: string }).type}`)
       }
     } catch (error) {
       if (debug) {
@@ -174,7 +192,7 @@ function formatResultsForDrizzle(
     case 'get':
       // Return first row as array of values
       if (projected.length === 0) return []
-      return Object.values(projected[0])
+      return Object.values(projected[0] || {})
 
     case 'all':
       // Return array of arrays (rows × columns)
@@ -207,6 +225,28 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   }
 
   return current
+}
+
+/**
+ * Extract local ID from full EntityId (e.g., "users/123" -> "123")
+ */
+function extractLocalId(entityId: EntityId | string): string {
+  const parts = String(entityId).split('/')
+  return parts[parts.length - 1] || entityId as string
+}
+
+/**
+ * Capitalize first letter of string
+ */
+function capitalize(str: string): string {
+  return str.charAt(0).toUpperCase() + str.slice(1)
+}
+
+/**
+ * Generate a simple name for entities without one
+ */
+function generateName(): string {
+  return `item-${Date.now()}`
 }
 
 // ============================================================================

@@ -25,6 +25,7 @@
  */
 
 import type { ParqueDB } from '../../ParqueDB.js'
+import type { EntityId } from '../../types/entity.js'
 import type { SQLQueryResult, SQLQueryOptions } from './types.js'
 import { parseSQL } from './parser.js'
 import { translateSelect, translateInsert, translateUpdate, translateDelete } from './translator.js'
@@ -73,12 +74,11 @@ export interface CreateSQLOptions {
  * @returns SQL executor function
  */
 export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExecutor {
-  const { debug = false, actor = 'sql' } = options
+  const { debug = false, actor = 'system/sql' } = options
 
   const execute = async <T = Record<string, unknown>>(
     query: string,
-    params: unknown[] = [],
-    queryOptions: SQLQueryOptions = {}
+    params: unknown[] = []
   ): Promise<SQLQueryResult<T>> => {
     if (debug) {
       console.log('[sql] Query:', query)
@@ -92,7 +92,7 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
         const translated = translateSelect(stmt, params)
         const collection = db.collection(translated.collection)
 
-        const results = await collection.find(translated.filter, {
+        const result = await collection.find(translated.filter, {
           limit: translated.limit,
           skip: translated.offset,
           sort: translated.orderBy
@@ -100,16 +100,17 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
             : undefined,
         })
 
-        // Apply column projection if specified
+        // Apply column projection if specified (PaginatedResult has .items)
+        const items = result.items as Record<string, unknown>[]
         const projected = translated.columns
-          ? results.map((row) => {
+          ? items.map((row) => {
               const obj: Record<string, unknown> = {}
               for (const col of translated.columns!) {
                 obj[col] = getNestedValue(row, col)
               }
               return obj as T
             })
-          : (results as T[])
+          : (items as unknown as T[])
 
         return {
           rows: projected,
@@ -122,10 +123,18 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
         const mutation = translateInsert(stmt, params)
         const collection = db.collection(mutation.collection)
 
-        const result = await collection.create(mutation.data!, { actor })
+        // Derive $type and name from collection and data
+        const $type = capitalize(mutation.collection)
+        const data = mutation.data || {}
+        const name = (data.name as string) || (data.title as string) || generateName()
+
+        const result = await collection.create(
+          { ...data, $type, name } as Parameters<typeof collection.create>[0],
+          { actor: actor as EntityId }
+        )
 
         return {
-          rows: [result as T],
+          rows: [result as unknown as T],
           rowCount: 1,
           command: 'INSERT',
         }
@@ -136,17 +145,18 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
         const collection = db.collection(mutation.collection)
 
         // Find matching entities and update each
-        const entities = await collection.find(mutation.filter || {})
+        const findResult = await collection.find(mutation.filter || {})
         const results: T[] = []
 
-        for (const entity of entities) {
+        for (const entity of findResult.items) {
+          const localId = extractLocalId(entity.$id)
           const updated = await collection.update(
-            entity.$id,
-            { $set: mutation.data },
-            { actor }
+            localId,
+            { $set: mutation.data } as Parameters<typeof collection.update>[1],
+            { actor: actor as EntityId }
           )
           if (updated) {
-            results.push(updated as T)
+            results.push(updated as unknown as T)
           }
         }
 
@@ -162,12 +172,13 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
         const collection = db.collection(mutation.collection)
 
         // Find matching entities and delete each
-        const entities = await collection.find(mutation.filter || {})
+        const findResult = await collection.find(mutation.filter || {})
         const results: T[] = []
 
-        for (const entity of entities) {
-          await collection.delete(entity.$id, { actor })
-          results.push(entity as T)
+        for (const entity of findResult.items) {
+          const localId = extractLocalId(entity.$id)
+          await collection.delete(localId, { actor: actor as EntityId })
+          results.push(entity as unknown as T)
         }
 
         return {
@@ -178,7 +189,7 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
       }
 
       default:
-        throw new Error(`Unsupported statement type: ${(stmt as any).type}`)
+        throw new Error(`Unsupported statement type: ${(stmt as { type: string }).type}`)
     }
   }
 
@@ -188,9 +199,10 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
     ...values: unknown[]
   ): Promise<SQLQueryResult<T>> => {
     // Build query with $1, $2, etc. placeholders
-    let query = strings[0]
+    // Note: For template literals, strings always has one more element than values
+    let query = strings[0] || ''
     for (let i = 0; i < values.length; i++) {
-      query += `$${i + 1}${strings[i + 1]}`
+      query += `$${i + 1}${strings[i + 1] || ''}`
     }
 
     return execute<T>(query, values)
@@ -222,6 +234,28 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   return current
 }
 
+/**
+ * Extract local ID from full EntityId (e.g., "users/123" -> "123")
+ */
+function extractLocalId(entityId: EntityId | string): string {
+  const parts = String(entityId).split('/')
+  return parts[parts.length - 1] || entityId as string
+}
+
+/**
+ * Capitalize first letter of string
+ */
+function capitalize(str: string): string {
+  return str.charAt(0).toUpperCase() + str.slice(1)
+}
+
+/**
+ * Generate a simple name for entities without one
+ */
+function generateName(): string {
+  return `item-${Date.now()}`
+}
+
 // ============================================================================
 // Convenience Helpers
 // ============================================================================
@@ -238,9 +272,10 @@ export function buildQuery(
   strings: TemplateStringsArray,
   ...values: unknown[]
 ): { query: string; params: unknown[] } {
-  let query = strings[0]
+  // Note: For template literals, strings always has one more element than values
+  let query = strings[0] || ''
   for (let i = 0; i < values.length; i++) {
-    query += `$${i + 1}${strings[i + 1]}`
+    query += `$${i + 1}${strings[i + 1] || ''}`
   }
   return { query, params: values }
 }

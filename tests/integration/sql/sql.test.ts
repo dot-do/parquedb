@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { ParqueDB } from '../../../src/ParqueDB.js'
-import { MemoryBackend } from '../../../src/storage/memory.js'
+import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import {
   createSQL,
   createDrizzleProxy,
@@ -257,7 +257,7 @@ describe('SQL Template Tag', () => {
     // Verify insert
     const collection = db.collection('users')
     const users = await collection.find({})
-    expect(users).toHaveLength(1)
+    expect(users.items).toHaveLength(1)
   })
 
   it('executes UPDATE query', async () => {
@@ -273,7 +273,7 @@ describe('SQL Template Tag', () => {
 
     // Verify update
     const users = await collection.find({ name: 'Alice' })
-    expect(users[0].status).toBe('inactive')
+    expect(users.items[0].status).toBe('inactive')
   })
 
   it('executes DELETE query', async () => {
@@ -290,8 +290,8 @@ describe('SQL Template Tag', () => {
 
     // Verify delete
     const users = await collection.find({})
-    expect(users).toHaveLength(1)
-    expect(users[0].name).toBe('Bob')
+    expect(users.items).toHaveLength(1)
+    expect(users.items[0].name).toBe('Bob')
   })
 
   it('supports raw queries with parameters array', async () => {
@@ -385,7 +385,7 @@ describe('Prisma Adapter', () => {
     // Verify insert
     const collection = db.collection('users')
     const users = await collection.find({})
-    expect(users).toHaveLength(1)
+    expect(users.items).toHaveLength(1)
   })
 
   it('starts a transaction', async () => {

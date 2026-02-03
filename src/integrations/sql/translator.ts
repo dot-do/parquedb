@@ -5,7 +5,7 @@
  * that can be passed to hyparquet's parquetQuery().
  */
 
-import type { Filter, FilterCondition } from '../../types/filter.js'
+import type { Filter } from '../../types/filter.js'
 import type {
   SQLStatement,
   SQLSelect,
@@ -47,8 +47,11 @@ export function translateSelect(
 
   // Translate ORDER BY
   if (stmt.orderBy && stmt.orderBy.length > 0) {
-    result.orderBy = stmt.orderBy[0].column
-    result.desc = stmt.orderBy[0].direction === 'DESC'
+    const firstOrder = stmt.orderBy[0]
+    if (firstOrder) {
+      result.orderBy = firstOrder.column
+      result.desc = firstOrder.direction === 'DESC'
+    }
   }
 
   // Translate LIMIT/OFFSET
@@ -74,10 +77,14 @@ export function translateInsert(
   // Map columns to values
   if (stmt.values.length > 0) {
     const values = stmt.values[0] // First row of values
-    for (let i = 0; i < stmt.columns.length; i++) {
-      const col = stmt.columns[i]
-      const val = values[i]
-      data[col] = resolveValue(val, params)
+    if (values) {
+      for (let i = 0; i < stmt.columns.length; i++) {
+        const col = stmt.columns[i]
+        const val = values[i]
+        if (col && val) {
+          data[col] = resolveValue(val, params)
+        }
+      }
     }
   }
 

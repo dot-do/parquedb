@@ -18,6 +18,7 @@
  */
 
 import type { ParqueDB } from '../../ParqueDB.js'
+import type { EntityId } from '../../types/entity.js'
 import type {
   PrismaDriverAdapter,
   PrismaQuery,
@@ -55,7 +56,7 @@ export class PrismaParqueDBAdapter implements PrismaDriverAdapter {
   constructor(db: ParqueDB, options: PrismaAdapterOptions = {}) {
     this.db = db
     this.debug = options.debug ?? false
-    this.actor = options.actor ?? 'prisma'
+    this.actor = options.actor ?? 'system/prisma'
   }
 
   /**
@@ -79,7 +80,7 @@ export class PrismaParqueDBAdapter implements PrismaDriverAdapter {
       const translated = translateSelect(stmt, args)
       const collection = this.db.collection(translated.collection)
 
-      const results = await collection.find(translated.filter, {
+      const result = await collection.find(translated.filter, {
         limit: translated.limit,
         skip: translated.offset,
         sort: translated.orderBy
@@ -87,8 +88,8 @@ export class PrismaParqueDBAdapter implements PrismaDriverAdapter {
           : undefined,
       })
 
-      // Format for Prisma
-      return this.formatResults(results, translated.columns)
+      // Format for Prisma (PaginatedResult has .items)
+      return this.formatResults(result.items as Record<string, unknown>[], translated.columns)
     } catch (error) {
       if (this.debug) {
         console.error('[prisma-parquedb] queryRaw error:', error)
@@ -116,7 +117,16 @@ export class PrismaParqueDBAdapter implements PrismaDriverAdapter {
         case 'INSERT': {
           const mutation = translateInsert(stmt, args)
           const collection = this.db.collection(mutation.collection)
-          await collection.create(mutation.data!, { actor: this.actor })
+
+          // Derive $type and name from collection and data
+          const $type = capitalize(mutation.collection)
+          const data = mutation.data || {}
+          const name = (data.name as string) || (data.title as string) || generateName()
+
+          await collection.create(
+            { ...data, $type, name } as Parameters<typeof collection.create>[0],
+            { actor: this.actor as EntityId }
+          )
           return 1
         }
 
@@ -125,14 +135,15 @@ export class PrismaParqueDBAdapter implements PrismaDriverAdapter {
           const collection = this.db.collection(mutation.collection)
 
           // Find matching entities and update each
-          const entities = await collection.find(mutation.filter || {})
+          const findResult = await collection.find(mutation.filter || {})
           let count = 0
 
-          for (const entity of entities) {
+          for (const entity of findResult.items) {
+            const localId = extractLocalId(entity.$id)
             const updated = await collection.update(
-              entity.$id,
-              { $set: mutation.data },
-              { actor: this.actor }
+              localId,
+              { $set: mutation.data } as Parameters<typeof collection.update>[1],
+              { actor: this.actor as EntityId }
             )
             if (updated) count++
           }
@@ -145,11 +156,12 @@ export class PrismaParqueDBAdapter implements PrismaDriverAdapter {
           const collection = this.db.collection(mutation.collection)
 
           // Find matching entities and delete each
-          const entities = await collection.find(mutation.filter || {})
+          const findResult = await collection.find(mutation.filter || {})
           let count = 0
 
-          for (const entity of entities) {
-            await collection.delete(entity.$id, { actor: this.actor })
+          for (const entity of findResult.items) {
+            const localId = extractLocalId(entity.$id)
+            await collection.delete(localId, { actor: this.actor as EntityId })
             count++
           }
 
@@ -193,7 +205,7 @@ export class PrismaParqueDBAdapter implements PrismaDriverAdapter {
     }
 
     // Determine columns from first result if not specified
-    const actualColumns = columns || Object.keys(results[0])
+    const actualColumns = columns || (results[0] ? Object.keys(results[0]) : [])
 
     // Build rows as arrays
     const rows = results.map((row) =>
@@ -242,7 +254,6 @@ class PrismaParqueDBTransaction implements PrismaTransaction {
   private db: ParqueDB
   private debug: boolean
   private actor: string
-  private operations: Array<() => Promise<unknown>> = []
   private committed = false
   private rolledBack = false
 
@@ -288,6 +299,32 @@ class PrismaParqueDBTransaction implements PrismaTransaction {
       console.warn('[prisma-parquedb] Rollback called, but ParqueDB uses append-only storage')
     }
   }
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Extract local ID from full EntityId (e.g., "users/123" -> "123")
+ */
+function extractLocalId(entityId: EntityId | string): string {
+  const parts = String(entityId).split('/')
+  return parts[parts.length - 1] || entityId as string
+}
+
+/**
+ * Capitalize first letter of string
+ */
+function capitalize(str: string): string {
+  return str.charAt(0).toUpperCase() + str.slice(1)
+}
+
+/**
+ * Generate a simple name for entities without one
+ */
+function generateName(): string {
+  return `item-${Date.now()}`
 }
 
 // ============================================================================
