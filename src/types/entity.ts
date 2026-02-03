@@ -211,7 +211,28 @@ export type Variant = Record<string, VariantValue>
 // =============================================================================
 
 /** Event operation types */
-export type EventOp = 'CREATE' | 'UPDATE' | 'DELETE'
+export type EventOp = 'CREATE' | 'UPDATE' | 'DELETE' | 'REL_CREATE' | 'REL_DELETE'
+
+/**
+ * Relationship event payload stored in Event.after for REL_CREATE
+ * and Event.before for REL_DELETE
+ */
+export interface RelationshipEventData {
+  /** Relationship predicate (e.g., "author", "categories") */
+  predicate: string
+  /** Reverse predicate name (e.g., "posts", "items") */
+  reverse: string
+  /** Source entity namespace */
+  fromNs: string
+  /** Source entity ID */
+  fromId: string
+  /** Target entity namespace */
+  toNs: string
+  /** Target entity ID */
+  toId: string
+  /** Optional edge data */
+  data?: Record<string, unknown>
+}
 
 /**
  * CDC event record

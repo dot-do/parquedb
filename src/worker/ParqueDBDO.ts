@@ -204,6 +204,15 @@ export class ParqueDBDO extends DurableObject<Env> {
   /** Whether counters have been initialized from SQLite */
   private countersInitialized = false
 
+  /** LRU cache for recent entity states (derived from events) */
+  private entityCache: Map<string, { entity: Entity; version: number }> = new Map()
+
+  /** Maximum size of the entity cache */
+  private static readonly ENTITY_CACHE_MAX_SIZE = 1000
+
+  /** Flag to skip entity table writes (Phase 3 WAL) */
+  private skipEntityTableWrites = true
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
     this.sql = ctx.storage.sql
@@ -434,12 +443,14 @@ export class ParqueDBDO extends DurableObject<Env> {
 
     const dataJson = JSON.stringify(dataWithoutLinks)
 
-    // Insert entity
-    this.sql.exec(
-      `INSERT INTO entities (ns, id, type, name, version, created_at, created_by, updated_at, updated_by, data)
-       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
-      ns, id, $type, name, now, actor, now, actor, dataJson
-    )
+    // Phase 3 WAL: Skip entity table writes - state derived from events
+    if (!this.skipEntityTableWrites) {
+      this.sql.exec(
+        `INSERT INTO entities (ns, id, type, name, version, created_at, created_by, updated_at, updated_by, data)
+         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+        ns, id, $type, name, now, actor, now, actor, dataJson
+      )
+    }
 
     // Create relationships
     for (const link of links) {
@@ -574,13 +585,15 @@ export class ParqueDBDO extends DurableObject<Env> {
         data: JSON.stringify(dataObj),
       })
 
-      // Also insert into SQLite for consistency
-      const dataJson = JSON.stringify(rest)
-      this.sql.exec(
-        `INSERT INTO entities (ns, id, type, name, version, created_at, created_by, updated_at, updated_by, data)
-         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
-        ns, id, $type, name, now, actor, now, actor, dataJson
-      )
+      // Phase 3 WAL: Skip entity table writes - state derived from events
+      if (!this.skipEntityTableWrites) {
+        const dataJson = JSON.stringify(rest)
+        this.sql.exec(
+          `INSERT INTO entities (ns, id, type, name, version, created_at, created_by, updated_at, updated_by, data)
+           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+          ns, id, $type, name, now, actor, now, actor, dataJson
+        )
+      }
     }
 
     // Write pending Parquet file to R2
@@ -727,15 +740,41 @@ export class ParqueDBDO extends DurableObject<Env> {
     const now = new Date().toISOString()
     const actor = options.actor || 'system/anonymous'
 
-    // Get current entity
-    const rows = [...this.sql.exec<StoredEntity>(
-      'SELECT * FROM entities WHERE ns = ? AND id = ? AND deleted_at IS NULL',
-      ns, id
-    )]
+    // Phase 3 WAL: Get current entity state from events first, fall back to table
+    let current: StoredEntity | null = null
 
-    if (rows.length === 0) {
+    if (this.skipEntityTableWrites) {
+      const currentEntity = await this.getEntityFromEvents(ns, id)
+      if (currentEntity && !currentEntity.deletedAt) {
+        const { $id: _$id, $type, name: entityName, createdAt, createdBy, updatedAt, updatedBy, deletedAt: _deletedAt, deletedBy: _deletedBy, version, ...rest } = currentEntity
+        current = {
+          ns, id,
+          type: $type,
+          name: entityName,
+          version,
+          created_at: createdAt.toISOString(),
+          created_by: createdBy as string,
+          updated_at: updatedAt.toISOString(),
+          updated_by: updatedBy as string,
+          deleted_at: null,
+          deleted_by: null,
+          data: JSON.stringify(rest),
+        }
+      }
+    }
+
+    if (!current) {
+      const rows = [...this.sql.exec<StoredEntity>(
+        'SELECT * FROM entities WHERE ns = ? AND id = ? AND deleted_at IS NULL',
+        ns, id
+      )]
+      if (rows.length > 0) {
+        current = rows[0]!
+      }
+    }
+
+    if (!current) {
       if (options.upsert) {
-        // Create the entity if upsert is enabled
         const createData: CreateInput = {
           $type: 'Unknown',
           name: id,
@@ -745,8 +784,6 @@ export class ParqueDBDO extends DurableObject<Env> {
       }
       throw new Error(`Entity ${ns}/${id} not found`)
     }
-
-    const current = rows[0]!
 
     // Check version for optimistic concurrency
     if (options.expectedVersion !== undefined && current.version !== options.expectedVersion) {
@@ -832,13 +869,18 @@ export class ParqueDBDO extends DurableObject<Env> {
     const newVersion = current.version + 1
     const dataJson = JSON.stringify(data)
 
-    // Update entity
-    this.sql.exec(
-      `UPDATE entities
-       SET type = ?, name = ?, version = ?, updated_at = ?, updated_by = ?, data = ?
-       WHERE ns = ? AND id = ?`,
-      type, name, newVersion, now, actor, dataJson, ns, id
-    )
+    // Phase 3 WAL: Skip entity table writes - state derived from events
+    if (!this.skipEntityTableWrites) {
+      this.sql.exec(
+        `UPDATE entities
+         SET type = ?, name = ?, version = ?, updated_at = ?, updated_by = ?, data = ?
+         WHERE ns = ? AND id = ?`,
+        type, name, newVersion, now, actor, dataJson, ns, id
+      )
+    }
+
+    // Invalidate cache for this entity
+    this.invalidateCache(ns, id)
 
     // Append update event
     await this.appendEvent({
@@ -880,44 +922,76 @@ export class ParqueDBDO extends DurableObject<Env> {
     const now = new Date().toISOString()
     const actor = options.actor || 'system/anonymous'
 
-    // Get current entity
-    const rows = [...this.sql.exec<StoredEntity>(
-      'SELECT * FROM entities WHERE ns = ? AND id = ?',
-      ns, id
-    )]
+    // Phase 3 WAL: Get current entity state from events first, fall back to table
+    let current: StoredEntity | null = null
 
-    if (rows.length === 0) {
-      return false
+    if (this.skipEntityTableWrites) {
+      const currentEntity = await this.getEntityFromEvents(ns, id)
+      if (currentEntity) {
+        const { $id: _$id, $type, name: entityName, createdAt, createdBy, updatedAt, updatedBy, deletedAt, deletedBy, version, ...rest } = currentEntity
+        current = {
+          ns, id,
+          type: $type,
+          name: entityName,
+          version,
+          created_at: createdAt.toISOString(),
+          created_by: createdBy as string,
+          updated_at: updatedAt.toISOString(),
+          updated_by: updatedBy as string,
+          deleted_at: deletedAt?.toISOString() ?? null,
+          deleted_by: (deletedBy as string) ?? null,
+          data: JSON.stringify(rest),
+        }
+      }
     }
 
-    const current = rows[0]!
+    if (!current) {
+      const rows = [...this.sql.exec<StoredEntity>(
+        'SELECT * FROM entities WHERE ns = ? AND id = ?',
+        ns, id
+      )]
+      if (rows.length > 0) {
+        current = rows[0]!
+      }
+    }
+
+    if (!current) {
+      return false
+    }
 
     // Check version for optimistic concurrency
     if (options.expectedVersion !== undefined && current.version !== options.expectedVersion) {
       throw new Error(`Version mismatch: expected ${options.expectedVersion}, got ${current.version}`)
     }
 
+    // Phase 3 WAL: Skip entity table writes - state derived from events
+    if (!this.skipEntityTableWrites) {
+      if (options.hard) {
+        this.sql.exec('DELETE FROM entities WHERE ns = ? AND id = ?', ns, id)
+      } else {
+        this.sql.exec(
+          `UPDATE entities SET deleted_at = ?, deleted_by = ?, version = version + 1 WHERE ns = ? AND id = ?`,
+          now, actor, ns, id
+        )
+      }
+    }
+
+    // Handle relationships (still use relationships table)
     if (options.hard) {
-      // Hard delete - remove from database
-      this.sql.exec('DELETE FROM entities WHERE ns = ? AND id = ?', ns, id)
-      // Also delete relationships
       this.sql.exec(
         'DELETE FROM relationships WHERE (from_ns = ? AND from_id = ?) OR (to_ns = ? AND to_id = ?)',
         ns, id, ns, id
       )
     } else {
-      // Soft delete - set deleted_at
-      this.sql.exec(
-        `UPDATE entities SET deleted_at = ?, deleted_by = ?, version = version + 1 WHERE ns = ? AND id = ?`,
-        now, actor, ns, id
-      )
-      // Soft delete relationships
       this.sql.exec(
         `UPDATE relationships SET deleted_at = ?, deleted_by = ?
          WHERE (from_ns = ? AND from_id = ?) OR (to_ns = ? AND to_id = ?)`,
         now, actor, ns, id, ns, id
       )
     }
+
+    // Invalidate cache for this entity
+    this.invalidateCache(ns, id)
 
     // Append delete event
     await this.appendEvent({
@@ -1001,14 +1075,22 @@ export class ParqueDBDO extends DurableObject<Env> {
       )
     }
 
-    // Append relationship event
+    // Append REL_CREATE event to WAL (Phase 4 relationship batching)
     await this.appendEvent({
       id: generateULID(),
       ts: Date.now(),
-      op: 'CREATE',
+      op: 'REL_CREATE',
       target: relTarget(entityTarget(fromNs, fromEntityId), predicate, entityTarget(toNs, toEntityId)),
       before: undefined,
-      after: { predicate, to: toId, data: options.data } as Variant,
+      after: {
+        predicate,
+        reverse,
+        fromNs,
+        fromId: fromEntityId,
+        toNs,
+        toId: toEntityId,
+        data: options.data,
+      } as Variant,
       actor: actor as string,
     })
 
@@ -1017,6 +1099,8 @@ export class ParqueDBDO extends DurableObject<Env> {
 
   /**
    * Remove a relationship between two entities
+   *
+   * Phase 4: Relationships are events in the WAL like entities.
    *
    * @param fromId - Source entity ID (ns/id format)
    * @param predicate - Relationship predicate
@@ -1042,22 +1126,23 @@ export class ParqueDBDO extends DurableObject<Env> {
     const toNs = toNsPart!
     const toEntityId = toIdParts.join('/')
 
-    // Soft delete the relationship
-    this.sql.exec(
-      `UPDATE relationships
-       SET deleted_at = ?, deleted_by = ?, version = version + 1
-       WHERE from_ns = ? AND from_id = ? AND predicate = ? AND to_ns = ? AND to_id = ?
-       AND deleted_at IS NULL`,
-      now, actor, fromNs, fromEntityId, predicate, toNs, toEntityId
-    )
+    // Generate reverse predicate name
+    const reverse = predicate.endsWith('s') ? predicate : predicate + 's'
 
-    // Append relationship event
+    // Append REL_DELETE event to WAL (Phase 4 relationship batching)
     await this.appendEvent({
       id: generateULID(),
       ts: Date.now(),
-      op: 'DELETE',
+      op: 'REL_DELETE',
       target: relTarget(entityTarget(fromNs, fromEntityId), predicate, entityTarget(toNs, toEntityId)),
-      before: { predicate, to: toId } as Variant,
+      before: {
+        predicate,
+        reverse,
+        fromNs,
+        fromId: fromEntityId,
+        toNs,
+        toId: toEntityId,
+      } as Variant,
       after: undefined,
       actor: actor as string,
     })
@@ -1072,12 +1157,38 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Get an entity by ID from DO storage
    *
-   * Note: For performance, reads can bypass DO and go directly to R2.
-   * This method is for cases where strong consistency is required.
+   * Phase 3 WAL: Entity state is derived from events, not stored in entities table.
+   * Priority order:
+   * 1. Check in-memory entity cache
+   * 2. Reconstruct from unflushed events
+   * 3. Fall back to entities table (backward compatibility)
    */
   async get(ns: string, id: string, includeDeleted = false): Promise<Entity | null> {
     await this.ensureInitialized()
 
+    const cacheKey = `${ns}/${id}`
+
+    // 1. Check cache first
+    const cached = this.entityCache.get(cacheKey)
+    if (cached) {
+      const entity = cached.entity
+      if (!includeDeleted && entity.deletedAt) {
+        return null
+      }
+      return entity
+    }
+
+    // 2. Try to reconstruct from events
+    const entityFromEvents = await this.getEntityFromEvents(ns, id)
+    if (entityFromEvents) {
+      if (!includeDeleted && entityFromEvents.deletedAt) {
+        return null
+      }
+      this.cacheEntity(cacheKey, entityFromEvents)
+      return entityFromEvents
+    }
+
+    // 3. Fall back to entities table (backward compatibility)
     const query = includeDeleted
       ? 'SELECT * FROM entities WHERE ns = ? AND id = ?'
       : 'SELECT * FROM entities WHERE ns = ? AND id = ? AND deleted_at IS NULL'
@@ -1088,7 +1199,175 @@ export class ParqueDBDO extends DurableObject<Env> {
       return null
     }
 
-    return this.toEntity(rows[0]!)
+    const entity = this.toEntity(rows[0]!)
+    this.cacheEntity(cacheKey, entity)
+    return entity
+  }
+
+  /**
+   * Add an entity to the LRU cache
+   */
+  private cacheEntity(key: string, entity: Entity): void {
+    this.entityCache.delete(key)
+    this.entityCache.set(key, { entity, version: entity.version })
+
+    if (this.entityCache.size > ParqueDBDO.ENTITY_CACHE_MAX_SIZE) {
+      const oldestKey = this.entityCache.keys().next().value
+      if (oldestKey) {
+        this.entityCache.delete(oldestKey)
+      }
+    }
+  }
+
+  /**
+   * Invalidate an entity in the cache
+   */
+  private invalidateCache(ns: string, id: string): void {
+    this.entityCache.delete(`${ns}/${id}`)
+  }
+
+  /**
+   * Reconstruct entity state from unflushed events
+   */
+  async getEntityFromEvents(ns: string, id: string): Promise<Entity | null> {
+    await this.ensureInitialized()
+
+    const target = `${ns}:${id}`
+    let entity: Entity | null = null
+
+    // 1. Read from event_batches
+    interface EventBatchRow extends Record<string, SqlStorageValue> {
+      batch: ArrayBuffer
+    }
+
+    const batchRows = [...this.sql.exec<EventBatchRow>(
+      `SELECT batch FROM event_batches WHERE flushed = 0 ORDER BY min_ts ASC`
+    )]
+
+    for (const row of batchRows) {
+      const batchEvents = this.deserializeEventBatch(row.batch)
+      for (const event of batchEvents) {
+        if (event.target === target) {
+          entity = this.applyEventToEntity(entity, event, ns, id)
+        }
+      }
+    }
+
+    // 2. Read from in-memory event buffer
+    for (const event of this.eventBuffer) {
+      if (event.target === target) {
+        entity = this.applyEventToEntity(entity, event, ns, id)
+      }
+    }
+
+    // 3. Check events_wal
+    interface WalRow extends Record<string, SqlStorageValue> {
+      events: ArrayBuffer
+    }
+
+    const walRows = [...this.sql.exec<WalRow>(
+      `SELECT events FROM events_wal WHERE ns = ? ORDER BY first_seq ASC`,
+      ns
+    )]
+
+    for (const row of walRows) {
+      const walEvents = this.deserializeEventBatch(row.events)
+      for (const event of walEvents) {
+        if (event.target === target) {
+          entity = this.applyEventToEntity(entity, event, ns, id)
+        }
+      }
+    }
+
+    // 4. Check namespace event buffers
+    const nsBuffer = this.nsEventBuffers.get(ns)
+    if (nsBuffer) {
+      for (const event of nsBuffer.events) {
+        if (event.target === target) {
+          entity = this.applyEventToEntity(entity, event, ns, id)
+        }
+      }
+    }
+
+    return entity
+  }
+
+  /**
+   * Apply a single event to an entity state
+   */
+  private applyEventToEntity(
+    current: Entity | null,
+    event: Event,
+    ns: string,
+    id: string
+  ): Entity | null {
+    const entityId = `${ns}/${id}` as EntityId
+
+    switch (event.op) {
+      case 'CREATE': {
+        if (!event.after) return current
+        const { $type, name, ...rest } = event.after as { $type: string; name: string; [key: string]: unknown }
+        return {
+          $id: entityId,
+          $type: $type || 'Unknown',
+          name: name || id,
+          createdAt: new Date(event.ts),
+          createdBy: (event.actor || 'system/anonymous') as EntityId,
+          updatedAt: new Date(event.ts),
+          updatedBy: (event.actor || 'system/anonymous') as EntityId,
+          version: 1,
+          ...rest,
+        } as Entity
+      }
+
+      case 'UPDATE': {
+        if (!current || !event.after) return current
+        const { $type, name, ...rest } = event.after as { $type?: string; name?: string; [key: string]: unknown }
+        return {
+          ...current,
+          $type: $type || current.$type,
+          name: name || current.name,
+          updatedAt: new Date(event.ts),
+          updatedBy: (event.actor || 'system/anonymous') as EntityId,
+          version: current.version + 1,
+          ...rest,
+        } as Entity
+      }
+
+      case 'DELETE': {
+        if (!current) return null
+        return {
+          ...current,
+          deletedAt: new Date(event.ts),
+          deletedBy: (event.actor || 'system/anonymous') as EntityId,
+          version: current.version + 1,
+        } as Entity
+      }
+
+      default:
+        return current
+    }
+  }
+
+  // Phase 3 helper methods for testing/migration
+  setSkipEntityTableWrites(skip: boolean): void {
+    this.skipEntityTableWrites = skip
+  }
+
+  getSkipEntityTableWrites(): boolean {
+    return this.skipEntityTableWrites
+  }
+
+  getCacheStats(): { size: number; maxSize: number } {
+    return { size: this.entityCache.size, maxSize: ParqueDBDO.ENTITY_CACHE_MAX_SIZE }
+  }
+
+  clearEntityCache(): void {
+    this.entityCache.clear()
+  }
+
+  isEntityCached(ns: string, id: string): boolean {
+    return this.entityCache.has(`${ns}/${id}`)
   }
 
   /**
