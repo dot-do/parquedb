@@ -76,6 +76,21 @@ export {
 } from './types'
 
 // =============================================================================
+// Error Classes
+// =============================================================================
+
+export {
+  CommitConflictError,
+  ReadOnlyError,
+  BackendEntityNotFoundError,
+  TableNotFoundError,
+  SnapshotNotFoundError,
+  InvalidNamespaceError,
+  SchemaNotFoundError,
+  WriteLockTimeoutError,
+} from './types'
+
+// =============================================================================
 // Iceberg Backend
 // =============================================================================
 
@@ -122,8 +137,50 @@ import type { BackendConfig, EntityBackend } from './types'
 import { IcebergBackend } from './iceberg'
 import { DeltaBackend } from './delta'
 
+// =============================================================================
+// Backend Migration
+// =============================================================================
+
+export {
+  // Migration functions
+  migrateBackend,
+  createBackendWithMigration,
+  // Detection utilities
+  detectExistingFormat,
+  discoverNamespaces,
+  // Types
+  type MigrationConfig,
+  type MigrationProgress,
+  type MigrationResult,
+  type BackendConfigWithMigration,
+} from './migration'
+
+// =============================================================================
+// Factory Function
+// =============================================================================
+
 /**
  * Create an entity backend from configuration
+ *
+ * For automatic migration when switching backends, use `createBackendWithMigration` instead.
+ *
+ * @example
+ * ```typescript
+ * // Simple backend creation (no migration)
+ * const backend = await createBackend({
+ *   type: 'iceberg',
+ *   storage,
+ *   warehouse: 'warehouse',
+ * })
+ *
+ * // With automatic migration from native
+ * const backend = await createBackendWithMigration({
+ *   type: 'iceberg',
+ *   storage,
+ *   warehouse: 'warehouse',
+ *   migrateFrom: 'auto', // Auto-detect and migrate existing data
+ * })
+ * ```
  */
 export async function createBackend(config: BackendConfig): Promise<EntityBackend> {
   let backend: EntityBackend
@@ -139,7 +196,7 @@ export async function createBackend(config: BackendConfig): Promise<EntityBacken
 
     case 'native':
       // TODO: Implement NativeBackend
-      throw new Error('Native backend not yet implemented')
+      throw new Error('Native backend not yet implemented - use createBackendWithMigration to auto-migrate to iceberg or delta')
 
     default:
       throw new Error(`Unknown backend type: ${(config as BackendConfig).type}`)

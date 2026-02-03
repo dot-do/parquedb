@@ -4,21 +4,33 @@
  * Tests real-world datasets (IMDB, O*NET, UNSPSC, Wiktionary, Wikidata)
  * across all three table formats (Native Parquet, Apache Iceberg, Delta Lake).
  *
+ * Backend Evolution: Just like schema evolution, backend evolution is automatic.
+ * Use `?migrate=true` to auto-convert native data to Iceberg/Delta formats.
+ *
  * Endpoints:
  * - GET /benchmark/datasets/backends - Full benchmark
  * - GET /benchmark/datasets/backends?dataset=imdb - Specific dataset
  * - GET /benchmark/datasets/backends?backend=iceberg - Specific backend
+ * - GET /benchmark/datasets/backends?migrate=true - Auto-migrate native → Iceberg/Delta
  *
  * Query params:
  * - dataset: imdb|imdb-1m|onet|onet-full|unspsc|unspsc-full|wiktionary|wikidata|all
  * - backend: native|iceberg|delta|all
  * - iterations: number of iterations per query (default: 3)
  * - maxQueries: max queries per dataset (default: 5)
+ * - migrate: true to auto-convert native data to Iceberg/Delta (default: false)
  */
 
 import { parquetQuery } from 'hyparquet'
 import { compressors } from '../parquet/compressors'
 import { logger } from '../utils/logger'
+import { R2Backend } from '../storage/R2Backend'
+import {
+  migrateBackend,
+  detectExistingFormat,
+  discoverNamespaces,
+  type BackendType,
+} from '../backends'
 
 // =============================================================================
 // Types
@@ -35,6 +47,8 @@ interface DatasetBackendConfig {
   backends: ('native' | 'iceberg' | 'delta')[]
   iterations: number
   maxQueries: number
+  /** Auto-migrate native data to Iceberg/Delta if not present */
+  autoMigrate: boolean
 }
 
 interface LatencyStats {
@@ -282,6 +296,103 @@ async function checkDatasetAvailable(bucket: R2Bucket, prefix: string, file: str
     return { available: head !== null, size: head?.size }
   } catch {
     return { available: false }
+  }
+}
+
+// =============================================================================
+// Auto-Migration Support
+// =============================================================================
+
+interface MigrationResult {
+  success: boolean
+  migrated: string[]
+  errors: string[]
+  durationMs: number
+}
+
+/**
+ * Auto-migrate native data to Iceberg and/or Delta formats
+ * This implements backend evolution - seamlessly converting data when switching formats.
+ */
+async function autoMigrateDatasets(
+  bucket: R2Bucket,
+  datasets: string[],
+  targetBackends: ('iceberg' | 'delta')[],
+  datasetsConfig: typeof DATASETS
+): Promise<MigrationResult> {
+  const startTime = performance.now()
+  const migrated: string[] = []
+  const errors: string[] = []
+
+  // Create StorageBackend from R2Bucket
+  const storage = new R2Backend(bucket as unknown as import('../storage/types/r2').R2Bucket)
+
+  for (const datasetId of datasets) {
+    const dataset = datasetsConfig[datasetId]
+    if (!dataset) continue
+
+    // Check if native data exists
+    const nativeExists = await checkDatasetAvailable(bucket, dataset.native.prefix, dataset.queries[0]?.file ?? 'data.parquet')
+    if (!nativeExists.available) {
+      logger.debug(`No native data found for ${datasetId}, skipping migration`)
+      continue
+    }
+
+    for (const targetBackend of targetBackends) {
+      const targetConfig = targetBackend === 'iceberg' ? dataset.iceberg : dataset.delta
+
+      if (!targetConfig) {
+        logger.debug(`No ${targetBackend} config for ${datasetId}`)
+        continue
+      }
+
+      // Check if target format already exists
+      const metadataPath = targetBackend === 'iceberg'
+        ? `${targetConfig.prefix}/${(targetConfig as { metadataPath: string }).metadataPath}`
+        : `${targetConfig.prefix}/${(targetConfig as { logPath: string }).logPath}/00000000000000000000.json`
+
+      const targetExists = await bucket.head(metadataPath)
+
+      if (targetExists) {
+        logger.debug(`${targetBackend} data already exists for ${datasetId}`)
+        continue
+      }
+
+      // Perform migration
+      logger.info(`Auto-migrating ${datasetId} from native to ${targetBackend}`)
+
+      try {
+        // Map dataset collections to namespaces
+        const namespaces = dataset.collections.map(c => `${datasetId}/${c}`)
+
+        const result = await migrateBackend({
+          storage,
+          from: 'native',
+          to: targetBackend,
+          namespaces,
+          onProgress: (progress) => {
+            logger.debug(`Migration progress: ${progress.namespace} - ${progress.entitiesMigrated}/${progress.totalEntities}`)
+          },
+        })
+
+        if (result.success) {
+          migrated.push(`${datasetId} → ${targetBackend}`)
+        } else {
+          errors.push(...result.errors)
+        }
+      } catch (err) {
+        const errorMsg = `Failed to migrate ${datasetId} to ${targetBackend}: ${err instanceof Error ? err.message : 'Unknown error'}`
+        logger.error(errorMsg)
+        errors.push(errorMsg)
+      }
+    }
+  }
+
+  return {
+    success: errors.length === 0,
+    migrated,
+    errors,
+    durationMs: Math.round(performance.now() - startTime),
   }
 }
 
@@ -602,9 +713,20 @@ async function benchmarkDeltaQueries(
 async function runDatasetBackendBenchmark(
   bucket: R2Bucket,
   config: DatasetBackendConfig
-): Promise<BenchmarkResult> {
+): Promise<BenchmarkResult & { migration?: MigrationResult }> {
   const startTime = performance.now()
   const results: DatasetResult[] = []
+  let migrationResult: MigrationResult | undefined
+
+  // Auto-migrate if requested
+  if (config.autoMigrate) {
+    const targetBackends = config.backends.filter(b => b !== 'native') as ('iceberg' | 'delta')[]
+    if (targetBackends.length > 0) {
+      logger.info(`Auto-migration enabled for backends: ${targetBackends.join(', ')}`)
+      migrationResult = await autoMigrateDatasets(bucket, config.datasets, targetBackends, DATASETS)
+      logger.info(`Migration complete: ${migrationResult.migrated.length} datasets migrated in ${migrationResult.durationMs}ms`)
+    }
+  }
 
   for (const datasetId of config.datasets) {
     const dataset = DATASETS[datasetId]
@@ -717,6 +839,7 @@ async function runDatasetBackendBenchmark(
       timestamp: new Date().toISOString(),
       durationMs: Math.round(performance.now() - startTime),
     },
+    ...(migrationResult && { migration: migrationResult }),
   }
 }
 
@@ -736,6 +859,7 @@ export async function handleDatasetBackendsBenchmarkRequest(
   const backendParam = params.get('backend') || 'all'
   const iterations = Math.min(parseInt(params.get('iterations') || '3'), 10)
   const maxQueries = Math.min(parseInt(params.get('maxQueries') || '5'), 10)
+  const autoMigrate = params.get('migrate') === 'true'
 
   // Determine datasets to test
   const availableDatasets = Object.keys(DATASETS)
@@ -754,6 +878,7 @@ export async function handleDatasetBackendsBenchmarkRequest(
     backends,
     iterations,
     maxQueries,
+    autoMigrate,
   }
 
   try {
