@@ -11,7 +11,7 @@
 import type { ParsedArgs } from '../types'
 import { print, printError, printSuccess } from '../types'
 import { createLockManager, type Lock } from '../../sync/lock'
-import { createMergeEngine, type MergeEngine } from '../../sync/merge-engine'
+import { createMergeEngine } from '../../sync/merge-engine'
 
 // =============================================================================
 // Helper Functions
@@ -511,26 +511,10 @@ async function abortMerge(
 }
 
 /**
- * Find common ancestor of two commits
- *
- * Uses optimized bidirectional BFS algorithm from src/sync/common-ancestor.ts
- * Time Complexity: O(min(n, m)) where n and m are distances to common ancestor
- * (Previously was O(n*m) naive traversal)
+ * Print merge preview for dry-run using MergeBranchesResult
  */
-async function findCommonAncestor(
-  storage: InstanceType<typeof import('../../storage/FsBackend').FsBackend>,
-  commit1: string,
-  commit2: string
-): Promise<string | null> {
-  const { findCommonAncestorSimple } = await import('../../sync/common-ancestor')
-  return findCommonAncestorSimple(storage, commit1, commit2)
-}
-
-/**
- * Print merge preview for dry-run
- */
-function printMergePreview(
-  result: Awaited<ReturnType<typeof import('../../sync/event-merge').mergeEventStreams>>,
+function printMergePreviewFromResult(
+  result: import('../../sync/merge-engine').MergeBranchesResult,
   jsonOutput: boolean
 ): void {
   if (jsonOutput) {
@@ -539,7 +523,7 @@ function printMergePreview(
         {
           success: result.success,
           conflicts: result.conflicts.length,
-          autoMerged: result.stats.autoMerged,
+          autoMerged: result.stats?.autoMerged ?? 0,
           stats: result.stats,
         },
         null,
@@ -552,8 +536,10 @@ function printMergePreview(
   print('Merge preview (dry-run):')
   print('')
   print(`Status: ${result.success ? 'Clean merge' : 'Has conflicts'}`)
-  print(`Events: ${result.stats.fromOurs} ours + ${result.stats.fromTheirs} theirs`)
-  print(`Auto-merged: ${result.stats.autoMerged}`)
+  if (result.stats) {
+    print(`Events: ${result.stats.fromTarget} ours + ${result.stats.fromSource} theirs`)
+    print(`Auto-merged: ${result.stats.autoMerged}`)
+  }
   print(`Conflicts: ${result.conflicts.length}`)
 
   if (result.conflicts.length > 0) {

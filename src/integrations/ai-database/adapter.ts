@@ -375,13 +375,53 @@ function entityToRecord(entity: Entity): Record<string, unknown> {
  * const users = await provider.list('User', { limit: 10 })
  * ```
  */
+/**
+ * Options for configuring the ParqueDBAdapter
+ */
+export interface ParqueDBAdapterOptions {
+  /**
+   * Enable batch loading for relationships to eliminate N+1 queries.
+   * Default: true
+   */
+  enableBatchLoader?: boolean
+
+  /**
+   * Options for the relationship batch loader.
+   * Only used if enableBatchLoader is true.
+   */
+  batchLoaderOptions?: BatchLoaderOptions
+}
+
 export class ParqueDBAdapter implements DBProviderExtended {
   private db: ParqueDB
   private embeddingsConfig: EmbeddingsConfig | null = null
   private eventHandlers = new Map<string, Set<(event: DBEvent) => void | Promise<void>>>()
+  private batchLoader: RelationshipBatchLoader | null = null
 
-  constructor(db: ParqueDB) {
+  constructor(db: ParqueDB, options?: ParqueDBAdapterOptions) {
     this.db = db
+
+    // Initialize batch loader if enabled (default: true)
+    const enableBatchLoader = options?.enableBatchLoader ?? true
+    if (enableBatchLoader) {
+      this.batchLoader = new RelationshipBatchLoader(db as any, options?.batchLoaderOptions)
+    }
+  }
+
+  /**
+   * Get the batch loader instance for advanced usage
+   * Returns null if batch loading is disabled
+   */
+  getBatchLoader(): RelationshipBatchLoader | null {
+    return this.batchLoader
+  }
+
+  /**
+   * Clear the batch loader cache
+   * Useful between requests in server environments
+   */
+  clearBatchLoader(): void {
+    this.batchLoader?.clear()
   }
 
   // ===========================================================================
@@ -493,8 +533,28 @@ export class ParqueDBAdapter implements DBProviderExtended {
 
   /**
    * Get related entities
+   *
+   * When batch loading is enabled (default), this method will automatically
+   * batch multiple relationship queries together to eliminate N+1 queries.
+   *
+   * @example
+   * ```typescript
+   * // These will be batched together when called in parallel
+   * const [author1, author2, author3] = await Promise.all([
+   *   adapter.related('Post', 'post-1', 'author'),
+   *   adapter.related('Post', 'post-2', 'author'),
+   *   adapter.related('Post', 'post-3', 'author'),
+   * ])
+   * ```
    */
   async related(type: string, id: string, relation: string): Promise<Record<string, unknown>[]> {
+    // Use batch loader if available
+    if (this.batchLoader) {
+      const entities = await this.batchLoader.load(type, id, relation)
+      return entities.map(entityToRecord)
+    }
+
+    // Fallback to direct query
     const namespace = typeToNamespace(type)
     const localId = stripNamespace(id)
 
@@ -1254,6 +1314,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
  * Create a ParqueDB provider for ai-database
  *
  * @param db - ParqueDB instance to wrap
+ * @param options - Adapter options including batch loader configuration
  * @returns A DBProviderExtended implementation
  *
  * @example
@@ -1267,7 +1328,21 @@ export class ParqueDBAdapter implements DBProviderExtended {
  * // Use with ai-database
  * setProvider(provider)
  * ```
+ *
+ * @example
+ * ```typescript
+ * // With custom batch loader options
+ * const provider = createParqueDBProvider(db, {
+ *   batchLoaderOptions: {
+ *     windowMs: 20,     // 20ms batching window
+ *     maxBatchSize: 50  // Flush after 50 requests
+ *   }
+ * })
+ * ```
  */
-export function createParqueDBProvider(db: ParqueDB): DBProviderExtended {
-  return new ParqueDBAdapter(db)
+export function createParqueDBProvider(
+  db: ParqueDB,
+  options?: ParqueDBAdapterOptions
+): DBProviderExtended {
+  return new ParqueDBAdapter(db, options)
 }

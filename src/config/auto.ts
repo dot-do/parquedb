@@ -35,7 +35,7 @@ import {
   createEnvActorResolver,
 } from './auth'
 import type { EntityId } from '../types/entity'
-import { createEmptyProxy, asR2Bucket, getCollection, extendFunction } from '../utils/type-utils'
+import { createEmptyProxy, toR2Bucket, getCollection, extendFunction } from '../utils/type-utils'
 import type { R2Bucket } from '../storage/types/r2'
 import type { Collection } from '../Collection'
 import type { SQLQueryOptions } from '../integrations/sql'
@@ -202,7 +202,7 @@ async function resolveStorage(
       if (workersEnv?.BUCKET) {
         const { R2Backend } = await import('../storage/R2Backend')
         // Bridge between @cloudflare/workers-types R2Bucket and our internal type
-        return new R2Backend(asR2Bucket<R2Bucket>(workersEnv.BUCKET))
+        return new R2Backend(toR2Bucket<R2Bucket>(workersEnv.BUCKET))
       }
     }
 
@@ -222,7 +222,7 @@ async function createWorkersStorage(env: Env): Promise<StorageBackend | undefine
   if (bindings.hasR2 && env.BUCKET) {
     const { R2Backend } = await import('../storage/R2Backend')
     // Bridge between @cloudflare/workers-types R2Bucket and our internal type
-    return new R2Backend(asR2Bucket<R2Bucket>(env.BUCKET))
+    return new R2Backend(toR2Bucket<R2Bucket>(env.BUCKET))
   }
 
   // Could add DO-based storage here in the future

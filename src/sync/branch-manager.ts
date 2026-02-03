@@ -379,6 +379,26 @@ export class BranchManager {
   }
 
   /**
+   * Get the current database state from the HEAD commit
+   *
+   * @returns Database state or null if no HEAD commit exists
+   */
+  async getCurrentState(): Promise<import('./commit').DatabaseState | null> {
+    const commitHash = await this.refs.resolveRef('HEAD')
+
+    if (!commitHash) {
+      return null
+    }
+
+    try {
+      const commit = await loadCommit(this.opts.storage, commitHash)
+      return commit.state
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * Validate branch name format
    * @param name Branch name to validate
    * @returns True if valid

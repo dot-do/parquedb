@@ -148,60 +148,107 @@ export interface ParqueDBService {
 }
 
 /**
+ * Check output parameters
+ */
+export interface CheckOutput {
+  readonly title: string
+  readonly summary: string
+}
+
+/**
+ * Check create parameters
+ */
+export interface CheckCreateParams {
+  readonly owner: string
+  readonly repo: string
+  readonly name: string
+  readonly head_sha: string
+  readonly status: string
+  readonly output?: CheckOutput
+}
+
+/**
+ * Check update parameters
+ */
+export interface CheckUpdateParams {
+  readonly owner: string
+  readonly repo: string
+  readonly check_run_id: number
+  readonly status?: string
+  readonly conclusion?: string
+  readonly output?: CheckOutput
+}
+
+/**
+ * Comment create parameters
+ */
+export interface CommentCreateParams {
+  readonly owner: string
+  readonly repo: string
+  readonly issue_number: number
+  readonly body: string
+}
+
+/**
+ * Comment update parameters
+ */
+export interface CommentUpdateParams {
+  readonly owner: string
+  readonly repo: string
+  readonly comment_id: number
+  readonly body: string
+}
+
+/**
+ * Comment list parameters
+ */
+export interface CommentListParams {
+  readonly owner: string
+  readonly repo: string
+  readonly issue_number: number
+}
+
+/**
+ * Comment data
+ */
+export interface CommentData {
+  readonly id: number
+  readonly body: string
+}
+
+/**
+ * Reaction create parameters
+ */
+export interface ReactionCreateParams {
+  readonly owner: string
+  readonly repo: string
+  readonly comment_id: number
+  readonly content: string
+}
+
+/**
+ * API response with data
+ */
+export interface ApiResponse<T> {
+  readonly data: T
+}
+
+/**
  * Interface for Octokit client
  */
 export interface OctokitClient {
-  rest: {
-    checks: {
-      create: (params: {
-        owner: string
-        repo: string
-        name: string
-        head_sha: string
-        status: string
-        output?: {
-          title: string
-          summary: string
-        }
-      }) => Promise<{ data: { id: number } }>
-      update: (params: {
-        owner: string
-        repo: string
-        check_run_id: number
-        status?: string
-        conclusion?: string
-        output?: {
-          title: string
-          summary: string
-        }
-      }) => Promise<{ data: { id: number } }>
+  readonly rest: {
+    readonly checks: {
+      readonly create: (params: CheckCreateParams) => Promise<ApiResponse<{ readonly id: number }>>
+      readonly update: (params: CheckUpdateParams) => Promise<ApiResponse<{ readonly id: number }>>
     }
-    issues: {
-      createComment: (params: {
-        owner: string
-        repo: string
-        issue_number: number
-        body: string
-      }) => Promise<{ data: { id: number } }>
-      updateComment: (params: {
-        owner: string
-        repo: string
-        comment_id: number
-        body: string
-      }) => Promise<{ data: { id: number } }>
-      listComments: (params: {
-        owner: string
-        repo: string
-        issue_number: number
-      }) => Promise<{ data: Array<{ id: number; body: string }> }>
+    readonly issues: {
+      readonly createComment: (params: CommentCreateParams) => Promise<ApiResponse<{ readonly id: number }>>
+      readonly updateComment: (params: CommentUpdateParams) => Promise<ApiResponse<{ readonly id: number }>>
+      readonly listComments: (params: CommentListParams) => Promise<ApiResponse<readonly CommentData[]>>
     }
-    reactions: {
-      createForIssueComment: (params: {
-        owner: string
-        repo: string
-        comment_id: number
-        content: string
-      }) => Promise<{ data: { id: number } }>
+    readonly reactions: {
+      readonly createForIssueComment: (params: ReactionCreateParams) => Promise<ApiResponse<{ readonly id: number }>>
     }
   }
 }
@@ -277,20 +324,35 @@ function timingSafeEqual(a: string, b: string): boolean {
 // =============================================================================
 
 /**
+ * Installation account information
+ */
+export interface InstallationAccount {
+  readonly login: string
+  readonly type: 'User' | 'Organization'
+}
+
+/**
+ * Installation information
+ */
+export interface InstallationInfo {
+  readonly id: number
+  readonly account: InstallationAccount
+}
+
+/**
+ * Repository reference
+ */
+export interface RepositoryRef {
+  readonly full_name: string
+}
+
+/**
  * Payload for installation.created webhook
  */
 export interface InstallationCreatedPayload {
-  action: 'created'
-  installation: {
-    id: number
-    account: {
-      login: string
-      type: 'User' | 'Organization'
-    }
-  }
-  repositories?: Array<{
-    full_name: string
-  }>
+  readonly action: 'created'
+  readonly installation: InstallationInfo
+  readonly repositories?: readonly RepositoryRef[]
 }
 
 /**
@@ -327,9 +389,9 @@ export async function handleInstallationCreated(
  * Payload for installation.deleted webhook
  */
 export interface InstallationDeletedPayload {
-  action: 'deleted'
-  installation: {
-    id: number
+  readonly action: 'deleted'
+  readonly installation: {
+    readonly id: number
   }
 }
 

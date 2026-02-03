@@ -319,6 +319,100 @@ diff:
       const result = await loadConfigFromRepo('owner', 'error-repo')
       expect(result.database.name).toBe('recovered')
     })
+
+    it('respects cache TTL and refetches after expiration', async () => {
+      // This test verifies that cached configs expire after the TTL
+      // We use vi.useFakeTimers to control time
+      vi.useFakeTimers()
+
+      let fetchCallCount = 0
+      const mockFetch = vi.fn().mockImplementation(async () => {
+        fetchCallCount++
+        return {
+          ok: true,
+          text: async () => `database:\n  name: fetch-${fetchCallCount}`,
+        }
+      })
+      global.fetch = mockFetch
+
+      // First request - should fetch
+      const result1 = await loadConfigFromRepo('owner', 'ttl-repo')
+      expect(result1.database.name).toBe('fetch-1')
+      expect(fetchCallCount).toBe(1)
+
+      // Second request immediately - should use cache
+      const result2 = await loadConfigFromRepo('owner', 'ttl-repo')
+      expect(result2.database.name).toBe('fetch-1')
+      expect(fetchCallCount).toBe(1) // No new fetch
+
+      // Advance time past TTL (5 minutes)
+      await vi.advanceTimersByTimeAsync(getConfigCacheTTL() + 1000)
+
+      // Third request after TTL - should refetch
+      const result3 = await loadConfigFromRepo('owner', 'ttl-repo')
+      expect(result3.database.name).toBe('fetch-2')
+      expect(fetchCallCount).toBe(2) // New fetch occurred
+
+      vi.useRealTimers()
+    })
+
+    it('invalidateConfigCache forces refetch on next request', async () => {
+      let fetchCallCount = 0
+      const mockFetch = vi.fn().mockImplementation(async () => {
+        fetchCallCount++
+        return {
+          ok: true,
+          text: async () => `database:\n  name: fetch-${fetchCallCount}`,
+        }
+      })
+      global.fetch = mockFetch
+
+      // First request - should fetch
+      const result1 = await loadConfigFromRepo('owner', 'invalidate-repo')
+      expect(result1.database.name).toBe('fetch-1')
+      expect(fetchCallCount).toBe(1)
+
+      // Second request - should use cache
+      const result2 = await loadConfigFromRepo('owner', 'invalidate-repo')
+      expect(result2.database.name).toBe('fetch-1')
+      expect(fetchCallCount).toBe(1)
+
+      // Invalidate the cache
+      invalidateConfigCache('owner', 'invalidate-repo')
+
+      // Third request after invalidation - should refetch
+      const result3 = await loadConfigFromRepo('owner', 'invalidate-repo')
+      expect(result3.database.name).toBe('fetch-2')
+      expect(fetchCallCount).toBe(2)
+    })
+
+    it('invalidateConfigCache only affects the specified repo', async () => {
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        const repoMatch = url.match(/github\.com\/owner\/([^/]+)/)
+        const repo = repoMatch ? repoMatch[1] : 'unknown'
+        return {
+          ok: true,
+          text: async () => `database:\n  name: ${repo}`,
+        }
+      })
+      global.fetch = mockFetch
+
+      // Load configs for two repos
+      await loadConfigFromRepo('owner', 'repo-a')
+      await loadConfigFromRepo('owner', 'repo-b')
+      expect(mockFetch).toHaveBeenCalledTimes(2)
+
+      // Invalidate only repo-a
+      invalidateConfigCache('owner', 'repo-a')
+
+      // Fetch repo-a again - should refetch
+      await loadConfigFromRepo('owner', 'repo-a')
+      expect(mockFetch).toHaveBeenCalledTimes(3)
+
+      // Fetch repo-b again - should still be cached
+      await loadConfigFromRepo('owner', 'repo-b')
+      expect(mockFetch).toHaveBeenCalledTimes(3) // No additional fetch
+    })
   })
 
   describe('pattern matching', () => {

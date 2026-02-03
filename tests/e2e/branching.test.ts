@@ -219,8 +219,8 @@ describe('E2E: Branch Switching', () => {
     // Verify starting on main
     expect(await branchManager.current()).toBe('main')
 
-    // Switch to feature
-    await branchManager.checkout('feature')
+    // Switch to feature (skip state reconstruction since we don't have real data files)
+    await branchManager.checkout('feature', { skipStateReconstruction: true })
 
     // Verify HEAD now points to feature
     expect(await branchManager.current()).toBe('feature')
@@ -233,8 +233,8 @@ describe('E2E: Branch Switching', () => {
     await refManager.setHead('main')
     await refManager.updateRef('main', commit.hash)
 
-    // Create and checkout in one step
-    await branchManager.checkout('new-feature', { create: true })
+    // Create and checkout in one step (skip state reconstruction for test)
+    await branchManager.checkout('new-feature', { create: true, skipStateReconstruction: true })
 
     // Verify on new branch
     expect(await branchManager.current()).toBe('new-feature')
@@ -250,7 +250,7 @@ describe('E2E: Branch Switching', () => {
     await refManager.setHead('main')
     await refManager.updateRef('main', commit.hash)
 
-    await expect(branchManager.checkout('does-not-exist')).rejects.toThrow('Branch not found')
+    await expect(branchManager.checkout('does-not-exist', { skipStateReconstruction: true })).rejects.toThrow('Branch not found')
   })
 
   it('tracks current branch correctly through multiple switches', async () => {
@@ -263,17 +263,17 @@ describe('E2E: Branch Switching', () => {
     await branchManager.create('feature-b')
     await branchManager.create('feature-c')
 
-    // Switch through branches
-    await branchManager.checkout('feature-a')
+    // Switch through branches (skip state reconstruction for test)
+    await branchManager.checkout('feature-a', { skipStateReconstruction: true })
     expect(await branchManager.current()).toBe('feature-a')
 
-    await branchManager.checkout('feature-b')
+    await branchManager.checkout('feature-b', { skipStateReconstruction: true })
     expect(await branchManager.current()).toBe('feature-b')
 
-    await branchManager.checkout('main')
+    await branchManager.checkout('main', { skipStateReconstruction: true })
     expect(await branchManager.current()).toBe('main')
 
-    await branchManager.checkout('feature-c')
+    await branchManager.checkout('feature-c', { skipStateReconstruction: true })
     expect(await branchManager.current()).toBe('feature-c')
 
     // Verify isCurrent flag in list
@@ -820,8 +820,8 @@ describe('E2E: Complete Branch/Merge Workflow', () => {
     await refManager.setHead('main')
     await refManager.updateRef('main', initialCommit.hash)
 
-    // 2. Create feature branch
-    await branchManager.checkout('feature/user-auth', { create: true })
+    // 2. Create feature branch (skip state reconstruction for test)
+    await branchManager.checkout('feature/user-auth', { create: true, skipStateReconstruction: true })
     expect(await branchManager.current()).toBe('feature/user-auth')
 
     // 3. Make commits on feature branch
@@ -851,8 +851,8 @@ describe('E2E: Complete Branch/Merge Workflow', () => {
     )
     await refManager.updateRef('feature/user-auth', featureCommit2.hash)
 
-    // 4. Switch back to main
-    await branchManager.checkout('main')
+    // 4. Switch back to main (skip state reconstruction for test)
+    await branchManager.checkout('main', { skipStateReconstruction: true })
     expect(await branchManager.current()).toBe('main')
 
     // Main should still be at initial commit
@@ -1033,11 +1033,11 @@ describe('E2E: Edge Cases', () => {
 
     expect(await branchManager.exists('feature/auth/oauth/google')).toBe(true)
 
-    // Can checkout and delete
-    await branchManager.checkout('feature/auth/oauth/google')
+    // Can checkout and delete (skip state reconstruction for test)
+    await branchManager.checkout('feature/auth/oauth/google', { skipStateReconstruction: true })
     expect(await branchManager.current()).toBe('feature/auth/oauth/google')
 
-    await branchManager.checkout('main')
+    await branchManager.checkout('main', { skipStateReconstruction: true })
     await branchManager.delete('feature/auth/oauth/google')
     expect(await branchManager.exists('feature/auth/oauth/google')).toBe(false)
   })

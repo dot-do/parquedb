@@ -405,15 +405,16 @@ describe('EmbeddingQueue', () => {
       )
     })
 
-    it('throws error if entity updater not set', async () => {
+    it('returns error in result if entity updater not set', async () => {
       const noUpdaterQueue = new EmbeddingQueue(storage, config)
       noUpdaterQueue.setEntityLoader(entityLoader)
 
       await noUpdaterQueue.enqueue('posts', 'abc123')
 
-      await expect(noUpdaterQueue.processQueue()).rejects.toThrow(
-        'Entity updater not set'
-      )
+      const result = await noUpdaterQueue.processQueue()
+
+      expect(result.failed).toBe(1)
+      expect(result.errors[0].error).toContain('Entity updater not set')
     })
   })
 
@@ -716,8 +717,11 @@ describe('priority handling', () => {
   beforeEach(() => {
     storage = createMockStorage()
     processedOrder = []
+  })
 
-    const config = createTestConfig({ batchSize: 1 })
+  it('processes higher priority items first within a batch', async () => {
+    // Use batchSize: 10 so all items are fetched and sorted together
+    const config = createTestConfig({ batchSize: 10 })
     queue = new EmbeddingQueue(storage, config)
 
     queue.setEntityLoader(async (_, id) => ({
@@ -726,24 +730,32 @@ describe('priority handling', () => {
     queue.setEntityUpdater(async (_, entityId) => {
       processedOrder.push(entityId)
     })
-  })
 
-  it('processes higher priority items first', async () => {
     await queue.enqueue('posts', 'low', 100)
     await queue.enqueue('posts', 'high', 10)
     await queue.enqueue('posts', 'medium', 50)
 
-    // Process all items one at a time
-    await queue.processQueue()
-    await queue.processQueue()
+    // Process all items in one batch
     await queue.processQueue()
 
+    // Check that high priority was processed first
     expect(processedOrder[0]).toBe('high')
     expect(processedOrder[1]).toBe('medium')
     expect(processedOrder[2]).toBe('low')
   })
 
   it('processes older items first at same priority', async () => {
+    // Use batchSize: 10 so all items are fetched and sorted together
+    const config = createTestConfig({ batchSize: 10 })
+    queue = new EmbeddingQueue(storage, config)
+
+    queue.setEntityLoader(async (_, id) => ({
+      description: `Entity ${id}`,
+    }))
+    queue.setEntityUpdater(async (_, entityId) => {
+      processedOrder.push(entityId)
+    })
+
     // Add items with slight delay to ensure different timestamps
     await queue.enqueue('posts', 'first', 50)
     await new Promise(r => setTimeout(r, 10))
@@ -751,9 +763,7 @@ describe('priority handling', () => {
     await new Promise(r => setTimeout(r, 10))
     await queue.enqueue('posts', 'third', 50)
 
-    // Process all items one at a time
-    await queue.processQueue()
-    await queue.processQueue()
+    // Process all items in one batch
     await queue.processQueue()
 
     expect(processedOrder[0]).toBe('first')

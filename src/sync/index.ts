@@ -21,6 +21,7 @@ export * from './commit'
 export * from './refs'
 export * from './branch-manager'
 export * from './state-store'
+export * from './object-store'
 
 // Event-based merge engine
 export * from './commutative-ops'
@@ -29,6 +30,7 @@ export * from './conflict-resolution'
 export * from './event-merge'
 export * from './merge-state'
 export * from './merge-commit'
+export * from './merge-engine'
 
 // Common ancestor algorithm
 export * from './common-ancestor'
