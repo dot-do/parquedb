@@ -93,3 +93,36 @@ export class IndexCatalogError extends Error {
     Object.setPrototypeOf(this, IndexCatalogError.prototype)
   }
 }
+
+/**
+ * Error thrown when an index already exists
+ */
+export class IndexAlreadyExistsError extends Error {
+  override readonly name = 'IndexAlreadyExistsError'
+
+  constructor(
+    /** Name of the index */
+    public readonly indexName: string,
+    /** Namespace of the index */
+    public readonly namespace: string
+  ) {
+    super(`Index "${indexName}" already exists in namespace "${namespace}"`)
+    Object.setPrototypeOf(this, IndexAlreadyExistsError.prototype)
+  }
+}
+
+/**
+ * Error thrown when an index definition is invalid
+ */
+export class IndexValidationError extends Error {
+  override readonly name = 'IndexValidationError'
+
+  constructor(
+    message: string,
+    /** Name of the index (if provided) */
+    public readonly indexName?: string
+  ) {
+    super(message)
+    Object.setPrototypeOf(this, IndexValidationError.prototype)
+  }
+}

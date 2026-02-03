@@ -6,7 +6,12 @@
  */
 
 import type { StorageBackend } from '../types/storage'
-import { IndexCatalogError } from './errors'
+import {
+  IndexCatalogError,
+  IndexNotFoundError,
+  IndexAlreadyExistsError,
+  IndexValidationError,
+} from './errors'
 import { logger } from '../utils/logger'
 import { safeJsonParse, isRecord } from '../utils/json-validation'
 import type { Filter } from '../types/filter'
@@ -22,6 +27,8 @@ import type {
   FTSSearchResult,
   VectorSearchOptions,
   VectorSearchResult,
+  HybridSearchOptions,
+  HybridSearchResult,
 } from './types'
 import { VectorIndex } from './vector'
 import { FTSIndex } from './fts'
@@ -116,7 +123,7 @@ export class IndexManager {
     try {
       const data = await this.storage.read(catalogPath)
       const result = safeJsonParse(new TextDecoder().decode(data))
-      if (!result.ok || !isRecord(result.value)) {
+      if (!result.ok || !isIndexCatalog(result.value)) {
         logger.warn(
           `Index catalog corrupted at ${catalogPath}, starting fresh`,
           new IndexCatalogError(catalogPath, new Error('Invalid JSON or not an object'))
@@ -124,8 +131,7 @@ export class IndexManager {
         this.loaded = true
         return
       }
-      const catalog = result.value as unknown as IndexCatalog
-      this.loadCatalog(catalog)
+      this.loadCatalog(result.value)
       this.loaded = true
     } catch (error: unknown) {
       // Catalog exists but failed to read - likely corrupted
@@ -167,7 +173,7 @@ export class IndexManager {
 
     // Check if index already exists
     if (this.hasIndex(ns, definition.name)) {
-      throw new Error(`Index ${definition.name} already exists in namespace ${ns}`)
+      throw new IndexAlreadyExistsError(definition.name, ns)
     }
 
     // Create metadata
@@ -228,7 +234,7 @@ export class IndexManager {
     await this.load()
 
     if (!this.hasIndex(ns, indexName)) {
-      throw new Error(`Index ${indexName} does not exist in namespace ${ns}`)
+      throw new IndexNotFoundError(indexName, ns)
     }
 
     const definition = this.indexes.get(ns)!.get(indexName)!
@@ -285,7 +291,7 @@ export class IndexManager {
   async rebuildIndex(ns: string, indexName: string): Promise<void> {
     const metadata = await this.getIndexMetadata(ns, indexName)
     if (!metadata) {
-      throw new Error(`Index ${indexName} does not exist in namespace ${ns}`)
+      throw new IndexNotFoundError(indexName, ns)
     }
 
     // Mark as building
@@ -501,6 +507,81 @@ export class IndexManager {
   }
 
   /**
+   * Execute a hybrid search combining vector similarity with metadata filtering.
+   *
+   * This method supports two strategies:
+   * - 'pre-filter': Apply metadata filters first to narrow candidates, then vector search
+   * - 'post-filter': Perform vector search first, then filter by metadata
+   * - 'auto': Automatically choose strategy based on filter selectivity
+   *
+   * @param ns - Namespace
+   * @param indexName - Vector index name
+   * @param queryVector - Query vector
+   * @param k - Number of results to return
+   * @param options - Hybrid search options including strategy and candidateIds
+   * @returns Hybrid search results with strategy info
+   *
+   * @example
+   * // Pre-filter: first filter by category, then vector search
+   * const candidateIds = await getCandidateIds({ category: 'tech' })
+   * const results = await indexManager.hybridSearch(
+   *   'posts', 'idx_embedding', queryVector, 10,
+   *   { strategy: 'pre-filter', candidateIds }
+   * )
+   *
+   * @example
+   * // Post-filter: vector search with over-fetching for later filtering
+   * const results = await indexManager.hybridSearch(
+   *   'posts', 'idx_embedding', queryVector, 10,
+   *   { strategy: 'post-filter', overFetchMultiplier: 3 }
+   * )
+   */
+  async hybridSearch(
+    ns: string,
+    indexName: string,
+    queryVector: number[],
+    k: number,
+    options?: HybridSearchOptions
+  ): Promise<HybridSearchResult> {
+    await this.load()
+
+    // Get the vector index
+    const vectorIndex = await this.getVectorIndex(ns, indexName)
+    if (!vectorIndex) {
+      return {
+        docIds: [],
+        rowGroups: [],
+        scores: [],
+        exact: false,
+        entriesScanned: 0,
+        strategyUsed: options?.strategy ?? 'auto',
+      }
+    }
+
+    // Execute hybrid search
+    return vectorIndex.hybridSearch(queryVector, k, options)
+  }
+
+  /**
+   * Get all document IDs indexed in a vector index.
+   * Useful for computing candidate intersections with metadata filters.
+   *
+   * @param ns - Namespace
+   * @param indexName - Vector index name
+   * @returns Set of all document IDs in the index
+   */
+  async getVectorIndexDocIds(ns: string, indexName: string): Promise<Set<string>> {
+    await this.load()
+
+    const vectorIndex = await this.getVectorIndex(ns, indexName)
+    if (!vectorIndex) {
+      return new Set()
+    }
+
+    return vectorIndex.getAllDocIds()
+  }
+
+  /**
    * Get or create a VectorIndex instance
    */
   private async getVectorIndex(ns: string, indexName: string): Promise<VectorIndex | null> {
@@ -631,7 +712,7 @@ export class IndexManager {
   async getIndexStats(ns: string, indexName: string): Promise<IndexStats> {
     const metadata = await this.getIndexMetadata(ns, indexName)
     if (!metadata) {
-      throw new Error(`Index ${indexName} does not exist in namespace ${ns}`)
+      throw new IndexNotFoundError(indexName, ns)
     }
 
     return {
@@ -716,7 +797,10 @@ export class IndexManager {
       case 'vector':
         return `${base}indexes/vector/${ns}.${definition.name}.hnsw`
       default:
-        throw new Error(`Unknown index type: ${definition.type}`)
+        throw new IndexValidationError(
+          `Unknown index type: ${(definition as { type: string }).type}`,
+          definition.name
+        )
     }
   }
 
@@ -726,19 +810,22 @@ export class IndexManager {
 
   private validateDefinition(definition: IndexDefinition): void {
     if (!definition.name) {
-      throw new Error('Index name is required')
+      throw new IndexValidationError('Index name is required')
     }
 
     if (!definition.type) {
-      throw new Error('Index type is required')
+      throw new IndexValidationError('Index type is required', definition.name)
     }
 
     if (!definition.fields || definition.fields.length === 0) {
-      throw new Error('At least one field is required')
+      throw new IndexValidationError('At least one field is required', definition.name)
     }
 
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(definition.name)) {
-      throw new Error('Invalid index name: must start with letter or underscore, contain only alphanumeric and underscore')
+      throw new IndexValidationError(
+        'Invalid index name: must start with letter or underscore, contain only alphanumeric and underscore',
+        definition.name
+      )
     }
   }
 
@@ -966,6 +1053,17 @@ interface IndexCatalogEntry {
     createdAt: string
     updatedAt: string
   }
+}
+
+/**
+ * Type guard for IndexCatalog
+ */
+function isIndexCatalog(value: unknown): value is IndexCatalog {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.version === 'number' &&
+    isRecord(value.indexes)
+  )
 }
 
 /**

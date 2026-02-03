@@ -542,3 +542,18 @@ export class InvalidNamespaceError extends Error {
     Object.setPrototypeOf(this, InvalidNamespaceError.prototype)
   }
 }
+
+/**
+ * Error thrown when a table's schema is missing or corrupted
+ */
+export class SchemaNotFoundError extends Error {
+  override readonly name = 'SchemaNotFoundError'
+
+  constructor(
+    public readonly ns: string,
+    message?: string
+  ) {
+    super(message ?? `Schema not found for table: ${ns}`)
+    Object.setPrototypeOf(this, SchemaNotFoundError.prototype)
+  }
+}

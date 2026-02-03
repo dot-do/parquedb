@@ -16,6 +16,8 @@ import {
   TableNotFoundError,
   SnapshotNotFoundError,
   InvalidNamespaceError,
+  SchemaNotFoundError,
+  CommitConflictError,
   type EntityBackend,
   type IcebergBackendConfig,
   type IcebergCatalogConfig,
@@ -486,7 +488,7 @@ export class IcebergBackend implements EntityBackend {
     // Evolve existing schema
     const currentSchema = metadata.schemas.find(s => s['schema-id'] === metadata['current-schema-id'])
     if (!currentSchema) {
-      throw new Error('Current schema not found')
+      throw new SchemaNotFoundError(ns, `Current schema not found for table: ${ns}`)
     }
 
     const builder = new SchemaEvolutionBuilder(currentSchema)
@@ -790,6 +792,7 @@ export class IcebergBackend implements EntityBackend {
             const stat = await this.storage.stat(versionHintPath)
             expectedVersionHintEtag = stat?.etag ?? null
           } catch {
+            // Intentionally ignored: File doesn't exist (table just created without version hint)
             expectedVersionHintEtag = null
           }
         }
@@ -961,9 +964,12 @@ export class IcebergBackend implements EntityBackend {
         }
       }
 
-      throw new Error(
+      throw new CommitConflictError(
         `Commit failed after ${this.maxOccRetries} retries due to concurrent modifications. ` +
-        `Table: ${ns}. Consider using a different concurrency strategy or retry the operation.`
+        `Consider using a different concurrency strategy or retry the operation.`,
+        ns,
+        /* version */ -1, // Unknown version after exhausted retries
+        this.maxOccRetries
       )
     } finally {
       releaseLock()
@@ -1162,6 +1168,7 @@ export class IcebergBackend implements EntityBackend {
         try {
           return await storage.read(key)
         } catch {
+          // Intentionally returns null: Iceberg storage interface expects null for missing files
           return null
         }
       },
@@ -1362,7 +1369,7 @@ class IcebergSnapshotBackend implements EntityBackend {
     _options?: GetOptions
   ): Promise<Entity<T> | null> {
     if (ns !== this.ns) {
-      throw new Error(`Snapshot backend only supports namespace: ${this.ns}`)
+      throw new InvalidNamespaceError(ns, this.ns)
     }
     const entities = await this.find<T>(ns, { $id: `${ns}/${id}` as EntityId }, { limit: 1 })
     return entities[0] ?? null
@@ -1374,7 +1381,7 @@ class IcebergSnapshotBackend implements EntityBackend {
     options?: FindOptions
   ): Promise<Entity<T>[]> {
     if (ns !== this.ns) {
-      throw new Error(`Snapshot backend only supports namespace: ${this.ns}`)
+      throw new InvalidNamespaceError(ns, this.ns)
     }
     // Delegate to parent's readEntitiesFromSnapshot with our snapshot
     return this.parent.readEntitiesFromSnapshotPublic<T>(ns, this.snapshotData, filter, options)

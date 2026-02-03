@@ -5,6 +5,7 @@
  */
 
 import type { Filter, UpdateInput } from '../types'
+import { ValidationError } from './types'
 
 // =============================================================================
 // Valid Operators
@@ -37,24 +38,28 @@ export const VALID_UPDATE_OPERATORS = new Set([
 
 /**
  * Validate a namespace string
+ *
+ * @throws {ValidationError} if namespace is invalid
  */
 export function validateNamespace(namespace: string): void {
   if (!namespace || typeof namespace !== 'string') {
-    throw new Error('Namespace is required and must be a non-empty string')
+    throw new ValidationError('namespace', namespace || '', 'Namespace is required and must be a non-empty string')
   }
   if (namespace.includes('/')) {
-    throw new Error('Namespace cannot contain "/" character')
+    throw new ValidationError('namespace', namespace, 'Namespace cannot contain "/" character')
   }
   if (namespace.startsWith('_')) {
-    throw new Error('Namespace cannot start with underscore')
+    throw new ValidationError('namespace', namespace, 'Namespace cannot start with underscore')
   }
   if (namespace.startsWith('$')) {
-    throw new Error('Namespace cannot start with dollar sign')
+    throw new ValidationError('namespace', namespace, 'Namespace cannot start with dollar sign')
   }
 }
 
 /**
  * Validate filter operators recursively
+ *
+ * @throws {ValidationError} if filter contains invalid operators
  */
 export function validateFilter(filter: Filter): void {
   if (!filter || typeof filter !== 'object') return
@@ -62,7 +67,9 @@ export function validateFilter(filter: Filter): void {
   for (const [key, value] of Object.entries(filter)) {
     if (key.startsWith('$')) {
       if (!VALID_FILTER_OPERATORS.has(key)) {
-        throw new Error(`Invalid filter operator: ${key}`)
+        throw new ValidationError('filter', '', `Invalid filter operator: ${key}`, {
+          fieldName: key,
+        })
       }
       // Recursively validate nested filters
       if (key === '$and' || key === '$or' || key === '$nor') {
@@ -76,7 +83,9 @@ export function validateFilter(filter: Filter): void {
       // Field with operators
       for (const op of Object.keys(value as object)) {
         if (op.startsWith('$') && !VALID_FILTER_OPERATORS.has(op)) {
-          throw new Error(`Invalid filter operator: ${op}`)
+          throw new ValidationError('filter', '', `Invalid filter operator: ${op}`, {
+            fieldName: op,
+          })
         }
       }
     }
@@ -85,11 +94,15 @@ export function validateFilter(filter: Filter): void {
 
 /**
  * Validate update operators
+ *
+ * @throws {ValidationError} if update contains invalid operators
  */
 export function validateUpdateOperators(update: UpdateInput): void {
   for (const key of Object.keys(update)) {
     if (key.startsWith('$') && !VALID_UPDATE_OPERATORS.has(key)) {
-      throw new Error(`Invalid update operator: ${key}`)
+      throw new ValidationError('update', '', `Invalid update operator: ${key}`, {
+        fieldName: key,
+      })
     }
   }
 }
