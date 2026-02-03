@@ -32,6 +32,12 @@ import { pushCommand, pullCommand, syncCommand } from './commands/sync'
 import { branchCommand } from './commands/branch'
 import { checkoutCommand } from './commands/checkout'
 import { logCommand } from './commands/log'
+import { mergeCommand } from './commands/merge'
+import { diffCommand } from './commands/diff'
+import { conflictsCommand } from './commands/conflicts'
+import { resolveCommand } from './commands/resolve'
+import { typesCommand } from './commands/types'
+import { schemaCommand } from './commands/schema'
 
 // =============================================================================
 // Register Built-in Commands
@@ -185,6 +191,58 @@ registry.register({
   execute: logCommand,
 })
 
+registry.register({
+  name: 'merge',
+  description: 'Merge branches with conflict resolution',
+  usage: 'parquedb merge <source> [--strategy <strategy>] [--dry-run]',
+  category: 'Branching',
+  execute: mergeCommand,
+})
+
+registry.register({
+  name: 'diff',
+  description: 'Show changes between branches',
+  usage: 'parquedb diff [target] [--stat] [--events]',
+  category: 'Branching',
+  execute: diffCommand,
+})
+
+registry.register({
+  name: 'conflicts',
+  description: 'List merge conflicts',
+  usage: 'parquedb conflicts [entity] [--json]',
+  category: 'Branching',
+  execute: conflictsCommand,
+})
+
+registry.register({
+  name: 'resolve',
+  description: 'Resolve merge conflicts',
+  usage: 'parquedb resolve <entity> --ours|--theirs|--newest',
+  category: 'Branching',
+  execute: resolveCommand,
+})
+
+// =============================================================================
+// Schema and Type Commands
+// =============================================================================
+
+registry.register({
+  name: 'types',
+  description: 'Generate TypeScript types from schema',
+  usage: 'parquedb types generate [--at <ref>] [-o <file>]',
+  category: 'Development',
+  execute: typesCommand,
+})
+
+registry.register({
+  name: 'schema',
+  description: 'Inspect and manage database schema',
+  usage: 'parquedb schema show|diff|check [options]',
+  category: 'Development',
+  execute: schemaCommand,
+})
+
 // =============================================================================
 // Constants
 // =============================================================================
@@ -210,6 +268,10 @@ COMMANDS:
   branch [name] [base]          List, create, or delete branches
   checkout <branch>             Switch branches or restore state
   log [branch]                  Show commit history
+  merge <source>                Merge branches with conflict resolution
+  diff [target]                 Show changes between branches
+  conflicts [entity]            List merge conflicts
+  resolve <entity>              Resolve merge conflicts
   push [options]                Push local database to remote
   pull <owner/database>         Pull remote database to local
   sync [options]                Bidirectional sync with remote
@@ -274,6 +336,36 @@ EXAMPLES:
 
   # Delete a branch
   parquedb branch -d feature/new-schema
+
+  # Merge a branch
+  parquedb merge feature/new-schema
+
+  # Merge with conflict resolution strategy
+  parquedb merge feature/new-schema --strategy ours
+
+  # Preview merge without applying
+  parquedb merge feature/new-schema --dry-run
+
+  # Show changes between branches
+  parquedb diff feature/new-schema
+
+  # Show diff statistics
+  parquedb diff feature/new-schema --stat
+
+  # View merge conflicts
+  parquedb conflicts
+
+  # Resolve a conflict
+  parquedb resolve posts/123 --ours
+
+  # Resolve all conflicts
+  parquedb resolve --all --newest
+
+  # Continue merge after resolving conflicts
+  parquedb merge --continue
+
+  # Abort merge
+  parquedb merge --abort
 
   # Login to oauth.do
   parquedb login
