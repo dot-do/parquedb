@@ -121,11 +121,22 @@ Access collections as properties using PascalCase. ParqueDB automatically create
 await db.Posts.find({ status: 'published' })
 await db.Users.get('users/123')
 
-// Lowercase is converted to proper namespace
+// Both PascalCase and camelCase work
 await db.posts.create({ title: 'Hello' }) // creates in 'posts' namespace
+await db.Posts.create({ title: 'Hello' }) // same as above
 ```
 
-The proxy converts PascalCase property names (e.g., `Posts`) to lowercase namespaces (e.g., `posts`).
+The proxy converts property names to lowercase namespaces:
+- `Posts` → `posts`
+- `BlogPosts` → `blogposts`
+- `userProfiles` → `userprofiles`
+
+For multi-word namespaces, use the `collection()` method for explicit control:
+```typescript
+// Explicit namespace control
+const blogPosts = db.collection('blog-posts')
+await blogPosts.create({ title: 'Hello' })
+```
 
 ---
 
@@ -172,12 +183,12 @@ db.registerSchema({
 ```
 
 Schema definitions support:
-- **Type notation**: `string`, `int`, `float`, `boolean`, `date`, `email`, `url`, `markdown`, etc.
+- **Type notation**: `string`, `int`, `float`, `boolean`, `date`, `email`, `url`, `markdown`, `text`, etc.
 - **Modifiers**: `!` (required), `#` (indexed), `?` (optional), `[]` (array)
 - **Defaults**: `string = "default value"`
-- **Relationships**: `-> Target` (forward), `<- Target.field[]` (reverse)
+- **Relationships**: `-> Target.field` (forward), `<- Target.field[]` (reverse)
 
-See [Schema Documentation](./schemas.md) for complete reference.
+See [Schema Documentation](schemas.md) for complete reference.
 
 ### getSchemaValidator()
 
@@ -303,7 +314,7 @@ The event log provides methods to query the complete history of changes.
 | `getEventsByOp()` | `getEventsByOp(op: EventOp): Promise<Event[]>` | Get events by operation type ('CREATE', 'UPDATE', 'DELETE') |
 | `getRawEvent()` | `getRawEvent(id: string): Promise<{ compressed: boolean; data: Event }>` | Get raw event data with compression info |
 | `getEventCount()` | `getEventCount(): Promise<number>` | Get total event count |
-| `getConfig()` | `getConfig(): EventLogConfig` | Get current event log configuration |
+| `getConfig()` | `getConfig(): Required<EventLogConfig>` | Get current event log configuration |
 | `archiveEvents()` | `archiveEvents(options?: { olderThan?: Date; maxEvents?: number }): Promise<ArchiveEventsResult>` | Archive old events |
 | `getArchivedEvents()` | `getArchivedEvents(): Promise<Event[]>` | Get archived events (if archiveOnRotation enabled) |
 
@@ -313,7 +324,7 @@ The event log provides methods to query the complete history of changes.
 interface Event {
   id: string           // Event ID (ULID)
   ts: Date            // Timestamp
-  target: string      // Target entity or relationship (e.g., 'posts:abc123')
+  target: string      // Target entity or relationship (e.g., 'posts:abc123' or 'posts:abc123->users:xyz789')
   op: EventOp         // Operation: 'CREATE' | 'UPDATE' | 'DELETE'
   before: unknown     // State before operation (null for CREATE)
   after: unknown      // State after operation (null for DELETE)
@@ -347,28 +358,29 @@ const count = await eventLog.getEventCount()
 console.log(`Total events: ${count}`)
 ```
 
-### queryAtTime(asOf)
+### Time-Travel Queries (asOf option)
 
-Query entity state at a specific point in time (time-travel queries).
+Query entity state at a specific point in time by using the `asOf` option with `find()` or `get()` methods.
 
 ```typescript
-// Use the asOf option with find() or get()
-find<T>(namespace: string, filter?: Filter, options?: { asOf: Date }): Promise<PaginatedResult<Entity<T>>>
-get<T>(namespace: string, id: string, options?: { asOf: Date }): Promise<Entity<T> | null>
+find<T>(namespace: string, filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
+get<T>(namespace: string, id: string, options?: GetOptions): Promise<Entity<T> | null>
 ```
 
 #### Parameters
 
+The `asOf` parameter is passed as part of the options object:
+
 | Name | Type | Description |
 |------|------|-------------|
-| `asOf` | `Date` | The timestamp to query at |
+| `options.asOf` | `Date` | The timestamp to query at |
 
 ParqueDB reconstructs entity state by replaying events up to the specified time.
 
 #### Example
 
 ```typescript
-// Get post as it existed on January 1st
+// Get post as it existed on January 1st, 2024
 const post = await db.get('posts', 'abc123', {
   asOf: new Date('2024-01-01'),
 })
@@ -384,11 +396,12 @@ const snapshot = await db.find('orders', { status: 'completed' }, {
   limit: 1000,
 })
 console.log(`Orders completed by Jan 1: ${snapshot.total}`)
+console.log(`Found ${snapshot.items.length} orders`)
 ```
 
 ### archiveEvents(options)
 
-Archive or drop old events based on configuration or manual threshold.
+Archive or drop old events based on configuration or manual threshold. This is a synchronous operation that returns immediately with the results.
 
 ```typescript
 archiveEvents(options?: { olderThan?: Date; maxEvents?: number }): ArchiveEventsResult
@@ -426,6 +439,9 @@ console.log(`Archived: ${result.archivedCount}, Dropped: ${result.droppedCount}`
 const result2 = db.archiveEvents({
   maxEvents: 1000,
 })
+
+console.log(`Oldest remaining event: ${result2.oldestEventTs}`)
+console.log(`Newest archived event: ${result2.newestArchivedTs}`)
 ```
 
 Event archival behavior depends on `eventLogConfig.archiveOnRotation`:
@@ -467,18 +483,13 @@ db.dispose()
 
 ### flush()
 
-Force write pending changes to storage. Normally, ParqueDB automatically flushes changes after each operation. This method is for advanced use cases where you need explicit control over when data is persisted.
-
-```typescript
-// Internal method - flushEvents() is private
-// Use beginTransaction() and commit() for explicit control
-```
+**Note**: ParqueDB does not expose a public `flush()` method. The database automatically manages persistence through an internal `flushEvents()` mechanism.
 
 ParqueDB buffers events in memory and automatically schedules a flush after each mutation. During transactions, auto-flush is suppressed until `commit()` is called.
 
-**Note**: `flushEvents()` is a private method. For explicit control over persistence:
+For explicit control over persistence:
 1. Use transactions with `beginTransaction()` and `commit()`
-2. Or rely on automatic flushing after each operation
+2. Or rely on automatic flushing after each operation (create, update, delete)
 
 ---
 
@@ -599,15 +610,15 @@ getSnapshotManager(): SnapshotManager
 
 ```typescript
 interface Snapshot {
-  id: string              // Snapshot ID
-  entityId: EntityId      // Entity this snapshot belongs to
-  ns: string             // Namespace
-  sequenceNumber: number  // Event sequence number at snapshot time
-  eventId?: string       // Event ID at snapshot time
-  createdAt: Date        // When snapshot was created
-  state: Record<string, unknown>  // Entity state
-  compressed: boolean    // Whether data is compressed
-  size?: number         // Compressed size in bytes
+  id: string                       // Snapshot ID (ULID)
+  entityId: EntityId               // Entity this snapshot belongs to
+  ns: string                      // Namespace
+  sequenceNumber: number           // Event sequence number at snapshot time
+  eventId?: string                // Event ID at snapshot time
+  createdAt: Date                 // When snapshot was created
+  state: Record<string, unknown>  // Entity state at snapshot time
+  compressed: boolean             // Whether data is compressed
+  size?: number                   // Compressed size in bytes (if compressed)
 }
 ```
 
@@ -661,28 +672,69 @@ ParqueDB provides methods for managing secondary indexes.
 
 ### createIndex(ns, definition)
 
-Create a new index on a collection.
+Create a new index on a collection. Supports hash indexes for equality queries, SST indexes for range queries, FTS indexes for full-text search, and vector indexes for similarity search.
 
 ```typescript
 createIndex(ns: string, definition: IndexDefinition): Promise<IndexMetadata>
 ```
 
-See [Secondary Indexes](./architecture/secondary-indexes.md) for details.
+#### Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `ns` | `string` | Collection namespace |
+| `definition` | `IndexDefinition` | Index definition with type, fields, and options |
+
+#### Example
+
+```typescript
+// Create a hash index for fast equality lookups
+await db.createIndex('orders', {
+  name: 'idx_status',
+  type: 'hash',
+  fields: [{ path: 'status' }]
+})
+
+// Create an FTS index for full-text search
+await db.createIndex('articles', {
+  name: 'idx_fts_content',
+  type: 'fts',
+  fields: [{ path: 'title' }, { path: 'body' }],
+  options: { language: 'english' }
+})
+```
+
+See [Secondary Indexes](architecture/secondary-indexes.md) for complete documentation.
 
 ### dropIndex(ns, indexName)
 
-Drop an index.
+Drop an index and remove it from the collection.
 
 ```typescript
 dropIndex(ns: string, indexName: string): Promise<void>
 ```
 
+#### Example
+
+```typescript
+await db.dropIndex('orders', 'idx_status')
+```
+
 ### listIndexes(ns)
 
-List all indexes for a namespace.
+List all indexes for a namespace with their metadata.
 
 ```typescript
 listIndexes(ns: string): Promise<IndexMetadata[]>
+```
+
+#### Example
+
+```typescript
+const indexes = await db.listIndexes('orders')
+for (const index of indexes) {
+  console.log(`${index.name} (${index.type}): ${index.fields.map(f => f.path).join(', ')}`)
+}
 ```
 
 ### getIndex(ns, indexName)
@@ -693,35 +745,67 @@ Get metadata for a specific index.
 getIndex(ns: string, indexName: string): Promise<IndexMetadata | null>
 ```
 
+#### Example
+
+```typescript
+const index = await db.getIndex('orders', 'idx_status')
+if (index) {
+  console.log('Index type:', index.type)
+  console.log('Indexed fields:', index.fields)
+}
+```
+
 ### rebuildIndex(ns, indexName)
 
-Rebuild an index.
+Rebuild an index by reprocessing all documents in the collection.
 
 ```typescript
 rebuildIndex(ns: string, indexName: string): Promise<void>
 ```
 
+#### Example
+
+```typescript
+// Rebuild the FTS index after schema changes
+await db.rebuildIndex('articles', 'idx_fts_content')
+```
+
 ### getIndexStats(ns, indexName)
 
-Get statistics for an index.
+Get statistics for an index including size, entry count, and performance metrics.
 
 ```typescript
 getIndexStats(ns: string, indexName: string): Promise<IndexStats>
 ```
 
+#### Example
+
+```typescript
+const stats = await db.getIndexStats('orders', 'idx_status')
+console.log('Index size:', stats.size)
+console.log('Entry count:', stats.entryCount)
+```
+
 ### getIndexManager()
 
-Get the index manager instance for advanced use cases.
+Get the index manager instance for advanced use cases and direct index manipulation.
 
 ```typescript
 getIndexManager(): IndexManager
+```
+
+#### Example
+
+```typescript
+const indexManager = db.getIndexManager()
+// Use for advanced index operations
 ```
 
 ---
 
 ## CRUD Operations
 
-For complete CRUD operation documentation, see the [Collection API Reference](./api/collection.md).
+For complete CRUD operation documentation, see the [Collection API Reference](api/collection.md).
 
 ParqueDB provides both namespace-based and collection-based CRUD methods:
 
@@ -773,82 +857,418 @@ await db.Posts.delete('abc123')
 
 ### deleteMany(namespace, filter, options)
 
-Delete multiple entities matching a filter.
+Delete multiple entities matching a filter. Supports both soft and hard deletes.
 
 ```typescript
 deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
 ```
 
+#### Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `namespace` | `string` | Collection namespace |
+| `filter` | `Filter` | MongoDB-style filter to match entities |
+| `options` | `DeleteOptions` | Delete options |
+
+#### DeleteOptions
+
+```typescript
+interface DeleteOptions {
+  soft?: boolean     // Soft delete (default: true)
+  actor?: EntityId   // Actor performing the delete
+}
+```
+
+#### DeleteResult
+
+```typescript
+interface DeleteResult {
+  deletedCount: number  // Number of entities deleted
+}
+```
+
+#### Example
+
+```typescript
+// Soft delete all draft posts
+const result = await db.deleteMany('posts', {
+  status: 'draft'
+}, {
+  soft: true,
+  actor: 'users/admin' as EntityId
+})
+
+console.log(`Deleted ${result.deletedCount} draft posts`)
+
+// Hard delete all posts older than 1 year
+const hardDelete = await db.deleteMany('posts', {
+  createdAt: { $lt: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000) }
+}, {
+  soft: false
+})
+
+console.log(`Permanently deleted ${hardDelete.deletedCount} old posts`)
+```
+
 ### restore(namespace, id, options)
 
-Restore a soft-deleted entity.
+Restore a soft-deleted entity by removing the `deletedAt` and `deletedBy` fields.
 
 ```typescript
 restore<T>(namespace: string, id: string, options?: { actor?: EntityId }): Promise<Entity<T> | null>
 ```
 
+#### Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `namespace` | `string` | Collection namespace |
+| `id` | `string` | Entity ID |
+| `options.actor` | `EntityId` | Actor performing the restore |
+
+#### Returns
+
+The restored entity, or `null` if the entity doesn't exist or wasn't soft-deleted.
+
+#### Example
+
+```typescript
+// Soft delete a post
+await db.delete('posts', 'abc123', { soft: true })
+
+// Later, restore it
+const restored = await db.restore('posts', 'abc123', {
+  actor: 'users/admin' as EntityId
+})
+
+if (restored) {
+  console.log('Post restored:', restored)
+} else {
+  console.log('Post not found or not soft-deleted')
+}
+```
+
 ### upsert(namespace, filter, update, options)
 
-Find and update an entity, or create if not found.
+Find and update an entity, or create if not found. If multiple entities match the filter, only the first one is updated.
 
 ```typescript
 upsert<T>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: { returnDocument?: 'before' | 'after' }): Promise<Entity<T> | null>
 ```
 
+#### Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `namespace` | `string` | Collection namespace |
+| `filter` | `Filter` | MongoDB-style filter to find existing entity |
+| `update` | `UpdateInput<T>` | Update operations to apply |
+| `options.returnDocument` | `'before' \| 'after'` | Which version to return (default: 'after') |
+
+#### Example
+
+```typescript
+// Update status or create new order
+const order = await db.upsert('orders',
+  { orderNumber: 'ORD-12345' },
+  {
+    $set: { status: 'shipped' },
+    $setOnInsert: {
+      $type: 'Order',
+      name: 'Order 12345',
+      createdAt: new Date()
+    }
+  }
+)
+```
+
 ### upsertMany(namespace, items, options)
 
-Upsert multiple entities in a single operation.
+Upsert multiple entities in a single operation with support for ordered/unordered execution and per-item optimistic concurrency.
 
 ```typescript
 upsertMany<T>(namespace: string, items: UpsertManyItem<T>[], options?: UpsertManyOptions): Promise<UpsertManyResult>
 ```
 
+#### Types
+
+```typescript
+interface UpsertManyItem<T> {
+  filter: Filter
+  update: UpdateInput<T>
+  options?: {
+    expectedVersion?: number
+  }
+}
+
+interface UpsertManyOptions {
+  ordered?: boolean  // Stop on first error if true (default: true)
+  actor?: EntityId   // Actor performing the operation
+}
+
+interface UpsertManyResult {
+  ok: boolean
+  insertedCount: number
+  modifiedCount: number
+  matchedCount: number
+  upsertedCount: number
+  upsertedIds: EntityId[]
+  errors: UpsertManyError[]
+}
+```
+
+#### Example
+
+```typescript
+const result = await db.upsertMany('products', [
+  {
+    filter: { sku: 'PROD-001' },
+    update: { $set: { price: 29.99 }, $inc: { inventory: 10 } }
+  },
+  {
+    filter: { sku: 'PROD-002' },
+    update: { $set: { price: 39.99 }, $setOnInsert: { name: 'New Product' } }
+  }
+], { ordered: false })
+
+console.log(`Inserted: ${result.insertedCount}, Modified: ${result.modifiedCount}`)
+```
+
 ### getRelated(namespace, id, relationField, options)
 
-Get related entities with pagination support.
+Get related entities with pagination support, filtering, sorting, and projection.
 
 ```typescript
 getRelated<T>(namespace: string, id: string, relationField: string, options?: GetRelatedOptions): Promise<GetRelatedResult<T>>
 ```
 
+#### Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `namespace` | `string` | Collection namespace |
+| `id` | `string` | Entity ID |
+| `relationField` | `string` | Relationship field name |
+| `options` | `GetRelatedOptions` | Query options |
+
+#### GetRelatedOptions
+
+```typescript
+interface GetRelatedOptions {
+  cursor?: string           // Cursor for pagination
+  limit?: number           // Maximum results
+  filter?: Filter          // Filter related entities
+  sort?: SortSpec          // Sort order
+  project?: Projection     // Field projection
+  includeDeleted?: boolean // Include soft-deleted entities
+}
+```
+
+#### Example
+
+```typescript
+// Get all posts by a user with pagination
+const result = await db.getRelated('users', 'user123', 'posts', {
+  filter: { status: 'published' },
+  sort: { createdAt: -1 },
+  limit: 10
+})
+
+console.log(`Found ${result.total} posts, showing ${result.items.length}`)
+if (result.hasMore) {
+  console.log(`Next cursor: ${result.nextCursor}`)
+}
+```
+
 ### history(entityId, options)
 
-Get the history of changes for an entity.
+Get the history of changes for an entity with support for pagination and filtering by operation type.
 
 ```typescript
 history(entityId: EntityId, options?: HistoryOptions): Promise<HistoryResult>
 ```
 
+#### Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `entityId` | `EntityId` | Full entity ID (e.g., 'posts/abc123') |
+| `options` | `HistoryOptions` | History query options |
+
+#### HistoryOptions
+
+```typescript
+interface HistoryOptions {
+  limit?: number      // Maximum results
+  cursor?: string     // Cursor for pagination
+  op?: EventOp       // Filter by operation type
+}
+```
+
+#### Example
+
+```typescript
+// Get all changes to a post
+const history = await db.history('posts/abc123' as EntityId, {
+  limit: 20
+})
+
+for (const item of history.items) {
+  console.log(`${item.op} at ${item.ts} by ${item.actor}`)
+  console.log('Before:', item.before)
+  console.log('After:', item.after)
+}
+
+// Get only UPDATE operations
+const updates = await db.history('posts/abc123' as EntityId, {
+  op: 'UPDATE'
+})
+```
+
 ### getHistory(namespace, id, options)
 
-Alias for `history` with namespace-based ID resolution.
+Convenience method for `history()` that accepts namespace and ID separately instead of a full EntityId.
 
 ```typescript
 getHistory(namespace: string, id: string, options?: HistoryOptions): Promise<HistoryResult>
 ```
 
+#### Example
+
+```typescript
+// Using getHistory (namespace + id)
+const history1 = await db.getHistory('posts', 'abc123', { limit: 10 })
+
+// Equivalent to using history with full EntityId
+const history2 = await db.history('posts/abc123' as EntityId, { limit: 10 })
+```
+
 ### getAtVersion(namespace, id, version)
 
-Get an entity at a specific version number.
+Get an entity at a specific version number. Reconstructs the entity state by replaying events up to the specified version.
 
 ```typescript
 getAtVersion<T>(namespace: string, id: string, version: number): Promise<Entity<T> | null>
 ```
 
+#### Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `namespace` | `string` | Collection namespace |
+| `id` | `string` | Entity ID |
+| `version` | `number` | Version number to retrieve |
+
+#### Returns
+
+The entity at the specified version, or `null` if the entity didn't exist at that version.
+
+#### Example
+
+```typescript
+// Get a post at version 5
+const postV5 = await db.getAtVersion('posts', 'abc123', 5)
+
+if (postV5) {
+  console.log('Post at version 5:', postV5)
+  console.log('Title:', postV5.title)
+}
+
+// Compare with current version
+const current = await db.get('posts', 'abc123')
+console.log('Current version:', current?.version)
+```
+
 ### diff(entityId, t1, t2)
 
-Compute the difference between entity states at two timestamps.
+Compute the difference between entity states at two timestamps, showing added, removed, and changed fields with before/after values.
 
 ```typescript
 diff(entityId: EntityId, t1: Date, t2: Date): Promise<DiffResult>
 ```
 
+#### Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `entityId` | `EntityId` | Full entity ID (e.g., 'posts/abc123') |
+| `t1` | `Date` | First timestamp (typically earlier) |
+| `t2` | `Date` | Second timestamp (typically later) |
+
+#### DiffResult
+
+```typescript
+interface DiffResult {
+  added: string[]    // Fields added between t1 and t2
+  removed: string[]  // Fields removed between t1 and t2
+  changed: string[]  // Fields that changed values
+  values: {          // Before/after values for all changes
+    [field: string]: { before: unknown; after: unknown }
+  }
+}
+```
+
+#### Example
+
+```typescript
+// Compare post state between two dates
+const diff = await db.diff(
+  'posts/abc123' as EntityId,
+  new Date('2024-01-01'),
+  new Date('2024-02-01')
+)
+
+console.log('Added fields:', diff.added)
+console.log('Removed fields:', diff.removed)
+console.log('Changed fields:', diff.changed)
+
+// Show all changes
+for (const field of diff.changed) {
+  const { before, after } = diff.values[field]!
+  console.log(`${field}: ${before} -> ${after}`)
+}
+```
+
 ### revert(entityId, targetTime, options)
 
-Revert an entity to its state at a specific timestamp.
+Revert an entity to its state at a specific timestamp. This creates a new UPDATE event with revert metadata.
 
 ```typescript
 revert<T>(entityId: EntityId, targetTime: Date, options?: RevertOptions): Promise<Entity<T>>
+```
+
+#### Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `entityId` | `EntityId` | Full entity ID (e.g., 'posts/abc123') |
+| `targetTime` | `Date` | Timestamp to revert to (must be in the past) |
+| `options` | `RevertOptions` | Revert options |
+
+#### RevertOptions
+
+```typescript
+interface RevertOptions {
+  actor?: EntityId  // Actor performing the revert
+}
+```
+
+#### Example
+
+```typescript
+// Revert a post to its state yesterday
+const revertedPost = await db.revert(
+  'posts/abc123' as EntityId,
+  new Date(Date.now() - 24 * 60 * 60 * 1000),
+  { actor: 'users/admin' as EntityId }
+)
+
+console.log('Reverted to:', revertedPost)
+
+// Verify the revert in history
+const history = await db.history('posts/abc123' as EntityId, { limit: 1 })
+console.log('Latest event metadata:', history.items[0]?.metadata) // { revert: true }
 ```
 
 ---
@@ -887,12 +1307,28 @@ try {
 
 ---
 
+## Performance Considerations
+
+### Snapshots
+
+Snapshots improve time-travel query performance by avoiding full event replay. Configure `autoSnapshotThreshold` to automatically create snapshots after a certain number of events.
+
+### Indexes
+
+Use secondary indexes to speed up queries on frequently-accessed fields. FTS indexes enable full-text search, while vector indexes support semantic similarity queries.
+
+### Event Log Management
+
+Configure `eventLogConfig` to manage event log size. Archive old events to reduce memory usage while preserving historical data.
+
+---
+
 ## See Also
 
-- [Collection API Reference](./api/collection.md) - Complete Collection interface documentation
-- [Getting Started](./getting-started.md) - Quick start guide
-- [Schema Definition](./schemas.md) - Complete schema reference
-- [Query API](./queries.md) - MongoDB-style filtering
-- [Update Operators](./updates.md) - All update operators
-- [Graph-First Architecture](./architecture/graph-first-architecture.md) - How relationships work
-- [Secondary Indexes](./architecture/secondary-indexes.md) - Index types and usage
+- [Collection API Reference](api/collection.md) - Complete Collection interface documentation
+- [Getting Started](getting-started.md) - Quick start guide
+- [Schema Definition](schemas.md) - Complete schema reference
+- [Query API](queries.md) - MongoDB-style filtering
+- [Update Operators](updates.md) - All update operators
+- [Graph-First Architecture](architecture/graph-first-architecture.md) - How relationships work
+- [Secondary Indexes](architecture/secondary-indexes.md) - Index types and usage
