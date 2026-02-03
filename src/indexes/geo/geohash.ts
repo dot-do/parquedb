@@ -12,10 +12,11 @@ for (let i = 0; i < BASE32.length; i++) {
   BASE32_MAP.set(BASE32[i]!, i)
 }
 
-// Geohash neighbor directions
+// Geohash neighbor directions - lookup table for finding the neighbor character
+// Each character maps to its neighbor in the specified direction
 const NEIGHBORS: Record<string, Record<string, string>> = {
   n: { even: 'p0r21436x8zb9dcf5h7kjnmqesgutwvy', odd: 'bc01fg45238967deuvhjyznpkmstqrwx' },
-  s: { even: '14365h7k9dcfesgujnmqp0r2twvyx8zb', odd: '238967debc01teleuvhjyznpkmstqrwx' },
+  s: { even: '14365h7k9dcfesgujnmqp0r2twvyx8zb', odd: '238967debc01fg45uvhjyznpkmstqrwx' },
   e: { even: 'bc01fg45238967deuvhjyznpkmstqrwx', odd: 'p0r21436x8zb9dcf5h7kjnmqesgutwvy' },
   w: { even: '238967debc01fg45kmstqrwxuvhjyznp', odd: '14365h7k9dcfesgujnmqp0r2twvyx8zb' },
 }
@@ -229,19 +230,21 @@ export function getNeighbors(hash: string): {
  * @param lat - Center latitude
  * @param lng - Center longitude
  * @param radiusMeters - Radius in meters
+ * @param precision - Optional fixed precision (default: auto-calculated from radius)
  * @returns Set of geohash prefixes that could contain points in the circle
  */
 export function geohashesInRadius(
   lat: number,
   lng: number,
-  radiusMeters: number
+  radiusMeters: number,
+  precision?: number
 ): Set<string> {
-  // Determine appropriate precision based on radius
+  // Determine appropriate precision based on radius, or use provided precision
   // Each precision level roughly halves the cell size
   // Precision 1 = ~5000km, 2 = ~1250km, 3 = ~156km, 4 = ~39km, 5 = ~4.9km
   // 6 = ~1.2km, 7 = ~153m, 8 = ~38m, 9 = ~4.8m, 10 = ~1.2m, 11 = ~15cm, 12 = ~2cm
-  const precision = radiusToPrecision(radiusMeters)
-  const centerHash = encodeGeohash(lat, lng, precision)
+  const effectivePrecision = precision ?? radiusToPrecision(radiusMeters)
+  const centerHash = encodeGeohash(lat, lng, effectivePrecision)
   const result = new Set<string>()
 
   // Add center cell

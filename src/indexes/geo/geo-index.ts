@@ -175,7 +175,8 @@ export class GeoIndex {
     const { maxDistance = Infinity, minDistance = 0, limit = 100 } = options
 
     // Get candidate geohash cells that might contain results
-    const candidateCells = geohashesInRadius(centerLat, centerLng, maxDistance)
+    // Use bucket precision to match how entries are stored
+    const candidateCells = geohashesInRadius(centerLat, centerLng, maxDistance, GeoIndex.BUCKET_PRECISION)
 
     // Collect all candidates from matching buckets
     const candidates: GeoEntry[] = []
