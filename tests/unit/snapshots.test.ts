@@ -688,5 +688,87 @@ describe('Snapshots', () => {
       expect(snapshots.length).toBe(1)
       expect(snapshots[0].state.title).toBe('Original Title')
     })
+
+    it('throws SnapshotNotFoundError when deleting non-existent snapshot', async () => {
+      const snapshotManager = db.getSnapshotManager()
+
+      await expect(
+        snapshotManager.deleteSnapshot('non-existent-snapshot-id')
+      ).rejects.toThrow('Snapshot not found')
+    })
+
+    it('throws error with snapshot ID when deleting non-existent snapshot', async () => {
+      const snapshotManager = db.getSnapshotManager()
+
+      try {
+        await snapshotManager.deleteSnapshot('my-fake-snapshot-id')
+        expect.fail('Should have thrown')
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error)
+        expect((error as Error).message).toContain('my-fake-snapshot-id')
+      }
+    })
+  })
+
+  // ===========================================================================
+  // Error Handling Tests
+  // ===========================================================================
+
+  describe('error handling', () => {
+    it('maintains consistency when deleting non-existent snapshot', async () => {
+      const entity = await db.create('posts', {
+        $type: 'Post',
+        name: 'Test Post',
+        title: 'Title',
+        content: 'Content',
+      })
+
+      const snapshotManager = db.getSnapshotManager()
+
+      // Create a snapshot
+      const snapshot = await snapshotManager.createSnapshot(entity.$id as EntityId)
+
+      // Verify it exists
+      let snapshots = await snapshotManager.listSnapshots(entity.$id as EntityId)
+      expect(snapshots.length).toBe(1)
+
+      // Try to delete a non-existent snapshot (should throw)
+      await expect(
+        snapshotManager.deleteSnapshot('non-existent-id')
+      ).rejects.toThrow()
+
+      // The original snapshot should still be intact
+      snapshots = await snapshotManager.listSnapshots(entity.$id as EntityId)
+      expect(snapshots.length).toBe(1)
+      expect(snapshots[0].id).toBe(snapshot.id)
+    })
+
+    it('successfully deletes existing snapshot', async () => {
+      const entity = await db.create('posts', {
+        $type: 'Post',
+        name: 'Test Post',
+        title: 'Title',
+        content: 'Content',
+      })
+
+      const snapshotManager = db.getSnapshotManager()
+
+      // Create two snapshots
+      const snapshot1 = await snapshotManager.createSnapshot(entity.$id as EntityId)
+      await db.update('posts', entity.$id as string, { $set: { title: 'V2' } })
+      const snapshot2 = await snapshotManager.createSnapshot(entity.$id as EntityId)
+
+      // Verify both exist
+      let snapshots = await snapshotManager.listSnapshots(entity.$id as EntityId)
+      expect(snapshots.length).toBe(2)
+
+      // Delete the first one
+      await snapshotManager.deleteSnapshot(snapshot1.id)
+
+      // Verify only one remains
+      snapshots = await snapshotManager.listSnapshots(entity.$id as EntityId)
+      expect(snapshots.length).toBe(1)
+      expect(snapshots[0].id).toBe(snapshot2.id)
+    })
   })
 })

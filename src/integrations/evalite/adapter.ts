@@ -119,6 +119,7 @@ export class ParqueDBEvaliteAdapter {
       collectionPrefix: userConfig.collectionPrefix ?? 'evalite',
       defaultActor: userConfig.defaultActor ?? ('system/evalite' as EntityId),
       debug: userConfig.debug ?? false,
+      mvIntegration: userConfig.mvIntegration,
     }
 
     this.db = new ParqueDB({ storage: this.config.storage })
@@ -192,11 +193,18 @@ export class ParqueDBEvaliteAdapter {
         actor: this.config.defaultActor,
       })
 
-      return {
+      const run: EvalRun = {
         id,
         runType: (opts.runType ?? 'full') as RunType,
         createdAt: entity.createdAt.toISOString(),
       }
+
+      // Notify MV integration
+      if (this.config.mvIntegration) {
+        await this.config.mvIntegration.processRun(run)
+      }
+
+      return run
     },
 
     /**
@@ -245,7 +253,14 @@ export class ParqueDBEvaliteAdapter {
         actor: this.config.defaultActor,
       })
 
-      return this.entityToSuite(entity)
+      const suite = this.entityToSuite(entity)
+
+      // Notify MV integration
+      if (this.config.mvIntegration) {
+        await this.config.mvIntegration.processSuite(suite)
+      }
+
+      return suite
     },
 
     /**
@@ -273,7 +288,14 @@ export class ParqueDBEvaliteAdapter {
         throw new Error(`Suite not found: ${opts.id}`)
       }
 
-      return this.entityToSuite(entity)
+      const suite = this.entityToSuite(entity)
+
+      // Notify MV integration
+      if (this.config.mvIntegration) {
+        await this.config.mvIntegration.processSuite(suite, 'update')
+      }
+
+      return suite
     },
 
     /**
@@ -324,7 +346,14 @@ export class ParqueDBEvaliteAdapter {
         actor: this.config.defaultActor,
       })
 
-      return this.entityToEval(entity)
+      const evalResult = this.entityToEval(entity)
+
+      // Notify MV integration
+      if (this.config.mvIntegration) {
+        await this.config.mvIntegration.processEval(evalResult)
+      }
+
+      return evalResult
     },
 
     /**
@@ -354,7 +383,14 @@ export class ParqueDBEvaliteAdapter {
         throw new Error(`Eval not found: ${opts.id}`)
       }
 
-      return this.entityToEval(entity)
+      const evalResult = this.entityToEval(entity)
+
+      // Notify MV integration
+      if (this.config.mvIntegration) {
+        await this.config.mvIntegration.processEval(evalResult, 'update')
+      }
+
+      return evalResult
     },
 
     /**
@@ -416,7 +452,14 @@ export class ParqueDBEvaliteAdapter {
         actor: this.config.defaultActor,
       })
 
-      return this.entityToScore(entity)
+      const score = this.entityToScore(entity)
+
+      // Notify MV integration
+      if (this.config.mvIntegration) {
+        await this.config.mvIntegration.processScore(score)
+      }
+
+      return score
     },
 
     /**
@@ -469,7 +512,14 @@ export class ParqueDBEvaliteAdapter {
         actor: this.config.defaultActor,
       })
 
-      return this.entityToTrace(entity)
+      const trace = this.entityToTrace(entity)
+
+      // Notify MV integration
+      if (this.config.mvIntegration) {
+        await this.config.mvIntegration.processTrace(trace)
+      }
+
+      return trace
     },
 
     /**

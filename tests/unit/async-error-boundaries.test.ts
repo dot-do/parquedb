@@ -134,8 +134,9 @@ describe('Async Error Boundaries', () => {
           console.warn('Background operation failed:', err)
         })
 
-        // Flush pending microtasks/promises
-        await vi.runAllTimersAsync()
+        // Flush pending microtasks/promises by awaiting a resolved promise
+        // This allows the catch handler to execute
+        await new Promise(resolve => setImmediate(resolve))
 
         // Error should be logged
         expect(mockLogger).toHaveBeenCalled()

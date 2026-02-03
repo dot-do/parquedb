@@ -32,6 +32,30 @@
 // Main adapter
 export { ParqueDBEvaliteAdapter, createEvaliteAdapter } from './adapter'
 
+// MV Integration
+export {
+  EvaliteMVIntegration,
+  createEvaliteMVIntegration,
+  queryEvaliteBuiltinView,
+} from './mv-integration'
+
+// MV Integration Types
+export type {
+  EvaliteMVConfig,
+  EvaliteEntityType,
+  EvaliteMVEvent,
+  EvaliteAnalyticsView,
+  EvaliteBuiltinViewName,
+  ScoreTrendData,
+  RunStatisticsData,
+  SuitePerformanceData,
+  ScorerAnalysisData,
+  TokenUsageBySuiteData,
+  FailurePatternData,
+  EvaliteMVState,
+  EvaliteQueryOptions,
+} from './mv-integration'
+
 // Types
 export type {
   // Configuration

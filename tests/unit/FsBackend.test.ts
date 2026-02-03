@@ -1019,8 +1019,14 @@ describe('FsBackend', () => {
       await expect(backend.read('subdir/../../../etc/passwd')).rejects.toThrow(PathTraversalError)
     })
 
-    it('should reject absolute paths', async () => {
-      await expect(backend.read('/etc/passwd')).rejects.toThrow(PathTraversalError)
+    it('should normalize absolute paths by stripping leading slash (consistent with other backends)', async () => {
+      // Write a file using relative path
+      const data = new TextEncoder().encode('test content')
+      await backend.write('etc/passwd', data)
+
+      // Should be able to read it using absolute-style path (leading slash stripped)
+      const content = await backend.read('/etc/passwd')
+      expect(new TextDecoder().decode(content)).toBe('test content')
     })
 
     it('should reject paths that resolve outside root', async () => {

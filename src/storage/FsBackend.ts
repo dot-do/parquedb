@@ -29,7 +29,7 @@ import {
   PathTraversalError,
 } from './errors'
 import { validateRange } from './validation'
-import { globToRegex } from './utils'
+import { globToRegex, normalizePath as normalizePathUtil } from './utils'
 import { getRandomBase36 } from '../utils'
 
 // Re-export PathTraversalError for backward compatibility
@@ -65,10 +65,8 @@ export class FsBackend implements StorageBackend {
       throw new PathTraversalError(path)
     }
 
-    // Reject absolute paths
-    if (path.startsWith('/')) {
-      throw new PathTraversalError(path)
-    }
+    // Normalize absolute paths by stripping leading slash (consistent with other backends)
+    path = normalizePathUtil(path)
 
     // Normalize the path (removes // and resolves ./ but we need to check .. ourselves)
     const normalizedPath = normalize(path)

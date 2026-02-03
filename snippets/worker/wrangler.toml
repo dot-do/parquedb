@@ -11,8 +11,9 @@ main = "search.ts"
 compatibility_date = "2024-09-02"
 compatibility_flags = ["nodejs_compat"]
 
-# Account ID for .do account
-account_id = "b6641681fe423910342b9ffa1364c76d"
+# Account ID - set via CLOUDFLARE_ACCOUNT_ID environment variable
+# or use: wrangler deploy --config snippets/worker/wrangler.toml --account-id $CLOUDFLARE_ACCOUNT_ID
+# account_id = ""  # Do NOT hardcode - use env var or CLI flag
 
 # ==============================================================================
 # Route Configuration
@@ -20,9 +21,12 @@ account_id = "b6641681fe423910342b9ffa1364c76d"
 # Routes to cdn.workers.do/search/*
 # Also available at parquedb-search.{account}.workers.dev
 
-[[routes]]
-pattern = "cdn.workers.do/search/*"
-zone_id = "7cdc309f5238b228485fc7e4ff29772b"
+# Routes configuration
+# Zone ID should be set via CLOUDFLARE_ZONE_ID environment variable
+# The wrangler CLI will prompt for zone selection if not specified
+# [[routes]]
+# pattern = "cdn.workers.do/search/*"
+# zone_id = ""  # Do NOT hardcode - configure per deployment
 
 # ==============================================================================
 # Tail Consumer Configuration
@@ -31,10 +35,8 @@ zone_id = "7cdc309f5238b228485fc7e4ff29772b"
 # This allows measuring REAL CPU time, not wall-clock time
 
 # The tail worker that will receive events from this worker
-# Uncomment and configure once tail worker is deployed:
-#
-# [[tail_consumers]]
-# service = "parquedb-tail"
+[[tail_consumers]]
+service = "parquedb-tail"
 
 # ==============================================================================
 # Observability

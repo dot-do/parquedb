@@ -1674,3 +1674,228 @@ describe('R2Backend Stale Upload Cleanup (Unit Tests)', () => {
     expect(backend.activeUploadCount).toBe(0)
   })
 })
+
+// =============================================================================
+// writeStreaming Cleanup Tests (Unit Tests)
+// =============================================================================
+
+describe('R2Backend writeStreaming Cleanup (Unit Tests)', () => {
+  /**
+   * Create a mock bucket that supports multipart uploads with controllable behavior
+   */
+  function createWriteStreamingMockBucket(options: {
+    uploadPartShouldFail?: boolean
+    completeShouldFail?: boolean
+    abortShouldFail?: boolean
+  } = {}) {
+    let uploadCounter = 0
+    const abortedUploadIds: string[] = []
+
+    const mockBucket: R2Bucket = {
+      async get() { return null },
+      async head() { return null },
+      async put(key: string, value: any) {
+        const data = value instanceof Uint8Array ? value : new Uint8Array(0)
+        return {
+          key,
+          version: 'v1',
+          size: data.length,
+          etag: 'simple-etag',
+          httpEtag: '"simple-etag"',
+          uploaded: new Date(),
+          storageClass: 'Standard' as const,
+          checksums: {},
+          writeHttpMetadata: () => {},
+        }
+      },
+      async delete() {},
+      async list() {
+        return { objects: [], truncated: false, delimitedPrefixes: [] }
+      },
+      async createMultipartUpload(key: string) {
+        const uploadId = `upload-${++uploadCounter}`
+        return {
+          key,
+          uploadId,
+          async uploadPart(partNumber: number, _value: any) {
+            if (options.uploadPartShouldFail) {
+              throw new Error('uploadPart failed')
+            }
+            return { partNumber, etag: `etag-${partNumber}` }
+          },
+          async abort() {
+            if (options.abortShouldFail) {
+              throw new Error('abort failed')
+            }
+            abortedUploadIds.push(uploadId)
+          },
+          async complete(_parts: any[]) {
+            if (options.completeShouldFail) {
+              throw new Error('complete failed')
+            }
+            return {
+              key,
+              version: 'v1',
+              size: 100,
+              etag: 'final-etag',
+              httpEtag: '"final-etag"',
+              uploaded: new Date(),
+              storageClass: 'Standard' as const,
+              checksums: {},
+              writeHttpMetadata: () => {},
+            }
+          },
+        }
+      },
+      resumeMultipartUpload() {
+        throw new Error('not implemented')
+      },
+    }
+
+    return { mockBucket, abortedUploadIds }
+  }
+
+  it('should not track uploads for small files (uses regular write)', async () => {
+    const { mockBucket } = createWriteStreamingMockBucket()
+    const backend = new R2Backend(mockBucket)
+
+    // Small file that doesn't need multipart
+    const smallData = new Uint8Array(1000)
+    await backend.writeStreaming('test/small.bin', smallData)
+
+    // No multipart upload was created, so nothing to track
+    expect(backend.activeUploadCount).toBe(0)
+  })
+
+  it('should remove upload from tracking on successful completion', async () => {
+    const { mockBucket } = createWriteStreamingMockBucket()
+    const backend = new R2Backend(mockBucket)
+
+    // Large file that needs multipart (over default part size)
+    // Use a smaller part size for testing to trigger multipart
+    const largeData = new Uint8Array(10 * 1024 * 1024 + 1) // Just over 10MB
+    await backend.writeStreaming('test/large.bin', largeData, {
+      partSize: 5 * 1024 * 1024, // 5MB minimum part size
+    })
+
+    // Upload should be removed from tracking after successful completion
+    expect(backend.activeUploadCount).toBe(0)
+  })
+
+  it('should remove upload from tracking when abort succeeds after error', async () => {
+    const { mockBucket, abortedUploadIds } = createWriteStreamingMockBucket({
+      uploadPartShouldFail: true,
+      abortShouldFail: false,
+    })
+    const backend = new R2Backend(mockBucket)
+
+    const largeData = new Uint8Array(10 * 1024 * 1024 + 1)
+
+    await expect(
+      backend.writeStreaming('test/large.bin', largeData, {
+        partSize: 5 * 1024 * 1024,
+      })
+    ).rejects.toThrow('uploadPart failed')
+
+    // Upload should be removed from tracking after successful abort
+    expect(backend.activeUploadCount).toBe(0)
+    expect(abortedUploadIds).toHaveLength(1)
+  })
+
+  it('should keep upload tracked when abort fails for later cleanup', async () => {
+    const { mockBucket } = createWriteStreamingMockBucket({
+      uploadPartShouldFail: true,
+      abortShouldFail: true,
+    })
+    const backend = new R2Backend(mockBucket)
+
+    const largeData = new Uint8Array(10 * 1024 * 1024 + 1)
+
+    await expect(
+      backend.writeStreaming('test/large.bin', largeData, {
+        partSize: 5 * 1024 * 1024,
+      })
+    ).rejects.toThrow('uploadPart failed')
+
+    // Upload should remain tracked for later cleanup since abort failed
+    expect(backend.activeUploadCount).toBe(1)
+
+    // Can be cleaned up later via cleanupStaleUploads or clearAllUploads
+    // Note: clearAllUploads will attempt abort again which will fail, but it still removes from tracking
+    const cleared = backend.clearAllUploads()
+    expect(cleared).toBe(1)
+    expect(backend.activeUploadCount).toBe(0)
+  })
+
+  it('should keep upload tracked when complete fails and abort fails', async () => {
+    const { mockBucket } = createWriteStreamingMockBucket({
+      uploadPartShouldFail: false,
+      completeShouldFail: true,
+      abortShouldFail: true,
+    })
+    const backend = new R2Backend(mockBucket)
+
+    const largeData = new Uint8Array(10 * 1024 * 1024 + 1)
+
+    await expect(
+      backend.writeStreaming('test/large.bin', largeData, {
+        partSize: 5 * 1024 * 1024,
+      })
+    ).rejects.toThrow('complete failed')
+
+    // Upload should remain tracked for later cleanup since abort failed
+    expect(backend.activeUploadCount).toBe(1)
+  })
+
+  it('should remove upload from tracking when complete fails but abort succeeds', async () => {
+    const { mockBucket, abortedUploadIds } = createWriteStreamingMockBucket({
+      uploadPartShouldFail: false,
+      completeShouldFail: true,
+      abortShouldFail: false,
+    })
+    const backend = new R2Backend(mockBucket)
+
+    const largeData = new Uint8Array(10 * 1024 * 1024 + 1)
+
+    await expect(
+      backend.writeStreaming('test/large.bin', largeData, {
+        partSize: 5 * 1024 * 1024,
+      })
+    ).rejects.toThrow('complete failed')
+
+    // Upload should be removed from tracking after successful abort
+    expect(backend.activeUploadCount).toBe(0)
+    expect(abortedUploadIds).toHaveLength(1)
+  })
+
+  it('orphaned uploads from writeStreaming can be cleaned up via stale cleanup', async () => {
+    vi.useFakeTimers()
+
+    const { mockBucket } = createWriteStreamingMockBucket({
+      uploadPartShouldFail: true,
+      abortShouldFail: true,
+    })
+    // Short TTL for testing
+    const backend = new R2Backend(mockBucket, { multipartUploadTTL: 100 })
+
+    const largeData = new Uint8Array(10 * 1024 * 1024 + 1)
+
+    await expect(
+      backend.writeStreaming('test/large.bin', largeData, {
+        partSize: 5 * 1024 * 1024,
+      })
+    ).rejects.toThrow('uploadPart failed')
+
+    expect(backend.activeUploadCount).toBe(1)
+
+    // Advance time past the TTL
+    vi.advanceTimersByTime(150)
+
+    // Stale cleanup should clean it up
+    const cleaned = backend.cleanupStaleUploads()
+    expect(cleaned).toBe(1)
+    expect(backend.activeUploadCount).toBe(0)
+
+    vi.useRealTimers()
+  })
+})

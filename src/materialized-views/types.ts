@@ -19,6 +19,9 @@ import {
   getCustomSourceHandler,
 } from './ingest-source'
 
+// Re-export cron validation from cron.ts
+export { validateCronExpression, type CronValidationResult } from './cron'
+
 // Re-export IngestSource types from the canonical source
 export type { IngestSource, KnownIngestSource, CustomIngestSource }
 export {
@@ -75,10 +78,24 @@ export const RefreshMode = {
 /**
  * Strategy for applying updates to the materialized view
  *
- * - 'replace': Atomically replace the entire view (default for scheduled)
+ * - 'full': Rebuild the entire view from source (for scheduled/manual modes)
+ * - 'incremental': Apply only changed data (efficient delta updates)
+ * - 'streaming': Real-time updates as changes occur
+ * - 'replace': Alias for 'full' - atomically replace the entire view
  * - 'append': Append new data (for INSERT-only workloads)
  */
-export type RefreshStrategy = 'replace' | 'append'
+export type RefreshStrategy = 'full' | 'incremental' | 'streaming' | 'replace' | 'append'
+
+/**
+ * Refresh strategy enum-like object for programmatic access
+ */
+export const RefreshStrategy = {
+  Full: 'full' as const,
+  Incremental: 'incremental' as const,
+  Streaming: 'streaming' as const,
+  Replace: 'replace' as const,
+  Append: 'append' as const,
+} as const
 
 /**
  * Refresh configuration for an MV
@@ -305,6 +322,24 @@ export type MVStatus =
   | 'disabled'
 
 /**
+ * Storage-layer view state
+ *
+ * - 'pending': View has been created but not yet built
+ * - 'building': View is being built for the first time
+ * - 'ready': View is ready for queries
+ * - 'stale': View data is outdated
+ * - 'error': View is in an error state
+ * - 'disabled': View has been disabled
+ */
+export type ViewState =
+  | 'pending'
+  | 'building'
+  | 'ready'
+  | 'stale'
+  | 'error'
+  | 'disabled'
+
+/**
  * MV Status enum-like object for programmatic access
  */
 export const MVStatus = {
@@ -419,6 +454,146 @@ export interface MVStats {
   cacheHitRatio: number
 }
 
+/**
+ * Statistics for a materialized view (storage layer alias)
+ */
+export type ViewStats = MVStats
+
+// =============================================================================
+// Storage Layer Types
+// =============================================================================
+
+/**
+ * Aggregation pipeline stage
+ */
+export interface PipelineStage {
+  /** Stage type */
+  $match?: Filter
+  $group?: Record<string, unknown>
+  $project?: Record<string, unknown>
+  $sort?: Record<string, 1 | -1>
+  $limit?: number
+  $skip?: number
+}
+
+/**
+ * Query specification for storage layer
+ *
+ * Represents the query/filter to apply when building the view.
+ */
+export interface ViewQuery {
+  /** Filter to apply to source data */
+  filter?: Filter
+
+  /** Projection/field selection (1 = include, 0 = exclude) */
+  project?: Record<string, 0 | 1>
+
+  /** Sort specification (1 = ascending, -1 = descending) */
+  sort?: Record<string, 1 | -1>
+
+  /** Aggregation pipeline (for complex transformations) */
+  pipeline?: PipelineStage[]
+}
+
+/**
+ * Schedule configuration for storage layer
+ */
+export interface ViewSchedule {
+  /** Cron expression for scheduled refresh */
+  cron: string
+}
+
+/**
+ * Options for storage layer view
+ *
+ * Configuration for how the view is refreshed and maintained.
+ */
+export interface ViewOptions {
+  /** Refresh mode: 'manual', 'streaming', or 'scheduled' */
+  refreshMode: 'manual' | 'streaming' | 'scheduled'
+
+  /** Schedule configuration (required for scheduled mode) */
+  schedule?: ViewSchedule | { cron?: string; intervalMs?: number; timezone?: string }
+
+  /** Maximum staleness in milliseconds (for streaming mode) */
+  maxStalenessMs?: number
+
+  /** Refresh strategy: 'full' or 'incremental' */
+  refreshStrategy?: 'full' | 'incremental' | 'streaming'
+
+  /** Whether to populate view data on creation */
+  populateOnCreate?: boolean
+
+  /** Indexes to create on the view */
+  indexes?: string[]
+
+  /** Description of the view */
+  description?: string
+
+  /** Tags for categorization */
+  tags?: string[]
+
+  /** Custom metadata */
+  metadata?: Record<string, unknown>
+}
+
+/**
+ * Storage layer view definition
+ *
+ * This is the format used by MVStorageManager for persisting view definitions.
+ * It differs from MVDefinition which is the declarative user-facing syntax.
+ */
+export interface ViewDefinition {
+  /** View name */
+  name: ViewName
+
+  /** Source collection name */
+  source: string
+
+  /** Query specification */
+  query: ViewQuery
+
+  /** View options */
+  options: ViewOptions
+}
+
+/**
+ * Storage layer view metadata
+ *
+ * Tracks the state and configuration of a stored view.
+ */
+export interface ViewMetadata {
+  /** View definition */
+  definition: ViewDefinition
+
+  /** Current state of the view */
+  state: ViewState
+
+  /** When the view was created */
+  createdAt: Date
+
+  /** When the view was last refreshed */
+  lastRefreshedAt?: Date
+
+  /** Duration of the last refresh in milliseconds */
+  lastRefreshDurationMs?: number
+
+  /** Next scheduled refresh time */
+  nextRefreshAt?: Date
+
+  /** Version number (incremented on each refresh) */
+  version: number
+
+  /** Number of documents in the view */
+  documentCount?: number
+
+  /** Size of the view in bytes */
+  sizeBytes?: number
+
+  /** Error message if state is 'error' */
+  error?: string
+}
+
 // =============================================================================
 // Type Guards
 // =============================================================================
@@ -455,6 +630,19 @@ export function isRefreshMode(value: unknown): value is RefreshMode {
 }
 
 /**
+ * Check if a value is a valid RefreshStrategy
+ */
+export function isRefreshStrategy(value: unknown): value is RefreshStrategy {
+  return (
+    value === 'full' ||
+    value === 'incremental' ||
+    value === 'streaming' ||
+    value === 'replace' ||
+    value === 'append'
+  )
+}
+
+/**
  * Check if a value is a valid MVStatus
  */
 export function isMVStatus(value: unknown): value is MVStatus {
@@ -462,6 +650,20 @@ export function isMVStatus(value: unknown): value is MVStatus {
     value === 'creating' ||
     value === 'ready' ||
     value === 'refreshing' ||
+    value === 'stale' ||
+    value === 'error' ||
+    value === 'disabled'
+  )
+}
+
+/**
+ * Check if a value is a valid ViewState
+ */
+export function isViewState(value: unknown): value is ViewState {
+  return (
+    value === 'pending' ||
+    value === 'building' ||
+    value === 'ready' ||
     value === 'stale' ||
     value === 'error' ||
     value === 'disabled'
@@ -585,6 +787,33 @@ export function isDenormalizationMV(mv: MVDefinition): boolean {
   return Boolean(mv.$expand)
 }
 
+/**
+ * Check if a value is a valid ViewDefinition (storage layer format)
+ */
+export function isValidViewDefinition(value: unknown): value is ViewDefinition {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  if (typeof v.name !== 'string') return false
+  if (typeof v.source !== 'string') return false
+  if (typeof v.query !== 'object' || v.query === null) return false
+  if (typeof v.options !== 'object' || v.options === null) return false
+  return true
+}
+
+/**
+ * Check if a query is a pipeline query (has non-empty pipeline array)
+ */
+export function isPipelineQuery(query: ViewQuery): boolean {
+  return Array.isArray(query.pipeline) && query.pipeline.length > 0
+}
+
+/**
+ * Check if a query is a simple query (no pipeline, uses filter/project/sort)
+ */
+export function isSimpleQuery(query: ViewQuery): boolean {
+  return !isPipelineQuery(query)
+}
+
 // =============================================================================
 // Validation
 // =============================================================================
@@ -596,6 +825,11 @@ export interface MVValidationError {
   field: string
   message: string
 }
+
+/**
+ * Validation error alias for ViewDefinition validation
+ */
+export type ViewValidationError = MVValidationError
 
 /**
  * Validate an MV definition and return errors
@@ -698,4 +932,339 @@ export function applyMVDefaults(def: MVDefinition): MVDefinition {
       ...def.$refresh,
     },
   }
+}
+
+// =============================================================================
+// Storage Layer Types - Extended
+// =============================================================================
+
+/**
+ * Schedule options for scheduled refresh views
+ */
+export interface ScheduleOptions {
+  /** Cron expression for scheduling */
+  cron?: string
+  /** Interval in milliseconds (alternative to cron) */
+  intervalMs?: number
+  /** Timezone for cron schedule */
+  timezone?: string
+}
+
+/**
+ * Extended view options with full support for all options
+ */
+export interface ExtendedViewOptions extends ViewOptions {
+  /** View description */
+  description?: string
+  /** Tags for categorization */
+  tags?: string[]
+  /** Custom metadata */
+  metadata?: Record<string, unknown>
+  /** Indexes to create on the view */
+  indexes?: string[]
+  /** Whether to populate view on creation */
+  populateOnCreate?: boolean
+}
+
+/**
+ * Default view options
+ */
+export const DEFAULT_VIEW_OPTIONS: Required<Pick<ExtendedViewOptions, 'refreshMode' | 'refreshStrategy' | 'populateOnCreate'>> = {
+  refreshMode: 'manual',
+  refreshStrategy: 'full',
+  populateOnCreate: false,
+}
+
+// =============================================================================
+// defineView API
+// =============================================================================
+
+/**
+ * Input for defineView API
+ */
+export interface DefineViewInput {
+  /** View name */
+  name: string
+  /** Source collection */
+  source: string
+  /** Query specification */
+  query: ViewQuery
+  /** View options */
+  options?: Partial<ExtendedViewOptions>
+}
+
+/**
+ * Result of defineView API
+ */
+export interface DefineViewResult {
+  /** Whether the view definition is valid */
+  success: boolean
+  /** The validated view definition (if successful) */
+  definition?: ViewDefinition & { options: ExtendedViewOptions }
+  /** Validation errors (if unsuccessful) */
+  errors?: ViewValidationError[]
+}
+
+/**
+ * Validate a ViewDefinition and return errors
+ */
+export function validateViewDefinition(def: Partial<ViewDefinition & { options?: Partial<ExtendedViewOptions> }>): ViewValidationError[] {
+  const errors: ViewValidationError[] = []
+
+  // Validate name
+  if (!def.name) {
+    errors.push({ field: 'name', message: 'Name is required' })
+  } else if (!isValidViewName(def.name as string)) {
+    errors.push({
+      field: 'name',
+      message: 'Name must start with a letter or underscore and contain only alphanumeric characters and underscores',
+    })
+  }
+
+  // Validate source
+  if (!def.source) {
+    errors.push({ field: 'source', message: 'Source collection is required' })
+  } else if (typeof def.source !== 'string') {
+    errors.push({ field: 'source', message: 'Source must be a string' })
+  }
+
+  // Validate query
+  if (!def.query) {
+    errors.push({ field: 'query', message: 'Query is required' })
+  } else if (typeof def.query !== 'object') {
+    errors.push({ field: 'query', message: 'Query must be an object' })
+  }
+
+  // Validate options
+  if (!def.options) {
+    errors.push({ field: 'options', message: 'Options are required' })
+  } else if (typeof def.options !== 'object') {
+    errors.push({ field: 'options', message: 'Options must be an object' })
+  } else {
+    // Validate refresh mode
+    if (def.options.refreshMode && !isRefreshMode(def.options.refreshMode)) {
+      errors.push({
+        field: 'options.refreshMode',
+        message: 'Refresh mode must be streaming, scheduled, or manual',
+      })
+    }
+
+    // Validate refresh strategy
+    if (def.options.refreshStrategy && !isRefreshStrategy(def.options.refreshStrategy)) {
+      errors.push({
+        field: 'options.refreshStrategy',
+        message: 'Refresh strategy must be full, incremental, or streaming',
+      })
+    }
+
+    // Validate schedule for scheduled mode
+    if (def.options.refreshMode === 'scheduled') {
+      if (!def.options.schedule) {
+        errors.push({
+          field: 'options.schedule',
+          message: 'Schedule is required for scheduled refresh mode',
+        })
+      } else {
+        const schedule = def.options.schedule as ScheduleOptions
+        if (!schedule.cron && !schedule.intervalMs) {
+          errors.push({
+            field: 'options.schedule',
+            message: 'Schedule must specify cron or intervalMs',
+          })
+        }
+        if (schedule.cron && !isValidCronExpression(schedule.cron)) {
+          errors.push({
+            field: 'options.schedule.cron',
+            message: 'Invalid cron expression',
+          })
+        }
+        if (schedule.intervalMs !== undefined && (typeof schedule.intervalMs !== 'number' || schedule.intervalMs <= 0)) {
+          errors.push({
+            field: 'options.schedule.intervalMs',
+            message: 'Interval must be a positive number',
+          })
+        }
+      }
+    }
+  }
+
+  return errors
+}
+
+/**
+ * Define a materialized view with validation and defaults
+ */
+export function defineView(input: DefineViewInput): DefineViewResult {
+  // Apply defaults
+  const options: ExtendedViewOptions = {
+    ...DEFAULT_VIEW_OPTIONS,
+    ...input.options,
+  }
+
+  const def = {
+    name: viewName(input.name),
+    source: input.source,
+    query: input.query,
+    options,
+  }
+
+  // Validate
+  const errors = validateViewDefinition(def)
+
+  if (errors.length > 0) {
+    return { success: false, errors }
+  }
+
+  return {
+    success: true,
+    definition: def as ViewDefinition & { options: ExtendedViewOptions },
+  }
+}
+
+// =============================================================================
+// MaterializedViewDefinition (Legacy API format)
+// =============================================================================
+
+/**
+ * Materialized View Definition (alternative format for conversion)
+ *
+ * This format is used for programmatic MV definitions that can be
+ * converted to/from the storage layer ViewDefinition format.
+ */
+export interface MaterializedViewDefinition {
+  /** View name */
+  name: string
+  /** Description */
+  description?: string
+  /** Source collection */
+  source: string
+  /** Filter to apply */
+  filter?: Filter
+  /** Projection/field selection */
+  project?: Record<string, 0 | 1>
+  /** Sort specification */
+  sort?: Record<string, 1 | -1>
+  /** Aggregation pipeline */
+  pipeline?: PipelineStage[]
+  /** Refresh strategy */
+  refreshStrategy: 'full' | 'incremental' | 'streaming'
+  /** Refresh mode */
+  refreshMode?: RefreshMode
+  /** Schedule for refresh */
+  schedule?: ScheduleOptions
+  /** Maximum staleness in milliseconds */
+  maxStalenessMs?: number
+  /** Whether to populate on create */
+  populateOnCreate?: boolean
+  /** Indexes to create */
+  indexes?: string[]
+  /** Dependencies (other views this depends on) */
+  dependencies?: string[]
+  /** Custom metadata */
+  meta?: Record<string, unknown>
+}
+
+/**
+ * Check if a value is a valid MaterializedViewDefinition
+ */
+export function isValidMaterializedViewDefinition(value: unknown): value is MaterializedViewDefinition {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  if (typeof v.name !== 'string') return false
+  if (typeof v.source !== 'string') return false
+  if (!v.refreshStrategy || !isRefreshStrategy(v.refreshStrategy)) return false
+  return true
+}
+
+/**
+ * Convert MaterializedViewDefinition to ViewDefinition (storage format)
+ */
+export function toViewDefinition(mvDef: MaterializedViewDefinition): ViewDefinition & { options: ExtendedViewOptions } {
+  const query: ViewQuery = {}
+
+  if (mvDef.filter) {
+    query.filter = mvDef.filter
+  }
+  if (mvDef.project) {
+    query.project = mvDef.project
+  }
+  if (mvDef.sort) {
+    query.sort = mvDef.sort
+  }
+  if (mvDef.pipeline) {
+    query.pipeline = mvDef.pipeline
+  }
+
+  const options: ExtendedViewOptions = {
+    refreshMode: mvDef.refreshMode || 'manual',
+    refreshStrategy: mvDef.refreshStrategy,
+    maxStalenessMs: mvDef.maxStalenessMs,
+    populateOnCreate: mvDef.populateOnCreate,
+    indexes: mvDef.indexes,
+    description: mvDef.description,
+    metadata: mvDef.meta,
+  }
+
+  if (mvDef.schedule) {
+    options.schedule = mvDef.schedule
+  }
+
+  return {
+    name: viewName(mvDef.name),
+    source: mvDef.source,
+    query,
+    options,
+  }
+}
+
+/**
+ * Convert ViewDefinition (storage format) to MaterializedViewDefinition
+ */
+export function fromViewDefinition(viewDef: ViewDefinition & { options?: Partial<ExtendedViewOptions> }): MaterializedViewDefinition {
+  const mvDef: MaterializedViewDefinition = {
+    name: viewDef.name as string,
+    source: viewDef.source,
+    refreshStrategy: (viewDef.options?.refreshStrategy || 'full') as 'full' | 'incremental' | 'streaming',
+  }
+
+  // Copy query fields
+  if (viewDef.query.filter) {
+    mvDef.filter = viewDef.query.filter
+  }
+  if (viewDef.query.project) {
+    mvDef.project = viewDef.query.project
+  }
+  if (viewDef.query.sort) {
+    mvDef.sort = viewDef.query.sort
+  }
+  if (viewDef.query.pipeline) {
+    mvDef.pipeline = viewDef.query.pipeline
+  }
+
+  // Copy options
+  if (viewDef.options) {
+    if (viewDef.options.refreshMode) {
+      mvDef.refreshMode = viewDef.options.refreshMode
+    }
+    if (viewDef.options.schedule) {
+      mvDef.schedule = viewDef.options.schedule as ScheduleOptions
+    }
+    if (viewDef.options.maxStalenessMs) {
+      mvDef.maxStalenessMs = viewDef.options.maxStalenessMs
+    }
+    if (viewDef.options.description) {
+      mvDef.description = viewDef.options.description
+    }
+    if (viewDef.options.indexes) {
+      mvDef.indexes = viewDef.options.indexes
+    }
+    if (viewDef.options.metadata) {
+      mvDef.meta = viewDef.options.metadata
+    }
+    if (viewDef.options.populateOnCreate !== undefined) {
+      mvDef.populateOnCreate = viewDef.options.populateOnCreate
+    }
+  }
+
+  return mvDef
 }

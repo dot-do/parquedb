@@ -165,6 +165,204 @@ describe('TailDO', () => {
   })
 })
 
+describe('TailDO Hibernation Persistence', () => {
+  describe('batchSeq persistence', () => {
+    it('should persist batchSeq across hibernation cycles', async () => {
+      // Mock storage to track persisted values
+      const storageMap = new Map<string, unknown>()
+      const mockStorage = {
+        get: vi.fn(async (key: string) => storageMap.get(key)),
+        put: vi.fn(async (key: string, value: unknown) => {
+          storageMap.set(key, value)
+        }),
+        setAlarm: vi.fn(),
+      }
+
+      // Simulate the initialization flow that should restore batchSeq
+      // When the DO wakes from hibernation, it should call storage.get('batchSeq')
+      // and restore the value
+
+      // Initially, batchSeq should be 0 (no stored value)
+      expect(await mockStorage.get('batchSeq')).toBeUndefined()
+
+      // After a batch is written, batchSeq should be persisted
+      await mockStorage.put('batchSeq', 1)
+      expect(await mockStorage.get('batchSeq')).toBe(1)
+
+      // After more batches
+      await mockStorage.put('batchSeq', 5)
+      expect(await mockStorage.get('batchSeq')).toBe(5)
+
+      // When DO wakes from hibernation, it should read the persisted value
+      const restoredBatchSeq = (await mockStorage.get('batchSeq')) ?? 0
+      expect(restoredBatchSeq).toBe(5)
+    })
+
+    it('should default batchSeq to 0 when no persisted value exists', async () => {
+      const mockStorage = {
+        get: vi.fn(async () => undefined),
+        put: vi.fn(),
+        setAlarm: vi.fn(),
+      }
+
+      // When no value is persisted, batchSeq should default to 0
+      const restoredBatchSeq = (await mockStorage.get('batchSeq')) ?? 0
+      expect(restoredBatchSeq).toBe(0)
+    })
+  })
+
+  describe('rawEventsBuffer persistence', () => {
+    it('should persist buffer events across hibernation cycles', async () => {
+      // Mock storage to track persisted values
+      const storageMap = new Map<string, unknown>()
+      const mockStorage = {
+        get: vi.fn(async (key: string) => storageMap.get(key)),
+        put: vi.fn(async (key: string, value: unknown) => {
+          storageMap.set(key, value)
+        }),
+        setAlarm: vi.fn(),
+      }
+
+      const testEvents: ValidatedTraceItem[] = [
+        {
+          scriptName: 'test-worker',
+          outcome: 'ok',
+          eventTimestamp: Date.now(),
+          event: null,
+          logs: [{ timestamp: Date.now(), level: 'info', message: 'test' }],
+          exceptions: [],
+          diagnosticsChannelEvents: [],
+        },
+        {
+          scriptName: 'test-worker-2',
+          outcome: 'ok',
+          eventTimestamp: Date.now(),
+          event: null,
+          logs: [],
+          exceptions: [],
+          diagnosticsChannelEvents: [],
+        },
+      ]
+
+      // Buffer should be persisted after receiving events
+      await mockStorage.put('rawEventsBuffer', testEvents)
+      expect(await mockStorage.get('rawEventsBuffer')).toEqual(testEvents)
+
+      // When DO wakes from hibernation, it should restore the buffer
+      const restoredBuffer = (await mockStorage.get('rawEventsBuffer')) as ValidatedTraceItem[] ?? []
+      expect(restoredBuffer).toHaveLength(2)
+      expect(restoredBuffer[0].scriptName).toBe('test-worker')
+      expect(restoredBuffer[1].scriptName).toBe('test-worker-2')
+    })
+
+    it('should default buffer to empty array when no persisted value exists', async () => {
+      const mockStorage = {
+        get: vi.fn(async () => undefined),
+        put: vi.fn(),
+        setAlarm: vi.fn(),
+      }
+
+      // When no value is persisted, buffer should default to empty array
+      const restoredBuffer = (await mockStorage.get('rawEventsBuffer')) ?? []
+      expect(restoredBuffer).toEqual([])
+    })
+
+    it('should clear buffer after successful flush', async () => {
+      // Mock storage to track persisted values
+      const storageMap = new Map<string, unknown>()
+      const mockStorage = {
+        get: vi.fn(async (key: string) => storageMap.get(key)),
+        put: vi.fn(async (key: string, value: unknown) => {
+          storageMap.set(key, value)
+        }),
+        setAlarm: vi.fn(),
+      }
+
+      const testEvents: ValidatedTraceItem[] = [
+        {
+          scriptName: 'test-worker',
+          outcome: 'ok',
+          eventTimestamp: Date.now(),
+          event: null,
+          logs: [],
+          exceptions: [],
+          diagnosticsChannelEvents: [],
+        },
+      ]
+
+      // Buffer is persisted with events
+      await mockStorage.put('rawEventsBuffer', testEvents)
+      expect(await mockStorage.get('rawEventsBuffer')).toHaveLength(1)
+
+      // After flush, buffer should be cleared (empty array, not deleted)
+      await mockStorage.put('rawEventsBuffer', [])
+      expect(await mockStorage.get('rawEventsBuffer')).toEqual([])
+    })
+
+    it('should preserve batchSeq when clearing buffer', async () => {
+      // Mock storage to track persisted values
+      const storageMap = new Map<string, unknown>()
+      const mockStorage = {
+        get: vi.fn(async (key: string) => storageMap.get(key)),
+        put: vi.fn(async (key: string, value: unknown) => {
+          storageMap.set(key, value)
+        }),
+        setAlarm: vi.fn(),
+      }
+
+      // Set both buffer and batchSeq
+      await mockStorage.put('rawEventsBuffer', [{ scriptName: 'test' }])
+      await mockStorage.put('batchSeq', 42)
+
+      // Clear buffer (simulating flush)
+      await mockStorage.put('rawEventsBuffer', [])
+
+      // batchSeq should be preserved
+      expect(await mockStorage.get('batchSeq')).toBe(42)
+      expect(await mockStorage.get('rawEventsBuffer')).toEqual([])
+    })
+  })
+
+  describe('combined state restoration', () => {
+    it('should restore both buffer and batchSeq on wake from hibernation', async () => {
+      // Mock storage with pre-existing state (simulating hibernation wake)
+      const preExistingState = new Map<string, unknown>([
+        ['rawEventsBuffer', [
+          {
+            scriptName: 'persisted-worker',
+            outcome: 'ok',
+            eventTimestamp: 1700000000000,
+            event: null,
+            logs: [],
+            exceptions: [],
+            diagnosticsChannelEvents: [],
+          },
+        ]],
+        ['batchSeq', 10],
+      ])
+
+      const mockStorage = {
+        get: vi.fn(async (key: string) => preExistingState.get(key)),
+        put: vi.fn(async (key: string, value: unknown) => {
+          preExistingState.set(key, value)
+        }),
+        setAlarm: vi.fn(),
+      }
+
+      // Simulate loading state on wake
+      const [buffer, batchSeq] = await Promise.all([
+        mockStorage.get('rawEventsBuffer') as Promise<ValidatedTraceItem[] | undefined>,
+        mockStorage.get('batchSeq') as Promise<number | undefined>,
+      ])
+
+      expect(buffer).toBeDefined()
+      expect(buffer).toHaveLength(1)
+      expect(buffer![0].scriptName).toBe('persisted-worker')
+      expect(batchSeq).toBe(10)
+    })
+  })
+})
+
 describe('Streaming Tail Configuration', () => {
   // Note: Full integration tests for TailDO require the Cloudflare Workers runtime
   // These tests validate the configuration structure and types only

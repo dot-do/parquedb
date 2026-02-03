@@ -30,5 +30,8 @@ export * from './bloom'
 // Vector Indexes
 export * from './vector'
 
+// Geo Indexes
+export * from './geo'
+
 // Compact Encoding
 export * from './encoding'

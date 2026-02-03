@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ParqueDB - Columnar Document Database for the Edge</title>
+  <meta name="description" content="A hybrid relational/document/graph database built on Apache Parquet. MongoDB-style API with bidirectional relationships, time-travel, and Cloudflare Workers support.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>P</text></svg>">
+  <style>
+    :root {
+      --primary: #0066cc;
+      --primary-dark: #004499;
+      --secondary: #6c757d;
+      --success: #28a745;
+      --background: #f8f9fa;
+      --surface: #ffffff;
+      --text: #212529;
+      --text-muted: #6c757d;
+      --border: #dee2e6;
+      --code-bg: #1e1e1e;
+      --code-text: #d4d4d4;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      line-height: 1.6;
+      color: var(--text);
+      background: var(--background);
+    }
+
+    a {
+      color: var(--primary);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Header */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .header-content {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo-icon {
+      width: 32px;
+      height: 32px;
+      background: var(--primary);
+      color: white;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+    }
+
+    nav {
+      display: flex;
+      gap: 32px;
+      align-items: center;
+    }
+
+    nav a {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    nav a:hover {
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-weight: 600;
+      text-align: center;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-dark);
+      text-decoration: none;
+    }
+
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: var(--background);
+      text-decoration: none;
+    }
+
+    /* Hero */
+    .hero {
+      padding: 80px 0;
+      text-align: center;
+    }
+
+    .hero h1 {
+      font-size: 48px;
+      font-weight: 800;
+      line-height: 1.2;
+      margin-bottom: 24px;
+    }
+
+    .hero h1 span {
+      color: var(--primary);
+    }
+
+    .hero p {
+      font-size: 20px;
+      color: var(--text-muted);
+      max-width: 700px;
+      margin: 0 auto 32px;
+    }
+
+    .hero-buttons {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      margin-bottom: 48px;
+    }
+
+    .install-command {
+      background: var(--code-bg);
+      color: var(--code-text);
+      padding: 16px 24px;
+      border-radius: 8px;
+      font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+      font-size: 16px;
+      display: inline-block;
+    }
+
+    .install-command .prompt {
+      color: #888;
+    }
+
+    /* Features */
+    .features {
+      padding: 80px 0;
+      background: var(--surface);
+    }
+
+    .section-title {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    .section-title h2 {
+      font-size: 36px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+
+    .section-title p {
+      color: var(--text-muted);
+      font-size: 18px;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 32px;
+    }
+
+    .feature-card {
+      padding: 32px;
+      border-radius: 12px;
+      background: var(--background);
+    }
+
+    .feature-icon {
+      width: 48px;
+      height: 48px;
+      background: var(--primary);
+      color: white;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 16px;
+    }
+
+    .feature-card h3 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .feature-card p {
+      color: var(--text-muted);
+    }
+
+    /* Comparison */
+    .comparison {
+      padding: 80px 0;
+    }
+
+    .comparison-table {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--surface);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    th, td {
+      padding: 16px 20px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      background: var(--background);
+      font-weight: 600;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .check {
+      color: var(--success);
+      font-weight: 700;
+    }
+
+    .cross {
+      color: var(--secondary);
+    }
+
+    /* Code Example */
+    .code-example {
+      padding: 80px 0;
+      background: var(--surface);
+    }
+
+    .code-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 32px;
+      align-items: start;
+    }
+
+    @media (max-width: 768px) {
+      .code-container {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .code-block {
+      background: var(--code-bg);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .code-header {
+      background: #2d2d2d;
+      padding: 12px 16px;
+      color: #888;
+      font-size: 13px;
+      font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+    }
+
+    .code-content {
+      padding: 20px;
+      overflow-x: auto;
+    }
+
+    pre {
+      margin: 0;
+      font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--code-text);
+    }
+
+    .code-keyword { color: #569cd6; }
+    .code-string { color: #ce9178; }
+    .code-comment { color: #6a9955; }
+    .code-function { color: #dcdcaa; }
+    .code-variable { color: #9cdcfe; }
+    .code-property { color: #9cdcfe; }
+
+    /* Performance */
+    .performance {
+      padding: 80px 0;
+    }
+
+    .perf-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 24px;
+    }
+
+    .perf-card {
+      background: var(--surface);
+      padding: 32px;
+      border-radius: 12px;
+      text-align: center;
+    }
+
+    .perf-value {
+      font-size: 48px;
+      font-weight: 800;
+      color: var(--primary);
+    }
+
+    .perf-label {
+      font-size: 14px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-top: 8px;
+    }
+
+    .perf-desc {
+      margin-top: 16px;
+      color: var(--text-muted);
+    }
+
+    /* CTA */
+    .cta {
+      padding: 80px 0;
+      background: var(--primary);
+      text-align: center;
+      color: white;
+    }
+
+    .cta h2 {
+      font-size: 36px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+
+    .cta p {
+      opacity: 0.9;
+      margin-bottom: 32px;
+      font-size: 18px;
+    }
+
+    .cta .btn-secondary {
+      background: white;
+      color: var(--primary);
+      border: none;
+    }
+
+    .cta .btn-secondary:hover {
+      background: var(--background);
+    }
+
+    /* Footer */
+    footer {
+      padding: 48px 0;
+      background: var(--code-bg);
+      color: #888;
+    }
+
+    .footer-content {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 24px;
+    }
+
+    .footer-links a {
+      color: #888;
+    }
+
+    .footer-links a:hover {
+      color: white;
+    }
+
+    @media (max-width: 768px) {
+      .hero h1 {
+        font-size: 32px;
+      }
+
+      .hero-buttons {
+        flex-direction: column;
+        align-items: center;
+      }
+
+      nav {
+        display: none;
+      }
+
+      .footer-content {
+        flex-direction: column;
+        gap: 24px;
+        text-align: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container header-content">
+      <a href="/" class="logo">
+        <div class="logo-icon">P</div>
+        ParqueDB
+      </a>
+      <nav>
+        <a href="https://github.com/dot-do/parquedb/blob/main/docs/getting-started.md">Docs</a>
+        <a href="https://github.com/dot-do/parquedb">GitHub</a>
+        <a href="https://www.npmjs.com/package/parquedb">npm</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container">
+        <h1>The <span>Columnar Document Database</span><br>for the Edge</h1>
+        <p>A hybrid relational/document/graph database built on Apache Parquet. MongoDB-style API with bidirectional relationships, time-travel queries, and first-class Cloudflare Workers support.</p>
+        <div class="hero-buttons">
+          <a href="https://github.com/dot-do/parquedb/blob/main/docs/getting-started.md" class="btn btn-primary">Get Started</a>
+          <a href="https://github.com/dot-do/parquedb" class="btn btn-secondary">View on GitHub</a>
+        </div>
+        <div class="install-command">
+          <span class="prompt">$</span> npm install parquedb
+        </div>
+      </div>
+    </section>
+
+    <section class="features">
+      <div class="container">
+        <div class="section-title">
+          <h2>Why ParqueDB?</h2>
+          <p>Built for modern edge computing with the features you need</p>
+        </div>
+        <div class="features-grid">
+          <div class="feature-card">
+            <div class="feature-icon">C</div>
+            <h3>Columnar Storage</h3>
+            <p>Parquet-native storage with 8-10x compression. Read only the columns you need with predicate pushdown for fast analytical queries.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">W</div>
+            <h3>Cloudflare Workers</h3>
+            <p>First-class support for Workers runtime with R2 storage and Durable Objects. CQRS architecture optimized for edge computing.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">G</div>
+            <h3>Graph Relationships</h3>
+            <p>Bidirectional relationships are indexed and traversable from either direction. No joins, no $lookup, no additional queries.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">T</div>
+            <h3>Time-Travel Queries</h3>
+            <p>Built-in event sourcing with full audit history. Query your data as it existed at any point in time with point-in-time reconstruction.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">M</div>
+            <h3>MongoDB-Style API</h3>
+            <p>Familiar query and update operators. Drop-in replacement for MongoDB with additional graph and time-travel capabilities.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">J</div>
+            <h3>Pure JavaScript</h3>
+            <p>No WASM or native dependencies. Runs in Node.js, browsers, and Cloudflare Workers using hyparquet for Parquet read/write.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="comparison">
+      <div class="container">
+        <div class="section-title">
+          <h2>Compare with Alternatives</h2>
+          <p>See how ParqueDB stacks up against other databases</p>
+        </div>
+        <div class="comparison-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Feature</th>
+                <th>ParqueDB</th>
+                <th>DuckDB</th>
+                <th>SQLite</th>
+                <th>MongoDB</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Cloudflare Workers</td>
+                <td class="check">Native R2/DO</td>
+                <td class="cross">No native support</td>
+                <td class="cross">DO only</td>
+                <td class="cross">External service</td>
+              </tr>
+              <tr>
+                <td>Storage Format</td>
+                <td>Parquet (columnar)</td>
+                <td>Parquet (read)</td>
+                <td>B-tree pages</td>
+                <td>BSON documents</td>
+              </tr>
+              <tr>
+                <td>Query API</td>
+                <td>MongoDB-style</td>
+                <td>SQL</td>
+                <td>SQL</td>
+                <td>MongoDB</td>
+              </tr>
+              <tr>
+                <td>Graph Relationships</td>
+                <td class="check">Built-in bidirectional</td>
+                <td class="cross">Joins only</td>
+                <td class="cross">Joins only</td>
+                <td class="cross">$lookup only</td>
+              </tr>
+              <tr>
+                <td>Time-Travel</td>
+                <td class="check">Built-in event sourcing</td>
+                <td class="cross">Snapshots</td>
+                <td class="cross">WAL replay</td>
+                <td class="cross">Change streams</td>
+              </tr>
+              <tr>
+                <td>Compression</td>
+                <td>8-10x</td>
+                <td>8-10x</td>
+                <td>2-3x</td>
+                <td>2-3x</td>
+              </tr>
+              <tr>
+                <td>Pure JavaScript</td>
+                <td class="check">Yes</td>
+                <td class="cross">WASM</td>
+                <td class="cross">WASM</td>
+                <td class="cross">Native driver</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="code-example">
+      <div class="container">
+        <div class="section-title">
+          <h2>Simple, Powerful API</h2>
+          <p>Get started with just a few lines of code</p>
+        </div>
+        <div class="code-container">
+          <div class="code-block">
+            <div class="code-header">schema.ts</div>
+            <div class="code-content">
+<pre><span class="code-keyword">import</span> { <span class="code-variable">DB</span> } <span class="code-keyword">from</span> <span class="code-string">'parquedb'</span>
+
+<span class="code-comment">// Define your schema</span>
+<span class="code-keyword">const</span> <span class="code-variable">db</span> = <span class="code-function">DB</span>({
+  <span class="code-property">User</span>: {
+    <span class="code-property">email</span>: <span class="code-string">'string!#'</span>,
+    <span class="code-property">name</span>: <span class="code-string">'string'</span>,
+    <span class="code-property">role</span>: <span class="code-string">'string'</span>
+  },
+  <span class="code-property">Post</span>: {
+    <span class="code-property">title</span>: <span class="code-string">'string!'</span>,
+    <span class="code-property">content</span>: <span class="code-string">'text'</span>,
+    <span class="code-property">author</span>: <span class="code-string">'-> User'</span>
+  }
+})</pre>
+            </div>
+          </div>
+          <div class="code-block">
+            <div class="code-header">app.ts</div>
+            <div class="code-content">
+<pre><span class="code-comment">// Create entities</span>
+<span class="code-keyword">const</span> <span class="code-variable">user</span> = <span class="code-keyword">await</span> <span class="code-variable">db</span>.<span class="code-property">User</span>.<span class="code-function">create</span>({
+  <span class="code-property">email</span>: <span class="code-string">'alice@example.com'</span>,
+  <span class="code-property">name</span>: <span class="code-string">'Alice'</span>
+})
+
+<span class="code-comment">// Query with MongoDB-style filters</span>
+<span class="code-keyword">const</span> <span class="code-variable">posts</span> = <span class="code-keyword">await</span> <span class="code-variable">db</span>.<span class="code-property">Post</span>.<span class="code-function">find</span>({
+  <span class="code-property">author</span>: <span class="code-variable">user</span>.<span class="code-property">$id</span>
+})
+
+<span class="code-comment">// Update with operators</span>
+<span class="code-keyword">await</span> <span class="code-variable">db</span>.<span class="code-property">Post</span>.<span class="code-function">update</span>(<span class="code-variable">posts</span>[<span class="code-number">0</span>].<span class="code-property">$id</span>, {
+  <span class="code-property">$set</span>: { <span class="code-property">title</span>: <span class="code-string">'Updated'</span> }
+})</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="performance">
+      <div class="container">
+        <div class="section-title">
+          <h2>Performance That Scales</h2>
+          <p>Optimized for both small datasets and large-scale analytics</p>
+        </div>
+        <div class="perf-grid">
+          <div class="perf-card">
+            <div class="perf-value">400x</div>
+            <div class="perf-label">Faster Lookups</div>
+            <div class="perf-desc">Indexed equality lookups vs full scan at 100K documents</div>
+          </div>
+          <div class="perf-card">
+            <div class="perf-value">8-10x</div>
+            <div class="perf-label">Compression</div>
+            <div class="perf-desc">Parquet columnar compression reduces storage costs</div>
+          </div>
+          <div class="perf-card">
+            <div class="perf-value">5ms</div>
+            <div class="perf-label">p50 Get by ID</div>
+            <div class="perf-desc">Fast point lookups for real-time applications</div>
+          </div>
+          <div class="perf-card">
+            <div class="perf-value">20x</div>
+            <div class="perf-label">Query Speedup</div>
+            <div class="perf-desc">Variant shredding on hot columns for analytical queries</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta">
+      <div class="container">
+        <h2>Ready to Get Started?</h2>
+        <p>ParqueDB is open source and free to use. Join the community!</p>
+        <div class="hero-buttons">
+          <a href="https://github.com/dot-do/parquedb/blob/main/docs/getting-started.md" class="btn btn-secondary">Read the Docs</a>
+          <a href="https://github.com/dot-do/parquedb" class="btn btn-secondary">Star on GitHub</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer-content">
+      <div>MIT License. Built with hyparquet.</div>
+      <div class="footer-links">
+        <a href="https://github.com/dot-do/parquedb">GitHub</a>
+        <a href="https://www.npmjs.com/package/parquedb">npm</a>
+        <a href="https://github.com/dot-do/parquedb/blob/main/docs/getting-started.md">Documentation</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

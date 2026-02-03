@@ -317,6 +317,20 @@ export interface ResolvedAIRequestsMVConfig {
   debug: boolean
 }
 
+/**
+ * Result of a cleanup operation
+ */
+export interface CleanupResult {
+  /** Whether cleanup completed successfully */
+  success: boolean
+  /** Total records deleted */
+  deletedCount: number
+  /** Duration of cleanup in milliseconds */
+  durationMs: number
+  /** Error message if failed */
+  error?: string
+}
+
 // =============================================================================
 // Helper Functions
 // =============================================================================
@@ -945,27 +959,73 @@ export class AIRequestsMV {
   /**
    * Delete old requests beyond the max age
    *
-   * @returns Number of deleted records
+   * Uses batch delete for efficiency (O(1) vs O(n) individual deletes).
+   *
+   * @param options - Optional cleanup options
+   * @returns Cleanup result with deleted count and details
    */
-  async cleanup(): Promise<number> {
+  async cleanup(options?: {
+    /** Override the default max age */
+    maxAgeMs?: number
+    /** Progress callback */
+    onProgress?: (progress: { deletedSoFar: number; percentage: number }) => void
+  }): Promise<CleanupResult> {
     const collection = this.db.collection(this.config.collection)
-    const cutoffDate = new Date(Date.now() - this.config.maxAgeMs)
+    const maxAgeMs = options?.maxAgeMs ?? this.config.maxAgeMs
+    const cutoffDate = new Date(Date.now() - maxAgeMs)
+    const startTime = Date.now()
 
-    const oldRequests = await collection.find(
-      { timestamp: { $lt: cutoffDate } },
-      { limit: this.config.batchSize }
-    )
+    try {
+      // Count total to delete
+      const filter = { timestamp: { $lt: cutoffDate } }
+      const totalToDelete = await collection.count(filter)
 
-    let deletedCount = 0
-    for (const request of oldRequests) {
-      const id = ((request as Record<string, unknown>).$id as string).split('/').pop()
-      if (id) {
-        await collection.delete(id)
-        deletedCount++
+      if (totalToDelete === 0) {
+        return {
+          success: true,
+          deletedCount: 0,
+          durationMs: Date.now() - startTime,
+        }
+      }
+
+      // Use batch delete for efficiency
+      const result = await collection.deleteMany(filter, { hard: true })
+
+      options?.onProgress?.({
+        deletedSoFar: result.deletedCount,
+        percentage: 100,
+      })
+
+      return {
+        success: true,
+        deletedCount: result.deletedCount,
+        durationMs: Date.now() - startTime,
+      }
+    } catch (error) {
+      return {
+        success: false,
+        deletedCount: 0,
+        durationMs: Date.now() - startTime,
+        error: error instanceof Error ? error.message : String(error),
       }
     }
+  }
 
-    return deletedCount
+  /**
+   * Get a cleanup scheduler for background retention management
+   *
+   * @param options - Scheduler options
+   * @returns Cleanup scheduler handle
+   */
+  getRetentionManager(): import('../retention').RetentionManager {
+    // Lazy import to avoid circular dependencies
+    const { RetentionManager } = require('../retention')
+    return new RetentionManager(this.db, {
+      collection: this.config.collection,
+      maxAgeMs: this.config.maxAgeMs,
+      timestampField: 'timestamp',
+      debug: this.config.debug,
+    })
   }
 
   /**

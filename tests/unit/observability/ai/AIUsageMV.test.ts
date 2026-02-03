@@ -477,6 +477,101 @@ describe('AIUsageMV', () => {
       expect(agg.maxLatencyMs).toBe(500)
     })
 
+    it('should calculate percentile latencies (p50, p90, p95, p99)', async () => {
+      // Generate 100 requests with known latency distribution
+      // Latencies: 1, 2, 3, ..., 100 ms
+      const logs: MockLog[] = []
+      for (let i = 1; i <= 100; i++) {
+        logs.push({
+          $id: `ai_logs/${i}`,
+          timestamp: new Date(`2026-02-03T10:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`),
+          modelId: 'gpt-4',
+          providerId: 'openai',
+          requestType: 'generate',
+          latencyMs: i,
+          cached: false,
+        })
+      }
+
+      const mockDb = createMockParqueDB(logs)
+      const db = mockDb as unknown as Parameters<typeof createAIUsageMV>[0]
+      const mv = new AIUsageMV(db)
+
+      await mv.refresh()
+
+      const agg = mockDb.__aggregates[0]
+
+      // For 100 values from 1-100:
+      // p50 should be around 50 (median)
+      // p90 should be around 90
+      // p95 should be around 95
+      // p99 should be around 99
+      expect(agg.p50LatencyMs).toBeDefined()
+      expect(agg.p90LatencyMs).toBeDefined()
+      expect(agg.p95LatencyMs).toBeDefined()
+      expect(agg.p99LatencyMs).toBeDefined()
+
+      // Allow some tolerance for rounding
+      expect(agg.p50LatencyMs).toBeGreaterThanOrEqual(49)
+      expect(agg.p50LatencyMs).toBeLessThanOrEqual(51)
+      expect(agg.p90LatencyMs).toBeGreaterThanOrEqual(89)
+      expect(agg.p90LatencyMs).toBeLessThanOrEqual(91)
+      expect(agg.p95LatencyMs).toBeGreaterThanOrEqual(94)
+      expect(agg.p95LatencyMs).toBeLessThanOrEqual(96)
+      expect(agg.p99LatencyMs).toBeGreaterThanOrEqual(98)
+      expect(agg.p99LatencyMs).toBeLessThanOrEqual(100)
+    })
+
+    it('should handle percentiles with small sample sizes', async () => {
+      const logs: MockLog[] = [
+        {
+          $id: 'ai_logs/1',
+          timestamp: new Date('2026-02-03T10:00:00Z'),
+          modelId: 'gpt-4',
+          providerId: 'openai',
+          requestType: 'generate',
+          latencyMs: 100,
+          cached: false,
+        },
+        {
+          $id: 'ai_logs/2',
+          timestamp: new Date('2026-02-03T10:01:00Z'),
+          modelId: 'gpt-4',
+          providerId: 'openai',
+          requestType: 'generate',
+          latencyMs: 200,
+          cached: false,
+        },
+        {
+          $id: 'ai_logs/3',
+          timestamp: new Date('2026-02-03T10:02:00Z'),
+          modelId: 'gpt-4',
+          providerId: 'openai',
+          requestType: 'generate',
+          latencyMs: 300,
+          cached: false,
+        },
+      ]
+
+      const mockDb = createMockParqueDB(logs)
+      const db = mockDb as unknown as Parameters<typeof createAIUsageMV>[0]
+      const mv = new AIUsageMV(db)
+
+      await mv.refresh()
+
+      const agg = mockDb.__aggregates[0]
+
+      // With 3 samples, percentiles should still be calculated
+      expect(agg.p50LatencyMs).toBeDefined()
+      expect(agg.p90LatencyMs).toBeDefined()
+      expect(agg.p95LatencyMs).toBeDefined()
+      expect(agg.p99LatencyMs).toBeDefined()
+
+      // For [100, 200, 300]: p50 should be 200, p99 should be 300
+      expect(agg.p50LatencyMs).toBe(200)
+      expect(agg.p99LatencyMs).toBe(300)
+    })
+
     it('should calculate cost estimates', async () => {
       const logs: MockLog[] = [
         {
@@ -821,6 +916,194 @@ describe('AIUsageMV', () => {
       expect(summary.byProvider['openai'].requestCount).toBe(30)
       expect(summary.byProvider['openai'].totalTokens).toBe(3000)
       expect(summary.byProvider['openai'].estimatedCost).toBe(0.60)
+    })
+  })
+
+  describe('incremental refresh', () => {
+    it('should preserve existing aggregate values when processing new logs', async () => {
+      // Initial aggregate with existing data (simulating data loaded from DB)
+      const existingAggregates: MockAggregate[] = [
+        {
+          $id: 'ai_usage/1',
+          dateKey: '2026-02-03',
+          modelId: 'gpt-4',
+          providerId: 'openai',
+          granularity: 'day',
+          requestCount: 5,
+          successCount: 5,
+          errorCount: 0,
+          cachedCount: 1,
+          generateCount: 3,
+          streamCount: 2,
+          totalPromptTokens: 500,
+          totalCompletionTokens: 250,
+          totalTokens: 750,
+          avgTokensPerRequest: 150,
+          totalLatencyMs: 2500,
+          avgLatencyMs: 500,
+          minLatencyMs: 100,
+          maxLatencyMs: 1000,
+          estimatedInputCost: 0.015,
+          estimatedOutputCost: 0.015,
+          estimatedTotalCost: 0.030,
+          createdAt: new Date('2026-02-03T08:00:00Z'),
+          updatedAt: new Date('2026-02-03T10:00:00Z'),
+          version: 2,
+        },
+      ]
+
+      // New log to add to existing aggregate
+      const logs: MockLog[] = [
+        {
+          $id: 'ai_logs/new1',
+          timestamp: new Date('2026-02-03T12:00:00Z'),
+          modelId: 'gpt-4',
+          providerId: 'openai',
+          requestType: 'generate',
+          usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+          latencyMs: 300,
+          cached: false,
+        },
+      ]
+
+      const mockDb = createMockParqueDB(logs, existingAggregates)
+      const db = mockDb as unknown as Parameters<typeof createAIUsageMV>[0]
+      const mv = new AIUsageMV(db)
+
+      const result = await mv.refresh()
+
+      expect(result.success).toBe(true)
+      expect(result.recordsProcessed).toBe(1)
+      expect(result.aggregatesUpdated).toBe(1)
+
+      // Verify the aggregate was updated correctly with merged values
+      const agg = mockDb.__aggregates[0]
+      expect(agg.requestCount).toBe(6) // 5 existing + 1 new
+      expect(agg.successCount).toBe(6) // 5 existing + 1 new
+      expect(agg.generateCount).toBe(4) // 3 existing + 1 new
+      expect(agg.totalPromptTokens).toBe(600) // 500 existing + 100 new
+      expect(agg.totalCompletionTokens).toBe(300) // 250 existing + 50 new
+      expect(agg.totalTokens).toBe(900) // 750 existing + 150 new
+      expect(agg.totalLatencyMs).toBe(2800) // 2500 existing + 300 new
+      expect(agg.minLatencyMs).toBe(100) // min(100, 300) = 100
+      expect(agg.maxLatencyMs).toBe(1000) // max(1000, 300) = 1000
+      expect(agg.version).toBe(3) // 2 existing + 1 increment
+    })
+
+    it('should handle minLatencyMs stored as null (from JSON serialization of Infinity)', async () => {
+      // Simulate what happens when Infinity is serialized to JSON and back
+      const existingAggregates: MockAggregate[] = [
+        {
+          $id: 'ai_usage/1',
+          dateKey: '2026-02-03',
+          modelId: 'gpt-4',
+          providerId: 'openai',
+          granularity: 'day',
+          requestCount: 0,
+          successCount: 0,
+          errorCount: 0,
+          cachedCount: 0,
+          generateCount: 0,
+          streamCount: 0,
+          totalPromptTokens: 0,
+          totalCompletionTokens: 0,
+          totalTokens: 0,
+          avgTokensPerRequest: 0,
+          totalLatencyMs: 0,
+          avgLatencyMs: 0,
+          minLatencyMs: null, // This is what Infinity becomes after JSON serialization
+          maxLatencyMs: 0,
+          estimatedInputCost: 0,
+          estimatedOutputCost: 0,
+          estimatedTotalCost: 0,
+          createdAt: new Date('2026-02-03T08:00:00Z'),
+          updatedAt: new Date('2026-02-03T08:00:00Z'),
+          version: 1,
+        },
+      ]
+
+      const logs: MockLog[] = [
+        {
+          $id: 'ai_logs/1',
+          timestamp: new Date('2026-02-03T10:00:00Z'),
+          modelId: 'gpt-4',
+          providerId: 'openai',
+          requestType: 'generate',
+          usage: { promptTokens: 100, completionTokens: 50 },
+          latencyMs: 500,
+          cached: false,
+        },
+      ]
+
+      const mockDb = createMockParqueDB(logs, existingAggregates)
+      const db = mockDb as unknown as Parameters<typeof createAIUsageMV>[0]
+      const mv = new AIUsageMV(db)
+
+      const result = await mv.refresh()
+
+      expect(result.success).toBe(true)
+
+      const agg = mockDb.__aggregates[0]
+      expect(agg.minLatencyMs).toBe(500) // Should be 500, not null or NaN
+    })
+
+    it('should preserve cost estimates when merging aggregates', async () => {
+      const existingAggregates: MockAggregate[] = [
+        {
+          $id: 'ai_usage/1',
+          dateKey: '2026-02-03',
+          modelId: 'gpt-4',
+          providerId: 'openai',
+          granularity: 'day',
+          requestCount: 1,
+          successCount: 1,
+          errorCount: 0,
+          cachedCount: 0,
+          generateCount: 1,
+          streamCount: 0,
+          totalPromptTokens: 1000000, // 1M tokens
+          totalCompletionTokens: 500000, // 0.5M tokens
+          totalTokens: 1500000,
+          avgTokensPerRequest: 1500000,
+          totalLatencyMs: 1000,
+          avgLatencyMs: 1000,
+          minLatencyMs: 1000,
+          maxLatencyMs: 1000,
+          estimatedInputCost: 30.0, // $30 for 1M input tokens
+          estimatedOutputCost: 30.0, // $30 for 0.5M output tokens ($60/M)
+          estimatedTotalCost: 60.0,
+          createdAt: new Date('2026-02-03T08:00:00Z'),
+          updatedAt: new Date('2026-02-03T08:00:00Z'),
+          version: 1,
+        },
+      ]
+
+      const logs: MockLog[] = [
+        {
+          $id: 'ai_logs/2',
+          timestamp: new Date('2026-02-03T12:00:00Z'),
+          modelId: 'gpt-4',
+          providerId: 'openai',
+          requestType: 'generate',
+          usage: { promptTokens: 1000000, completionTokens: 500000 }, // Another 1M input, 0.5M output
+          latencyMs: 2000,
+          cached: false,
+        },
+      ]
+
+      const mockDb = createMockParqueDB(logs, existingAggregates)
+      const db = mockDb as unknown as Parameters<typeof createAIUsageMV>[0]
+      const mv = new AIUsageMV(db)
+
+      await mv.refresh()
+
+      const agg = mockDb.__aggregates[0]
+      expect(agg.requestCount).toBe(2)
+      expect(agg.totalPromptTokens).toBe(2000000) // 1M + 1M
+      expect(agg.totalCompletionTokens).toBe(1000000) // 0.5M + 0.5M
+      expect(agg.estimatedInputCost).toBe(60.0) // $30 + $30
+      expect(agg.estimatedOutputCost).toBe(60.0) // $30 + $30
+      expect(agg.estimatedTotalCost).toBe(120.0) // $60 + $60
     })
   })
 

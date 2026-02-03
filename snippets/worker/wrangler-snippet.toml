@@ -1,0 +1,46 @@
+# ParqueDB Snippet-Optimized Search Worker (v2)
+#
+# Optimized for Cloudflare Snippets constraints:
+# - 5ms CPU time
+# - 32KB script bundle
+# - 32MB memory
+# - 5 subrequests
+#
+# Deploy: wrangler deploy --config snippets/worker/wrangler-snippet.toml
+
+name = "parquedb-search-snippet"
+main = "search-snippet.ts"
+compatibility_date = "2024-09-02"
+compatibility_flags = ["nodejs_compat"]
+
+# Account ID for .do account
+account_id = "b6641681fe423910342b9ffa1364c76d"
+
+# ==============================================================================
+# Route Configuration
+# ==============================================================================
+# Routes to cdn.workers.do/search/*
+
+[[routes]]
+pattern = "cdn.workers.do/search-v2/*"
+zone_id = "7cdc309f5238b228485fc7e4ff29772b"
+
+# ==============================================================================
+# R2 Bucket Binding
+# ==============================================================================
+# Direct R2 access for pre-computed indexes
+
+[[r2_buckets]]
+binding = "DATA"
+bucket_name = "parquedb-search-data"
+
+# ==============================================================================
+# Observability
+# ==============================================================================
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+invocation_logs = true

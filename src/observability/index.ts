@@ -41,3 +41,17 @@ export {
   // Global instance
   globalHookRegistry,
 } from './hooks'
+
+// Re-export retention module
+export {
+  RetentionManager,
+  createRetentionManager,
+  type RetentionPolicy,
+  type TieredRetentionPolicies,
+  type RetentionManagerConfig,
+  type ResolvedRetentionConfig,
+  type CleanupProgress,
+  type CleanupResult,
+  type ScheduleOptions,
+  type CleanupScheduler,
+} from './retention'

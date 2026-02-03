@@ -116,10 +116,14 @@ export {
 } from './engine'
 
 // Worker Errors MV
-export type { WorkerErrorsConfig } from './worker-errors'
+export type {
+  WorkerErrorsConfig,
+  WorkerErrorsStatsExtended,
+} from './worker-errors'
 export {
   WorkerErrorsMV,
   createWorkerErrorsMV,
+  WORKER_ERRORS_SCHEMA,
 } from './worker-errors'
 
 // Worker Logs MV

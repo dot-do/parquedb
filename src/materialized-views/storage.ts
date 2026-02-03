@@ -15,15 +15,11 @@
 
 import type { StorageBackend, WriteResult } from '../types/storage'
 import type {
-  ViewName,
   ViewDefinition,
   ViewMetadata,
   ViewState,
   ViewStats,
-  ViewOptions,
-  ViewQuery,
 } from './types'
-import { viewName } from './types'
 
 // =============================================================================
 // Storage Paths

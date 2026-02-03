@@ -5,6 +5,57 @@ description: Quick start guide for ParqueDB using the new DB() API
 
 Get up and running with ParqueDB in minutes.
 
+## 5-Minute Tutorial
+
+Here is a complete working example you can run immediately:
+
+```typescript
+import { DB } from 'parquedb'
+
+// 1. Define your schema
+const db = DB({
+  User: {
+    email: 'string!#',  // required, indexed
+    name: 'string!',
+    role: 'string = "user"'
+  },
+  Post: {
+    title: 'string!',
+    content: 'text',
+    published: 'boolean = false',
+    author: '-> User.posts'  // relationship to User
+  }
+})
+
+// 2. Create some data
+const alice = await db.User.create({
+  email: 'alice@example.com',
+  name: 'Alice'
+})
+
+const post = await db.Post.create({
+  title: 'Getting Started with ParqueDB',
+  content: 'ParqueDB is a document database built on Parquet...',
+  author: alice.$id
+})
+
+// 3. Query your data
+const users = await db.User.find({ role: 'user' })
+const alicePosts = await db.Post.find({ author: alice.$id })
+
+// 4. Update data
+await db.Post.update(post.$id, {
+  $set: { published: true }
+})
+
+// 5. Use SQL if you prefer
+const results = await db.sql`SELECT * FROM posts WHERE published = ${true}`
+
+console.log('Created user:', alice.$id)
+console.log('Created post:', post.$id)
+console.log('Found posts:', alicePosts.length)
+```
+
 ## Installation
 
 ```bash
@@ -473,6 +524,169 @@ export default defineConfig({
 | **Pagination** | `await db.Users.find({}, { limit: 10, skip: 20 })` |
 | **Sorting** | `await db.Users.find({}, { sort: { createdAt: -1 } })` |
 | **Projection** | `await db.Users.find({}, { project: { name: 1, email: 1 } })` |
+
+## Practical Examples
+
+### Building a Blog API
+
+```typescript
+import { DB } from 'parquedb'
+
+const db = DB({
+  Author: {
+    email: 'email!#',
+    name: 'string!',
+    bio: 'text',
+    posts: '<- Post.author[]'
+  },
+  Post: {
+    title: 'string!',
+    slug: 'string!#',
+    content: 'markdown!',
+    status: 'enum(draft,published,archived) = "draft"',
+    publishedAt: 'datetime',
+    author: '-> Author.posts',
+    tags: '-> Tag.posts[]'
+  },
+  Tag: {
+    name: 'string!#',
+    posts: '<- Post.tags[]'
+  }
+})
+
+// Create an author
+const author = await db.Author.create({
+  email: 'writer@blog.com',
+  name: 'Jane Writer',
+  bio: 'Tech blogger and coffee enthusiast'
+})
+
+// Create tags
+const techTag = await db.Tag.create({ name: 'Technology' })
+const tutorialTag = await db.Tag.create({ name: 'Tutorial' })
+
+// Create a published post with relationships
+const post = await db.Post.create({
+  title: 'Introduction to ParqueDB',
+  slug: 'intro-to-parquedb',
+  content: '# Welcome\n\nParqueDB is a modern database...',
+  status: 'published',
+  publishedAt: new Date(),
+  author: author.$id,
+  tags: [techTag.$id, tutorialTag.$id]
+})
+
+// Query published posts with pagination
+const publishedPosts = await db.Post.find(
+  { status: 'published' },
+  {
+    sort: { publishedAt: -1 },
+    limit: 10,
+    skip: 0
+  }
+)
+
+// Find posts by tag
+const techPosts = await db.Post.find({
+  tags: { $in: [techTag.$id] }
+})
+```
+
+### E-commerce Product Catalog
+
+```typescript
+const db = DB({
+  Category: {
+    name: 'string!',
+    slug: 'string!#',
+    parent: '-> Category.children',
+    children: '<- Category.parent[]',
+    products: '<- Product.category[]'
+  },
+  Product: {
+    name: 'string!',
+    sku: 'string!#',
+    price: 'decimal(10,2)!',
+    stock: 'int = 0',
+    description: 'text',
+    category: '-> Category.products'
+  }
+})
+
+// Create category hierarchy
+const electronics = await db.Category.create({ name: 'Electronics', slug: 'electronics' })
+const phones = await db.Category.create({
+  name: 'Phones',
+  slug: 'phones',
+  parent: electronics.$id
+})
+
+// Create products
+await db.Product.create({
+  name: 'Smartphone Pro',
+  sku: 'PHONE-001',
+  price: 999.99,
+  stock: 50,
+  category: phones.$id
+})
+
+// Find products in stock, sorted by price
+const inStock = await db.Product.find(
+  { stock: { $gt: 0 } },
+  { sort: { price: 1 } }
+)
+
+// Update stock after sale
+await db.Product.update('products/abc123', {
+  $inc: { stock: -1 }
+})
+```
+
+### User Authentication System
+
+```typescript
+const db = DB({
+  User: {
+    email: 'email!#',
+    passwordHash: 'string!',
+    name: 'string!',
+    role: 'enum(user,admin,moderator) = "user"',
+    emailVerified: 'boolean = false',
+    lastLoginAt: 'datetime',
+    sessions: '<- Session.user[]'
+  },
+  Session: {
+    token: 'string!#',
+    expiresAt: 'datetime!',
+    userAgent: 'string',
+    ipAddress: 'string',
+    user: '-> User.sessions'
+  }
+})
+
+// Find user by email for login
+const user = await db.User.find({ email: 'user@example.com' })
+
+// Create session on successful login
+const session = await db.Session.create({
+  token: crypto.randomUUID(),
+  expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+  userAgent: request.headers.get('user-agent'),
+  ipAddress: request.headers.get('cf-connecting-ip'),
+  user: user[0].$id
+})
+
+// Update last login time
+await db.User.update(user[0].$id, {
+  $set: { lastLoginAt: new Date() }
+})
+
+// Find and validate session
+const [activeSession] = await db.Session.find({
+  token: sessionToken,
+  expiresAt: { $gt: new Date() }
+})
+```
 
 ## Next Steps
 

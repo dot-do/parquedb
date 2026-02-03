@@ -9,7 +9,7 @@
  */
 
 import type { Entity, EntityId, Event, EventOp, StorageBackend } from '../types'
-import { entityTarget, parseEntityTarget, isRelationshipTarget, asEntityId } from '../types'
+import { entityTarget, parseEntityTarget, isRelationshipTarget, asEntityId, variantAsEntityOrNull } from '../types'
 import { generateId } from '../utils'
 import { toFullId } from './validation'
 import type {
@@ -49,8 +49,10 @@ export function recordEvent(
   meta?: Record<string, unknown>
 ): Event {
   // Deep copy to prevent mutation of stored event state
-  const deepCopy = <T>(obj: T | null): T | undefined => {
-    if (obj === null) return undefined
+  // For DELETE operations, null after state is meaningful (hard delete)
+  // so we preserve it as null instead of converting to undefined
+  const deepCopy = <T>(obj: T | null): T | null | undefined => {
+    if (obj === null) return null
     return JSON.parse(JSON.stringify(obj))
   }
 
@@ -59,8 +61,8 @@ export function recordEvent(
     ts: Date.now(),
     op,
     target,
-    before: deepCopy(before) as import('../types').Variant | undefined,
-    after: deepCopy(after) as import('../types').Variant | undefined,
+    before: deepCopy(before) as import('../types').Variant | null | undefined,
+    after: deepCopy(after) as import('../types').Variant | null | undefined,
     actor: actor as string | undefined,
     metadata: meta as import('../types').Variant | undefined,
   }
@@ -136,12 +138,18 @@ export async function flushEvents(
       if (event.op === 'CREATE') {
         // Remove created entity
         entities.delete(fullId)
-      } else if (event.op === 'UPDATE' && event.before) {
-        // Restore previous state
-        entities.set(fullId, event.before as Entity)
-      } else if (event.op === 'DELETE' && event.before) {
-        // Restore deleted entity
-        entities.set(fullId, event.before as Entity)
+      } else if (event.op === 'UPDATE') {
+        // Restore previous state using type-safe cast
+        const previousState = variantAsEntityOrNull(event.before)
+        if (previousState) {
+          entities.set(fullId, previousState)
+        }
+      } else if (event.op === 'DELETE') {
+        // Restore deleted entity using type-safe cast
+        const previousState = variantAsEntityOrNull(event.before)
+        if (previousState) {
+          entities.set(fullId, previousState)
+        }
       }
     }
     throw error

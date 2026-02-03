@@ -5,8 +5,8 @@
  * between local filesystem and remote R2 storage.
  */
 
-import type { ParsedArgs } from '../index'
-import { print, printError, printSuccess } from '../index'
+import type { ParsedArgs } from '../types'
+import { print, printError, printSuccess } from '../types'
 import type { Visibility } from '../../types/visibility'
 import { isValidVisibility, DEFAULT_VISIBILITY } from '../../types/visibility'
 import type { ConflictStrategy, SyncFileEntry, SyncManifest } from '../../sync/manifest'

@@ -5,7 +5,7 @@
  * and DBProviderExtended interfaces.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { DB } from '../../../src/db'
 import { ParqueDBAdapter, createParqueDBProvider } from '../../../src/integrations/ai-database'
 import type { DBProviderExtended, DBEvent, DBAction } from '../../../src/integrations/ai-database'
@@ -324,6 +324,205 @@ describe('ai-database Adapter', () => {
 
       await tx.rollback() // Clean up
     })
+
+    it('should persist created entities on commit', async () => {
+      const tx = await adapter.beginTransaction()
+
+      const user = await tx.create('User', undefined, {
+        name: 'TxUser',
+        email: 'txuser@example.com',
+      })
+
+      await tx.commit()
+
+      // Entity should exist after commit
+      const retrieved = await adapter.get('User', user.$id as string)
+      expect(retrieved).not.toBeNull()
+      expect(retrieved?.name).toBe('TxUser')
+    })
+
+    it('should rollback created entities', async () => {
+      const tx = await adapter.beginTransaction()
+
+      const user = await tx.create('User', undefined, {
+        name: 'RollbackUser',
+        email: 'rollback@example.com',
+      })
+
+      const userId = user.$id as string
+
+      await tx.rollback()
+
+      // Entity should not exist after rollback
+      const retrieved = await adapter.get('User', userId)
+      expect(retrieved).toBeNull()
+    })
+
+    it('should rollback updates to existing entities', async () => {
+      // Create entity outside transaction
+      const original = await adapter.create('User', undefined, {
+        name: 'OriginalName',
+        email: 'original@example.com',
+        age: 25,
+      })
+
+      const tx = await adapter.beginTransaction()
+
+      // Update within transaction
+      await tx.update('User', original.$id as string, {
+        name: 'UpdatedName',
+        age: 30,
+      })
+
+      // Verify update is visible within transaction
+      const duringTx = await tx.get('User', original.$id as string)
+      expect(duringTx?.name).toBe('UpdatedName')
+      expect(duringTx?.age).toBe(30)
+
+      await tx.rollback()
+
+      // Entity should have original values after rollback
+      const retrieved = await adapter.get('User', original.$id as string)
+      expect(retrieved).not.toBeNull()
+      expect(retrieved?.name).toBe('OriginalName')
+      expect(retrieved?.age).toBe(25)
+    })
+
+    it('should rollback deleted entities', async () => {
+      // Create entity outside transaction
+      const original = await adapter.create('User', undefined, {
+        name: 'ToDelete',
+        email: 'delete@example.com',
+      })
+
+      const tx = await adapter.beginTransaction()
+
+      // Delete within transaction
+      const deleted = await tx.delete('User', original.$id as string)
+      expect(deleted).toBe(true)
+
+      await tx.rollback()
+
+      // Entity should still exist after rollback
+      const retrieved = await adapter.get('User', original.$id as string)
+      expect(retrieved).not.toBeNull()
+      expect(retrieved?.name).toBe('ToDelete')
+    })
+
+    it('should rollback relationships created in transaction', async () => {
+      // Create entities outside transaction
+      const user = await adapter.create('User', undefined, {
+        name: 'RelUser',
+        email: 'reluser@example.com',
+      })
+
+      const post = await adapter.create('Post', undefined, {
+        title: 'RelPost',
+        content: 'Content',
+        status: 'draft',
+      })
+
+      const tx = await adapter.beginTransaction()
+
+      // Create relationship within transaction
+      await tx.relate('Post', post.$id as string, 'author', 'User', user.$id as string)
+
+      await tx.rollback()
+
+      // Relationship should not exist after rollback
+      const relatedUsers = await adapter.related('Post', post.$id as string, 'author')
+      expect(relatedUsers.length).toBe(0)
+    })
+
+    it('should handle multiple operations in one transaction with rollback', async () => {
+      // Create an entity to update
+      const existing = await adapter.create('User', undefined, {
+        name: 'Existing',
+        email: 'existing@example.com',
+      })
+
+      const tx = await adapter.beginTransaction()
+
+      // Create new entity
+      const newUser = await tx.create('User', undefined, {
+        name: 'NewUser',
+        email: 'new@example.com',
+      })
+
+      // Update existing entity
+      await tx.update('User', existing.$id as string, {
+        name: 'UpdatedExisting',
+      })
+
+      // Create a post
+      const post = await tx.create('Post', undefined, {
+        title: 'TxPost',
+        content: 'Content',
+      })
+
+      // Relate post to new user
+      await tx.relate('Post', post.$id as string, 'author', 'User', newUser.$id as string)
+
+      await tx.rollback()
+
+      // New user should not exist
+      const newUserResult = await adapter.get('User', newUser.$id as string)
+      expect(newUserResult).toBeNull()
+
+      // Existing user should have original name
+      const existingResult = await adapter.get('User', existing.$id as string)
+      expect(existingResult?.name).toBe('Existing')
+
+      // Post should not exist
+      const postResult = await adapter.get('Post', post.$id as string)
+      expect(postResult).toBeNull()
+    })
+
+    it('should persist all operations on commit', async () => {
+      // Create an entity to update
+      const existing = await adapter.create('User', undefined, {
+        name: 'ExistingForCommit',
+        email: 'existingcommit@example.com',
+      })
+
+      const tx = await adapter.beginTransaction()
+
+      // Create new entity
+      const newUser = await tx.create('User', undefined, {
+        name: 'NewUserCommit',
+        email: 'newcommit@example.com',
+      })
+
+      // Update existing entity
+      await tx.update('User', existing.$id as string, {
+        name: 'UpdatedForCommit',
+      })
+
+      // Create a post
+      const post = await tx.create('Post', undefined, {
+        title: 'CommitPost',
+        content: 'Content',
+      })
+
+      // Relate post to new user
+      await tx.relate('Post', post.$id as string, 'author', 'User', newUser.$id as string)
+
+      await tx.commit()
+
+      // All changes should be persisted
+      const newUserResult = await adapter.get('User', newUser.$id as string)
+      expect(newUserResult).not.toBeNull()
+      expect(newUserResult?.name).toBe('NewUserCommit')
+
+      const existingResult = await adapter.get('User', existing.$id as string)
+      expect(existingResult?.name).toBe('UpdatedForCommit')
+
+      const postResult = await adapter.get('Post', post.$id as string)
+      expect(postResult).not.toBeNull()
+
+      const relatedUsers = await adapter.related('Post', post.$id as string, 'author')
+      expect(relatedUsers.length).toBe(1)
+    })
   })
 
   describe('Embeddings Configuration', () => {
@@ -337,20 +536,210 @@ describe('ai-database Adapter', () => {
         },
       })
 
-      // No assertion needed - just verify no error thrown
-      expect(true).toBe(true)
+      // Verify config is stored
+      const config = adapter.getEmbeddingsConfig()
+      expect(config).not.toBeNull()
+      expect(config?.fields?.Post).toEqual(['title', 'content'])
+    })
+
+    it('should accept provider in setEmbeddingsConfig', () => {
+      const mockProvider = {
+        embed: async (text: string) => [0.1, 0.2, 0.3],
+        embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3]),
+        dimensions: 3,
+        model: 'mock-model',
+      }
+
+      adapter.setEmbeddingsConfig({
+        fields: { Post: ['title'] },
+      }, mockProvider)
+
+      expect(adapter.getEmbeddingsConfig()).not.toBeNull()
+    })
+  })
+
+  describe('Auto-Embedding Generation', () => {
+    let adapterWithEmbeddings: ParqueDBAdapter
+    let mockProvider: {
+      embed: ReturnType<typeof vi.fn>
+      embedBatch: ReturnType<typeof vi.fn>
+      dimensions: number
+      model: string
+    }
+
+    beforeEach(() => {
+      // Create a mock embedding provider
+      mockProvider = {
+        embed: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+        embedBatch: vi.fn().mockResolvedValue([[0.1, 0.2, 0.3]]),
+        dimensions: 3,
+        model: 'mock-model',
+      }
+
+      // Create adapter with embedding provider
+      adapterWithEmbeddings = new ParqueDBAdapter(db as any, {
+        embeddingProvider: mockProvider,
+      })
+
+      // Configure embeddings
+      adapterWithEmbeddings.setEmbeddingsConfig({
+        fields: {
+          Post: ['title', 'content'],
+          User: ['bio'],
+        },
+        vectorField: 'embedding',
+      })
+    })
+
+    it('should auto-generate embeddings on create', async () => {
+      const post = await adapterWithEmbeddings.create('Post', undefined, {
+        title: 'Hello World',
+        content: 'This is a test post',
+      })
+
+      // Verify embedding provider was called
+      expect(mockProvider.embed).toHaveBeenCalledWith('Hello World\n\nThis is a test post')
+
+      // Verify embedding is stored in the entity
+      expect(post.embedding).toEqual([0.1, 0.2, 0.3])
+    })
+
+    it('should not generate embeddings for unconfigured types', async () => {
+      const category = await adapterWithEmbeddings.create('Category', undefined, {
+        name: 'Tech',
+        slug: 'tech',
+      })
+
+      // Embedding provider should not be called
+      expect(mockProvider.embed).not.toHaveBeenCalled()
+
+      // No embedding field
+      expect(category.embedding).toBeUndefined()
+    })
+
+    it('should skip embedding if no text fields have values', async () => {
+      const post = await adapterWithEmbeddings.create('Post', undefined, {
+        status: 'draft',
+      })
+
+      // Embedding provider should not be called (no title or content)
+      expect(mockProvider.embed).not.toHaveBeenCalled()
+    })
+
+    it('should regenerate embeddings on update when configured fields change', async () => {
+      // Create a post first
+      const post = await adapterWithEmbeddings.create('Post', undefined, {
+        title: 'Original Title',
+        content: 'Original content',
+      })
+
+      mockProvider.embed.mockClear()
+
+      // Update the title
+      const updated = await adapterWithEmbeddings.update('Post', post.$id as string, {
+        title: 'Updated Title',
+      })
+
+      // Embedding should be regenerated with merged content
+      expect(mockProvider.embed).toHaveBeenCalledTimes(1)
+      // Should include the updated title and original content
+      expect(mockProvider.embed).toHaveBeenCalledWith(expect.stringContaining('Updated Title'))
+    })
+
+    it('should not regenerate embeddings when non-configured fields change', async () => {
+      const post = await adapterWithEmbeddings.create('Post', undefined, {
+        title: 'Test',
+        content: 'Test content',
+      })
+
+      mockProvider.embed.mockClear()
+
+      // Update a non-configured field
+      await adapterWithEmbeddings.update('Post', post.$id as string, {
+        status: 'published',
+      })
+
+      // Embedding should NOT be regenerated
+      expect(mockProvider.embed).not.toHaveBeenCalled()
+    })
+
+    it('should use custom vectorField from config', async () => {
+      adapterWithEmbeddings.setEmbeddingsConfig({
+        fields: { Post: ['title'] },
+        vectorField: 'customEmbedding',
+      })
+
+      const post = await adapterWithEmbeddings.create('Post', undefined, {
+        title: 'Hello',
+      })
+
+      expect(post.customEmbedding).toEqual([0.1, 0.2, 0.3])
+      expect(post.embedding).toBeUndefined()
+    })
+
+    it('should work without provider configured', async () => {
+      // Use adapter without embedding provider
+      adapter.setEmbeddingsConfig({
+        fields: { Post: ['title'] },
+      })
+
+      // Should not throw, just skip embedding generation
+      const post = await adapter.create('Post', undefined, {
+        title: 'Test',
+        content: 'Content',
+      })
+
+      expect(post.embedding).toBeUndefined()
+    })
+
+    it('should concatenate multiple fields with newlines', async () => {
+      await adapterWithEmbeddings.create('Post', undefined, {
+        title: 'Title Text',
+        content: 'Content Text',
+      })
+
+      // Fields should be joined with '\n\n'
+      expect(mockProvider.embed).toHaveBeenCalledWith('Title Text\n\nContent Text')
+    })
+
+    it('should only embed non-empty string fields', async () => {
+      await adapterWithEmbeddings.create('Post', undefined, {
+        title: 'Only Title',
+        content: '', // Empty content
+      })
+
+      // Should only include title
+      expect(mockProvider.embed).toHaveBeenCalledWith('Only Title')
     })
   })
 
   describe('Semantic Search', () => {
     it('should perform semantic search', async () => {
-      await adapter.create('Post', undefined, {
+      // Create a mock embedding provider that returns consistent vectors
+      const mockEmbeddingProvider = {
+        embed: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+        embedBatch: vi.fn().mockResolvedValue([[0.1, 0.2, 0.3]]),
+        dimensions: 3,
+        model: 'mock-model',
+      }
+
+      // Create a new adapter with the embedding provider
+      const adapterWithEmbeddings = new ParqueDBAdapter(db as any, {
+        embeddingProvider: mockEmbeddingProvider,
+      })
+
+      adapterWithEmbeddings.setEmbeddingsConfig({
+        fields: { Post: ['title', 'content'] },
+        vectorField: 'embedding',
+      })
+
+      await adapterWithEmbeddings.create('Post', undefined, {
         title: 'Machine Learning Basics',
         content: 'Introduction to ML algorithms',
       })
 
       // Semantic search (requires vector index to be meaningful)
-      const results = await adapter.semanticSearch('Post', 'AI and machine learning', {
+      const results = await adapterWithEmbeddings.semanticSearch('Post', 'AI and machine learning', {
         limit: 5,
       })
 
@@ -364,12 +753,30 @@ describe('ai-database Adapter', () => {
 
   describe('Hybrid Search', () => {
     it('should perform hybrid search', async () => {
-      await adapter.create('Post', undefined, {
+      // Create a mock embedding provider that returns consistent vectors
+      const mockEmbeddingProvider = {
+        embed: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+        embedBatch: vi.fn().mockResolvedValue([[0.1, 0.2, 0.3]]),
+        dimensions: 3,
+        model: 'mock-model',
+      }
+
+      // Create a new adapter with the embedding provider
+      const adapterWithEmbeddings = new ParqueDBAdapter(db as any, {
+        embeddingProvider: mockEmbeddingProvider,
+      })
+
+      adapterWithEmbeddings.setEmbeddingsConfig({
+        fields: { Post: ['title', 'content'] },
+        vectorField: 'embedding',
+      })
+
+      await adapterWithEmbeddings.create('Post', undefined, {
         title: 'Deep Learning Tutorial',
         content: 'Neural networks and deep learning',
       })
 
-      const results = await adapter.hybridSearch('Post', 'deep learning', {
+      const results = await adapterWithEmbeddings.hybridSearch('Post', 'deep learning', {
         limit: 5,
         rrfK: 60,
       })

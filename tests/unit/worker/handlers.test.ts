@@ -1062,6 +1062,60 @@ describe('handleRelationshipTraversal', () => {
     expect(api.count).toBe(5)
   })
 
+  it('should throw error for invalid limit (non-numeric)', async () => {
+    const worker = createMockWorker({
+      getRelationships: vi.fn().mockResolvedValue([]),
+      getStorageStats: vi.fn().mockReturnValue({
+        cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false,
+      }),
+    })
+
+    const context = createContext(
+      'https://test.parquedb.com/datasets/onet-graph/occupations/11-1011/skills?limit=abc',
+      { worker }
+    )
+
+    await expect(
+      handleRelationshipTraversal(context, 'onet-graph', 'occupations', '11-1011', 'skills')
+    ).rejects.toThrow('Invalid limit: must be a valid integer')
+  })
+
+  it('should throw error for negative skip', async () => {
+    const worker = createMockWorker({
+      getRelationships: vi.fn().mockResolvedValue([]),
+      getStorageStats: vi.fn().mockReturnValue({
+        cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false,
+      }),
+    })
+
+    const context = createContext(
+      'https://test.parquedb.com/datasets/onet-graph/occupations/11-1011/skills?skip=-10',
+      { worker }
+    )
+
+    await expect(
+      handleRelationshipTraversal(context, 'onet-graph', 'occupations', '11-1011', 'skills')
+    ).rejects.toThrow('Invalid skip: must be non-negative')
+  })
+
+  it('should throw error for limit exceeding maximum', async () => {
+    const worker = createMockWorker({
+      getRelationships: vi.fn().mockResolvedValue([]),
+      getStorageStats: vi.fn().mockReturnValue({
+        cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false,
+      }),
+    })
+
+    const context = createContext(
+      'https://test.parquedb.com/datasets/onet-graph/occupations/11-1011/skills?limit=10000',
+      { worker }
+    )
+
+    await expect(
+      handleRelationshipTraversal(context, 'onet-graph', 'occupations', '11-1011', 'skills')
+    ).rejects.toThrow('Invalid limit: cannot exceed 1000')
+  })
+
   it('should pass predicate filter to worker.getRelationships', async () => {
     const worker = createMockWorker({
       getRelationships: vi.fn().mockResolvedValue([]),

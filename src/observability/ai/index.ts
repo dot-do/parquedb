@@ -81,6 +81,7 @@ export {
   type AIRequestsStats,
   type AIRequestsMVConfig,
   type ResolvedAIRequestsMVConfig,
+  type CleanupResult as AIRequestsCleanupResult,
 } from './AIRequestsMV'
 
 // GeneratedContentMV
@@ -98,4 +99,5 @@ export {
   type ContentStats,
   type GeneratedContentMVConfig,
   type ResolvedContentMVConfig,
+  type CleanupResult as ContentCleanupResult,
 } from './GeneratedContentMV'

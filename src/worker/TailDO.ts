@@ -166,12 +166,74 @@ export class TailDO extends DurableObject<TailDOEnv> {
   /** Whether a flush alarm is currently scheduled */
   private alarmScheduled = false
 
+  /** Whether persisted state has been loaded */
+  private stateLoaded = false
+
   /** Maximum buffer size before forced flush (prevents unbounded memory growth) */
   private static readonly MAX_BUFFER_SIZE = 1000
+
+  /** Storage keys for persisted state */
+  private static readonly STORAGE_KEY_BUFFER = 'rawEventsBuffer'
+  private static readonly STORAGE_KEY_BATCH_SEQ = 'batchSeq'
 
   constructor(ctx: DurableObjectState, env: TailDOEnv) {
     super(ctx, env)
     this.doId = ctx.id.toString()
+
+    // Restore state from storage on wake from hibernation
+    // Use blockConcurrencyWhile to ensure state is loaded before handling requests
+    this.ctx.blockConcurrencyWhile(async () => {
+      await this.loadPersistedState()
+    })
+  }
+
+  // ===========================================================================
+  // State Persistence (Hibernation Support)
+  // ===========================================================================
+
+  /**
+   * Load persisted state from Durable Object storage
+   *
+   * Called on construction to restore state after hibernation.
+   */
+  private async loadPersistedState(): Promise<void> {
+    if (this.stateLoaded) return
+
+    const [buffer, batchSeq] = await Promise.all([
+      this.ctx.storage.get<ValidatedTraceItem[]>(TailDO.STORAGE_KEY_BUFFER),
+      this.ctx.storage.get<number>(TailDO.STORAGE_KEY_BATCH_SEQ),
+    ])
+
+    if (buffer !== undefined) {
+      this.rawEventsBuffer = buffer
+      console.log(`[TailDO] Restored ${buffer.length} events from storage after hibernation`)
+    }
+
+    if (batchSeq !== undefined) {
+      this.batchSeq = batchSeq
+    }
+
+    this.stateLoaded = true
+  }
+
+  /**
+   * Persist the current buffer and batch sequence to storage
+   *
+   * Called after buffer modifications to ensure data survives hibernation.
+   */
+  private async persistState(): Promise<void> {
+    await Promise.all([
+      this.ctx.storage.put(TailDO.STORAGE_KEY_BUFFER, this.rawEventsBuffer),
+      this.ctx.storage.put(TailDO.STORAGE_KEY_BATCH_SEQ, this.batchSeq),
+    ])
+  }
+
+  /**
+   * Clear persisted buffer from storage after successful flush
+   */
+  private async clearPersistedBuffer(): Promise<void> {
+    // Keep batchSeq but clear the buffer
+    await this.ctx.storage.put(TailDO.STORAGE_KEY_BUFFER, [])
   }
 
   // ===========================================================================
@@ -245,11 +307,17 @@ export class TailDO extends DurableObject<TailDOEnv> {
     })
 
     this.batchSeq++
+
+    // Persist the updated batchSeq to survive hibernation
+    await this.ctx.storage.put(TailDO.STORAGE_KEY_BATCH_SEQ, this.batchSeq)
+
     console.log(`[TailDO] Wrote ${events.length} raw events to ${filePath}`)
   }
 
   /**
    * Flush raw events buffer to R2
+   *
+   * Clears persisted buffer after successful write to prevent data loss.
    */
   private async flushRawEvents(): Promise<void> {
     if (this.rawEventsBuffer.length === 0) return
@@ -258,6 +326,9 @@ export class TailDO extends DurableObject<TailDOEnv> {
     this.rawEventsBuffer = []
 
     await this.writeRawEventsToR2(events)
+
+    // Clear persisted buffer after successful flush
+    await this.clearPersistedBuffer()
   }
 
   /**
@@ -363,6 +434,9 @@ export class TailDO extends DurableObject<TailDOEnv> {
       if (parsed.events && parsed.events.length > 0) {
         this.rawEventsBuffer.push(...parsed.events)
         this.totalEventsProcessed += parsed.events.length
+
+        // Persist buffer to survive hibernation
+        await this.persistState()
 
         // Maybe flush if batch size reached
         await this.maybeFlushRawEvents()

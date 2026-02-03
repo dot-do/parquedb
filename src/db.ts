@@ -42,6 +42,7 @@ import { MemoryBackend, StorageRouter } from './storage'
 import type { RouterSchema } from './storage/router'
 import { createSQL } from './integrations/sql'
 import type { SQLExecutor } from './integrations/sql'
+import { DEFAULT_COLLECTION_OPTIONS, type CollectionOptions } from './types/collection-options'
 
 // =============================================================================
 // Types
@@ -98,35 +99,8 @@ export type LayoutConfig =
   | (string | string[])[]  // No tabs: array of rows
   | Record<string, (string | string[])[]>  // Tabs: object with tab names
 
-/**
- * Per-collection storage and behavior options
- *
- * @example
- * ```typescript
- * const db = DB({
- *   Occupation: {
- *     $options: {
- *       includeDataVariant: true,  // Include $data variant column (default: true)
- *     },
- *     name: 'string!',
- *     socCode: 'string!#',
- *   },
- *   Logs: {
- *     $options: { includeDataVariant: false },  // Omit $data for write-heavy logs
- *     level: 'string',
- *     message: 'string',
- *   }
- * })
- * ```
- */
-export interface CollectionOptions {
-  /** Include $data variant column for fast full-row reads (default: true) */
-  includeDataVariant?: boolean
-  // Future options can be added here:
-  // compression?: 'snappy' | 'gzip' | 'zstd' | 'none'
-  // partitionBy?: string[]
-  // rowGroupSize?: number
-}
+// Re-export CollectionOptions for backward compatibility
+export type { CollectionOptions } from './types/collection-options'
 
 /**
  * Schema definition for a single collection
@@ -264,12 +238,8 @@ function convertToGraphDLInput(schema: DBSchema): Record<string, Record<string, 
 // Collection Options Helpers
 // =============================================================================
 
-/**
- * Default collection options
- */
-export const DEFAULT_COLLECTION_OPTIONS: Required<CollectionOptions> = {
-  includeDataVariant: true,
-}
+// Re-export DEFAULT_COLLECTION_OPTIONS for backward compatibility
+export { DEFAULT_COLLECTION_OPTIONS } from './types/collection-options'
 
 /**
  * Extract $options from a collection schema

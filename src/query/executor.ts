@@ -71,7 +71,7 @@ export interface QueryStats {
   /** Index used (if any) */
   indexUsed?: string
   /** Index type used */
-  indexType?: 'fts' | 'vector'
+  indexType?: 'fts' | 'vector' | 'geo'
 }
 
 /**
@@ -107,7 +107,7 @@ export interface QueryPlan {
     /** Index name */
     name: string
     /** Index type */
-    type: 'fts' | 'vector'
+    type: 'fts' | 'vector' | 'geo'
     /** Field being queried */
     field?: string
     /** Whether index will be used */
@@ -342,6 +342,125 @@ export class QueryExecutor {
 
               // Vector search returns results ordered by similarity
               candidateDocIds = vectorResult.docIds
+            }
+          }
+          break
+        }
+
+        case 'geo': {
+          // Handle geo proximity search
+          const geoCondition = indexPlan.condition as {
+            // $geo operator format
+            $near?: { lat: number; lng: number } | [number, number]
+            $maxDistance?: number
+            $minDistance?: number
+            limit?: number
+            // Field-level $near format (MongoDB style)
+            lat?: number
+            lng?: number
+          }
+
+          // Extract center point
+          let centerLat: number | undefined
+          let centerLng: number | undefined
+
+          if (geoCondition.$near) {
+            if (Array.isArray(geoCondition.$near)) {
+              // [lng, lat] format (GeoJSON style)
+              centerLng = geoCondition.$near[0]
+              centerLat = geoCondition.$near[1]
+            } else {
+              // { lat, lng } format
+              centerLat = geoCondition.$near.lat
+              centerLng = geoCondition.$near.lng
+            }
+          }
+
+          if (typeof centerLat === 'number' && typeof centerLng === 'number') {
+            const geoResult = await this.indexManager!.geoSearch(
+              ns,
+              indexPlan.index.name,
+              centerLat,
+              centerLng,
+              {
+                maxDistance: geoCondition.$maxDistance,
+                minDistance: geoCondition.$minDistance,
+                limit: geoCondition.limit ?? options.limit,
+              }
+            )
+
+            // Return results with distance info
+            const geoDocIds = geoResult.docIds
+            if (geoDocIds.length === 0) {
+              return {
+                rows: [],
+                hasMore: false,
+                stats: {
+                  totalRowGroups: 0,
+                  scannedRowGroups: 0,
+                  skippedRowGroups: 0,
+                  rowsScanned: geoResult.entriesScanned,
+                  rowsMatched: 0,
+                  executionTimeMs: Date.now() - startTime,
+                  columnsRead: [],
+                  usedBloomFilter: false,
+                  indexUsed: indexPlan.index.name,
+                  indexType: 'geo',
+                },
+              }
+            }
+
+            // Load matching documents
+            const dataPath = `data/${ns}/data.parquet`
+            const metadata = await this.reader.readMetadata(dataPath)
+            const columns = this.selectColumns(filter, options)
+            const allRows = await this.reader.readAll<T>(dataPath, columns.length > 0 ? columns : undefined)
+
+            // Filter to matching documents and add distance
+            const candidateSet = new Set(geoDocIds)
+            const distanceMap = new Map<string, number>()
+            geoDocIds.forEach((id, i) => {
+              distanceMap.set(id, geoResult.distances[i] ?? 0)
+            })
+
+            let filtered = allRows.filter(row => {
+              const id = (row as Record<string, unknown>).$id as string
+              return candidateSet.has(id)
+            })
+
+            // Sort by distance (already ordered from index, but maintain order)
+            filtered.sort((a, b) => {
+              const idA = (a as Record<string, unknown>).$id as string
+              const idB = (b as Record<string, unknown>).$id as string
+              return (distanceMap.get(idA) ?? 0) - (distanceMap.get(idB) ?? 0)
+            })
+
+            // Add distance to each result
+            filtered = filtered.map(row => ({
+              ...row as object,
+              $distance: distanceMap.get((row as Record<string, unknown>).$id as string),
+            })) as T[]
+
+            // Apply limit
+            if (options.limit && filtered.length > options.limit) {
+              filtered = filtered.slice(0, options.limit)
+            }
+
+            return {
+              rows: filtered,
+              hasMore: false,
+              stats: {
+                totalRowGroups: metadata.rowGroups?.length ?? 0,
+                scannedRowGroups: 1,
+                skippedRowGroups: 0,
+                rowsScanned: allRows.length,
+                rowsMatched: filtered.length,
+                executionTimeMs: Date.now() - startTime,
+                columnsRead: columns,
+                usedBloomFilter: false,
+                indexUsed: indexPlan.index.name,
+                indexType: 'geo',
+              },
             }
           }
           break

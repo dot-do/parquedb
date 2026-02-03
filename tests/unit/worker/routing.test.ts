@@ -6,7 +6,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { parseQueryFilter, parseQueryOptions, QueryParamError } from '@/worker/routing'
+import { parseQueryFilter, parseQueryOptions, QueryParamError, parsePaginationParams } from '@/worker/routing'
+import { MAX_QUERY_LIMIT, MAX_QUERY_OFFSET } from '@/constants'
 
 // =============================================================================
 // parseQueryFilter
@@ -149,5 +150,199 @@ describe('parseQueryOptions', () => {
   it('accepts limit of 0', () => {
     const params = new URLSearchParams({ limit: '0' })
     expect(parseQueryOptions(params)).toEqual({ limit: 0 })
+  })
+})
+
+// =============================================================================
+// parsePaginationParams
+// =============================================================================
+
+describe('parsePaginationParams', () => {
+  // ---------------------------------------------------------------------------
+  // Default behavior
+  // ---------------------------------------------------------------------------
+
+  it('returns default values when no params present', () => {
+    const params = new URLSearchParams()
+    expect(parsePaginationParams(params)).toEqual({ limit: 100, offset: 0 })
+  })
+
+  it('uses custom default limit', () => {
+    const params = new URLSearchParams()
+    expect(parsePaginationParams(params, { defaultLimit: 50 })).toEqual({
+      limit: 50,
+      offset: 0,
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Valid limit values
+  // ---------------------------------------------------------------------------
+
+  it('parses valid limit', () => {
+    const params = new URLSearchParams({ limit: '25' })
+    expect(parsePaginationParams(params)).toEqual({ limit: 25, offset: 0 })
+  })
+
+  it('accepts limit of 0', () => {
+    const params = new URLSearchParams({ limit: '0' })
+    expect(parsePaginationParams(params)).toEqual({ limit: 0, offset: 0 })
+  })
+
+  it('accepts limit at max', () => {
+    const params = new URLSearchParams({ limit: String(MAX_QUERY_LIMIT) })
+    expect(parsePaginationParams(params)).toEqual({
+      limit: MAX_QUERY_LIMIT,
+      offset: 0,
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Invalid limit values
+  // ---------------------------------------------------------------------------
+
+  it('throws QueryParamError on non-numeric limit (NaN)', () => {
+    const params = new URLSearchParams({ limit: 'abc' })
+    expect(() => parsePaginationParams(params)).toThrow(QueryParamError)
+    expect(() => parsePaginationParams(params)).toThrow('Invalid limit: must be a valid integer')
+  })
+
+  it('throws QueryParamError on negative limit', () => {
+    const params = new URLSearchParams({ limit: '-5' })
+    expect(() => parsePaginationParams(params)).toThrow(QueryParamError)
+    expect(() => parsePaginationParams(params)).toThrow('Invalid limit: must be non-negative')
+  })
+
+  it('throws QueryParamError when limit exceeds max', () => {
+    const params = new URLSearchParams({ limit: String(MAX_QUERY_LIMIT + 1) })
+    expect(() => parsePaginationParams(params)).toThrow(QueryParamError)
+    expect(() => parsePaginationParams(params)).toThrow(`Invalid limit: cannot exceed ${MAX_QUERY_LIMIT}`)
+  })
+
+  it('throws QueryParamError on float limit', () => {
+    const params = new URLSearchParams({ limit: '10.5' })
+    // parseInt('10.5') = 10, so this should pass - parseInt truncates
+    // But we could consider this invalid if we want strict integer parsing
+    // For now, parseInt behavior is acceptable
+    expect(parsePaginationParams(params)).toEqual({ limit: 10, offset: 0 })
+  })
+
+  it('throws QueryParamError on empty string limit', () => {
+    // Empty string should use default
+    const params = new URLSearchParams({ limit: '' })
+    expect(parsePaginationParams(params)).toEqual({ limit: 100, offset: 0 })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Valid offset values
+  // ---------------------------------------------------------------------------
+
+  it('parses valid offset', () => {
+    const params = new URLSearchParams({ offset: '50' })
+    expect(parsePaginationParams(params)).toEqual({ limit: 100, offset: 50 })
+  })
+
+  it('accepts offset of 0', () => {
+    const params = new URLSearchParams({ offset: '0' })
+    expect(parsePaginationParams(params)).toEqual({ limit: 100, offset: 0 })
+  })
+
+  it('accepts offset at max', () => {
+    const params = new URLSearchParams({ offset: String(MAX_QUERY_OFFSET) })
+    expect(parsePaginationParams(params)).toEqual({
+      limit: 100,
+      offset: MAX_QUERY_OFFSET,
+    })
+  })
+
+  it('accepts skip as alias for offset', () => {
+    const params = new URLSearchParams({ skip: '30' })
+    expect(parsePaginationParams(params)).toEqual({ limit: 100, offset: 30 })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Invalid offset values
+  // ---------------------------------------------------------------------------
+
+  it('throws QueryParamError on non-numeric offset (NaN)', () => {
+    const params = new URLSearchParams({ offset: 'xyz' })
+    expect(() => parsePaginationParams(params)).toThrow(QueryParamError)
+    expect(() => parsePaginationParams(params)).toThrow('Invalid offset: must be a valid integer')
+  })
+
+  it('throws QueryParamError on negative offset', () => {
+    const params = new URLSearchParams({ offset: '-10' })
+    expect(() => parsePaginationParams(params)).toThrow(QueryParamError)
+    expect(() => parsePaginationParams(params)).toThrow('Invalid offset: must be non-negative')
+  })
+
+  it('throws QueryParamError when offset exceeds max', () => {
+    const params = new URLSearchParams({ offset: String(MAX_QUERY_OFFSET + 1) })
+    expect(() => parsePaginationParams(params)).toThrow(QueryParamError)
+    expect(() => parsePaginationParams(params)).toThrow(`Invalid offset: cannot exceed ${MAX_QUERY_OFFSET}`)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Custom options
+  // ---------------------------------------------------------------------------
+
+  it('uses custom maxLimit', () => {
+    const params = new URLSearchParams({ limit: '200' })
+    expect(() => parsePaginationParams(params, { maxLimit: 100 })).toThrow(
+      'cannot exceed 100'
+    )
+  })
+
+  it('uses custom maxOffset', () => {
+    const params = new URLSearchParams({ offset: '1001' })
+    expect(() => parsePaginationParams(params, { maxOffset: 1000 })).toThrow(
+      'cannot exceed 1000'
+    )
+  })
+
+  it('uses custom offsetParam name', () => {
+    const params = new URLSearchParams({ skip: '25' })
+    const result = parsePaginationParams(params, { offsetParam: 'skip' })
+    expect(result.offset).toBe(25)
+  })
+
+  it('uses custom limitParam name', () => {
+    const params = new URLSearchParams({ pageSize: '15' })
+    const result = parsePaginationParams(params, { limitParam: 'pageSize' })
+    expect(result.limit).toBe(15)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Edge cases
+  // ---------------------------------------------------------------------------
+
+  it('handles both limit and offset together', () => {
+    const params = new URLSearchParams({ limit: '50', offset: '100' })
+    expect(parsePaginationParams(params)).toEqual({ limit: 50, offset: 100 })
+  })
+
+  it('handles whitespace in values', () => {
+    // parseInt with leading/trailing whitespace
+    const params = new URLSearchParams({ limit: ' 50 ' })
+    // parseInt(' 50 ') = 50
+    expect(parsePaginationParams(params)).toEqual({ limit: 50, offset: 0 })
+  })
+
+  it('prefers offset over skip when both present', () => {
+    const params = new URLSearchParams({ offset: '100', skip: '50' })
+    expect(parsePaginationParams(params)).toEqual({ limit: 100, offset: 100 })
+  })
+
+  it('QueryParamError has correct properties', () => {
+    const params = new URLSearchParams({ limit: 'bad' })
+    try {
+      parsePaginationParams(params)
+      expect.fail('Should have thrown')
+    } catch (e) {
+      expect(e).toBeInstanceOf(QueryParamError)
+      const err = e as QueryParamError
+      expect(err.status).toBe(400)
+      expect(err.name).toBe('QueryParamError')
+    }
   })
 })

@@ -29,7 +29,7 @@ import type {
 import type { HybridSearchStrategy } from '../indexes/types'
 
 import type { IStorageRouter } from '../storage/router'
-import type { CollectionOptions } from '../db'
+import type { CollectionOptions } from '../types/collection-options'
 import type { EmbeddingProvider } from '../embeddings/provider'
 
 // =============================================================================

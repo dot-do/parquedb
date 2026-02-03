@@ -110,7 +110,7 @@ describe('Event Log', () => {
       expect((updateEvent!.after as Variant).title).toBe('Updated Title')
     })
 
-    it('records DELETE event', async () => {
+    it('records DELETE event for soft delete with after state', async () => {
       const entity = await db.create('posts', {
         $type: 'Post',
         name: 'Test Post',
@@ -126,7 +126,32 @@ describe('Event Log', () => {
       const deleteEvent = events.find((e: Event) => e.op === 'DELETE')
       expect(deleteEvent).toBeDefined()
       expect(deleteEvent!.before).toBeDefined()
-      expect(deleteEvent!.after).toBeUndefined()
+      // Soft delete should record the after state with deletedAt/deletedBy
+      expect(deleteEvent!.after).toBeDefined()
+      expect((deleteEvent!.after as Variant).deletedAt).toBeDefined()
+      expect((deleteEvent!.after as Variant).deletedBy).toBeDefined()
+      // Version should be incremented in after state
+      expect((deleteEvent!.after as Variant).version).toBe(2)
+    })
+
+    it('records DELETE event for hard delete with null after state', async () => {
+      const entity = await db.create('posts', {
+        $type: 'Post',
+        name: 'Test Post',
+        title: 'To Be Hard Deleted',
+        content: 'Test content',
+      })
+
+      await db.delete('posts', entity.$id as string, { hard: true })
+
+      const eventLog = db.getEventLog()
+      const events = await eventLog.getEvents(entity.$id as EntityId)
+
+      const deleteEvent = events.find((e: Event) => e.op === 'DELETE')
+      expect(deleteEvent).toBeDefined()
+      expect(deleteEvent!.before).toBeDefined()
+      // Hard delete should have null after state
+      expect(deleteEvent!.after).toBeNull()
     })
 
     it('records LINK event for relationships', async () => {

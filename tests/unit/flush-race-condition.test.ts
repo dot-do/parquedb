@@ -283,9 +283,9 @@ describe('Flush Race Condition', () => {
       ).rejects.toThrow('Simulated write failure')
 
       // The failed entity should not exist in memory
-      const allEntities = await db.find('posts')
-      expect(allEntities).toHaveLength(1)
-      expect(allEntities[0]?.name).toBe('Post 1')
+      const result = await db.find('posts')
+      expect(result.items).toHaveLength(1)
+      expect(result.items[0]?.name).toBe('Post 1')
     })
 
     it('should remove failed events from pending queue', async () => {
@@ -319,8 +319,8 @@ describe('Flush Race Condition', () => {
       expect(entity.name).toBe('Post 2')
 
       // Only the successful entity should exist
-      const allEntities = await db.find('posts')
-      expect(allEntities).toHaveLength(1)
+      const result = await db.find('posts')
+      expect(result.items).toHaveLength(1)
     })
   })
 })

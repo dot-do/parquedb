@@ -13,7 +13,7 @@
  * NOTE: 'hash' and 'sst' removed - native parquet predicate pushdown on $index_* columns
  * is now faster than secondary indexes for equality and range queries
  */
-export type IndexType = 'fts' | 'bloom' | 'vector'
+export type IndexType = 'fts' | 'bloom' | 'vector' | 'geo'
 
 /**
  * Index field definition
@@ -47,6 +47,8 @@ export interface IndexDefinition {
   ftsOptions?: FTSIndexOptions
   /** Vector-specific options */
   vectorOptions?: VectorIndexOptions
+  /** Geo-specific options */
+  geoOptions?: GeoIndexOptions
   /** Index metadata */
   metadata?: Record<string, unknown>
 }
@@ -84,6 +86,14 @@ export interface VectorIndexOptions {
   m?: number
   /** HNSW efConstruction parameter - size of dynamic candidate list during construction (default: 200) */
   efConstruction?: number
+}
+
+/**
+ * Geo-specific index options
+ */
+export interface GeoIndexOptions {
+  /** Geohash precision for bucketing (1-12, default: 6 = ~1.2km cells) */
+  bucketPrecision?: number
 }
 
 // =============================================================================
@@ -394,3 +404,51 @@ export type IndexEvent =
  * Index event listener
  */
 export type IndexEventListener = (event: IndexEvent) => void
+
+// =============================================================================
+// Geo Index Types
+// =============================================================================
+
+/**
+ * Entry stored in a geo index
+ */
+export interface GeoIndexEntry {
+  /** Document ID */
+  docId: string
+  /** Latitude */
+  lat: number
+  /** Longitude */
+  lng: number
+  /** Row group number */
+  rowGroup: number
+  /** Row offset within row group */
+  rowOffset: number
+  /** Precomputed geohash */
+  geohash: string
+}
+
+/**
+ * Geo search options
+ */
+export interface GeoSearchOptions {
+  /** Maximum distance in meters */
+  maxDistance?: number
+  /** Minimum distance in meters */
+  minDistance?: number
+  /** Maximum results to return */
+  limit?: number
+}
+
+/**
+ * Result of a geo proximity search
+ */
+export interface GeoSearchResult {
+  /** Matching document IDs (ordered by distance) */
+  docIds: string[]
+  /** Row group hints for efficient reading */
+  rowGroups: number[]
+  /** Distances in meters for each result */
+  distances: number[]
+  /** Number of entries scanned */
+  entriesScanned: number
+}

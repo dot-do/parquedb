@@ -1,0 +1,47 @@
+{
+  "name": "imdb",
+  "version": 2,
+  "totalDocs": 10000,
+  "shardSize": 500,
+  "shardCount": 20,
+  "textFields": [
+    "primaryTitle",
+    "originalTitle"
+  ],
+  "hashFields": [
+    "tconst",
+    "titleType",
+    "startYear"
+  ],
+  "idField": "tconst",
+  "termShards": [
+    "0",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h",
+    "i",
+    "j",
+    "k",
+    "l",
+    "m",
+    "n",
+    "o",
+    "p",
+    "q",
+    "r",
+    "s",
+    "t",
+    "u",
+    "v",
+    "w",
+    "x",
+    "y",
+    "z"
+  ],
+  "buildTime": "2026-02-03T18:47:20.256Z"
+}

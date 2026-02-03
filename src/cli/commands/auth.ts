@@ -4,8 +4,8 @@
  * Login, logout, and whoami commands using oauth.do
  */
 
-import type { ParsedArgs } from '../index'
-import { print, printError, printSuccess } from '../index'
+import type { ParsedArgs } from '../types'
+import { print, printError, printSuccess } from '../types'
 
 /**
  * Login command - authenticate with oauth.do

@@ -4,6 +4,11 @@
  * Hierarchical Navigable Small World (HNSW) graph for approximate nearest neighbor search.
  * Provides efficient O(log n) search with high recall for vector similarity queries.
  *
+ * Memory Management:
+ * - Uses LRU cache with configurable max nodes and max bytes limits
+ * - Supports Product Quantization (PQ) for vector compression
+ * - Automatically evicts least recently used nodes when limits are exceeded
+ *
  * Storage format: indexes/vector/{ns}.{name}.hnsw
  *
  * References:
@@ -23,10 +28,13 @@ import type {
 } from '../types'
 import { getDistanceFunction, distanceToScore } from './distance'
 import { logger } from '../../utils/logger'
+import { LRUCache, type LRUCacheOptions } from './lru-cache'
 import {
   DEFAULT_HNSW_M,
   DEFAULT_HNSW_EF_CONSTRUCTION,
   DEFAULT_HNSW_EF_SEARCH,
+  DEFAULT_VECTOR_INDEX_MAX_NODES,
+  DEFAULT_VECTOR_INDEX_MAX_BYTES,
 } from '../../constants'
 
 // =============================================================================
@@ -47,6 +55,18 @@ const VERSION = 1
 // =============================================================================
 // Types
 // =============================================================================
+
+/**
+ * Options for memory-bounded vector index
+ */
+export interface VectorIndexMemoryOptions {
+  /** Maximum number of nodes to keep in memory */
+  maxNodes?: number
+  /** Maximum memory in bytes */
+  maxBytes?: number
+  /** Callback when a node is evicted from cache */
+  onEvict?: (nodeId: number) => void
+}
 
 interface HNSWNode {
   id: number
@@ -224,11 +244,15 @@ class MaxHeap {
 
 /**
  * HNSW-based vector index for approximate nearest neighbor search
+ *
+ * Memory-bounded implementation with LRU eviction policy.
+ * When the index grows beyond configured limits, least recently used
+ * nodes are evicted to maintain memory bounds.
  */
 export class VectorIndex {
-  /** All nodes in the graph */
-  private nodes: Map<number, HNSWNode> = new Map()
-  /** DocId to node ID mapping */
+  /** LRU cache for nodes with memory limits */
+  private nodeCache: LRUCache<HNSWNode>
+  /** DocId to node ID mapping (kept in memory, small overhead) */
   private docIdToNodeId: Map<string, number> = new Map()
   /** Entry point node ID */
   private entryPoint: number | null = null
@@ -238,6 +262,12 @@ export class VectorIndex {
   private nextNodeId: number = 0
   /** Whether index is loaded */
   private loaded: boolean = false
+  /** Total node count (may exceed cache size) */
+  private totalNodeCount: number = 0
+  /** Nodes that have been evicted (for persistence) */
+  private evictedNodeIds: Set<number> = new Set()
+  /** Memory limit options */
+  private readonly memoryOptions: VectorIndexMemoryOptions
 
   /** HNSW parameters */
   private readonly m: number
@@ -250,7 +280,8 @@ export class VectorIndex {
     private storage: StorageBackend,
     readonly namespace: string,
     readonly definition: IndexDefinition,
-    private basePath: string = ''
+    private basePath: string = '',
+    memoryOptions?: VectorIndexMemoryOptions
   ) {
     const options = definition.vectorOptions ?? { dimensions: 128 }
     this.dimensions = options.dimensions
@@ -258,6 +289,105 @@ export class VectorIndex {
     this.m = options.m ?? DEFAULT_M
     this.efConstruction = options.efConstruction ?? DEFAULT_EF_CONSTRUCTION
     this.distanceFn = getDistanceFunction(this.metric)
+
+    // Configure memory limits
+    this.memoryOptions = {
+      maxNodes: memoryOptions?.maxNodes ?? DEFAULT_VECTOR_INDEX_MAX_NODES,
+      maxBytes: memoryOptions?.maxBytes ?? DEFAULT_VECTOR_INDEX_MAX_BYTES,
+      onEvict: memoryOptions?.onEvict,
+    }
+
+    // Initialize LRU cache with memory limits
+    const cacheOptions: LRUCacheOptions = {
+      maxEntries: this.memoryOptions.maxNodes,
+      maxBytes: this.memoryOptions.maxBytes,
+      onEvict: (nodeId: number, node: unknown) => {
+        this.evictedNodeIds.add(nodeId)
+        if (this.memoryOptions.onEvict) {
+          this.memoryOptions.onEvict(nodeId)
+        }
+        logger.debug(`VectorIndex: evicted node ${nodeId} (${(node as HNSWNode).docId})`)
+      },
+    }
+
+    this.nodeCache = new LRUCache<HNSWNode>(cacheOptions, this.calculateNodeSize.bind(this))
+  }
+
+  /**
+   * Calculate memory size of a node in bytes
+   */
+  private calculateNodeSize(node: HNSWNode): number {
+    let size = 0
+    // Vector: 8 bytes per float64
+    size += node.vector.length * 8
+    // DocId string (approximate)
+    size += node.docId.length * 2
+    // Fixed fields (id, rowGroup, rowOffset, maxLayer)
+    size += 16
+    // Connections Map overhead
+    size += 48 // Map base overhead
+    for (const connections of node.connections.values()) {
+      size += 8 // Layer number
+      size += connections.length * 4 // Node IDs (4 bytes each)
+    }
+    return size
+  }
+
+  // ===========================================================================
+  // Accessor Methods (for backward compatibility)
+  // ===========================================================================
+
+  /**
+   * Get a node from the cache
+   * @private
+   */
+  private getNode(nodeId: number): HNSWNode | undefined {
+    return this.nodeCache.get(nodeId)
+  }
+
+  /**
+   * Set a node in the cache
+   * @private
+   */
+  private setNode(nodeId: number, node: HNSWNode): void {
+    this.nodeCache.set(nodeId, node)
+    this.evictedNodeIds.delete(nodeId) // No longer evicted
+  }
+
+  /**
+   * Check if a node exists in cache
+   * @private
+   */
+  private hasNode(nodeId: number): boolean {
+    return this.nodeCache.has(nodeId)
+  }
+
+  /**
+   * Delete a node from cache
+   * @private
+   */
+  private deleteNode(nodeId: number): boolean {
+    return this.nodeCache.delete(nodeId)
+  }
+
+  /**
+   * Get all nodes in cache (for iteration)
+   * @private
+   */
+  private *iterateNodes(): IterableIterator<HNSWNode> {
+    yield* this.nodeCache.values()
+  }
+
+  /**
+   * Legacy accessor for nodes (returns iterable for backward compat)
+   * @deprecated Use iterateNodes() instead
+   */
+  private get nodes(): { size: number; values: () => IterableIterator<HNSWNode>; get: (id: number) => HNSWNode | undefined } {
+    return {
+      size: this.nodeCache.size,
+      values: () => this.iterateNodes(),
+      get: (id: number) => this.getNode(id),
+    }
   }
 
   // ===========================================================================
@@ -322,7 +452,7 @@ export class VectorIndex {
     k: number,
     options?: VectorSearchOptions
   ): VectorSearchResult {
-    if (this.nodes.size === 0 || this.entryPoint === null) {
+    if (this.nodeCache.size === 0 || this.entryPoint === null) {
       return {
         docIds: [],
         rowGroups: [],
@@ -337,21 +467,31 @@ export class VectorIndex {
 
     // Start from entry point and traverse down layers
     let currentNodeId = this.entryPoint
-    let currentDistance = this.distanceFn(
-      query,
-      this.nodes.get(currentNodeId)!.vector
-    )
+    const entryNode = this.getNode(currentNodeId)
+    if (!entryNode) {
+      // Entry point was evicted, return empty result
+      return {
+        docIds: [],
+        rowGroups: [],
+        scores: [],
+        exact: false,
+        entriesScanned: 0,
+      }
+    }
+    let currentDistance = this.distanceFn(query, entryNode.vector)
 
     // Greedy search through upper layers
     for (let layer = this.maxLayerInGraph; layer > 0; layer--) {
       let improved = true
       while (improved) {
         improved = false
-        const node = this.nodes.get(currentNodeId)!
+        const node = this.getNode(currentNodeId)
+        if (!node) break // Node was evicted
+
         const connections = node.connections.get(layer) ?? []
 
         for (const neighborId of connections) {
-          const neighbor = this.nodes.get(neighborId)
+          const neighbor = this.getNode(neighborId)
           if (!neighbor) continue
 
           const distance = this.distanceFn(query, neighbor.vector)
@@ -377,7 +517,7 @@ export class VectorIndex {
     let entriesScanned = 0
     for (const candidate of candidates) {
       entriesScanned++
-      const node = this.nodes.get(candidate.nodeId)
+      const node = this.getNode(candidate.nodeId)
       if (!node) continue
 
       const score = distanceToScore(candidate.distance, this.metric)
@@ -438,7 +578,7 @@ export class VectorIndex {
       // Heuristic: use pre-filter if candidate set is small relative to index size
       // Use post-filter if no candidates provided or candidates are most of the index
       if (candidateIds && candidateIds.size > 0) {
-        const selectivity = candidateIds.size / this.nodes.size
+        const selectivity = candidateIds.size / this.totalNodeCount
         // If filtering removes more than 50% of docs, pre-filter is more efficient
         actualStrategy = selectivity < 0.5 ? 'pre-filter' : 'post-filter'
       } else {
@@ -492,8 +632,8 @@ export class VectorIndex {
       const nodeId = this.docIdToNodeId.get(docId)
       if (nodeId === undefined) continue
 
-      const node = this.nodes.get(nodeId)
-      if (!node) continue
+      const node = this.getNode(nodeId)
+      if (!node) continue // Node was evicted from cache
 
       entriesScanned++
       const distance = this.distanceFn(query, node.vector)
@@ -617,8 +757,9 @@ export class VectorIndex {
       node.connections.set(l, [])
     }
 
-    this.nodes.set(nodeId, node)
+    this.setNode(nodeId, node)
     this.docIdToNodeId.set(docId, nodeId)
+    this.totalNodeCount++
 
     // Handle first node
     if (this.entryPoint === null) {
@@ -629,21 +770,27 @@ export class VectorIndex {
 
     // Find entry point and insert
     let currentNodeId = this.entryPoint
-    let currentDistance = this.distanceFn(
-      vector,
-      this.nodes.get(currentNodeId)!.vector
-    )
+    const entryNode = this.getNode(currentNodeId)
+    if (!entryNode) {
+      // Entry point was evicted, use this node as new entry
+      this.entryPoint = nodeId
+      this.maxLayerInGraph = nodeLayer
+      return
+    }
+    let currentDistance = this.distanceFn(vector, entryNode.vector)
 
     // Traverse upper layers greedily
     for (let layer = this.maxLayerInGraph; layer > nodeLayer; layer--) {
       let improved = true
       while (improved) {
         improved = false
-        const currentNode = this.nodes.get(currentNodeId)!
+        const currentNode = this.getNode(currentNodeId)
+        if (!currentNode) break // Node was evicted
+
         const connections = currentNode.connections.get(layer) ?? []
 
         for (const neighborId of connections) {
-          const neighbor = this.nodes.get(neighborId)
+          const neighbor = this.getNode(neighborId)
           if (!neighbor) continue
 
           const distance = this.distanceFn(vector, neighbor.vector)
@@ -674,7 +821,7 @@ export class VectorIndex {
       for (const neighbor of neighbors) {
         nodeConnections.push(neighbor.nodeId)
 
-        const neighborNode = this.nodes.get(neighbor.nodeId)
+        const neighborNode = this.getNode(neighbor.nodeId)
         if (neighborNode) {
           const neighborConnections = neighborNode.connections.get(layer) ?? []
           neighborConnections.push(nodeId)
@@ -718,14 +865,20 @@ export class VectorIndex {
     const nodeId = this.docIdToNodeId.get(docId)
     if (nodeId === undefined) return false
 
-    const node = this.nodes.get(nodeId)
-    if (!node) return false
+    const node = this.getNode(nodeId)
+    if (!node) {
+      // Node was evicted from cache but still tracked - clean up mapping
+      this.docIdToNodeId.delete(docId)
+      this.evictedNodeIds.delete(nodeId)
+      this.totalNodeCount--
+      return true
+    }
 
     // Remove connections to this node from all neighbors
     for (let layer = 0; layer <= node.maxLayer; layer++) {
       const connections = node.connections.get(layer) ?? []
       for (const neighborId of connections) {
-        const neighbor = this.nodes.get(neighborId)
+        const neighbor = this.getNode(neighborId)
         if (neighbor) {
           const neighborConnections = neighbor.connections.get(layer) ?? []
           const filtered = neighborConnections.filter(id => id !== nodeId)
@@ -735,22 +888,24 @@ export class VectorIndex {
     }
 
     // Remove node
-    this.nodes.delete(nodeId)
+    this.deleteNode(nodeId)
     this.docIdToNodeId.delete(docId)
+    this.evictedNodeIds.delete(nodeId)
+    this.totalNodeCount--
 
     // Update entry point if necessary
     if (this.entryPoint === nodeId) {
-      if (this.nodes.size === 0) {
+      if (this.nodeCache.size === 0) {
         this.entryPoint = null
         this.maxLayerInGraph = -1
       } else {
-        // Find new entry point (node with highest layer)
+        // Find new entry point (node with highest layer among cached nodes)
         let newEntryPoint: number | null = null
         let maxLayer = -1
-        for (const [id, n] of this.nodes) {
+        for (const n of this.iterateNodes()) {
           if (n.maxLayer > maxLayer) {
             maxLayer = n.maxLayer
-            newEntryPoint = id
+            newEntryPoint = n.id
           }
         }
         this.entryPoint = newEntryPoint
@@ -794,11 +949,13 @@ export class VectorIndex {
    * Clear all entries from the index
    */
   clear(): void {
-    this.nodes.clear()
+    this.nodeCache.clear()
     this.docIdToNodeId.clear()
+    this.evictedNodeIds.clear()
     this.entryPoint = null
     this.maxLayerInGraph = -1
     this.nextNodeId = 0
+    this.totalNodeCount = 0
   }
 
   // ===========================================================================
@@ -862,31 +1019,48 @@ export class VectorIndex {
    * Get index statistics
    */
   getStats(): IndexStats {
-    let sizeBytes = 0
-    for (const node of this.nodes.values()) {
-      // Vector size + connections + metadata
-      sizeBytes += node.vector.length * 8 // 8 bytes per float64
-      sizeBytes += node.docId.length
-      sizeBytes += 16 // rowGroup, rowOffset, id, maxLayer
-
-      for (const connections of node.connections.values()) {
-        sizeBytes += connections.length * 4 // 4 bytes per node ID
-      }
-    }
-
     return {
-      entryCount: this.nodes.size,
-      sizeBytes,
+      entryCount: this.totalNodeCount,
+      sizeBytes: this.nodeCache.bytes,
       dimensions: this.dimensions,
       maxLayer: this.maxLayerInGraph,
-    }
+      // Additional memory stats
+      cachedNodes: this.nodeCache.size,
+      evictedNodes: this.evictedNodeIds.size,
+      maxNodes: this.memoryOptions.maxNodes,
+      maxBytes: this.memoryOptions.maxBytes,
+    } as IndexStats
   }
 
   /**
-   * Get the number of entries
+   * Get the number of entries (total, including evicted)
    */
   get size(): number {
-    return this.nodes.size
+    return this.totalNodeCount
+  }
+
+  /**
+   * Get the number of nodes currently in cache
+   */
+  get cachedSize(): number {
+    return this.nodeCache.size
+  }
+
+  /**
+   * Get current memory usage in bytes
+   */
+  get memoryUsage(): number {
+    return this.nodeCache.bytes
+  }
+
+  /**
+   * Get memory limits configuration
+   */
+  get memoryLimits(): { maxNodes: number; maxBytes: number } {
+    return {
+      maxNodes: this.memoryOptions.maxNodes ?? DEFAULT_VECTOR_INDEX_MAX_NODES,
+      maxBytes: this.memoryOptions.maxBytes ?? DEFAULT_VECTOR_INDEX_MAX_BYTES,
+    }
   }
 
   // ===========================================================================
@@ -922,7 +1096,7 @@ export class VectorIndex {
     const candidates = new MinHeap()
     const results = new MaxHeap()
 
-    const entryNode = this.nodes.get(entryPointId)
+    const entryNode = this.getNode(entryPointId)
     if (!entryNode) return []
 
     const entryDistance = this.distanceFn(query, entryNode.vector)
@@ -940,7 +1114,7 @@ export class VectorIndex {
       }
 
       // Explore neighbors
-      const currentNode = this.nodes.get(current.nodeId)
+      const currentNode = this.getNode(current.nodeId)
       if (!currentNode) continue
 
       const connections = currentNode.connections.get(layer) ?? []
@@ -948,7 +1122,7 @@ export class VectorIndex {
         if (visited.has(neighborId)) continue
         visited.add(neighborId)
 
-        const neighbor = this.nodes.get(neighborId)
+        const neighbor = this.getNode(neighborId)
         if (!neighbor) continue
 
         const distance = this.distanceFn(query, neighbor.vector)
@@ -996,7 +1170,7 @@ export class VectorIndex {
     // Calculate distances and sort
     const withDistances = connections
       .map(id => {
-        const node = this.nodes.get(id)
+        const node = this.getNode(id)
         if (!node) return null
         return {
           id,
@@ -1042,11 +1216,12 @@ export class VectorIndex {
 
   /**
    * Serialize the index to bytes
+   * Note: Only serializes nodes currently in cache
    */
   private serialize(): Uint8Array {
     // Calculate size
     let totalSize = 4 + 1 + 4 + 4 + 4 + 4 + 1 + 1 // header
-    for (const node of this.nodes.values()) {
+    for (const node of this.iterateNodes()) {
       totalSize += 4 // node ID
       totalSize += 4 + node.docId.length // docId length + docId
       totalSize += node.vector.length * 8 // vector
@@ -1080,7 +1255,7 @@ export class VectorIndex {
     view.setUint32(offset, this.m, false)
     offset += 4
 
-    view.setUint32(offset, this.nodes.size, false)
+    view.setUint32(offset, this.nodeCache.size, false)
     offset += 4
 
     view.setInt32(offset, this.entryPoint ?? -1, false)
@@ -1095,7 +1270,7 @@ export class VectorIndex {
     offset += 1
 
     // Nodes
-    for (const node of this.nodes.values()) {
+    for (const node of this.iterateNodes()) {
       view.setUint32(offset, node.id, false)
       offset += 4
 
@@ -1242,8 +1417,9 @@ export class VectorIndex {
         maxLayer,
       }
 
-      this.nodes.set(nodeId, node)
+      this.setNode(nodeId, node)
       this.docIdToNodeId.set(docId, nodeId)
+      this.totalNodeCount++
 
       if (nodeId >= this.nextNodeId) {
         this.nextNodeId = nodeId + 1

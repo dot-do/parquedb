@@ -17,6 +17,29 @@ import {
   type DBArtifact,
 } from '../../../src/integrations/ai-database'
 import { ParqueDB } from '../../../src/ParqueDB'
+import type { EmbeddingProvider } from '../../../src/embeddings/provider'
+
+/**
+ * Create a mock embedding provider for testing
+ * Returns deterministic vectors based on text content
+ */
+function createMockEmbeddingProvider(dimensions = 128): EmbeddingProvider {
+  return {
+    dimensions,
+    model: 'mock-embedding-model',
+    async embed(text: string): Promise<number[]> {
+      // Generate a deterministic vector based on text content
+      const vector = new Array(dimensions).fill(0)
+      for (let i = 0; i < dimensions; i++) {
+        vector[i] = Math.sin((text.charCodeAt(i % text.length) ?? 65) + i) * 0.5
+      }
+      return vector
+    },
+    async embedBatch(texts: string[]): Promise<number[][]> {
+      return Promise.all(texts.map(text => this.embed(text)))
+    },
+  }
+}
 
 describe('ParqueDBAdapter', () => {
   let db: ParqueDB
@@ -876,36 +899,69 @@ describe('ParqueDBAdapter', () => {
   })
 
   describe('semantic search', () => {
+    let adapterWithEmbeddings: ParqueDBAdapter
+
+    beforeEach(async () => {
+      const storage = new MemoryBackend()
+      const dbWithEmbeddings = new ParqueDB({ storage })
+      adapterWithEmbeddings = new ParqueDBAdapter(dbWithEmbeddings, {
+        embeddingProvider: createMockEmbeddingProvider(),
+      })
+      // Configure embedding fields so embeddings are auto-generated on create
+      adapterWithEmbeddings.setEmbeddingsConfig({
+        fields: {
+          Document: ['content'],
+        },
+        vectorField: 'embedding',
+      })
+    })
+
     it('should perform semantic search', async () => {
-      await adapter.create('Document', 'doc-1', {
+      await adapterWithEmbeddings.create('Document', 'doc-1', {
         content: 'This document is about machine learning and AI',
       })
 
-      // Note: This will use placeholder scoring since no real embeddings
-      const results = await adapter.semanticSearch('Document', 'artificial intelligence')
+      const results = await adapterWithEmbeddings.semanticSearch('Document', 'artificial intelligence')
 
       expect(Array.isArray(results)).toBe(true)
     })
 
     it('should respect limit option', async () => {
-      await adapter.create('Document', 'doc-1', { content: 'Content 1' })
-      await adapter.create('Document', 'doc-2', { content: 'Content 2' })
-      await adapter.create('Document', 'doc-3', { content: 'Content 3' })
+      await adapterWithEmbeddings.create('Document', 'doc-1', { content: 'Content 1' })
+      await adapterWithEmbeddings.create('Document', 'doc-2', { content: 'Content 2' })
+      await adapterWithEmbeddings.create('Document', 'doc-3', { content: 'Content 3' })
 
-      const results = await adapter.semanticSearch('Document', 'content', { limit: 2 })
+      const results = await adapterWithEmbeddings.semanticSearch('Document', 'content', { limit: 2 })
 
       expect(results.length).toBeLessThanOrEqual(2)
     })
   })
 
   describe('hybrid search', () => {
+    let adapterWithEmbeddings: ParqueDBAdapter
+
+    beforeEach(async () => {
+      const storage = new MemoryBackend()
+      const dbWithEmbeddings = new ParqueDB({ storage })
+      adapterWithEmbeddings = new ParqueDBAdapter(dbWithEmbeddings, {
+        embeddingProvider: createMockEmbeddingProvider(),
+      })
+      // Configure embedding fields so embeddings are auto-generated on create
+      adapterWithEmbeddings.setEmbeddingsConfig({
+        fields: {
+          Article: ['title', 'content'],
+        },
+        vectorField: 'embedding',
+      })
+    })
+
     it('should perform hybrid search combining FTS and semantic', async () => {
-      await adapter.create('Article', 'art-1', {
+      await adapterWithEmbeddings.create('Article', 'art-1', {
         title: 'Introduction to TypeScript',
         content: 'TypeScript extends JavaScript with static typing',
       })
 
-      const results = await adapter.hybridSearch('Article', 'TypeScript programming')
+      const results = await adapterWithEmbeddings.hybridSearch('Article', 'TypeScript programming')
 
       expect(Array.isArray(results)).toBe(true)
       if (results.length > 0) {
@@ -916,12 +972,12 @@ describe('ParqueDBAdapter', () => {
     })
 
     it('should respect RRF parameters', async () => {
-      await adapter.create('Article', 'art-1', {
+      await adapterWithEmbeddings.create('Article', 'art-1', {
         title: 'Test Article',
         content: 'Test content',
       })
 
-      const results = await adapter.hybridSearch('Article', 'test', {
+      const results = await adapterWithEmbeddings.hybridSearch('Article', 'test', {
         rrfK: 30,
         ftsWeight: 0.7,
         semanticWeight: 0.3,

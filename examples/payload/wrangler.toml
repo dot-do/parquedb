@@ -17,8 +17,11 @@ bucket_name = "payload-media"
 
 # Environment variables
 [vars]
-PAYLOAD_SECRET = "your-secret-here-change-in-production"
 NODE_ENV = "production"
+
+# SECURITY: Secrets should be set via Cloudflare dashboard or wrangler CLI:
+#   wrangler secret put PAYLOAD_SECRET
+# Never commit secrets to version control!
 
 # Workers Assets for static files
 [assets]

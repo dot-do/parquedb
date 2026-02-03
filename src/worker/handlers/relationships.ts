@@ -11,6 +11,7 @@ import {
   measureTiming,
 } from '../responses'
 import { handleFileNotFoundError } from './datasets'
+import { parsePaginationParams } from '../routing'
 import type { HandlerContext } from './types'
 
 /**
@@ -70,9 +71,11 @@ export async function handleRelationshipTraversal(
   // Sort by importance
   items.sort((a, b) => (b.importance || 0) - (a.importance || 0))
 
-  // Pagination
-  const limit = parseInt(url.searchParams.get('limit') || '100')
-  const skip = parseInt(url.searchParams.get('skip') || '0')
+  // Pagination with validation
+  const { limit, offset: skip } = parsePaginationParams(url.searchParams, {
+    defaultLimit: 100,
+    offsetParam: 'skip',
+  })
   const paginatedItems = items.slice(skip, skip + limit)
 
   return buildResponse(request, {

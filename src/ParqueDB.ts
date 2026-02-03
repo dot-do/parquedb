@@ -93,7 +93,7 @@ import type {
 import type { IndexDefinition, IndexMetadata, IndexStats } from './indexes/types'
 import type { IndexManager } from './indexes/manager'
 import type { IStorageRouter, StorageMode } from './storage/router'
-import type { CollectionOptions } from './db'
+import type { CollectionOptions } from './types/collection-options'
 
 import type {
   ParqueDBConfig,

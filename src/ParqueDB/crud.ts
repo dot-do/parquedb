@@ -632,11 +632,14 @@ export async function deleteEntity(
   }
 
   const [eventNs, ...eventIdParts] = fullId.split('/')
+  // For soft delete, after state is the soft-deleted entity
+  // For hard delete, after state is null
+  const afterState = options?.hard ? null : ctx.entities.get(fullId)
   await ctx.recordEvent(
     'DELETE',
     entityTarget(eventNs ?? '', eventIdParts.join('/')),
     beforeEntityForEvent,
-    null,
+    afterState ?? null,
     actor
   )
 

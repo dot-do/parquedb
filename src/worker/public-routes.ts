@@ -29,6 +29,7 @@ import {
 } from './RateLimitDO'
 import { MissingBucketError } from './r2-errors'
 import { extractBearerToken, verifyOwnership } from './jwt-utils'
+import { parsePaginationParams } from './routing'
 
 /**
  * Get the database index stub for a user
@@ -279,10 +280,11 @@ async function handleListPublic(
   env: Env
 ): Promise<Response> {
   try {
-    // Get query parameters
+    // Get query parameters with validation
     const url = new URL(request.url)
-    const limit = parseInt(url.searchParams.get('limit') ?? '50', 10)
-    const offset = parseInt(url.searchParams.get('offset') ?? '0', 10)
+    const { limit, offset } = parsePaginationParams(url.searchParams, {
+      defaultLimit: 50,
+    })
 
     // For now, we need a way to aggregate public databases across all users
     // This would typically require a global index or aggregation service
@@ -399,11 +401,12 @@ async function handleCollectionQuery(
       )
     }
 
-    // Parse query parameters (for future query implementation)
+    // Parse query parameters with validation (for future query implementation)
     const url = new URL(request.url)
     const _filter = url.searchParams.get('filter')
-    const _limit = parseInt(url.searchParams.get('limit') ?? '100', 10)
-    const _offset = parseInt(url.searchParams.get('offset') ?? '0', 10)
+    const { limit: _limit, offset: _offset } = parsePaginationParams(url.searchParams, {
+      defaultLimit: 100,
+    })
     void _filter; void _limit; void _offset // Will be used in future implementation
 
     // TODO: Execute query against the database's R2 bucket

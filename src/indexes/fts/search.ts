@@ -11,7 +11,7 @@ import type { TokenizerOptions, CorpusStats } from './types'
 import { tokenize, tokenizeQuery } from './tokenizer'
 import { InvertedIndex } from './inverted-index'
 import { BM25Scorer } from './scoring'
-import { parseBooleanQuery, isBooleanQuery, type BooleanQuery, type BooleanClause } from './query-parser'
+import { parseBooleanQuery, isBooleanQuery, parseQuery, isAdvancedQuery, type BooleanQuery, type BooleanClause } from './query-parser'
 import {
   DEFAULT_FTS_MIN_WORD_LENGTH,
   DEFAULT_FTS_MAX_WORD_LENGTH,
@@ -88,6 +88,16 @@ export class FTSIndex {
   search(query: string, options: FTSSearchOptions = {}): FTSSearchResult[] {
     const { limit = DEFAULT_FTS_SEARCH_LIMIT, minScore = 0 } = options
 
+    // Check if query contains boolean operators (AND, OR, NOT, parentheses)
+    if (isBooleanQuery(query)) {
+      return this.searchBoolean(query, options)
+    }
+
+    // Check if query contains phrases or +/- modifiers
+    if (isAdvancedQuery(query)) {
+      return this.searchAdvanced(query, options)
+    }
+
     // Tokenize query
     const queryTerms = tokenizeQuery(query, this.tokenizerOptions)
 
@@ -124,6 +134,210 @@ export class FTSIndex {
       score: r.score,
       matchedTokens: r.matchedTerms,
     }))
+  }
+
+  /**
+   * Execute an advanced search with phrases, required/excluded terms
+   *
+   * @param query - Search query string with phrases and/or modifiers
+   * @param options - Search options
+   * @returns Ranked search results
+   */
+  private searchAdvanced(query: string, options: FTSSearchOptions = {}): FTSSearchResult[] {
+    const { limit = DEFAULT_FTS_SEARCH_LIMIT, minScore = 0 } = options
+
+    const parsed = parseQuery(query)
+    const corpusStats = this.invertedIndex.getCorpusStats()
+
+    if (corpusStats.documentCount === 0) {
+      return []
+    }
+
+    // Helper to stem a term
+    const stemTerm = (term: string): string => {
+      const stemmed = tokenizeQuery(term, this.tokenizerOptions)
+      return stemmed.length > 0 ? stemmed[0]! : term.toLowerCase()
+    }
+
+    // Collect all phrase matches
+    const phraseMatchDocs: Map<string, Set<string>> = new Map()
+
+    // Process all phrases (regular, required, excluded)
+    const allPhrases = [
+      ...parsed.phrases.map(p => ({ phrase: p, type: 'normal' as const })),
+      ...parsed.requiredPhrases.map(p => ({ phrase: p, type: 'required' as const })),
+      ...parsed.excludedPhrases.map(p => ({ phrase: p, type: 'excluded' as const })),
+    ]
+
+    for (const { phrase, type } of allPhrases) {
+      const phraseResults = this.searchPhrase(phrase, { limit: 10000 })
+      const docIds = new Set(phraseResults.map(r => r.docId))
+      phraseMatchDocs.set(`${type}:${phrase}`, docIds)
+    }
+
+    // Find candidate documents
+    let candidateDocs: Set<string>
+
+    // If there are required phrases or terms, start with those
+    const hasRequired = parsed.requiredPhrases.length > 0 ||
+      parsed.terms.some(t => t.required)
+    const hasExcluded = parsed.excludedPhrases.length > 0 ||
+      parsed.terms.some(t => t.excluded)
+
+    if (hasRequired) {
+      // Must match all required phrases
+      candidateDocs = new Set<string>()
+
+      for (const phrase of parsed.requiredPhrases) {
+        const matchingDocs = phraseMatchDocs.get(`required:${phrase}`) ?? new Set()
+        if (candidateDocs.size === 0 && parsed.requiredPhrases.indexOf(phrase) === 0) {
+          // First required phrase - initialize set
+          for (const docId of matchingDocs) {
+            candidateDocs.add(docId)
+          }
+        } else {
+          // Intersect with existing candidates
+          for (const docId of candidateDocs) {
+            if (!matchingDocs.has(docId)) {
+              candidateDocs.delete(docId)
+            }
+          }
+        }
+      }
+
+      // Also handle required terms
+      for (const term of parsed.terms.filter(t => t.required)) {
+        const stemmed = stemTerm(term.term)
+        const postings = this.invertedIndex.getPostings(stemmed)
+        const termDocs = new Set(postings.map(p => p.docId))
+
+        if (candidateDocs.size === 0 && parsed.requiredPhrases.length === 0) {
+          for (const docId of termDocs) {
+            candidateDocs.add(docId)
+          }
+        } else {
+          for (const docId of candidateDocs) {
+            if (!termDocs.has(docId)) {
+              candidateDocs.delete(docId)
+            }
+          }
+        }
+      }
+    } else {
+      // No required terms - collect all possible matches
+      candidateDocs = new Set<string>()
+
+      // Add docs matching regular phrases
+      for (const phrase of parsed.phrases) {
+        const matchingDocs = phraseMatchDocs.get(`normal:${phrase}`) ?? new Set()
+        for (const docId of matchingDocs) {
+          candidateDocs.add(docId)
+        }
+      }
+
+      // Add docs matching regular terms
+      for (const term of parsed.terms.filter(t => !t.excluded)) {
+        const stemmed = stemTerm(term.term)
+        const postings = this.invertedIndex.getPostings(stemmed)
+        for (const posting of postings) {
+          candidateDocs.add(posting.docId)
+        }
+      }
+    }
+
+    // Apply exclusions
+    if (hasExcluded) {
+      // Remove docs matching excluded phrases
+      for (const phrase of parsed.excludedPhrases) {
+        const excludedDocs = phraseMatchDocs.get(`excluded:${phrase}`) ?? new Set()
+        for (const docId of excludedDocs) {
+          candidateDocs.delete(docId)
+        }
+      }
+
+      // Remove docs matching excluded terms
+      for (const term of parsed.terms.filter(t => t.excluded)) {
+        const stemmed = stemTerm(term.term)
+        const postings = this.invertedIndex.getPostings(stemmed)
+        for (const posting of postings) {
+          candidateDocs.delete(posting.docId)
+        }
+      }
+    }
+
+    if (candidateDocs.size === 0) {
+      return []
+    }
+
+    // Score remaining candidates
+    // Phrase matches get a boost
+    const results: FTSSearchResult[] = []
+    const phraseBoost = 1.5
+
+    // Collect all stemmed terms for scoring
+    const allTerms: string[] = []
+    for (const term of parsed.terms.filter(t => !t.excluded)) {
+      allTerms.push(stemTerm(term.term))
+    }
+    for (const phrase of [...parsed.phrases, ...parsed.requiredPhrases]) {
+      const phraseTerms = tokenizeQuery(phrase, this.tokenizerOptions)
+      allTerms.push(...phraseTerms)
+    }
+
+    // Score documents
+    for (const docId of candidateDocs) {
+      const docStats = this.invertedIndex.getDocumentStats(docId)
+      const termFreqs = new Map<string, number>()
+
+      for (const term of allTerms) {
+        const postings = this.invertedIndex.getPostings(term)
+        const freq = postings
+          .filter(p => p.docId === docId)
+          .reduce((sum, p) => sum + p.frequency, 0)
+        if (freq > 0) {
+          termFreqs.set(term, (termFreqs.get(term) ?? 0) + freq)
+        }
+      }
+
+      // Compute IDFs
+      const termIdfs = new Map<string, number>()
+      for (const term of allTerms) {
+        const df = corpusStats.documentFrequency.get(term) ?? 0
+        termIdfs.set(term, this.scorer.idf(df, corpusStats.documentCount))
+      }
+
+      let score = this.scorer.score(
+        termFreqs,
+        docStats?.totalLength ?? 0,
+        corpusStats.avgDocLength,
+        termIdfs
+      )
+
+      // Apply phrase boost for documents that match phrases
+      let matchedPhrases: string[] = []
+      for (const phrase of [...parsed.phrases, ...parsed.requiredPhrases]) {
+        const key = parsed.requiredPhrases.includes(phrase) ? `required:${phrase}` : `normal:${phrase}`
+        const matchingDocs = phraseMatchDocs.get(key) ?? new Set()
+        if (matchingDocs.has(docId)) {
+          score *= phraseBoost
+          matchedPhrases.push(phrase)
+        }
+      }
+
+      results.push({
+        docId,
+        score,
+        matchedTokens: allTerms.filter(t => termFreqs.has(t)),
+      })
+    }
+
+    // Sort by score
+    results.sort((a, b) => b.score - a.score)
+
+    // Filter by minimum score and limit
+    return results
+      .filter(r => r.score >= minScore)
+      .slice(0, limit)
   }
 
   /**
@@ -210,6 +424,9 @@ export class FTSIndex {
       return this.search(phrase, options)
     }
 
+    // Check if position indexing is enabled
+    const positionsIndexed = this.definition.ftsOptions?.indexPositions ?? false
+
     // Get candidate documents (must contain all terms)
     const termPostings = queryTerms.map(term => ({
       term,
@@ -221,26 +438,74 @@ export class FTSIndex {
       termPostings.map(tp => new Set(tp.postings.map(p => p.docId)))
     )
 
+    // If positions are not indexed, fall back to term-based search
+    // (documents with all terms match, but we can't verify order)
+    if (!positionsIndexed) {
+      const results: FTSSearchResult[] = []
+      const corpusStats = this.invertedIndex.getCorpusStats()
+
+      for (const docId of candidateDocs) {
+        const docStats = this.invertedIndex.getDocumentStats(docId)
+        const termFreqs = new Map<string, number>()
+        for (const { term, postings } of termPostings) {
+          const freq = postings
+            .filter(p => p.docId === docId)
+            .reduce((sum, p) => sum + p.frequency, 0)
+          termFreqs.set(term, freq)
+        }
+
+        // Compute IDFs
+        const termIdfs = new Map<string, number>()
+        for (const term of queryTerms) {
+          const df = corpusStats.documentFrequency.get(term) ?? 0
+          termIdfs.set(term, this.scorer.idf(df, corpusStats.documentCount))
+        }
+
+        const score = this.scorer.score(
+          termFreqs,
+          docStats?.totalLength ?? 0,
+          corpusStats.avgDocLength,
+          termIdfs
+        )
+
+        results.push({
+          docId,
+          score,
+          matchedTokens: queryTerms,
+        })
+      }
+
+      results.sort((a, b) => b.score - a.score)
+      return results.slice(0, options.limit ?? DEFAULT_FTS_SEARCH_LIMIT)
+    }
+
     // Check phrase positions in each candidate document
     const results: FTSSearchResult[] = []
     const corpusStats = this.invertedIndex.getCorpusStats()
 
     for (const docId of candidateDocs) {
-      const docTermPositions: Map<string, number[]> = new Map()
+      // Track positions per field to avoid cross-field false matches
+      // Map: field -> term -> positions[]
+      const fieldTermPositions: Map<string, Map<string, number[]>> = new Map()
 
       for (const { term, postings } of termPostings) {
         const docPostings = postings.filter(p => p.docId === docId)
         for (const posting of docPostings) {
           if (posting.positions.length > 0) {
-            const existing = docTermPositions.get(term) ?? []
+            let fieldMap = fieldTermPositions.get(posting.field)
+            if (!fieldMap) {
+              fieldMap = new Map()
+              fieldTermPositions.set(posting.field, fieldMap)
+            }
+            const existing = fieldMap.get(term) ?? []
             existing.push(...posting.positions)
-            docTermPositions.set(term, existing)
+            fieldMap.set(term, existing)
           }
         }
       }
 
-      // Check for consecutive positions
-      if (this.hasConsecutivePositions(queryTerms, docTermPositions)) {
+      // Check for consecutive positions within the same field
+      if (this.hasConsecutivePositionsInAnyField(queryTerms, fieldTermPositions)) {
         // Calculate score
         const docStats = this.invertedIndex.getDocumentStats(docId)
         const termFreqs = new Map<string, number>()
@@ -382,6 +647,26 @@ export class FTSIndex {
     }
 
     return result
+  }
+
+  /**
+   * Check if terms appear consecutively within the same field
+   *
+   * @param terms - Array of terms to check
+   * @param fieldTermPositions - Map of field -> term -> positions
+   * @returns true if all terms appear consecutively in at least one field
+   */
+  private hasConsecutivePositionsInAnyField(
+    terms: string[],
+    fieldTermPositions: Map<string, Map<string, number[]>>
+  ): boolean {
+    // Check each field separately to avoid cross-field false matches
+    for (const [_field, termPositions] of fieldTermPositions) {
+      if (this.hasConsecutivePositions(terms, termPositions)) {
+        return true
+      }
+    }
+    return false
   }
 
   private hasConsecutivePositions(

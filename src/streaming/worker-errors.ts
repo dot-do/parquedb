@@ -9,9 +9,32 @@
  * - Severity classification (critical, error, warning, info)
  * - Indexing by error type, worker, path, and time
  * - Rolling statistics computation
+ * - Parquet persistence with buffered writes
+ *
+ * @example
+ * ```typescript
+ * // Create the MV with Parquet persistence
+ * const workerErrors = createWorkerErrorsMV({
+ *   storage: myStorage,
+ *   datasetPath: 'errors/workers',
+ *   flushThreshold: 500,
+ *   flushIntervalMs: 30000,
+ * })
+ *
+ * // Start the MV (enables periodic flushing)
+ * workerErrors.start()
+ *
+ * // Process events
+ * await workerErrors.process(events)
+ *
+ * // Stop and flush remaining errors
+ * await workerErrors.stop()
+ * ```
  */
 
 import type { Event } from '../types/entity'
+import type { StorageBackend } from '../types/storage'
+import type { ParquetSchema } from '../parquet/types'
 import {
   type MVHandler,
   type WorkerError,
@@ -24,6 +47,51 @@ import {
   categoryFromStatus,
   DEFAULT_ERROR_PATTERNS,
 } from './types'
+
+// =============================================================================
+// Parquet Schema for Worker Errors
+// =============================================================================
+
+/**
+ * Parquet schema for worker errors
+ */
+export const WORKER_ERRORS_SCHEMA: ParquetSchema = {
+  id: { type: 'BYTE_ARRAY', optional: false },
+  ts: { type: 'INT64', optional: false },
+  category: { type: 'BYTE_ARRAY', optional: false },
+  severity: { type: 'BYTE_ARRAY', optional: false },
+  code: { type: 'BYTE_ARRAY', optional: false },
+  message: { type: 'BYTE_ARRAY', optional: false },
+  stack: { type: 'BYTE_ARRAY', optional: true },
+  path: { type: 'BYTE_ARRAY', optional: true },
+  method: { type: 'BYTE_ARRAY', optional: true },
+  requestId: { type: 'BYTE_ARRAY', optional: true },
+  workerName: { type: 'BYTE_ARRAY', optional: true },
+  colo: { type: 'BYTE_ARRAY', optional: true },
+  metadata: { type: 'BYTE_ARRAY', optional: true }, // JSON-encoded
+}
+
+// =============================================================================
+// Statistics Types
+// =============================================================================
+
+/**
+ * Extended statistics for the WorkerErrors MV with persistence info
+ */
+export interface WorkerErrorsStatsExtended extends WorkerErrorStats {
+  /** Total error records written to Parquet */
+  recordsWritten: number
+  /** Total Parquet files created */
+  filesCreated: number
+  /** Total bytes written to Parquet */
+  bytesWritten: number
+  /** Number of flushes performed */
+  flushCount: number
+  /** Last flush timestamp */
+  lastFlushAt: number | null
+  /** Current buffer size */
+  bufferSize: number
+}
 
 // =============================================================================
 // Worker Errors MV Configuration
@@ -41,13 +109,29 @@ export interface WorkerErrorsConfig {
   statsWindowMs?: number
   /** Namespaces to listen for error events (default: ['logs', 'errors', 'workers']) */
   sourceNamespaces?: string[]
+  /** Storage backend for writing Parquet files (optional - enables persistence) */
+  storage?: StorageBackend
+  /** Base path for error files (e.g., 'errors/workers') - required if storage is set */
+  datasetPath?: string
+  /** Number of records to buffer before flushing (default: 500) */
+  flushThreshold?: number
+  /** Maximum time to buffer records in ms (default: 30000) */
+  flushIntervalMs?: number
+  /** Compression codec for Parquet (default: 'lz4') */
+  compression?: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd'
+  /** Target row group size (default: 5000) */
+  rowGroupSize?: number
 }
 
-const DEFAULT_CONFIG: Required<WorkerErrorsConfig> = {
-  errorPatterns: [],
+const DEFAULT_CONFIG = {
+  errorPatterns: [] as ErrorPattern[],
   maxErrors: 10000,
   statsWindowMs: 60000,
   sourceNamespaces: ['logs', 'errors', 'workers'],
+  flushThreshold: 500,
+  flushIntervalMs: 30000,
+  compression: 'lz4' as const,
+  rowGroupSize: 5000,
 }
 
 // =============================================================================
@@ -61,15 +145,33 @@ const DEFAULT_CONFIG: Required<WorkerErrorsConfig> = {
  * - Categorized error list
  * - Index by error type
  * - Rolling statistics
+ * - Parquet persistence (when storage is configured)
+ *
+ * Buffers error records in memory and periodically flushes them to Parquet
+ * files for efficient storage and querying.
  */
 export class WorkerErrorsMV implements MVHandler {
   readonly name = 'WorkerErrors'
   readonly sourceNamespaces: string[]
 
-  private readonly config: Required<WorkerErrorsConfig>
+  private readonly config: WorkerErrorsConfig
   private readonly errorPatterns: ErrorPattern[]
 
-  // Error storage
+  // Parquet persistence
+  private readonly storage?: StorageBackend
+  private readonly datasetPath?: string
+  private readonly flushThreshold: number
+  private readonly flushIntervalMs: number
+  private readonly compression: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd'
+  private readonly rowGroupSize: number
+
+  // Buffer for Parquet writes
+  private buffer: WorkerError[] = []
+  private flushTimer: ReturnType<typeof setTimeout> | null = null
+  private flushPromise: Promise<void> | null = null
+  private running = false
+
+  // In-memory error storage (for querying)
   private errors: WorkerError[] = []
 
   // Indexes for fast lookup
@@ -80,13 +182,31 @@ export class WorkerErrorsMV implements MVHandler {
   private byPath: Map<string, Set<string>> = new Map()
   private byId: Map<string, WorkerError> = new Map()
 
+  // Extended stats for persistence tracking
+  private persistenceStats = {
+    recordsWritten: 0,
+    filesCreated: 0,
+    bytesWritten: 0,
+    flushCount: 0,
+    lastFlushAt: null as number | null,
+    bufferSize: 0,
+  }
+
   constructor(config: WorkerErrorsConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config }
-    this.sourceNamespaces = this.config.sourceNamespaces
+    this.sourceNamespaces = this.config.sourceNamespaces ?? DEFAULT_CONFIG.sourceNamespaces
     this.errorPatterns = [
       ...DEFAULT_ERROR_PATTERNS,
-      ...this.config.errorPatterns,
+      ...(this.config.errorPatterns ?? []),
     ]
+
+    // Parquet persistence configuration
+    this.storage = config.storage
+    this.datasetPath = config.datasetPath?.replace(/\/$/, '') // Remove trailing slash
+    this.flushThreshold = config.flushThreshold ?? DEFAULT_CONFIG.flushThreshold
+    this.flushIntervalMs = config.flushIntervalMs ?? DEFAULT_CONFIG.flushIntervalMs
+    this.compression = config.compression ?? DEFAULT_CONFIG.compression
+    this.rowGroupSize = config.rowGroupSize ?? DEFAULT_CONFIG.rowGroupSize
 
     // Initialize category and severity maps
     const categories: ErrorCategory[] = [
@@ -101,6 +221,51 @@ export class WorkerErrorsMV implements MVHandler {
     for (const sev of severities) {
       this.bySeverity.set(sev, new Set())
     }
+  }
+
+  // ===========================================================================
+  // Lifecycle Methods
+  // ===========================================================================
+
+  /**
+   * Start the MV (enables periodic flushing if storage is configured)
+   */
+  start(): void {
+    if (this.running) return
+
+    this.running = true
+    if (this.storage && this.datasetPath) {
+      this.startFlushTimer()
+    }
+  }
+
+  /**
+   * Stop the MV and flush remaining records
+   */
+  async stop(): Promise<void> {
+    if (!this.running) return
+
+    this.running = false
+    this.stopFlushTimer()
+
+    // Flush remaining records
+    if (this.storage && this.datasetPath) {
+      await this.flush()
+    }
+  }
+
+  /**
+   * Check if the MV is running
+   */
+  isRunning(): boolean {
+    return this.running
+  }
+
+  /**
+   * Check if Parquet persistence is enabled
+   */
+  isPersistenceEnabled(): boolean {
+    return !!(this.storage && this.datasetPath)
   }
 
   // ===========================================================================
@@ -119,6 +284,11 @@ export class WorkerErrorsMV implements MVHandler {
       if (workerError) {
         this.addError(workerError)
       }
+    }
+
+    // Check if we should flush to Parquet
+    if (this.storage && this.datasetPath) {
+      await this.maybeFlush()
     }
   }
 
@@ -193,7 +363,7 @@ export class WorkerErrorsMV implements MVHandler {
    */
   getStats(): WorkerErrorStats {
     const now = Date.now()
-    const windowStart = now - this.config.statsWindowMs
+    const windowStart = now - (this.config.statsWindowMs ?? DEFAULT_CONFIG.statsWindowMs)
 
     // Count by category
     const byCategory: Record<ErrorCategory, number> = {
@@ -236,7 +406,8 @@ export class WorkerErrorsMV implements MVHandler {
 
     // Calculate error rate (errors in the window)
     const errorsInWindow = this.errors.filter(e => e.ts >= windowStart).length
-    const windowMinutes = this.config.statsWindowMs / 60000
+    const statsWindowMs = this.config.statsWindowMs ?? DEFAULT_CONFIG.statsWindowMs
+    const windowMinutes = statsWindowMs / 60000
     const errorRatePerMinute = errorsInWindow / windowMinutes
 
     // Time range
@@ -257,6 +428,51 @@ export class WorkerErrorsMV implements MVHandler {
   }
 
   /**
+   * Get extended statistics including persistence info
+   */
+  getExtendedStats(): WorkerErrorsStatsExtended {
+    return {
+      ...this.getStats(),
+      ...this.persistenceStats,
+      bufferSize: this.buffer.length,
+    }
+  }
+
+  /**
+   * Flush buffered errors to Parquet
+   *
+   * @throws Error if storage is not configured
+   */
+  async flush(): Promise<void> {
+    if (!this.storage || !this.datasetPath) {
+      return // No-op if persistence is not enabled
+    }
+
+    // Wait for any in-flight flush
+    if (this.flushPromise) {
+      await this.flushPromise
+    }
+
+    if (this.buffer.length === 0) {
+      return
+    }
+
+    this.flushPromise = this.doFlush()
+    try {
+      await this.flushPromise
+    } finally {
+      this.flushPromise = null
+    }
+  }
+
+  /**
+   * Get current buffer contents (for testing/debugging)
+   */
+  getBuffer(): WorkerError[] {
+    return [...this.buffer]
+  }
+
+  /**
    * Get error count
    */
   count(): number {
@@ -264,16 +480,32 @@ export class WorkerErrorsMV implements MVHandler {
   }
 
   /**
-   * Clear all errors
+   * Clear all errors (in-memory only, does not affect persisted Parquet files)
    */
   clear(): void {
     this.errors = []
+    this.buffer = []
     this.byId.clear()
     for (const set of this.byCategory.values()) set.clear()
     for (const set of this.bySeverity.values()) set.clear()
     this.byCode.clear()
     this.byWorker.clear()
     this.byPath.clear()
+    this.persistenceStats.bufferSize = 0
+  }
+
+  /**
+   * Reset statistics
+   */
+  resetStats(): void {
+    this.persistenceStats = {
+      recordsWritten: 0,
+      filesCreated: 0,
+      bytesWritten: 0,
+      flushCount: 0,
+      lastFlushAt: null,
+      bufferSize: this.buffer.length,
+    }
   }
 
   // ===========================================================================
@@ -330,9 +562,9 @@ export class WorkerErrorsMV implements MVHandler {
       stack: after.stack as string | undefined,
       path: after.path as string | undefined,
       method: after.method as string | undefined,
-      requestId: (after.requestId ?? after.cf?.rayId) as string | undefined,
+      requestId: (after.requestId ?? (after.cf as Record<string, unknown> | undefined)?.rayId) as string | undefined,
       workerName: after.workerName as string | undefined,
-      colo: (after.colo ?? after.cf?.colo) as string | undefined,
+      colo: (after.colo ?? (after.cf as Record<string, unknown> | undefined)?.colo) as string | undefined,
       metadata: this.extractMetadata(after),
     }
   }
@@ -402,17 +634,24 @@ export class WorkerErrorsMV implements MVHandler {
     // Check for duplicate
     if (this.byId.has(error.id)) return
 
-    // Enforce max size
-    while (this.errors.length >= this.config.maxErrors) {
+    // Enforce max size for in-memory storage
+    const maxErrors = this.config.maxErrors ?? DEFAULT_CONFIG.maxErrors
+    while (this.errors.length >= maxErrors) {
       const oldest = this.errors.shift()
       if (oldest) {
         this.removeFromIndexes(oldest)
       }
     }
 
-    // Add to storage
+    // Add to in-memory storage
     this.errors.push(error)
     this.byId.set(error.id, error)
+
+    // Add to Parquet buffer if persistence is enabled
+    if (this.storage && this.datasetPath) {
+      this.buffer.push(error)
+      this.persistenceStats.bufferSize = this.buffer.length
+    }
 
     // Add to indexes
     this.byCategory.get(error.category)?.add(error.id)
@@ -467,6 +706,190 @@ export class WorkerErrorsMV implements MVHandler {
       }
     }
     return result
+  }
+
+  // ===========================================================================
+  // Parquet Persistence Methods
+  // ===========================================================================
+
+  /**
+   * Check if we should flush based on threshold
+   */
+  private async maybeFlush(): Promise<void> {
+    if (this.buffer.length >= this.flushThreshold) {
+      await this.flush()
+    }
+  }
+
+  /**
+   * Start the periodic flush timer
+   */
+  private startFlushTimer(): void {
+    if (this.flushTimer) return
+
+    this.flushTimer = setInterval(() => {
+      if (this.buffer.length > 0 && !this.flushPromise) {
+        this.flush().catch((err) => {
+          console.error('[WorkerErrorsMV] Periodic flush failed:', err)
+        })
+      }
+    }, this.flushIntervalMs)
+  }
+
+  /**
+   * Stop the periodic flush timer
+   */
+  private stopFlushTimer(): void {
+    if (this.flushTimer) {
+      clearInterval(this.flushTimer)
+      this.flushTimer = null
+    }
+  }
+
+  /**
+   * Perform the actual flush to Parquet
+   */
+  private async doFlush(): Promise<void> {
+    if (!this.storage || !this.datasetPath) return
+    if (this.buffer.length === 0) return
+
+    // Snapshot and clear buffer
+    const errors = this.buffer
+    this.buffer = []
+    this.persistenceStats.bufferSize = 0
+
+    // Generate file path with timestamp partitioning
+    const now = new Date()
+    const year = now.getUTCFullYear()
+    const month = String(now.getUTCMonth() + 1).padStart(2, '0')
+    const day = String(now.getUTCDate()).padStart(2, '0')
+    const hour = String(now.getUTCHours()).padStart(2, '0')
+    const timestamp = Date.now()
+
+    const filePath = `${this.datasetPath}/year=${year}/month=${month}/day=${day}/hour=${hour}/errors-${timestamp}.parquet`
+
+    try {
+      // Convert errors to columnar format
+      const columns = this.errorsToColumns(errors)
+
+      // Write to Parquet using storage backend
+      const buffer = await this.buildParquetBuffer(columns)
+      const result = await this.storage.writeAtomic(filePath, buffer, {
+        contentType: 'application/vnd.apache.parquet',
+      })
+
+      // Update stats
+      this.persistenceStats.recordsWritten += errors.length
+      this.persistenceStats.filesCreated++
+      this.persistenceStats.bytesWritten += result.size
+      this.persistenceStats.flushCount++
+      this.persistenceStats.lastFlushAt = Date.now()
+    } catch (error) {
+      // Put errors back in buffer on failure
+      this.buffer = errors.concat(this.buffer)
+      this.persistenceStats.bufferSize = this.buffer.length
+      throw error
+    }
+  }
+
+  /**
+   * Convert errors to columnar format
+   */
+  private errorsToColumns(errors: WorkerError[]): Record<string, unknown[]> {
+    const columns: Record<string, unknown[]> = {}
+
+    // Initialize columns
+    for (const colName of Object.keys(WORKER_ERRORS_SCHEMA)) {
+      columns[colName] = []
+    }
+
+    // Fill columns
+    for (const error of errors) {
+      columns['id']!.push(error.id)
+      columns['ts']!.push(error.ts)
+      columns['category']!.push(error.category)
+      columns['severity']!.push(error.severity)
+      columns['code']!.push(error.code)
+      columns['message']!.push(error.message)
+      columns['stack']!.push(error.stack ?? null)
+      columns['path']!.push(error.path ?? null)
+      columns['method']!.push(error.method ?? null)
+      columns['requestId']!.push(error.requestId ?? null)
+      columns['workerName']!.push(error.workerName ?? null)
+      columns['colo']!.push(error.colo ?? null)
+      columns['metadata']!.push(error.metadata ? JSON.stringify(error.metadata) : null)
+    }
+
+    return columns
+  }
+
+  /**
+   * Build Parquet buffer from columnar data
+   */
+  private async buildParquetBuffer(columns: Record<string, unknown[]>): Promise<Uint8Array> {
+    try {
+      // Try to use hyparquet-writer
+      const { parquetWriteBuffer } = await import('hyparquet-writer')
+      const { writeCompressors } = await import('../parquet/compression')
+
+      const columnData = Object.entries(columns).map(([name, data]) => ({
+        name,
+        data,
+        columnIndex: true,
+        offsetIndex: true,
+      }))
+
+      const writeOptions: Record<string, unknown> = {
+        columnData,
+        statistics: true,
+        rowGroupSize: this.rowGroupSize,
+      }
+
+      // Set compression
+      if (this.compression !== 'none') {
+        const codecMap: Record<string, string> = {
+          snappy: 'SNAPPY',
+          gzip: 'GZIP',
+          lz4: 'LZ4',
+          zstd: 'ZSTD',
+        }
+        writeOptions.codec = codecMap[this.compression]
+        writeOptions.compressors = writeCompressors
+      }
+
+      const result = parquetWriteBuffer(writeOptions as Parameters<typeof parquetWriteBuffer>[0])
+      return new Uint8Array(result)
+    } catch {
+      // Fallback to JSON-based format
+      return this.buildFallbackBuffer(columns)
+    }
+  }
+
+  /**
+   * Build fallback buffer when hyparquet-writer is not available
+   */
+  private buildFallbackBuffer(columns: Record<string, unknown[]>): Uint8Array {
+    const data = {
+      schema: WORKER_ERRORS_SCHEMA,
+      columns,
+      metadata: {
+        compression: this.compression,
+        rowGroupSize: this.rowGroupSize,
+      },
+    }
+
+    const jsonStr = JSON.stringify(data)
+    const encoder = new TextEncoder()
+    const jsonBytes = encoder.encode(jsonStr)
+
+    // Wrap with Parquet magic bytes
+    const MAGIC = new Uint8Array([0x50, 0x41, 0x52, 0x31]) // 'PAR1'
+    const buffer = new Uint8Array(MAGIC.length * 2 + jsonBytes.length)
+    buffer.set(MAGIC, 0)
+    buffer.set(jsonBytes, MAGIC.length)
+    buffer.set(MAGIC, MAGIC.length + jsonBytes.length)
+
+    return buffer
   }
 }
 

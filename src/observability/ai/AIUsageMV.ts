@@ -62,6 +62,27 @@ const DEFAULT_GRANULARITY: TimeGranularity = 'day'
 const DEFAULT_MAX_AGE_MS = AI_USAGE_MAX_AGE_MS
 const DEFAULT_BATCH_SIZE = MAX_BATCH_SIZE
 
+/**
+ * Maximum reservoir size for latency sampling
+ * This provides a good balance between accuracy and memory usage
+ */
+const LATENCY_RESERVOIR_SIZE = 1000
+
+// =============================================================================
+// Working Aggregate Type (includes latency samples for percentile calculation)
+// =============================================================================
+
+/**
+ * Working aggregate that includes latency samples for percentile calculation
+ * This is used during aggregation and converted to AIUsageAggregate when persisted
+ */
+interface WorkingAggregate extends AIUsageAggregate {
+  /** Latency samples for percentile calculation (reservoir sampling) */
+  _latencySamples: number[]
+  /** Count of total items seen (for reservoir sampling) */
+  _sampleCount: number
+}
+
 // =============================================================================
 // Utility Functions
 // =============================================================================
@@ -278,7 +299,7 @@ export class AIUsageMV {
       }
 
       // Group logs by aggregate key
-      const aggregates = new Map<string, AIUsageAggregate>()
+      const aggregates = new Map<string, WorkingAggregate>()
 
       for (const log of logs) {
         recordsProcessed++
@@ -295,7 +316,7 @@ export class AIUsageMV {
           // Try to load existing aggregate from DB
           const existingAggregates = await targetCollection.find({ dateKey, modelId, providerId }, { limit: 1 })
           if (existingAggregates.length > 0) {
-            aggregate = existingAggregates[0] as unknown as AIUsageAggregate
+            aggregate = normalizeAggregateFromDB(existingAggregates[0] as unknown as AIUsageAggregate)
           } else {
             aggregate = createEmptyAggregate(aggregateId, modelId, providerId, dateKey, this.config.granularity)
           }
@@ -310,6 +331,13 @@ export class AIUsageMV {
       for (const aggregate of aggregates.values()) {
         aggregate.updatedAt = now
         aggregate.version++
+
+        // Calculate percentiles from latency samples
+        const percentiles = calculatePercentiles(aggregate._latencySamples)
+        aggregate.p50LatencyMs = percentiles.p50
+        aggregate.p90LatencyMs = percentiles.p90
+        aggregate.p95LatencyMs = percentiles.p95
+        aggregate.p99LatencyMs = percentiles.p99
 
         // Check if this aggregate exists
         const existing = await targetCollection.find({ dateKey: aggregate.dateKey, modelId: aggregate.modelId, providerId: aggregate.providerId }, { limit: 1 })
@@ -333,6 +361,10 @@ export class AIUsageMV {
                 avgLatencyMs: aggregate.avgLatencyMs,
                 minLatencyMs: aggregate.minLatencyMs,
                 maxLatencyMs: aggregate.maxLatencyMs,
+                p50LatencyMs: aggregate.p50LatencyMs,
+                p90LatencyMs: aggregate.p90LatencyMs,
+                p95LatencyMs: aggregate.p95LatencyMs,
+                p99LatencyMs: aggregate.p99LatencyMs,
                 estimatedInputCost: aggregate.estimatedInputCost,
                 estimatedOutputCost: aggregate.estimatedOutputCost,
                 estimatedTotalCost: aggregate.estimatedTotalCost,
@@ -363,6 +395,10 @@ export class AIUsageMV {
             avgLatencyMs: aggregate.avgLatencyMs,
             minLatencyMs: aggregate.minLatencyMs,
             maxLatencyMs: aggregate.maxLatencyMs,
+            p50LatencyMs: aggregate.p50LatencyMs,
+            p90LatencyMs: aggregate.p90LatencyMs,
+            p95LatencyMs: aggregate.p95LatencyMs,
+            p99LatencyMs: aggregate.p99LatencyMs,
             estimatedInputCost: aggregate.estimatedInputCost,
             estimatedOutputCost: aggregate.estimatedOutputCost,
             estimatedTotalCost: aggregate.estimatedTotalCost,
@@ -603,7 +639,58 @@ export class AIUsageMV {
 // =============================================================================
 
 /**
- * Create an empty aggregate
+ * Normalize an aggregate loaded from the database
+ *
+ * Handles edge cases like:
+ * - minLatencyMs being null/undefined (from Infinity serialization)
+ * - Missing numeric fields defaulting to 0
+ * - Ensuring all expected fields exist
+ * - Initializing latency samples for reservoir sampling
+ */
+function normalizeAggregateFromDB(aggregate: AIUsageAggregate): WorkingAggregate {
+  // Handle minLatencyMs - Infinity doesn't survive JSON serialization
+  // It becomes null, and Math.min(null, x) returns 0 which is incorrect
+  if (aggregate.minLatencyMs === null || aggregate.minLatencyMs === undefined || !Number.isFinite(aggregate.minLatencyMs)) {
+    aggregate.minLatencyMs = aggregate.requestCount > 0 ? aggregate.minLatencyMs ?? Infinity : Infinity
+    // If we have requests but minLatencyMs is invalid, we can't recover the true min
+    // So we set it to Infinity to ensure new values will be properly tracked
+    if (!Number.isFinite(aggregate.minLatencyMs)) {
+      aggregate.minLatencyMs = Infinity
+    }
+  }
+
+  // Ensure numeric fields have valid values
+  aggregate.requestCount = aggregate.requestCount ?? 0
+  aggregate.successCount = aggregate.successCount ?? 0
+  aggregate.errorCount = aggregate.errorCount ?? 0
+  aggregate.cachedCount = aggregate.cachedCount ?? 0
+  aggregate.generateCount = aggregate.generateCount ?? 0
+  aggregate.streamCount = aggregate.streamCount ?? 0
+  aggregate.totalPromptTokens = aggregate.totalPromptTokens ?? 0
+  aggregate.totalCompletionTokens = aggregate.totalCompletionTokens ?? 0
+  aggregate.totalTokens = aggregate.totalTokens ?? 0
+  aggregate.avgTokensPerRequest = aggregate.avgTokensPerRequest ?? 0
+  aggregate.totalLatencyMs = aggregate.totalLatencyMs ?? 0
+  aggregate.avgLatencyMs = aggregate.avgLatencyMs ?? 0
+  aggregate.maxLatencyMs = aggregate.maxLatencyMs ?? 0
+  aggregate.estimatedInputCost = aggregate.estimatedInputCost ?? 0
+  aggregate.estimatedOutputCost = aggregate.estimatedOutputCost ?? 0
+  aggregate.estimatedTotalCost = aggregate.estimatedTotalCost ?? 0
+  aggregate.version = aggregate.version ?? 0
+
+  // Convert to working aggregate with latency samples
+  // Note: We lose historical samples when loading from DB, so percentiles
+  // will be recalculated from new samples only. For more accurate historical
+  // percentiles, consider storing a T-digest or DDSketch in the DB.
+  return {
+    ...aggregate,
+    _latencySamples: [],
+    _sampleCount: 0,
+  }
+}
+
+/**
+ * Create an empty working aggregate
  */
 function createEmptyAggregate(
   id: string,
@@ -611,7 +698,7 @@ function createEmptyAggregate(
   providerId: string,
   dateKey: string,
   granularity: TimeGranularity
-): AIUsageAggregate {
+): WorkingAggregate {
   const now = new Date()
   return {
     $id: id,
@@ -641,6 +728,8 @@ function createEmptyAggregate(
     createdAt: now,
     updatedAt: now,
     version: 0,
+    _latencySamples: [],
+    _sampleCount: 0,
   }
 }
 
@@ -648,7 +737,7 @@ function createEmptyAggregate(
  * Update an aggregate from a log entry
  */
 function updateAggregateFromLog(
-  aggregate: AIUsageAggregate,
+  aggregate: WorkingAggregate,
   log: Record<string, unknown>,
   pricingMap: Map<string, ModelPricing>
 ): void {
@@ -699,10 +788,75 @@ function updateAggregateFromLog(
   aggregate.minLatencyMs = Math.min(aggregate.minLatencyMs, latencyMs)
   aggregate.maxLatencyMs = Math.max(aggregate.maxLatencyMs, latencyMs)
 
+  // Reservoir sampling for latency percentiles
+  addLatencySample(aggregate, latencyMs)
+
   // Update averages
   if (aggregate.requestCount > 0) {
     aggregate.avgLatencyMs = aggregate.totalLatencyMs / aggregate.requestCount
     aggregate.avgTokensPerRequest = aggregate.totalTokens / aggregate.requestCount
+  }
+}
+
+/**
+ * Add a latency sample using reservoir sampling (Algorithm R)
+ *
+ * This maintains a representative sample of latencies with O(1) space complexity.
+ * Each element has an equal probability of being in the reservoir.
+ */
+function addLatencySample(aggregate: WorkingAggregate, latencyMs: number): void {
+  aggregate._sampleCount++
+
+  if (aggregate._latencySamples.length < LATENCY_RESERVOIR_SIZE) {
+    // Reservoir not full - add directly
+    aggregate._latencySamples.push(latencyMs)
+  } else {
+    // Reservoir full - randomly replace an element
+    // Each new element has k/n probability of being included (where k = reservoir size, n = total count)
+    const randomIndex = Math.floor(Math.random() * aggregate._sampleCount)
+    if (randomIndex < LATENCY_RESERVOIR_SIZE) {
+      aggregate._latencySamples[randomIndex] = latencyMs
+    }
+  }
+}
+
+/**
+ * Calculate percentiles from latency samples
+ *
+ * Uses the "nearest rank" method for percentile calculation.
+ */
+function calculatePercentiles(samples: number[]): {
+  p50: number | undefined
+  p90: number | undefined
+  p95: number | undefined
+  p99: number | undefined
+} {
+  if (samples.length === 0) {
+    return { p50: undefined, p90: undefined, p95: undefined, p99: undefined }
+  }
+
+  // Sort samples in ascending order
+  const sorted = [...samples].sort((a, b) => a - b)
+  const n = sorted.length
+
+  /**
+   * Calculate percentile using the "nearest rank" method
+   * Percentile p means p% of values are at or below this value
+   */
+  const getPercentile = (p: number): number => {
+    if (n === 1) return sorted[0]
+    // Use ceiling to get the rank (1-indexed), then convert to 0-indexed
+    const rank = Math.ceil((p / 100) * n)
+    // Clamp to valid array bounds
+    const index = Math.min(Math.max(rank - 1, 0), n - 1)
+    return sorted[index]
+  }
+
+  return {
+    p50: getPercentile(50),
+    p90: getPercentile(90),
+    p95: getPercentile(95),
+    p99: getPercentile(99),
   }
 }
 

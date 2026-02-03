@@ -621,3 +621,340 @@ describe('WorkerErrorsMV Integration', () => {
     expect(mv.getError('int-1')?.message).toBe('Integration test error')
   })
 })
+
+// =============================================================================
+// Parquet Persistence Tests
+// =============================================================================
+
+describe('WorkerErrorsMV Parquet Persistence', () => {
+  /**
+   * Create a mock storage backend for testing
+   */
+  function createMockStorage() {
+    const files = new Map<string, Uint8Array>()
+    return {
+      files,
+      type: 'memory',
+      read: async (path: string) => {
+        const data = files.get(path)
+        if (!data) throw new Error(`File not found: ${path}`)
+        return data
+      },
+      readRange: async (path: string, start: number, end: number) => {
+        const data = files.get(path)
+        if (!data) throw new Error(`File not found: ${path}`)
+        return data.slice(start, end)
+      },
+      exists: async (path: string) => files.has(path),
+      stat: async (path: string) => {
+        const data = files.get(path)
+        if (!data) return null
+        return {
+          path,
+          size: data.length,
+          mtime: new Date(),
+          isDirectory: false,
+        }
+      },
+      list: async (prefix: string) => {
+        const matchingFiles = Array.from(files.keys()).filter(k => k.startsWith(prefix))
+        return { files: matchingFiles, hasMore: false }
+      },
+      write: async (path: string, data: Uint8Array) => {
+        files.set(path, data)
+        return { etag: 'test-etag', size: data.length }
+      },
+      writeAtomic: async (path: string, data: Uint8Array) => {
+        files.set(path, data)
+        return { etag: 'test-etag', size: data.length }
+      },
+      append: async () => {},
+      delete: async (path: string) => {
+        return files.delete(path)
+      },
+      deletePrefix: async () => 0,
+      mkdir: async () => {},
+      rmdir: async () => {},
+      writeConditional: async (path: string, data: Uint8Array) => {
+        files.set(path, data)
+        return { etag: 'test-etag', size: data.length }
+      },
+      copy: async () => {},
+      move: async () => {},
+    }
+  }
+
+  describe('Configuration', () => {
+    test('persistence is disabled by default', () => {
+      const mv = createWorkerErrorsMV()
+      expect(mv.isPersistenceEnabled()).toBe(false)
+    })
+
+    test('persistence is enabled when storage is configured', () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+      })
+      expect(mv.isPersistenceEnabled()).toBe(true)
+    })
+
+    test('accepts custom flush configuration', () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+        flushThreshold: 100,
+        flushIntervalMs: 5000,
+        compression: 'snappy',
+        rowGroupSize: 1000,
+      })
+      expect(mv.isPersistenceEnabled()).toBe(true)
+    })
+  })
+
+  describe('Lifecycle', () => {
+    test('start enables periodic flushing', () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+      })
+
+      expect(mv.isRunning()).toBe(false)
+      mv.start()
+      expect(mv.isRunning()).toBe(true)
+    })
+
+    test('stop disables periodic flushing', async () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+      })
+
+      mv.start()
+      await mv.stop()
+      expect(mv.isRunning()).toBe(false)
+    })
+
+    test('stop flushes remaining errors', async () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+        flushThreshold: 1000, // High threshold so it doesn't auto-flush
+      })
+
+      mv.start()
+
+      // Add some errors
+      await mv.process([
+        createEvent('e1', { errorMessage: 'Error 1' }),
+        createEvent('e2', { errorMessage: 'Error 2' }),
+      ])
+
+      expect(mv.getBuffer().length).toBe(2)
+
+      await mv.stop()
+
+      expect(mv.getBuffer().length).toBe(0)
+      expect(storage.files.size).toBe(1)
+    })
+  })
+
+  describe('Buffering', () => {
+    test('errors are added to buffer when persistence is enabled', async () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+        flushThreshold: 1000,
+      })
+
+      await mv.process([
+        createEvent('e1', { errorMessage: 'Error 1' }),
+      ])
+
+      expect(mv.getBuffer().length).toBe(1)
+      expect(mv.getBuffer()[0]?.id).toBe('e1')
+    })
+
+    test('buffer is not used when persistence is disabled', async () => {
+      const mv = createWorkerErrorsMV()
+
+      await mv.process([
+        createEvent('e1', { errorMessage: 'Error 1' }),
+      ])
+
+      expect(mv.getBuffer().length).toBe(0)
+    })
+
+    test('flush clears buffer and writes to storage', async () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+        flushThreshold: 1000,
+      })
+
+      await mv.process([
+        createEvent('e1', { errorMessage: 'Error 1' }),
+        createEvent('e2', { errorMessage: 'Error 2' }),
+      ])
+
+      expect(mv.getBuffer().length).toBe(2)
+
+      await mv.flush()
+
+      expect(mv.getBuffer().length).toBe(0)
+      expect(storage.files.size).toBe(1)
+    })
+
+    test('auto-flushes when threshold is reached', async () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+        flushThreshold: 3,
+      })
+
+      // Add 3 errors to trigger auto-flush
+      await mv.process([
+        createEvent('e1', { errorMessage: 'Error 1' }),
+        createEvent('e2', { errorMessage: 'Error 2' }),
+        createEvent('e3', { errorMessage: 'Error 3' }),
+      ])
+
+      // Buffer should be cleared after auto-flush
+      expect(mv.getBuffer().length).toBe(0)
+      expect(storage.files.size).toBe(1)
+    })
+  })
+
+  describe('Statistics', () => {
+    test('getExtendedStats includes persistence info', async () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+        flushThreshold: 2,
+      })
+
+      // Add errors and trigger flush
+      await mv.process([
+        createEvent('e1', { errorMessage: 'Error 1' }),
+        createEvent('e2', { errorMessage: 'Error 2' }),
+      ])
+
+      const stats = mv.getExtendedStats()
+
+      expect(stats.recordsWritten).toBe(2)
+      expect(stats.filesCreated).toBe(1)
+      expect(stats.bytesWritten).toBeGreaterThan(0)
+      expect(stats.flushCount).toBe(1)
+      expect(stats.lastFlushAt).not.toBeNull()
+      expect(stats.bufferSize).toBe(0)
+    })
+
+    test('resetStats clears persistence stats', async () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+        flushThreshold: 2,
+      })
+
+      await mv.process([
+        createEvent('e1', { errorMessage: 'Error 1' }),
+        createEvent('e2', { errorMessage: 'Error 2' }),
+      ])
+
+      mv.resetStats()
+
+      const stats = mv.getExtendedStats()
+      expect(stats.recordsWritten).toBe(0)
+      expect(stats.filesCreated).toBe(0)
+      expect(stats.bytesWritten).toBe(0)
+      expect(stats.flushCount).toBe(0)
+      expect(stats.lastFlushAt).toBeNull()
+    })
+  })
+
+  describe('File Partitioning', () => {
+    test('writes files with time-based partitioning', async () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+        flushThreshold: 1,
+      })
+
+      await mv.process([
+        createEvent('e1', { errorMessage: 'Error 1' }),
+      ])
+
+      // Check file path format
+      const files = Array.from(storage.files.keys())
+      expect(files.length).toBe(1)
+
+      const filePath = files[0]!
+      // Should match pattern: errors/workers/year=YYYY/month=MM/day=DD/hour=HH/errors-TIMESTAMP.parquet
+      expect(filePath).toMatch(/^errors\/workers\/year=\d{4}\/month=\d{2}\/day=\d{2}\/hour=\d{2}\/errors-\d+\.parquet$/)
+    })
+  })
+
+  describe('Error Handling', () => {
+    test('restores buffer on write failure', async () => {
+      const storage = createMockStorage()
+      // Make writeAtomic fail
+      storage.writeAtomic = async () => {
+        throw new Error('Write failed')
+      }
+
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+        flushThreshold: 1000,
+      })
+
+      await mv.process([
+        createEvent('e1', { errorMessage: 'Error 1' }),
+      ])
+
+      expect(mv.getBuffer().length).toBe(1)
+
+      await expect(mv.flush()).rejects.toThrow('Write failed')
+
+      // Buffer should be restored
+      expect(mv.getBuffer().length).toBe(1)
+    })
+  })
+
+  describe('Parquet Output', () => {
+    test('writes valid Parquet-like data', async () => {
+      const storage = createMockStorage()
+      const mv = createWorkerErrorsMV({
+        storage: storage as any,
+        datasetPath: 'errors/workers',
+        flushThreshold: 1,
+      })
+
+      await mv.process([
+        createEvent('e1', { errorMessage: 'Test error', workerName: 'test-worker' }),
+      ])
+
+      const files = Array.from(storage.files.entries())
+      expect(files.length).toBe(1)
+
+      const [, data] = files[0]!
+      expect(data.length).toBeGreaterThan(0)
+
+      // Check for Parquet magic bytes (PAR1)
+      expect(data[0]).toBe(0x50) // P
+      expect(data[1]).toBe(0x41) // A
+      expect(data[2]).toBe(0x52) // R
+      expect(data[3]).toBe(0x31) // 1
+    })
+  })
+})

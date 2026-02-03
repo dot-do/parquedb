@@ -27,6 +27,11 @@ import {
   DEFAULT_REFRESH_CONFIG,
 } from './types'
 import type { Filter } from '../types/filter'
+import {
+  getMVDependencies,
+  detectMVCycles,
+  MVCycleError,
+} from './cycle-detection'
 
 // =============================================================================
 // Error Types
@@ -544,6 +549,24 @@ export function validateSchema(schema: Record<string, unknown>): Map<string, MVV
   const errors = new Map<string, MVValidationError[]>()
   const parsed = parseSchema(schema)
 
+  // Check for cycles first
+  const cycle = detectMVCycles(schema)
+  if (cycle) {
+    // Report the cycle error on the first view in the cycle
+    const firstView = cycle[0]
+    const isSelfRef = cycle.length === 2 && cycle[0] === cycle[1]
+    const cycleMessage = isSelfRef
+      ? `Circular dependency detected: MV "${firstView}" references itself`
+      : `Circular dependency detected in materialized views: ${cycle.join(' -> ')}`
+
+    const existingErrors = errors.get(firstView) || []
+    existingErrors.push({
+      field: '$from',
+      message: cycleMessage,
+    })
+    errors.set(firstView, existingErrors)
+  }
+
   // Validate MVs
   for (const [name, mv] of Array.from(parsed.materializedViews)) {
     const mvErrors = validateMVDefinition(name, mv)
@@ -563,7 +586,8 @@ export function validateSchema(schema: Record<string, unknown>): Map<string, MVV
     }
 
     if (mvErrors.length > 0) {
-      errors.set(name, mvErrors)
+      const existingErrors = errors.get(name) || []
+      errors.set(name, [...existingErrors, ...mvErrors])
     }
   }
 
@@ -588,4 +612,11 @@ export {
   validateMVDefinition,
   applyMVDefaults,
   DEFAULT_REFRESH_CONFIG,
+}
+
+// Re-export cycle detection functions
+export {
+  getMVDependencies,
+  detectMVCycles,
+  MVCycleError,
 }

@@ -24,10 +24,13 @@ import { DurableObject } from 'cloudflare:workers'
 export {
   type RateLimitConfig,
   type RateLimitResult,
+  type EndpointType,
   DEFAULT_RATE_LIMITS,
   getClientId,
   buildRateLimitHeaders,
   buildRateLimitResponse,
+  getEndpointTypeFromPath,
+  addRateLimitHeadersToResponse,
 } from './rate-limit-utils'
 
 import {

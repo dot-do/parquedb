@@ -26,6 +26,10 @@ export { getEntityStore, getEventStore, getArchivedEventStore, getSnapshotStore,
 // Re-export collection
 export { CollectionImpl } from './collection'
 
+// Re-export collections manager
+export { CollectionManager, createCollection } from './collections'
+export type { CollectionManagerContext } from './collections'
+
 // Re-export snapshot manager
 export { SnapshotManagerImpl } from './snapshots'
 

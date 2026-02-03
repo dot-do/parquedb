@@ -380,6 +380,40 @@ export const DEFAULT_REMOTE_TIMEOUT = 30000
  */
 export const DEFAULT_VECTOR_TOP_K = 10
 
+/**
+ * Maximum number of nodes to keep in memory for vector index
+ * Default: 100,000 nodes (~10MB for 128-dim vectors with PQ)
+ */
+export const DEFAULT_VECTOR_INDEX_MAX_NODES = 100000
+
+/**
+ * Maximum memory in bytes for vector index
+ * Default: 64MB (fits within Cloudflare Workers 128MB limit with headroom)
+ */
+export const DEFAULT_VECTOR_INDEX_MAX_BYTES = 64 * 1024 * 1024
+
+/**
+ * Number of sub-quantizers for Product Quantization
+ * Higher = better recall but more memory
+ */
+export const DEFAULT_PQ_SUBQUANTIZERS = 8
+
+/**
+ * Bits per sub-quantizer code (2^8 = 256 centroids)
+ */
+export const DEFAULT_PQ_BITS = 8
+
+/**
+ * Number of centroids per sub-quantizer (2^DEFAULT_PQ_BITS)
+ */
+export const DEFAULT_PQ_CENTROIDS = 256
+
+/**
+ * Enable Product Quantization by default for large indexes
+ * Threshold: indexes with more than this many vectors will use PQ
+ */
+export const DEFAULT_PQ_THRESHOLD = 10000
+
 // =============================================================================
 // Index Cache Constants
 // =============================================================================
@@ -464,6 +498,16 @@ export const DEFAULT_EVENT_SOURCE_BUFFER_SIZE = 1000
  * Default query result limit
  */
 export const DEFAULT_QUERY_LIMIT = 100
+
+/**
+ * Maximum query result limit (prevents OOM from malicious input)
+ */
+export const MAX_QUERY_LIMIT = 1000
+
+/**
+ * Maximum query offset (prevents excessive skip operations)
+ */
+export const MAX_QUERY_OFFSET = 100000
 
 // =============================================================================
 // Content Retention Constants

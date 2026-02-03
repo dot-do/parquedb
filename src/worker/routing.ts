@@ -7,6 +7,7 @@
 import type { Filter } from '../types/filter'
 import type { FindOptions } from '../types/options'
 import { matchGroupsAs } from '../types/cast'
+import { MAX_QUERY_LIMIT, MAX_QUERY_OFFSET } from '../constants'
 
 // =============================================================================
 // Error Types
@@ -162,4 +163,104 @@ export function matchRoute<T extends string[]>(
   const match = path.match(pattern)
   if (!match) return null
   return matchGroupsAs<T>(match.slice(1))
+}
+
+// =============================================================================
+// Pagination Parameter Parsing
+// =============================================================================
+
+/**
+ * Pagination parameters with validated values
+ */
+export interface PaginationParams {
+  limit: number
+  offset: number
+}
+
+/**
+ * Options for parsing pagination parameters
+ */
+export interface ParsePaginationOptions {
+  /** Default limit if not specified (default: 100) */
+  defaultLimit?: number
+  /** Maximum allowed limit (default: MAX_QUERY_LIMIT = 1000) */
+  maxLimit?: number
+  /** Maximum allowed offset (default: MAX_QUERY_OFFSET = 100000) */
+  maxOffset?: number
+  /** Name of the limit parameter (default: 'limit') */
+  limitParam?: string
+  /** Name of the offset/skip parameter (default: 'offset', also accepts 'skip') */
+  offsetParam?: string
+}
+
+/**
+ * Parse and validate pagination parameters from URL search params.
+ *
+ * This function handles common pagination edge cases:
+ * - NaN from invalid numeric strings
+ * - Negative values
+ * - Values exceeding maximum bounds
+ * - Empty or missing parameters
+ *
+ * @param params - URLSearchParams from the request URL
+ * @param options - Configuration options
+ * @returns Validated pagination parameters
+ * @throws QueryParamError for invalid values
+ *
+ * @example
+ * ```ts
+ * const url = new URL(request.url)
+ * const { limit, offset } = parsePaginationParams(url.searchParams, {
+ *   defaultLimit: 50,
+ *   maxLimit: 100
+ * })
+ * ```
+ */
+export function parsePaginationParams(
+  params: URLSearchParams,
+  options: ParsePaginationOptions = {}
+): PaginationParams {
+  const {
+    defaultLimit = 100,
+    maxLimit = MAX_QUERY_LIMIT,
+    maxOffset = MAX_QUERY_OFFSET,
+    limitParam = 'limit',
+    offsetParam = 'offset',
+  } = options
+
+  // Parse limit
+  const limitStr = params.get(limitParam)
+  let limit = defaultLimit
+  if (limitStr !== null && limitStr !== '') {
+    const parsed = parseInt(limitStr, 10)
+    if (Number.isNaN(parsed)) {
+      throw new QueryParamError(`Invalid ${limitParam}: must be a valid integer`)
+    }
+    if (parsed < 0) {
+      throw new QueryParamError(`Invalid ${limitParam}: must be non-negative`)
+    }
+    if (parsed > maxLimit) {
+      throw new QueryParamError(`Invalid ${limitParam}: cannot exceed ${maxLimit}`)
+    }
+    limit = parsed
+  }
+
+  // Parse offset (also accept 'skip' as an alias)
+  const offsetStr = params.get(offsetParam) ?? params.get('skip')
+  let offset = 0
+  if (offsetStr !== null && offsetStr !== '') {
+    const parsed = parseInt(offsetStr, 10)
+    if (Number.isNaN(parsed)) {
+      throw new QueryParamError(`Invalid ${offsetParam}: must be a valid integer`)
+    }
+    if (parsed < 0) {
+      throw new QueryParamError(`Invalid ${offsetParam}: must be non-negative`)
+    }
+    if (parsed > maxOffset) {
+      throw new QueryParamError(`Invalid ${offsetParam}: cannot exceed ${maxOffset}`)
+    }
+    offset = parsed
+  }
+
+  return { limit, offset }
 }

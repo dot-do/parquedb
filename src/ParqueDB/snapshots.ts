@@ -18,6 +18,7 @@ import type {
 } from './types'
 
 import { EntityNotFoundError, EventError } from './types'
+import { ParqueDBError, ErrorCode, SnapshotNotFoundError } from '../errors'
 
 export interface SnapshotContext {
   storage: StorageBackend
@@ -154,18 +155,40 @@ export class SnapshotManagerImpl implements SnapshotManager {
 
   /**
    * Delete a specific snapshot
+   *
+   * @throws {SnapshotNotFoundError} If the snapshot does not exist
+   * @throws {ParqueDBError} If the storage operation fails (with code STORAGE_ERROR)
    */
   async deleteSnapshot(snapshotId: string): Promise<void> {
     const index = this.snapshots.findIndex((s) => s.id === snapshotId)
-    if (index !== -1) {
-      const snapshot = this.snapshots[index]!
-      this.snapshots.splice(index, 1)
-      await this.storage.delete(`data/${snapshot.ns}/snapshots/${snapshotId}.parquet`)
+    if (index === -1) {
+      throw new SnapshotNotFoundError(snapshotId)
     }
+
+    const snapshot = this.snapshots[index]!
+    const snapshotPath = `data/${snapshot.ns}/snapshots/${snapshotId}.parquet`
+
+    // Delete from storage first, then remove from in-memory array
+    // This ensures consistency: if storage fails, we don't have orphaned in-memory state
+    try {
+      await this.storage.delete(snapshotPath)
+    } catch (error) {
+      throw new ParqueDBError(
+        `Failed to delete snapshot ${snapshotId} from storage`,
+        ErrorCode.STORAGE_ERROR,
+        { path: snapshotPath, operation: 'delete', snapshotId },
+        error instanceof Error ? error : undefined
+      )
+    }
+
+    // Only remove from in-memory array after successful storage deletion
+    this.snapshots.splice(index, 1)
   }
 
   /**
    * Prune old snapshots based on age and/or keeping a minimum count
+   *
+   * @throws {ParqueDBError} If any storage delete operation fails (partial pruning may have occurred, with code STORAGE_ERROR)
    */
   async pruneSnapshots(options: PruneSnapshotsOptions): Promise<void> {
     const { olderThan, keepMinimum = 0 } = options
@@ -176,6 +199,9 @@ export class SnapshotManagerImpl implements SnapshotManager {
       if (!snapshotsByEntity.has(eid)) snapshotsByEntity.set(eid, [])
       snapshotsByEntity.get(eid)!.push(snapshot)
     }
+
+    // Collect snapshots to prune first, then delete them
+    const snapshotsToPrune: Snapshot[] = []
 
     for (const [, entitySnapshots] of snapshotsByEntity) {
       // Sort newest first by sequence number (most accurate measure of "age")
@@ -195,13 +221,45 @@ export class SnapshotManagerImpl implements SnapshotManager {
           (entitySnapshots.length > 1 && entitySnapshots[0] && snapshot.sequenceNumber < entitySnapshots[0].sequenceNumber)
 
         if (shouldPrune) {
-          const idx = this.snapshots.findIndex((s) => s.id === snapshot.id)
-          if (idx !== -1) {
-            this.snapshots.splice(idx, 1)
-            await this.storage.delete(`data/${snapshot.ns}/snapshots/${snapshot.id}.parquet`)
-          }
+          snapshotsToPrune.push(snapshot)
         }
       }
+    }
+
+    // Delete snapshots one by one, removing from in-memory array only after successful storage delete
+    const errors: Array<{ snapshotId: string; error: Error }> = []
+
+    for (const snapshot of snapshotsToPrune) {
+      const snapshotPath = `data/${snapshot.ns}/snapshots/${snapshot.id}.parquet`
+      try {
+        await this.storage.delete(snapshotPath)
+        // Only remove from in-memory array after successful storage deletion
+        const idx = this.snapshots.findIndex((s) => s.id === snapshot.id)
+        if (idx !== -1) {
+          this.snapshots.splice(idx, 1)
+        }
+      } catch (error) {
+        errors.push({
+          snapshotId: snapshot.id,
+          error: error instanceof Error ? error : new Error(String(error)),
+        })
+      }
+    }
+
+    // If any errors occurred, throw an aggregate error with details
+    if (errors.length > 0) {
+      const failedIds = errors.map((e) => e.snapshotId).join(', ')
+      throw new ParqueDBError(
+        `Failed to delete ${errors.length} snapshot(s) during pruning: ${failedIds}`,
+        ErrorCode.STORAGE_ERROR,
+        {
+          operation: 'pruneSnapshots',
+          failedCount: errors.length,
+          totalCount: snapshotsToPrune.length,
+          failedSnapshotIds: errors.map((e) => e.snapshotId),
+        },
+        errors[0]?.error
+      )
     }
   }
 

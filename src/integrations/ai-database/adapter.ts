@@ -10,6 +10,7 @@
 import type { ParqueDB, Collection } from '../../ParqueDB'
 import type { Entity, EntityId, Filter, UpdateInput } from '../../types'
 import { RelationshipBatchLoader, type BatchLoaderOptions, type BatchLoaderDB } from '../../relationships/batch-loader'
+import type { EmbeddingProvider } from '../../embeddings/provider'
 
 // =============================================================================
 // Types from ai-database (replicated to avoid circular dependency)
@@ -164,7 +165,10 @@ export interface EmbeddingsConfig {
   provider?: string
   model?: string
   dimensions?: number
+  /** Fields to embed per entity type: { Post: ['title', 'content'] } */
   fields?: Record<string, string[]>
+  /** Target field to store embeddings (default: 'embedding') */
+  vectorField?: string
 }
 
 /**
@@ -390,11 +394,40 @@ export interface ParqueDBAdapterOptions {
    * Only used if enableBatchLoader is true.
    */
   batchLoaderOptions?: BatchLoaderOptions
+
+  /**
+   * Embedding provider for auto-generating embeddings on create/update.
+   *
+   * When configured along with setEmbeddingsConfig(), embeddings will be
+   * automatically generated for configured fields.
+   *
+   * @example
+   * ```typescript
+   * import { createWorkersAIProvider } from 'parquedb/embeddings'
+   *
+   * const adapter = new ParqueDBAdapter(db, {
+   *   embeddingProvider: createWorkersAIProvider(env.AI)
+   * })
+   *
+   * adapter.setEmbeddingsConfig({
+   *   fields: { Post: ['title', 'content'] },
+   *   vectorField: 'embedding'
+   * })
+   *
+   * // Embeddings auto-generated on create
+   * await adapter.create('Post', undefined, {
+   *   title: 'Hello',
+   *   content: 'World'
+   * })
+   * ```
+   */
+  embeddingProvider?: EmbeddingProvider
 }
 
 export class ParqueDBAdapter implements DBProviderExtended {
   private db: ParqueDB
   private embeddingsConfig: EmbeddingsConfig | null = null
+  private embeddingProvider: EmbeddingProvider | null = null
   private eventHandlers = new Map<string, Set<(event: DBEvent) => void | Promise<void>>>()
   private batchLoader: RelationshipBatchLoader | null = null
 
@@ -405,6 +438,11 @@ export class ParqueDBAdapter implements DBProviderExtended {
     const enableBatchLoader = options?.enableBatchLoader ?? true
     if (enableBatchLoader) {
       this.batchLoader = new RelationshipBatchLoader(db as BatchLoaderDB, options?.batchLoaderOptions)
+    }
+
+    // Store embedding provider if provided
+    if (options?.embeddingProvider) {
+      this.embeddingProvider = options.embeddingProvider
     }
   }
 
@@ -476,6 +514,9 @@ export class ParqueDBAdapter implements DBProviderExtended {
 
   /**
    * Create a new entity
+   *
+   * If embeddings are configured for this entity type and an embedding provider
+   * is available, embeddings will be automatically generated for the configured fields.
    */
   async create(
     type: string,
@@ -483,10 +524,14 @@ export class ParqueDBAdapter implements DBProviderExtended {
     data: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const namespace = typeToNamespace(type)
+
+    // Generate embeddings if configured
+    const dataWithEmbeddings = await this.generateEmbeddingsForType(type, data)
+
     const entityData = {
-      ...data,
+      ...dataWithEmbeddings,
       $type: type,
-      name: (data.name as string) || (data.title as string) || id || generateId(),
+      name: (dataWithEmbeddings.name as string) || (dataWithEmbeddings.title as string) || id || generateId(),
       ...(id ? { $id: `${namespace}/${id}` } : {}),
     }
 
@@ -496,6 +541,11 @@ export class ParqueDBAdapter implements DBProviderExtended {
 
   /**
    * Update an entity
+   *
+   * If embeddings are configured for this entity type and the update includes
+   * fields that are configured for embedding, embeddings will be automatically
+   * regenerated. The embedding is generated from the combined current state
+   * of all configured fields (including both existing and updated values).
    */
   async update(
     type: string,
@@ -505,8 +555,34 @@ export class ParqueDBAdapter implements DBProviderExtended {
     const namespace = typeToNamespace(type)
     const localId = stripNamespace(id)
 
+    // Check if we need to regenerate embeddings
+    const updatedFields = Object.keys(data)
+    const needsEmbedding = this.shouldRegenerateEmbeddings(type, updatedFields)
+
+    let dataToSet = data
+
+    if (needsEmbedding) {
+      // Fetch existing entity to merge with update for complete text
+      const existingEntity = await this.db.get(namespace, localId)
+      if (existingEntity) {
+        // Merge existing data with updates
+        const mergedData = {
+          ...entityToRecord(existingEntity),
+          ...data,
+        }
+        // Generate embeddings from merged data
+        dataToSet = await this.generateEmbeddingsForType(type, mergedData)
+        // Only include the original update fields plus the embedding
+        const vectorField = this.embeddingsConfig?.vectorField ?? 'embedding'
+        dataToSet = {
+          ...data,
+          [vectorField]: dataToSet[vectorField],
+        }
+      }
+    }
+
     const updateOp: UpdateInput = {
-      $set: data,
+      $set: dataToSet,
     }
 
     const entity = await this.db.update(namespace, localId, updateOp, { upsert: false })
@@ -658,30 +734,126 @@ export class ParqueDBAdapter implements DBProviderExtended {
 
   /**
    * Begin a new transaction
+   *
+   * Returns a transaction that properly uses ParqueDB's native transaction support.
+   * All operations within the transaction are tracked for rollback, and changes
+   * are only committed when commit() is called.
+   *
+   * @example
+   * ```typescript
+   * const tx = await adapter.beginTransaction()
+   * try {
+   *   const user = await tx.create('User', undefined, { name: 'Alice' })
+   *   await tx.relate('Post', postId, 'author', 'User', user.$id)
+   *   await tx.commit()
+   * } catch (error) {
+   *   await tx.rollback()
+   *   throw error
+   * }
+   * ```
    */
   async beginTransaction(): Promise<Transaction> {
     const dbTransaction = this.db.beginTransaction()
+    const self = this
 
     // Wrap ParqueDB transaction in ai-database Transaction interface
     return {
+      /**
+       * Get an entity within the transaction.
+       * Reads see in-progress changes from this transaction.
+       */
       get: async (type: string, id: string) => {
-        return this.get(type, id)
+        // Use the adapter's get method - it reads from the entity store which
+        // includes uncommitted changes from this transaction
+        return self.get(type, id)
       },
+
+      /**
+       * Create an entity within the transaction.
+       * Uses the underlying ParqueDB transaction for proper rollback support.
+       */
       create: async (type: string, id: string | undefined, data: Record<string, unknown>) => {
-        return this.create(type, id, data)
+        const namespace = typeToNamespace(type)
+        const entityData = {
+          ...data,
+          $type: type,
+          name: (data.name as string) || (data.title as string) || id || generateId(),
+          ...(id ? { $id: `${namespace}/${id}` } : {}),
+        }
+
+        const entity = await dbTransaction.create(namespace, entityData)
+        return entityToRecord(entity)
       },
+
+      /**
+       * Update an entity within the transaction.
+       * Uses the underlying ParqueDB transaction for proper rollback support.
+       */
       update: async (type: string, id: string, data: Record<string, unknown>) => {
-        return this.update(type, id, data)
+        const namespace = typeToNamespace(type)
+        const localId = stripNamespace(id)
+
+        const updateOp: UpdateInput = {
+          $set: data,
+        }
+
+        const entity = await dbTransaction.update(namespace, localId, updateOp, { upsert: false })
+        if (!entity) {
+          throw new Error(`Entity not found: ${type}/${id}`)
+        }
+        return entityToRecord(entity)
       },
+
+      /**
+       * Delete an entity within the transaction.
+       * Uses the underlying ParqueDB transaction for proper rollback support.
+       */
       delete: async (type: string, id: string) => {
-        return this.delete(type, id)
+        const namespace = typeToNamespace(type)
+        const localId = stripNamespace(id)
+
+        const result = await dbTransaction.delete(namespace, localId)
+        return result.deletedCount > 0
       },
+
+      /**
+       * Create a relationship within the transaction.
+       * Uses the underlying ParqueDB transaction's update method for proper rollback support.
+       */
       relate: async (fromType, fromId, relation, toType, toId, metadata) => {
-        return this.relate(fromType, fromId, relation, toType, toId, metadata)
+        const fromNamespace = typeToNamespace(fromType)
+        const fromLocalId = stripNamespace(fromId)
+        const toNamespace = typeToNamespace(toType)
+        const toLocalId = stripNamespace(toId)
+
+        // Use $link operator to create relationship
+        const linkOp: UpdateInput = {
+          $link: {
+            [relation]: `${toNamespace}/${toLocalId}`,
+          },
+        }
+
+        // If metadata provided, store it in a separate field
+        if (metadata) {
+          (linkOp.$set as Record<string, unknown>) = linkOp.$set || {}
+          ;(linkOp.$set as Record<string, unknown>)[`_rel_${relation}_meta`] = metadata
+        }
+
+        await dbTransaction.update(fromNamespace, fromLocalId, linkOp)
       },
+
+      /**
+       * Commit the transaction.
+       * Persists all changes and flushes events to the event log.
+       */
       commit: async () => {
         await dbTransaction.commit()
       },
+
+      /**
+       * Rollback the transaction.
+       * Discards all changes made within this transaction.
+       */
       rollback: async () => {
         await dbTransaction.rollback()
       },
@@ -694,9 +866,109 @@ export class ParqueDBAdapter implements DBProviderExtended {
 
   /**
    * Configure embeddings for auto-generation
+   *
+   * When an embedding provider is configured (either via constructor options
+   * or by passing one here), embeddings will be automatically generated for
+   * the configured fields on create() and update() operations.
+   *
+   * @param config - Embeddings configuration
+   * @param provider - Optional embedding provider (overrides constructor option)
+   *
+   * @example
+   * ```typescript
+   * // Configure with provider
+   * adapter.setEmbeddingsConfig({
+   *   fields: { Post: ['title', 'content'] },
+   *   vectorField: 'embedding'
+   * }, createWorkersAIProvider(env.AI))
+   *
+   * // Or use provider from constructor
+   * adapter.setEmbeddingsConfig({
+   *   fields: { Post: ['title', 'content'] }
+   * })
+   * ```
    */
-  setEmbeddingsConfig(config: EmbeddingsConfig): void {
+  setEmbeddingsConfig(config: EmbeddingsConfig, provider?: EmbeddingProvider): void {
     this.embeddingsConfig = config
+    if (provider) {
+      this.embeddingProvider = provider
+    }
+  }
+
+  /**
+   * Get the current embeddings configuration
+   */
+  getEmbeddingsConfig(): EmbeddingsConfig | null {
+    return this.embeddingsConfig
+  }
+
+  /**
+   * Generate embeddings for entity data based on embeddings config
+   *
+   * @param type - Entity type
+   * @param data - Entity data
+   * @returns Updated data with embeddings, or original data if no embedding needed
+   */
+  private async generateEmbeddingsForType(
+    type: string,
+    data: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    // Skip if no config or provider
+    if (!this.embeddingsConfig || !this.embeddingProvider) {
+      return data
+    }
+
+    // Check if this type has configured fields
+    const fieldsToEmbed = this.embeddingsConfig.fields?.[type]
+    if (!fieldsToEmbed || fieldsToEmbed.length === 0) {
+      return data
+    }
+
+    // Collect text from configured fields
+    const texts: string[] = []
+    for (const field of fieldsToEmbed) {
+      const value = data[field]
+      if (typeof value === 'string' && value.trim()) {
+        texts.push(value.trim())
+      }
+    }
+
+    // Skip if no text to embed
+    if (texts.length === 0) {
+      return data
+    }
+
+    // Concatenate texts with newlines and generate embedding
+    const textToEmbed = texts.join('\n\n')
+    const embedding = await this.embeddingProvider.embed(textToEmbed)
+
+    // Store embedding in configured vector field (default: 'embedding')
+    const vectorField = this.embeddingsConfig.vectorField ?? 'embedding'
+    return {
+      ...data,
+      [vectorField]: embedding,
+    }
+  }
+
+  /**
+   * Check if any of the updated fields require re-generating embeddings
+   *
+   * @param type - Entity type
+   * @param updatedFields - Fields being updated
+   * @returns True if embeddings should be regenerated
+   */
+  private shouldRegenerateEmbeddings(type: string, updatedFields: string[]): boolean {
+    if (!this.embeddingsConfig || !this.embeddingProvider) {
+      return false
+    }
+
+    const fieldsToEmbed = this.embeddingsConfig.fields?.[type]
+    if (!fieldsToEmbed || fieldsToEmbed.length === 0) {
+      return false
+    }
+
+    // Check if any updated field is in the embed fields list
+    return updatedFields.some(field => fieldsToEmbed.includes(field))
   }
 
   // ===========================================================================
@@ -705,7 +977,13 @@ export class ParqueDBAdapter implements DBProviderExtended {
 
   /**
    * Semantic search using vector similarity
-   * Falls back to FTS if no embedding provider is configured
+   *
+   * Requires an embedding provider to be configured via setEmbeddingsConfig()
+   * or passed in the adapter options.
+   *
+   * Returns results with actual similarity scores from the vector index.
+   *
+   * @throws Error if no embedding provider is configured
    */
   async semanticSearch(
     type: string,
@@ -715,45 +993,70 @@ export class ParqueDBAdapter implements DBProviderExtended {
     const namespace = typeToNamespace(type)
     const limit = options?.limit || 10
 
-    try {
-      // Try vector search first if embedding provider is configured
-      const filter: Filter = {
-        $vector: {
-          $near: query, // Will be converted to embedding
-          $k: limit,
-          ...(options?.minScore ? { $minScore: options.minScore } : {}),
-        },
-      }
+    // Convert text query to vector using the adapter's embedding provider
+    if (!this.embeddingProvider) {
+      throw new Error(
+        'Semantic search requires an embedding provider. ' +
+        'Configure one via setEmbeddingsConfig() or pass embeddingProvider in adapter options.'
+      )
+    }
 
-      const result = await this.db.find(namespace, filter)
+    // Generate embedding for the query text
+    const queryVector = await this.embeddingProvider.embed(query)
 
-      return result.items.map((entity, index) => ({
+    // Build the filter with the actual vector (not text)
+    const filter: Filter = {
+      $vector: {
+        $near: queryVector,
+        $k: limit,
+        ...(options?.minScore ? { $minScore: options.minScore } : {}),
+      },
+    }
+
+    const result = await this.db.find(namespace, filter, { limit })
+
+    // Get actual similarity scores from the index manager
+    const indexManager = this.db.getIndexManager()
+    const indexes = await indexManager.listIndexes(namespace)
+    const vectorIndexMeta = indexes.find(idx => idx.definition.type === 'vector')
+
+    // Build a score map from document IDs to similarity scores
+    const scoreMap = new Map<string, number>()
+
+    if (vectorIndexMeta) {
+      // Perform the vector search to get actual similarity scores
+      const vectorResult = await indexManager.vectorSearch(
+        namespace,
+        vectorIndexMeta.definition.name,
+        queryVector,
+        limit,
+        { minScore: options?.minScore }
+      )
+
+      // Map document IDs to their similarity scores
+      vectorResult.docIds.forEach((docId, idx) => {
+        const score = vectorResult.scores?.[idx] ?? 0
+        // Store with both the raw docId and namespace-prefixed version
+        scoreMap.set(docId, score)
+        scoreMap.set(`${namespace}/${docId}`, score)
+      })
+    }
+
+    // Map results and ensure limit is respected
+    const results = result.items.slice(0, limit).map((entity) => {
+      // Look up the actual similarity score, try both full ID and local ID
+      const localId = entity.$id.includes('/') ? entity.$id.split('/').slice(1).join('/') : entity.$id
+      const score = scoreMap.get(entity.$id) ?? scoreMap.get(localId) ?? 0
+
+      return {
         ...entityToRecord(entity),
         $id: entity.$id,
         $type: entity.$type,
-        // Score decreases with rank (approximate)
-        $score: 1 - index * 0.1,
-      }))
-    } catch (err) {
-      // Fall back to FTS if vector search is not available
-      const errMessage = err instanceof Error ? err.message : ''
-      if (errMessage.includes('embedding provider')) {
-        // Use FTS as fallback
-        const ftsFilter: Filter = {
-          $text: { $search: query },
-        }
-        const result = await this.db.find(namespace, ftsFilter, { limit })
-
-        return result.items.map((entity, index) => ({
-          ...entityToRecord(entity),
-          $id: entity.$id,
-          $type: entity.$type,
-          // Score decreases with rank (approximate)
-          $score: 1 - index * 0.1,
-        }))
+        $score: score,
       }
-      throw err
-    }
+    })
+
+    return results
   }
 
   /**

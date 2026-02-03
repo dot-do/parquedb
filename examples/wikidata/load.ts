@@ -34,7 +34,15 @@ import {
   getEnglishDescription,
   wikidataSchema,
   COMMON_PROPERTIES,
+  TYPE_PARTITIONS,
+  getPartitionForEntity,
+  PartitionName,
+  extractIdentifiers,
+  extractCoordinates,
+  IdentifierRecord,
+  CoordinateRecord,
 } from './schema.js'
+import { encodeGeohash } from '../../src/indexes/geo/geohash.js'
 
 const pipelineAsync = promisify(pipeline)
 
@@ -49,6 +57,9 @@ interface LoaderConfig {
   maxItems: number | null
   skipClaims: boolean
   skipEdges: boolean
+  skipIdentifiers: boolean
+  skipCoordinates: boolean
+  partitionByType: boolean
   verbose: boolean
 }
 
@@ -59,11 +70,14 @@ function parseArgs(): LoaderConfig {
     console.error('Usage: npx tsx load.ts <dump-file> <output-dir> [options]')
     console.error('')
     console.error('Options:')
-    console.error('  --batch-size <n>    Items per batch (default: 10000)')
-    console.error('  --max-items <n>     Maximum items to process (for testing)')
-    console.error('  --skip-claims       Skip claim extraction')
-    console.error('  --skip-edges        Skip edge extraction')
-    console.error('  --verbose           Enable verbose logging')
+    console.error('  --batch-size <n>      Items per batch (default: 10000)')
+    console.error('  --max-items <n>       Maximum items to process (for testing)')
+    console.error('  --skip-claims         Skip claim extraction')
+    console.error('  --skip-edges          Skip edge extraction')
+    console.error('  --skip-identifiers    Skip external identifier extraction')
+    console.error('  --skip-coordinates    Skip coordinate extraction')
+    console.error('  --partition-by-type   Partition items into type-specific files')
+    console.error('  --verbose             Enable verbose logging')
     process.exit(1)
   }
 
@@ -74,6 +88,9 @@ function parseArgs(): LoaderConfig {
     maxItems: null,
     skipClaims: false,
     skipEdges: false,
+    skipIdentifiers: false,
+    skipCoordinates: false,
+    partitionByType: false,
     verbose: false,
   }
 
@@ -90,6 +107,15 @@ function parseArgs(): LoaderConfig {
         break
       case '--skip-edges':
         config.skipEdges = true
+        break
+      case '--skip-identifiers':
+        config.skipIdentifiers = true
+        break
+      case '--skip-coordinates':
+        config.skipCoordinates = true
+        break
+      case '--partition-by-type':
+        config.partitionByType = true
         break
       case '--verbose':
         config.verbose = true
@@ -188,6 +214,10 @@ interface BatchBuffers {
   items: CreateInput[]
   properties: CreateInput[]
   claims: CreateInput[]
+  identifiers: IdentifierRecord[]
+  coordinates: CoordinateRecord[]
+  // Partitioned items by type
+  partitionedItems: Record<PartitionName, CreateInput[]>
 }
 
 /**
@@ -210,6 +240,16 @@ class BatchAccumulator extends Writable {
       items: [],
       properties: [],
       claims: [],
+      identifiers: [],
+      coordinates: [],
+      partitionedItems: {
+        people: [],
+        organizations: [],
+        places: [],
+        works: [],
+        taxa: [],
+        other: [],
+      },
     }
   }
 
@@ -277,8 +317,30 @@ class BatchAccumulator extends Writable {
       modified: entity.modified ? new Date(entity.modified) : null,
     }
 
-    this.buffers.items.push(itemRecord)
+    // Add to appropriate buffer based on partitioning mode
+    if (this.config.partitionByType) {
+      const partition = getPartitionForEntity(entity)
+      this.buffers.partitionedItems[partition].push(itemRecord)
+    } else {
+      this.buffers.items.push(itemRecord)
+    }
     this.stats.itemsProcessed++
+
+    // Extract external identifiers
+    if (!this.config.skipIdentifiers) {
+      const identifiers = extractIdentifiers(entity)
+      this.buffers.identifiers.push(...identifiers)
+      this.stats.identifiersProcessed += identifiers.length
+    }
+
+    // Extract coordinates
+    if (!this.config.skipCoordinates) {
+      const coords = extractCoordinates(entity, encodeGeohash)
+      if (coords) {
+        this.buffers.coordinates.push(coords)
+        this.stats.coordinatesProcessed++
+      }
+    }
 
     // Process claims (statements about this item)
     if (!this.config.skipClaims && entity.claims) {
@@ -425,20 +487,39 @@ class BatchAccumulator extends Writable {
   }
 
   private shouldFlush(): boolean {
+    // Check partitioned items
+    if (this.config.partitionByType) {
+      for (const partition of Object.values(this.buffers.partitionedItems)) {
+        if (partition.length >= this.config.batchSize) return true
+      }
+    }
+
     return (
       this.buffers.items.length >= this.config.batchSize ||
       this.buffers.properties.length >= this.config.batchSize ||
-      this.buffers.claims.length >= this.config.batchSize
+      this.buffers.claims.length >= this.config.batchSize ||
+      this.buffers.identifiers.length >= this.config.batchSize ||
+      this.buffers.coordinates.length >= this.config.batchSize
     )
   }
 
   private async flushBuffers(final = false): Promise<void> {
     const flushThreshold = final ? 0 : this.config.batchSize
 
-    // Flush items
-    if (this.buffers.items.length > flushThreshold) {
-      await this.writeEntities('items', this.buffers.items)
-      this.buffers.items = []
+    // Flush partitioned items
+    if (this.config.partitionByType) {
+      for (const [partition, records] of Object.entries(this.buffers.partitionedItems) as [PartitionName, CreateInput[]][]) {
+        if (records.length > flushThreshold) {
+          await this.writeEntities(`items/${partition}`, records)
+          this.buffers.partitionedItems[partition] = []
+        }
+      }
+    } else {
+      // Flush items (non-partitioned mode)
+      if (this.buffers.items.length > flushThreshold) {
+        await this.writeEntities('items', this.buffers.items)
+        this.buffers.items = []
+      }
     }
 
     // Flush properties
@@ -451,6 +532,74 @@ class BatchAccumulator extends Writable {
     if (this.buffers.claims.length > flushThreshold) {
       await this.writeClaimsWithRelationships(this.buffers.claims)
       this.buffers.claims = []
+    }
+
+    // Flush identifiers
+    if (this.buffers.identifiers.length > flushThreshold) {
+      await this.writeIdentifiers(this.buffers.identifiers)
+      this.buffers.identifiers = []
+    }
+
+    // Flush coordinates
+    if (this.buffers.coordinates.length > flushThreshold) {
+      await this.writeCoordinates(this.buffers.coordinates)
+      this.buffers.coordinates = []
+    }
+  }
+
+  /**
+   * Write identifier records to collection
+   */
+  private async writeIdentifiers(records: IdentifierRecord[]): Promise<void> {
+    const collection = this.db.collection('identifiers')
+
+    for (const record of records) {
+      try {
+        await collection.create({
+          $id: `identifiers/${record.entity_id}/${record.property_id}/${record.value.slice(0, 50)}`,
+          $type: 'wikidata:Identifier',
+          name: `${record.property_name}: ${record.value}`,
+          ...record,
+        })
+      } catch (error) {
+        if (this.config.verbose) {
+          console.error(`Error creating identifier: ${(error as Error).message}`)
+        }
+      }
+    }
+
+    this.stats.filesWritten++
+
+    if (this.config.verbose) {
+      console.log(`  Wrote ${records.length} identifiers to ParqueDB`)
+    }
+  }
+
+  /**
+   * Write coordinate records to collection
+   */
+  private async writeCoordinates(records: CoordinateRecord[]): Promise<void> {
+    const collection = this.db.collection('coordinates')
+
+    for (const record of records) {
+      try {
+        await collection.create({
+          $id: `coordinates/${record.entity_id}`,
+          $type: 'wikidata:Coordinate',
+          name: record.entity_name ?? record.entity_id,
+          ...record,
+        })
+      } catch (error) {
+        if (this.config.verbose) {
+          console.error(`Error creating coordinate: ${(error as Error).message}`)
+        }
+      }
+    }
+
+    this.stats.filesWritten++
+
+    if (this.config.verbose) {
+      console.log(`  Wrote ${records.length} coordinates to ParqueDB`)
     }
   }
 
@@ -567,6 +716,8 @@ interface LoaderStats {
   propertiesProcessed: number
   claimsProcessed: number
   edgesProcessed: number
+  identifiersProcessed: number
+  coordinatesProcessed: number
   filesWritten: number
   bytesWritten: number
 }
@@ -579,6 +730,8 @@ function createStats(): LoaderStats {
     propertiesProcessed: 0,
     claimsProcessed: 0,
     edgesProcessed: 0,
+    identifiersProcessed: 0,
+    coordinatesProcessed: 0,
     filesWritten: 0,
     bytesWritten: 0,
   }
@@ -599,6 +752,8 @@ function printStats(stats: LoaderStats): void {
   console.log(`  Properties:     ${stats.propertiesProcessed.toLocaleString()}`)
   console.log(`Claims:           ${stats.claimsProcessed.toLocaleString()}`)
   console.log(`Edges:            ${stats.edgesProcessed.toLocaleString()}`)
+  console.log(`Identifiers:      ${stats.identifiersProcessed.toLocaleString()}`)
+  console.log(`Coordinates:      ${stats.coordinatesProcessed.toLocaleString()}`)
   console.log(`Batches written:  ${stats.filesWritten}`)
   console.log(`Throughput:       ${Math.round(stats.entitiesProcessed / elapsed).toLocaleString()} entities/s`)
   console.log('='.repeat(60))

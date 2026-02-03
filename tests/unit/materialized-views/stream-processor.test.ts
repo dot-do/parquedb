@@ -679,7 +679,7 @@ describe('StreamProcessor', () => {
 
       expect(processor.getDeadLetterQueueSize()).toBe(1)
 
-      const cleared = processor.clearDeadLetterQueue()
+      const cleared = await processor.clearDeadLetterQueue()
       expect(cleared).toHaveLength(1)
       expect(cleared[0]!.records).toHaveLength(1)
       expect(processor.getDeadLetterQueueSize()).toBe(0)

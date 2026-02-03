@@ -98,6 +98,61 @@ function createMockCollection() {
       store.delete(fullId)
       return { deletedCount: exists ? 1 : 0 }
     }),
+    count: vi.fn(async (filter?: Record<string, unknown>) => {
+      let results = Array.from(store.values())
+
+      if (filter) {
+        results = results.filter(item => {
+          for (const [key, value] of Object.entries(filter)) {
+            if (key === 'timestamp' && typeof value === 'object' && value !== null) {
+              const ts = item[key] as Date
+              const filterObj = value as Record<string, unknown>
+              if (filterObj.$gte && ts < (filterObj.$gte as Date)) return false
+              if (filterObj.$lt && ts >= (filterObj.$lt as Date)) return false
+            } else if (typeof value === 'boolean') {
+              if (item[key] !== value) return false
+            } else if (typeof value === 'string') {
+              if (item[key] !== value) return false
+            } else if (typeof value !== 'object' && item[key] !== value) {
+              return false
+            }
+          }
+          return true
+        })
+      }
+
+      return results.length
+    }),
+    deleteMany: vi.fn(async (filter: Record<string, unknown>, _options?: { hard?: boolean }) => {
+      let toDelete: string[] = []
+
+      for (const [id, item] of store) {
+        let matches = true
+        for (const [key, value] of Object.entries(filter)) {
+          if (key === 'timestamp' && typeof value === 'object' && value !== null) {
+            const ts = item[key] as Date
+            const filterObj = value as Record<string, unknown>
+            if (filterObj.$lt && ts >= (filterObj.$lt as Date)) matches = false
+            if (filterObj.$gte && ts < (filterObj.$gte as Date)) matches = false
+          } else if (typeof value === 'boolean') {
+            if (item[key] !== value) matches = false
+          } else if (typeof value === 'string') {
+            if (item[key] !== value) matches = false
+          } else if (typeof value !== 'object' && item[key] !== value) {
+            matches = false
+          }
+        }
+        if (matches) {
+          toDelete.push(id)
+        }
+      }
+
+      for (const id of toDelete) {
+        store.delete(id)
+      }
+
+      return { deletedCount: toDelete.length }
+    }),
   }
 }
 
@@ -729,9 +784,81 @@ describe('Cleanup', () => {
     })
 
     // Run cleanup
-    const deletedCount = await mv.cleanup()
+    const result = await mv.cleanup()
 
     // Old request should be deleted
-    expect(deletedCount).toBe(1)
+    expect(result.success).toBe(true)
+    expect(result.deletedCount).toBe(1)
+  })
+
+  it('should return CleanupResult with success false on error', async () => {
+    const db = createMockDB()
+    const mv = new AIRequestsMV(
+      db as unknown as Parameters<typeof createAIRequestsMV>[0],
+      { maxAgeMs: 1000 }
+    )
+
+    // First, record something to ensure collection is created
+    await mv.record({
+      modelId: 'gpt-4',
+      providerId: 'openai',
+      requestType: 'generate',
+      latencyMs: 100,
+    })
+
+    // Mock count to throw an error
+    const collection = db.collections.get('ai_requests')!
+    collection.count = vi.fn().mockRejectedValue(new Error('Count failed'))
+
+    const result = await mv.cleanup()
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Count failed')
+  })
+
+  it('should support progress callback', async () => {
+    const db = createMockDB()
+    const mv = new AIRequestsMV(
+      db as unknown as Parameters<typeof createAIRequestsMV>[0],
+      { maxAgeMs: 1000 }
+    )
+
+    const oldTimestamp = new Date(Date.now() - 5000)
+    await mv.record({
+      modelId: 'gpt-4',
+      providerId: 'openai',
+      requestType: 'generate',
+      latencyMs: 100,
+      timestamp: oldTimestamp,
+    })
+
+    const progressCalls: Array<{ deletedSoFar: number; percentage: number }> = []
+    const result = await mv.cleanup({
+      onProgress: (progress) => progressCalls.push({ ...progress }),
+    })
+
+    expect(result.success).toBe(true)
+    expect(progressCalls.length).toBeGreaterThan(0)
+  })
+
+  it('should return zero when no records to delete', async () => {
+    const db = createMockDB()
+    const mv = new AIRequestsMV(
+      db as unknown as Parameters<typeof createAIRequestsMV>[0],
+      { maxAgeMs: 1000 }
+    )
+
+    // Add only recent requests
+    await mv.record({
+      modelId: 'gpt-4',
+      providerId: 'openai',
+      requestType: 'generate',
+      latencyMs: 100,
+    })
+
+    const result = await mv.cleanup()
+
+    expect(result.success).toBe(true)
+    expect(result.deletedCount).toBe(0)
   })
 })

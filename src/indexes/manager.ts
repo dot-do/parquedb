@@ -29,9 +29,12 @@ import type {
   VectorSearchResult,
   HybridSearchOptions,
   HybridSearchResult,
+  GeoSearchOptions,
+  GeoSearchResult,
 } from './types'
 import { VectorIndex } from './vector'
 import { FTSIndex } from './fts'
+import { GeoIndex } from './geo'
 
 // =============================================================================
 // Index Manager Options
@@ -77,6 +80,8 @@ export class IndexManager {
   private vectorIndexes: Map<string, VectorIndex> = new Map()
   /** Cache for loaded FTSIndex instances */
   private ftsIndexes: Map<string, FTSIndex> = new Map()
+  /** Cache for loaded GeoIndex instances */
+  private geoIndexes: Map<string, GeoIndex> = new Map()
   private basePath: string
   private onError?: IndexManagerErrorHandler
   private throwOnListenerError: boolean
@@ -370,6 +375,36 @@ export class IndexManager {
       }
     }
 
+    // Check for $geo operator -> use geo index
+    if (filter.$geo) {
+      const geoField = filter.$geo.field ?? filter.$geo.$field ?? 'location'
+      const geoIndex = this.findGeoIndex(ns, geoField)
+      if (geoIndex) {
+        return {
+          index: geoIndex,
+          type: 'geo',
+          field: geoField,
+          condition: filter.$geo,
+        }
+      }
+    }
+
+    // Also check for field-level $near operator (MongoDB style)
+    for (const [field, condition] of Object.entries(filter)) {
+      if (field.startsWith('$')) continue
+      if (typeof condition === 'object' && condition !== null && '$near' in (condition as Record<string, unknown>)) {
+        const geoIndex = this.findGeoIndex(ns, field)
+        if (geoIndex) {
+          return {
+            index: geoIndex,
+            type: 'geo',
+            field,
+            condition: condition,
+          }
+        }
+      }
+    }
+
     // NOTE: Hash and SST indexes removed - equality and range queries now use
     // native parquet predicate pushdown on $index_* columns
 
@@ -586,6 +621,58 @@ export class IndexManager {
   }
 
   /**
+   * Execute a geo proximity search
+   *
+   * @param ns - Namespace
+   * @param indexName - Index name
+   * @param lat - Center latitude
+   * @param lng - Center longitude
+   * @param options - Search options (maxDistance, minDistance, limit)
+   * @returns Geo search results
+   */
+  async geoSearch(
+    ns: string,
+    indexName: string,
+    lat: number,
+    lng: number,
+    options?: GeoSearchOptions
+  ): Promise<GeoSearchResult> {
+    await this.load()
+
+    // Get the geo index
+    const geoIndex = await this.getGeoIndex(ns, indexName)
+    if (!geoIndex) {
+      return {
+        docIds: [],
+        rowGroups: [],
+        distances: [],
+        entriesScanned: 0,
+      }
+    }
+
+    // Execute the search
+    return geoIndex.search(lat, lng, options)
+  }
+
+  /**
+   * Get all document IDs indexed in a geo index.
+   *
+   * @param ns - Namespace
+   * @param indexName - Geo index name
+   * @returns Set of all document IDs in the index
+   */
+  async getGeoIndexDocIds(ns: string, indexName: string): Promise<Set<string>> {
+    await this.load()
+
+    const geoIndex = await this.getGeoIndex(ns, indexName)
+    if (!geoIndex) {
+      return new Set()
+    }
+
+    return geoIndex.getAllDocIds()
+  }
+
+  /**
    * Get or create a VectorIndex instance
    */
   private async getVectorIndex(ns: string, indexName: string): Promise<VectorIndex | null> {
@@ -614,6 +701,37 @@ export class IndexManager {
     // Cache it
     this.vectorIndexes.set(cacheKey, vectorIndex)
     return vectorIndex
+  }
+
+  /**
+   * Get or create a GeoIndex instance
+   */
+  private async getGeoIndex(ns: string, indexName: string): Promise<GeoIndex | null> {
+    const cacheKey = `${ns}.${indexName}`
+
+    // Return cached instance if available
+    if (this.geoIndexes.has(cacheKey)) {
+      return this.geoIndexes.get(cacheKey)!
+    }
+
+    // Get the index definition
+    const definition = this.indexes.get(ns)?.get(indexName)
+    if (!definition || definition.type !== 'geo') {
+      return null
+    }
+
+    // Create and load the index
+    const geoIndex = new GeoIndex(
+      this.storage,
+      ns,
+      definition,
+      this.basePath
+    )
+    await geoIndex.load()
+
+    // Cache it
+    this.geoIndexes.set(cacheKey, geoIndex)
+    return geoIndex
   }
 
   // ===========================================================================
@@ -800,6 +918,8 @@ export class IndexManager {
         return `${base}indexes/bloom/${ns}.${definition.name}.bloom`
       case 'vector':
         return `${base}indexes/vector/${ns}.${definition.name}.hnsw`
+      case 'geo':
+        return `${base}indexes/geo/${ns}.${definition.name}.geoidx`
       default:
         throw new IndexValidationError(
           `Unknown index type: ${(definition as { type: string }).type}`,
@@ -909,6 +1029,19 @@ export class IndexManager {
         // The IndexBloomFilter class is used directly during writes
         break
       }
+      case 'geo': {
+        // Create and cache the geo index
+        const geoIndex = new GeoIndex(
+          this.storage,
+          ns,
+          definition,
+          this.basePath
+        )
+        this.geoIndexes.set(cacheKey, geoIndex)
+        // Note: Actual data indexing happens via onDocumentAdded
+        await geoIndex.save()
+        break
+      }
     }
 
     metadata.buildProgress = 1
@@ -954,6 +1087,25 @@ export class IndexManager {
         // during Parquet file writes rather than per-document updates
         break
       }
+      case 'geo': {
+        const geoIndex = await this.getGeoIndex(ns, definition.name)
+        if (geoIndex) {
+          // Extract lat/lng from document based on field path
+          const firstField = definition.fields[0]
+          if (firstField) {
+            const location = this.getFieldValue(doc, firstField.path)
+            if (location && typeof location === 'object') {
+              const loc = location as { lat?: number; lng?: number; latitude?: number; longitude?: number }
+              const lat = loc.lat ?? loc.latitude
+              const lng = loc.lng ?? loc.longitude
+              if (typeof lat === 'number' && typeof lng === 'number') {
+                geoIndex.insert(docId, lat, lng, rowGroup, rowOffset)
+              }
+            }
+          }
+        }
+        break
+      }
     }
   }
 
@@ -982,6 +1134,13 @@ export class IndexManager {
         // Bloom filters don't support removal - they require rebuild
         break
       }
+      case 'geo': {
+        const geoIndex = await this.getGeoIndex(ns, definition.name)
+        if (geoIndex) {
+          geoIndex.remove(docId)
+        }
+        break
+      }
     }
   }
 
@@ -1004,6 +1163,19 @@ export class IndexManager {
 
     for (const definition of nsIndexes.values()) {
       if (definition.type === 'vector' && definition.fields.some(f => f.path === field)) {
+        return definition
+      }
+    }
+
+    return null
+  }
+
+  private findGeoIndex(ns: string, field: string): IndexDefinition | null {
+    const nsIndexes = this.indexes.get(ns)
+    if (!nsIndexes) return null
+
+    for (const definition of nsIndexes.values()) {
+      if (definition.type === 'geo' && definition.fields.some(f => f.path === field)) {
         return definition
       }
     }
@@ -1100,7 +1272,7 @@ export interface SelectedIndex {
   /** Selected index definition */
   index: IndexDefinition
   /** Index type */
-  type: 'fts' | 'vector'
+  type: 'fts' | 'vector' | 'geo'
   /** Field being queried (for secondary indexes) */
   field?: string
   /** Query condition */

@@ -193,6 +193,8 @@ export interface AIUsageAggregate {
   maxLatencyMs: number
   /** P50 latency estimate */
   p50LatencyMs?: number
+  /** P90 latency estimate */
+  p90LatencyMs?: number
   /** P95 latency estimate */
   p95LatencyMs?: number
   /** P99 latency estimate */

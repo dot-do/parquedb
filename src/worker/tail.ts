@@ -618,11 +618,17 @@ export const DEFAULT_TAIL_CONFIG: TailWorkerConfig = {
  * skipped by default, allowing partial processing of batches with some
  * malformed items.
  *
+ * IMPORTANT: This function creates a handler that maintains internal batch state.
+ * For batching to work correctly, you must reuse the same handler instance across
+ * invocations. Create the handler once at module level or pass in external batch
+ * state via the `batchState` config option.
+ *
  * @param config - Tail worker configuration
  * @returns Tail handler function
  *
  * @example
  * ```typescript
+ * // Create handler once at module level for batch state persistence
  * const handler = createTailHandler({
  *   validation: {
  *     skipInvalidItems: true,
@@ -632,6 +638,12 @@ export const DEFAULT_TAIL_CONFIG: TailWorkerConfig = {
  *     console.warn(`Skipped ${result.invalidCount} invalid items`)
  *   }
  * })
+ *
+ * export default {
+ *   async tail(events: unknown, env: TailWorkerEnv) {
+ *     await handler(events, env)
+ *   }
+ * }
  * ```
  */
 export function createTailHandler(config: TailWorkerConfig = DEFAULT_TAIL_CONFIG) {
@@ -639,9 +651,9 @@ export function createTailHandler(config: TailWorkerConfig = DEFAULT_TAIL_CONFIG
   const batchConfig = config.batch || DEFAULT_BATCH_CONFIG
   const validationConfig = config.validation || {}
 
-  // Note: In a real implementation, batch state would be managed externally
-  // (e.g., in Durable Object) since Workers are stateless
-  let batchState = createBatchState()
+  // Batch state is created once per handler instance
+  // Reuse the handler instance to preserve batch state across invocations
+  const batchState = createBatchState()
 
   return async function tail(events: unknown, env: TailWorkerEnv): Promise<void> {
     // Validate input - this will gracefully handle non-array input
@@ -711,6 +723,11 @@ export function createTailHandler(config: TailWorkerConfig = DEFAULT_TAIL_CONFIG
  *
  * Default export for use as a Cloudflare Worker.
  *
+ * The handler is created once at module level to preserve batch state across
+ * invocations within the same Worker instance. Note that Workers are ephemeral,
+ * so batch state will be lost when the Worker instance is recycled. For truly
+ * persistent batching across Worker restarts, use a Durable Object.
+ *
  * @example wrangler.toml configuration:
  * ```toml
  * name = "parquedb-tail"
@@ -730,6 +747,10 @@ export function createTailHandler(config: TailWorkerConfig = DEFAULT_TAIL_CONFIG
  * dataset = "parquedb_metrics"
  * ```
  */
+
+// Create handler once at module level to preserve batch state across invocations
+const defaultHandler = createTailHandler(DEFAULT_TAIL_CONFIG)
+
 export default {
   /**
    * Tail handler - processes events from producer Workers
@@ -741,7 +762,6 @@ export default {
    * @param env - Environment bindings
    */
   async tail(events: unknown, env: TailWorkerEnv): Promise<void> {
-    const handler = createTailHandler(DEFAULT_TAIL_CONFIG)
-    await handler(events, env)
+    await defaultHandler(events, env)
   },
 }

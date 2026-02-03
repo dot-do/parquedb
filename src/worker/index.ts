@@ -59,6 +59,16 @@ import { handlePublicRoutes } from './public-routes'
 // Import sync routes handler
 import { handleSyncRoutes, handleUpload, handleDownload } from './sync-routes'
 
+// Import rate limiting utilities
+import {
+  getClientId,
+  getEndpointTypeFromPath,
+  buildRateLimitResponse,
+  addRateLimitHeadersToResponse,
+  type RateLimitResult,
+} from './rate-limit-utils'
+import { type RateLimitDO } from './RateLimitDO'
+
 // Import handlers
 import {
   handleRoot,
@@ -170,8 +180,11 @@ export {
   buildRateLimitHeaders,
   buildRateLimitResponse,
   DEFAULT_RATE_LIMITS,
+  getEndpointTypeFromPath,
+  addRateLimitHeadersToResponse,
   type RateLimitConfig,
   type RateLimitResult,
+  type EndpointType,
 } from './RateLimitDO'
 
 // Re-export TailDO and related types for event-driven compaction
@@ -209,6 +222,43 @@ export {
   type ProcessingResult,
   type BatchResult,
 } from './compaction-consumer'
+
+// =============================================================================
+// Rate Limiting Helper
+// =============================================================================
+
+/**
+ * Check rate limit for the current request
+ *
+ * @param request - Incoming request
+ * @param env - Worker environment
+ * @param path - URL pathname
+ * @returns Rate limit result, or null if rate limiting is not configured
+ */
+async function checkRateLimitForRequest(
+  request: Request,
+  env: Env,
+  path: string
+): Promise<RateLimitResult | null> {
+  // Rate limiting requires RATE_LIMITER binding
+  if (!env.RATE_LIMITER) {
+    return null
+  }
+
+  const clientId = getClientId(request)
+  const endpointType = getEndpointTypeFromPath(path, request.method)
+
+  try {
+    const rateLimitId = env.RATE_LIMITER.idFromName(clientId)
+    const limiter = env.RATE_LIMITER.get(rateLimitId) as unknown as RateLimitDO
+    return await limiter.checkLimit(endpointType)
+  } catch (error) {
+    // If rate limiting fails, log but allow the request through
+    // This prevents rate limiter failures from blocking legitimate traffic
+    logger.error('Rate limit check failed', error)
+    return null
+  }
+}
 
 // =============================================================================
 // Worker Implementation
@@ -785,6 +835,30 @@ export default {
       return buildCorsPreflightResponse()
     }
 
+    // =========================================================================
+    // Rate Limiting - Applied at fetch handler level for all routes
+    // Excludes: health check (/ and /health) to allow monitoring
+    // =========================================================================
+    const isExemptFromRateLimit = path === '/' || path === '' || path === '/health'
+    let rateLimitResult: RateLimitResult | null = null
+
+    if (!isExemptFromRateLimit) {
+      rateLimitResult = await checkRateLimitForRequest(request, env, path)
+
+      // If rate limited, return 429 response immediately
+      if (rateLimitResult && !rateLimitResult.allowed) {
+        return buildRateLimitResponse(rateLimitResult)
+      }
+    }
+
+    // Helper to add rate limit headers to successful responses
+    const withRateLimitHeaders = (response: Response): Response => {
+      if (rateLimitResult) {
+        return addRateLimitHeadersToResponse(response, rateLimitResult)
+      }
+      return response
+    }
+
     // Create worker instance
     const worker = new ParqueDBWorker(ctx, env)
 
@@ -801,7 +875,7 @@ export default {
 
     try {
       // =======================================================================
-      // Root - API Overview
+      // Root - API Overview (exempt from rate limiting)
       // =======================================================================
       if (path === '/' || path === '') {
         return handleRoot(context)
@@ -809,56 +883,67 @@ export default {
 
       // =======================================================================
       // Benchmark - Real R2 I/O Performance Tests
+      // Rate limited via 'benchmark' endpoint type (10 req/min)
       // =======================================================================
       if (path === '/benchmark') {
         if (!env.BUCKET) {
           throw new MissingBucketError('BUCKET', 'Required for benchmark operations.')
         }
-        return handleBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleBenchmarkRequest>[1])
+        const response = await handleBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleBenchmarkRequest>[1])
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Benchmark Datasets - Real Dataset I/O Performance Tests
+      // Rate limited via 'benchmark' endpoint type (10 req/min)
       // =======================================================================
       if (path === '/benchmark-datasets') {
         if (!env.BUCKET) {
           throw new MissingBucketError('BUCKET', 'Required for dataset benchmark operations.')
         }
-        return handleDatasetBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleDatasetBenchmarkRequest>[1])
+        const response = await handleDatasetBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleDatasetBenchmarkRequest>[1])
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Benchmark Indexed - Secondary Index Performance Tests
+      // Rate limited via 'benchmark' endpoint type (10 req/min)
       // =======================================================================
       if (path === '/benchmark-indexed') {
         if (!env.BUCKET) {
           throw new MissingBucketError('BUCKET', 'Required for indexed benchmark operations.')
         }
-        return handleIndexedBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleIndexedBenchmarkRequest>[1])
+        const response = await handleIndexedBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleIndexedBenchmarkRequest>[1])
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Benchmark Backends - Compare Native/Iceberg/Delta (Synthetic Data)
+      // Rate limited via 'benchmark' endpoint type (10 req/min)
       // =======================================================================
       if (path === '/benchmark/backends') {
         if (!env.CDN_BUCKET) {
           throw new MissingBucketError('CDN_BUCKET', 'Required for backend comparison benchmarks.')
         }
-        return handleBackendsBenchmarkRequest(request, env.CDN_BUCKET)
+        const response = await handleBackendsBenchmarkRequest(request, env.CDN_BUCKET)
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Benchmark Datasets + Backends - Real Data Across All Formats
+      // Rate limited via 'benchmark' endpoint type (10 req/min)
       // =======================================================================
       if (path === '/benchmark/datasets/backends') {
         if (!env.BUCKET) {
           throw new MissingBucketError('BUCKET', 'Required for dataset backend benchmarks.')
         }
-        return handleDatasetBackendsBenchmarkRequest(request, env.BUCKET)
+        const response = await handleDatasetBackendsBenchmarkRequest(request, env.BUCKET)
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Backend Migration - Durable Object-based batch migration
+      // Rate limited via 'migration' endpoint type (5 req/min)
       // Handles migrations in batches to work within subrequest limits (1000/request)
       // Uses DO alarm() to continue processing across invocations
       //
@@ -870,7 +955,7 @@ export default {
       // =======================================================================
       if (path.startsWith('/migrate')) {
         if (!env.MIGRATION) {
-          return buildErrorResponse(500, 'MIGRATION_DO_NOT_CONFIGURED', 'Migration DO not available')
+          return withRateLimitHeaders(buildErrorResponse(request, new Error('Migration DO not available'), 500, startTime))
         }
 
         const id = env.MIGRATION.idFromName('default')
@@ -891,28 +976,31 @@ export default {
         const migrationUrl = new URL(request.url)
         migrationUrl.pathname = migrationPath
 
-        return stub.fetch(new Request(migrationUrl.toString(), {
+        const response = await stub.fetch(new Request(migrationUrl.toString(), {
           method: request.method,
           headers: request.headers,
           body: request.body,
         }))
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Compaction Status - Event-driven compaction tracking
+      // Rate limited via 'compaction' endpoint type (30 req/min)
       // =======================================================================
       if (path === '/compaction/status') {
         if (!env.COMPACTION_STATE) {
-          return buildErrorResponse(500, 'COMPACTION_STATE_NOT_CONFIGURED', 'Compaction State DO not available')
+          return withRateLimitHeaders(buildErrorResponse(request, new Error('Compaction State DO not available'), 500, startTime))
         }
 
         const id = env.COMPACTION_STATE.idFromName('default')
         const stub = env.COMPACTION_STATE.get(id)
-        return stub.fetch(new Request(new URL('/status', request.url).toString()))
+        const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
-      // Health Check
+      // Health Check (exempt from rate limiting for monitoring)
       // =======================================================================
       if (path === '/health') {
         return handleHealth(context)
@@ -920,125 +1008,152 @@ export default {
 
       // =======================================================================
       // Debug Endpoints
+      // Rate limited via 'debug' endpoint type (30 req/min)
       // =======================================================================
       if (path === '/debug/r2') {
-        return handleDebugR2(context, env)
+        const response = await handleDebugR2(context, env)
+        return withRateLimitHeaders(response)
       }
 
       if (path === '/debug/entity') {
-        return handleDebugEntity(context)
+        const response = await handleDebugEntity(context)
+        return withRateLimitHeaders(response)
       }
 
       if (path === '/debug/indexes') {
-        return handleDebugIndexes(context, env)
+        const response = await handleDebugIndexes(context, env)
+        return withRateLimitHeaders(response)
       }
 
       if (path === '/debug/query') {
-        return handleDebugQuery(context)
+        const response = await handleDebugQuery(context)
+        return withRateLimitHeaders(response)
       }
 
       if (path === '/debug/cache') {
-        return handleDebugCache(context)
+        const response = await handleDebugCache(context)
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Sync API Routes (push/pull/sync)
+      // Rate limited via 'sync' endpoint type (100 req/min)
+      // Note: sync-routes.ts doesn't apply its own rate limiting, so we apply it here
       // =======================================================================
       const syncResponse = await handleSyncRoutes(request, env, path)
       if (syncResponse) {
-        return syncResponse
+        return withRateLimitHeaders(syncResponse)
       }
 
       // Handle sync upload/download endpoints
+      // Rate limited via 'sync_file' endpoint type (500 req/min)
       const uploadMatch = path.match(/^\/api\/sync\/upload\/([^/]+)\/(.+)$/)
       if (uploadMatch && request.method === 'PUT') {
         const [, databaseId, filePath] = uploadMatch
-        return handleUpload(request, env, databaseId!, decodeURIComponent(filePath!))
+        const response = await handleUpload(request, env, databaseId!, decodeURIComponent(filePath!))
+        return withRateLimitHeaders(response)
       }
 
       const downloadMatch = path.match(/^\/api\/sync\/download\/([^/]+)\/(.+)$/)
       if (downloadMatch && request.method === 'GET') {
         const [, databaseId, filePath] = downloadMatch
-        return handleDownload(request, env, databaseId!, decodeURIComponent(filePath!))
+        const response = await handleDownload(request, env, databaseId!, decodeURIComponent(filePath!))
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Public Database Access Routes
+      // Note: public-routes.ts applies its own rate limiting internally
+      // We still add headers here for consistency, but skip if already rate limited
       // =======================================================================
       const publicResponse = await handlePublicRoutes(request, env, path, baseUrl)
       if (publicResponse) {
+        // public-routes.ts already handles rate limiting and headers
         return publicResponse
       }
 
       // =======================================================================
       // Datasets Overview
+      // Rate limited via 'datasets' endpoint type (200 req/min)
       // =======================================================================
       if (path === '/datasets') {
-        return handleDatasetsList(context)
+        const response = await handleDatasetsList(context)
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Dataset Detail - /datasets/:dataset
+      // Rate limited via 'datasets' endpoint type (200 req/min)
       // =======================================================================
       const datasetMatch = matchRoute<[string]>(path, RoutePatterns.dataset)
       if (datasetMatch) {
         const [datasetId] = datasetMatch
-        return handleDatasetDetail(context, datasetId)
+        const response = await handleDatasetDetail(context, datasetId)
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Collection List - /datasets/:dataset/:collection
+      // Rate limited via 'datasets' endpoint type (200 req/min)
       // =======================================================================
       const collectionMatch = matchRoute<[string, string]>(path, RoutePatterns.collection)
       if (collectionMatch) {
         const [datasetId, collectionId] = collectionMatch
-        return handleCollectionList(context, datasetId, collectionId)
+        const response = await handleCollectionList(context, datasetId, collectionId)
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Relationship Traversal - /datasets/:dataset/:collection/:id/:predicate
+      // Rate limited via 'datasets' endpoint type (200 req/min)
       // (Must be checked before entity detail due to matching order)
       // =======================================================================
       const relMatch = matchRoute<[string, string, string, string]>(path, RoutePatterns.relationship)
       if (relMatch) {
         const [datasetId, collectionId, entityId, predicate] = relMatch
-        return handleRelationshipTraversal(context, datasetId, collectionId, decodeURIComponent(entityId), predicate)
+        const response = await handleRelationshipTraversal(context, datasetId, collectionId, decodeURIComponent(entityId), predicate)
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Entity Detail - /datasets/:dataset/:collection/:id
+      // Rate limited via 'datasets' endpoint type (200 req/min)
       // =======================================================================
       const entityMatch = matchRoute<[string, string, string]>(path, RoutePatterns.entity)
       if (entityMatch) {
         const [datasetId, collectionId, entityId] = entityMatch
-        return handleEntityDetail(context, datasetId, collectionId, decodeURIComponent(entityId))
+        const response = await handleEntityDetail(context, datasetId, collectionId, decodeURIComponent(entityId))
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // Legacy /ns routes (backwards compatibility)
+      // Rate limited via 'ns_read' (300 req/min) or 'ns_write' (60 req/min)
+      // based on HTTP method
       // =======================================================================
       const nsMatch = path.match(RoutePatterns.ns)
       if (nsMatch) {
         const ns = nsMatch[1]!
         const id = nsMatch[2]
-        return handleNsRoute(context, ns, id)
+        const response = await handleNsRoute(context, ns, id)
+        return withRateLimitHeaders(response)
       }
 
       // =======================================================================
       // 404 - Not Found
       // =======================================================================
-      return buildErrorResponse(request, new Error(`Route '${path}' not found`), 404, startTime)
+      return withRateLimitHeaders(buildErrorResponse(request, new Error(`Route '${path}' not found`), 404, startTime))
 
     } catch (error: unknown) {
       // Handle R2 bucket errors with specific error responses
       const bucketErrorResponse = handleBucketError(error)
       if (bucketErrorResponse) {
-        return bucketErrorResponse
+        return withRateLimitHeaders(bucketErrorResponse)
       }
 
       logger.error('ParqueDB error', error)
       const err = error instanceof Error ? error : new Error(String(error))
-      return buildErrorResponse(request, err, 500, startTime)
+      return withRateLimitHeaders(buildErrorResponse(request, err, 500, startTime))
     }
   },
 

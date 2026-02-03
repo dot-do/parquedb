@@ -11,6 +11,7 @@
  */
 
 import type { StorageBackend, EntityId } from '../../types'
+import type { EvaliteMVIntegration } from './mv-integration'
 
 // =============================================================================
 // Run Types
@@ -365,6 +366,11 @@ export interface EvaliteAdapterConfig {
    * @default false
    */
   debug?: boolean
+
+  /**
+   * Materialized views integration for analytics
+   */
+  mvIntegration?: EvaliteMVIntegration
 }
 
 /**
@@ -375,6 +381,7 @@ export interface ResolvedEvaliteConfig {
   collectionPrefix: string
   defaultActor: EntityId
   debug: boolean
+  mvIntegration?: EvaliteMVIntegration
 }
 
 // =============================================================================

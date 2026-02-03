@@ -979,6 +979,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       const upload = await this.bucket.createMultipartUpload(key, r2Options)
       const uploadedParts: R2UploadedPart[] = []
 
+      // Track this upload for cleanup if abort fails later
+      // This ensures orphaned uploads can be cleaned up via cleanupStaleUploads()
+      this.activeUploads.set(upload.uploadId, {
+        upload,
+        createdAt: Date.now(),
+      })
+
       try {
         // Upload each part
         for (let partNumber = 1; partNumber <= numParts; partNumber++) {
@@ -996,6 +1003,9 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         // Complete the upload
         const result = await upload.complete(uploadedParts)
 
+        // Remove from tracking on success
+        this.activeUploads.delete(upload.uploadId)
+
         return {
           etag: result.etag,
           size: result.size,
@@ -1005,9 +1015,18 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         // Attempt to abort on failure
         try {
           await upload.abort()
+          // Remove from tracking on successful abort
+          this.activeUploads.delete(upload.uploadId)
         } catch (abortError: unknown) {
-          // Best-effort abort: multipart upload abort failure is non-critical
-          logger.debug('Failed to abort multipart upload after error', abortError)
+          // Abort failed - the upload remains tracked for later cleanup via cleanupStaleUploads()
+          // Log with full context for debugging orphaned uploads
+          logger.debug('Failed to abort multipart upload after error', {
+            uploadId: upload.uploadId,
+            key,
+            path,
+            abortError,
+            originalError: error,
+          })
         }
         throw error
       }

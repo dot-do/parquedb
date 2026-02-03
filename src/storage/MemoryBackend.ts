@@ -51,6 +51,9 @@ export class MemoryBackend implements StorageBackend {
   /** Set of directories (virtual) */
   private directories = new Set<string>()
 
+  /** Per-path append locks for thread-safety */
+  private appendLocks = new Map<string, Promise<void>>()
+
   /**
    * Normalize path (remove leading slash if present, handle trailing slashes)
    */
@@ -309,20 +312,45 @@ export class MemoryBackend implements StorageBackend {
 
   /**
    * Append to file (for event logs)
+   *
+   * Thread-safe: Uses per-path locking to prevent race conditions when
+   * multiple concurrent appends occur on the same file.
    */
   async append(path: string, data: Uint8Array): Promise<void> {
     path = this.normalizePath(path)
 
-    const existing = this.files.get(path)
-    if (existing) {
-      // Append to existing file
-      const newData = new Uint8Array(existing.data.length + data.length)
-      newData.set(existing.data, 0)
-      newData.set(data, existing.data.length)
-      await this.write(path, newData)
-    } else {
-      // Create new file
-      await this.write(path, data)
+    // Wait for any pending append on this path to complete before starting ours
+    const pendingAppend = this.appendLocks.get(path)
+    if (pendingAppend) {
+      await pendingAppend
+    }
+
+    // Create a new promise for our append operation
+    let resolveAppend: () => void
+    const ourAppend = new Promise<void>((resolve) => {
+      resolveAppend = resolve
+    })
+    this.appendLocks.set(path, ourAppend)
+
+    try {
+      const existing = this.files.get(path)
+      if (existing) {
+        // Append to existing file
+        const newData = new Uint8Array(existing.data.length + data.length)
+        newData.set(existing.data, 0)
+        newData.set(data, existing.data.length)
+        await this.write(path, newData)
+      } else {
+        // Create new file
+        await this.write(path, data)
+      }
+    } finally {
+      // Release our lock only if we're still the current lock holder
+      // (another append may have already taken over)
+      if (this.appendLocks.get(path) === ourAppend) {
+        this.appendLocks.delete(path)
+      }
+      resolveAppend!()
     }
   }
 

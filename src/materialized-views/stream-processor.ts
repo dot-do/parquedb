@@ -6,6 +6,7 @@
  * - Flushing: Writes batches to Parquet files via StorageBackend
  * - Backpressure: Pauses ingestion when write buffer is full
  * - Recovery: Handles failures gracefully with retry logic
+ * - Persistence: WAL, DLQ persistence, and checkpointing for crash recovery
  *
  * This is designed for local AI observability use cases where streaming
  * data (AI SDK logs, evalite traces, etc.) needs to be materialized
@@ -20,9 +21,10 @@
  *   batchSize: 100,
  *   flushIntervalMs: 5000,
  *   schema: aiRequestSchema,
+ *   persistence: { enabled: true }, // Enable crash recovery
  * })
  *
- * await processor.start()
+ * await processor.start() // Recovers any pending records from WAL/DLQ
  *
  * // Push records as they arrive
  * processor.push({ model: 'gpt-4', prompt: '...', tokens: 150 })
@@ -39,6 +41,13 @@
 import type { StorageBackend, WriteResult } from '../types/storage'
 import type { ParquetSchema } from '../parquet/types'
 import { ParquetWriter } from '../parquet/writer'
+import {
+  StreamPersistence,
+  createStreamPersistence,
+  type StreamCheckpoint,
+  type RecoveryResult,
+  type PersistenceStats,
+} from './stream-persistence'
 
 // =============================================================================
 // Types
@@ -138,6 +147,18 @@ export interface StreamProcessorConfig<T> {
    * Retry configuration for failed writes
    */
   retry?: RetryConfig
+
+  /**
+   * Persistence configuration for crash recovery
+   *
+   * When enabled, the processor will:
+   * - Log records to WAL before writing to Parquet
+   * - Persist failed batches to disk (surviving crashes)
+   * - Checkpoint stream position for incremental recovery
+   *
+   * @default { enabled: false }
+   */
+  persistence?: PersistenceConfig
 }
 
 /**
@@ -155,6 +176,46 @@ export interface RetryConfig {
 
   /** Multiplier for exponential backoff */
   backoffMultiplier?: number
+}
+
+/**
+ * Persistence configuration for crash recovery
+ */
+export interface PersistenceConfig {
+  /**
+   * Enable persistence (WAL, DLQ persistence, checkpointing)
+   * @default false
+   */
+  enabled: boolean
+
+  /**
+   * Maximum WAL segment size in bytes before rotation
+   * @default 10MB
+   */
+  maxWalSegmentSize?: number
+
+  /**
+   * Maximum age of WAL segments before archiving (ms)
+   * @default 1 hour
+   */
+  maxWalSegmentAge?: number
+
+  /**
+   * How often to save checkpoints (in batches)
+   * @default 10 (save checkpoint every 10 batches)
+   */
+  checkpointInterval?: number
+
+  /**
+   * Whether to sync WAL writes immediately (durability vs performance)
+   * @default true
+   */
+  syncWal?: boolean
+
+  /**
+   * Callback when recovery completes
+   */
+  onRecovery?: (result: RecoveryResult) => void
 }
 
 /**
@@ -283,6 +344,15 @@ export interface StreamProcessorStats {
 
   /** Last successful write time */
   lastWriteAt: number | null
+
+  /** Records recovered from WAL on startup */
+  recordsRecovered: number
+
+  /** DLQ entries recovered on startup */
+  dlqEntriesRecovered: number
+
+  /** Last checkpoint sequence (if using persistence) */
+  lastCheckpointSequence?: string | number
 }
 
 /**
@@ -309,6 +379,13 @@ const DEFAULT_CONFIG = {
     maxDelayMs: 5000,
     backoffMultiplier: 2,
   },
+  persistence: {
+    enabled: false,
+    maxWalSegmentSize: 10 * 1024 * 1024, // 10MB
+    maxWalSegmentAge: 60 * 60 * 1000, // 1 hour
+    checkpointInterval: 10, // Save checkpoint every 10 batches
+    syncWal: true,
+  },
 }
 
 // =============================================================================
@@ -329,6 +406,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
     onBatchWritten?: StreamProcessorConfig<T>['onBatchWritten']
     onError?: StreamProcessorConfig<T>['onError']
     onWriteError?: StreamProcessorConfig<T>['onWriteError']
+    persistence: Required<Omit<PersistenceConfig, 'onRecovery'>> & { onRecovery?: PersistenceConfig['onRecovery'] }
   }
 
   private state: ProcessorState = 'idle'
@@ -344,6 +422,10 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
 
   // Dead-letter queue for failed batches
   private deadLetterQueue: FailedBatch<T>[] = []
+
+  // Persistence layer for crash recovery
+  private persistence: StreamPersistence<T> | null = null
+  private batchesSinceCheckpoint = 0
 
   // Statistics
   private stats: StreamProcessorStats = this.createEmptyStats()
@@ -362,12 +444,28 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
         ...DEFAULT_CONFIG.retry,
         ...config.retry,
       },
+      persistence: {
+        ...DEFAULT_CONFIG.persistence,
+        ...config.persistence,
+      },
     }
 
     this.writer = new ParquetWriter(this.config.storage, {
       rowGroupSize: this.config.rowGroupSize,
       compression: this.config.compression,
     })
+
+    // Initialize persistence if enabled
+    if (this.config.persistence.enabled) {
+      this.persistence = createStreamPersistence<T>({
+        name: this.config.name,
+        storage: this.config.storage,
+        basePath: this.config.outputPath,
+        maxWalSegmentSize: this.config.persistence.maxWalSegmentSize,
+        maxWalSegmentAge: this.config.persistence.maxWalSegmentAge,
+        syncWal: this.config.persistence.syncWal,
+      })
+    }
   }
 
   // ===========================================================================
@@ -376,6 +474,12 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
 
   /**
    * Start the processor
+   *
+   * When persistence is enabled, this will:
+   * 1. Recover any pending records from WAL
+   * 2. Recover any failed batches from DLQ
+   * 3. Load the last checkpoint
+   * 4. Re-process recovered records
    */
   async start(): Promise<void> {
     if (this.state === 'running') {
@@ -384,6 +488,47 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
 
     if (this.state === 'stopping') {
       throw new Error('Cannot start while stopping')
+    }
+
+    // Perform recovery if persistence is enabled
+    if (this.persistence) {
+      const recoveryResult = await this.persistence.recover()
+
+      // Update stats with recovery information
+      this.stats.recordsRecovered = recoveryResult.pendingRecords.length
+      this.stats.dlqEntriesRecovered = recoveryResult.dlqEntriesRecovered
+
+      // Restore checkpoint info
+      if (recoveryResult.checkpoint) {
+        this.stats.lastCheckpointSequence = recoveryResult.checkpoint.sequence
+        this.batchCounter = recoveryResult.checkpoint.lastBatchNumber
+      }
+
+      // Add recovered records to buffer for re-processing
+      if (recoveryResult.pendingRecords.length > 0) {
+        this.buffer.push(...recoveryResult.pendingRecords)
+        this.stats.bufferSize = this.buffer.length
+      }
+
+      // Restore DLQ entries
+      if (recoveryResult.failedBatches.length > 0) {
+        this.deadLetterQueue.push(...recoveryResult.failedBatches)
+      }
+
+      // Call recovery callback if provided
+      if (this.config.persistence.onRecovery) {
+        this.config.persistence.onRecovery(recoveryResult)
+      }
+
+      // Log recovery status
+      if (!recoveryResult.cleanRecovery) {
+        console.log(
+          `[StreamProcessor:${this.config.name}] Recovery completed: ` +
+            `${recoveryResult.walEntriesRecovered} WAL entries, ` +
+            `${recoveryResult.dlqEntriesRecovered} DLQ entries, ` +
+            `checkpoint: ${recoveryResult.checkpoint?.sequence ?? 'none'}`
+        )
+      }
     }
 
     this.state = 'running'
@@ -395,6 +540,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
    * Stop the processor gracefully
    *
    * Flushes any remaining buffered records before stopping.
+   * When persistence is enabled, saves a final checkpoint.
    */
   async stop(): Promise<void> {
     if (this.state !== 'running') {
@@ -412,6 +558,11 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
     // Wait for pending writes to complete
     while (this.pendingWrites > 0) {
       await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+
+    // Save final checkpoint if persistence is enabled
+    if (this.persistence) {
+      await this.saveCheckpoint()
     }
 
     this.state = 'stopped'
@@ -508,6 +659,70 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
   }
 
   /**
+   * Check if persistence is enabled
+   */
+  isPersistenceEnabled(): boolean {
+    return this.persistence !== null
+  }
+
+  /**
+   * Get persistence statistics
+   *
+   * Returns information about WAL, DLQ, and checkpoint state.
+   * Only available if persistence is enabled.
+   */
+  async getPersistenceStats(): Promise<PersistenceStats | null> {
+    if (!this.persistence) return null
+    return this.persistence.getStats()
+  }
+
+  /**
+   * Manually save a checkpoint
+   *
+   * This is useful for ensuring state is persisted before a graceful shutdown
+   * or at critical points in processing.
+   */
+  async checkpoint(metadata?: Record<string, unknown>): Promise<void> {
+    if (!this.persistence) {
+      throw new Error('Persistence is not enabled')
+    }
+
+    await this.persistence.saveCheckpoint({
+      timestamp: Date.now(),
+      lastBatchNumber: this.batchCounter,
+      recordsProcessed: this.stats.recordsWritten,
+      metadata: {
+        ...metadata,
+        bufferSize: this.buffer.length,
+        pendingWrites: this.pendingWrites,
+        dlqSize: this.deadLetterQueue.length,
+      },
+    })
+    this.stats.lastCheckpointSequence = this.batchCounter
+  }
+
+  /**
+   * Get the last checkpoint
+   *
+   * Returns the most recently saved checkpoint, or null if none exists.
+   */
+  async getCheckpoint(): Promise<StreamCheckpoint | null> {
+    if (!this.persistence) return null
+    return this.persistence.loadCheckpoint()
+  }
+
+  /**
+   * Clean up old WAL archive files
+   *
+   * @param maxAgeMs Maximum age of archives to keep (default: 24 hours)
+   * @returns Number of files cleaned up
+   */
+  async cleanupWALArchives(maxAgeMs?: number): Promise<number> {
+    if (!this.persistence) return 0
+    return this.persistence.cleanupWALArchives(maxAgeMs)
+  }
+
+  /**
    * Get the dead-letter queue containing failed batches
    *
    * Failed batches are added to this queue when writeFailureBehavior is 'queue'.
@@ -530,10 +745,21 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
    *
    * Use this after you've processed/replayed the failed batches.
    * Returns the cleared batches for final processing.
+   * Also clears persisted DLQ entries if persistence is enabled.
    */
-  clearDeadLetterQueue(): FailedBatch<T>[] {
+  async clearDeadLetterQueue(): Promise<FailedBatch<T>[]> {
     const batches = this.deadLetterQueue
     this.deadLetterQueue = []
+
+    // Clear persisted DLQ entries
+    if (this.persistence) {
+      try {
+        await this.persistence.clearDLQ()
+      } catch (error) {
+        console.warn(`[StreamProcessor:${this.config.name}] Failed to clear persisted DLQ:`, error)
+      }
+    }
+
     return batches
   }
 
@@ -562,14 +788,33 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
         successCount++
         this.stats.recordsWritten += failedBatch.records.length
         this.stats.batchesWritten++
+
+        // Remove from persisted DLQ on success
+        if (this.persistence) {
+          try {
+            await this.persistence.updateDLQEntry(failedBatch, true)
+          } catch {
+            // Best-effort cleanup
+          }
+        }
       } catch (err) {
         // Still failed, add back to DLQ
-        this.deadLetterQueue.push({
+        const updatedBatch: FailedBatch<T> = {
           ...failedBatch,
           error: err instanceof Error ? err : new Error(String(err)),
           failedAt: Date.now(),
           attempts: failedBatch.attempts + this.config.retry.maxAttempts,
-        })
+        }
+        this.deadLetterQueue.push(updatedBatch)
+
+        // Update persisted DLQ entry
+        if (this.persistence) {
+          try {
+            await this.persistence.updateDLQEntry(failedBatch, false)
+          } catch {
+            // Best-effort update
+          }
+        }
       }
     }
 
@@ -597,6 +842,31 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
       startedAt: null,
       lastRecordAt: null,
       lastWriteAt: null,
+      recordsRecovered: 0,
+      dlqEntriesRecovered: 0,
+    }
+  }
+
+  /**
+   * Save a checkpoint to persistence layer
+   */
+  private async saveCheckpoint(): Promise<void> {
+    if (!this.persistence) return
+
+    try {
+      await this.persistence.saveCheckpoint({
+        timestamp: Date.now(),
+        lastBatchNumber: this.batchCounter,
+        recordsProcessed: this.stats.recordsWritten,
+        metadata: {
+          bufferSize: this.buffer.length,
+          pendingWrites: this.pendingWrites,
+          dlqSize: this.deadLetterQueue.length,
+        },
+      })
+      this.stats.lastCheckpointSequence = this.batchCounter
+    } catch (error) {
+      console.warn(`[StreamProcessor:${this.config.name}] Failed to save checkpoint:`, error)
     }
   }
 
@@ -661,6 +931,18 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
     const startTime = Date.now()
     const filePath = this.getBatchFilePath(batchNumber)
 
+    // Log to WAL before writing (if persistence enabled)
+    let walEntryId: string | undefined
+    if (this.persistence) {
+      try {
+        const walEntry = await this.persistence.logWAL(records, batchNumber, filePath)
+        walEntryId = walEntry.id
+      } catch (walError) {
+        // WAL write failed - continue without WAL protection
+        console.warn(`[StreamProcessor:${this.config.name}] WAL write failed:`, walError)
+      }
+    }
+
     try {
       // Transform records if needed
       const transformedRecords = records.map((record) => {
@@ -682,6 +964,16 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
       // Write with retry
       const writeResult = await this.writeWithRetry(filePath, transformedRecords, batchNumber)
 
+      // Commit WAL entry on success
+      if (this.persistence && walEntryId) {
+        try {
+          await this.persistence.commitWAL(walEntryId)
+        } catch (commitError) {
+          // WAL commit failed - not critical since data was written
+          console.warn(`[StreamProcessor:${this.config.name}] WAL commit failed:`, commitError)
+        }
+      }
+
       const durationMs = Date.now() - startTime
 
       // Update stats
@@ -694,6 +986,13 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
       // Keep only last 100 timing samples
       if (this.batchDurations.length > 100) {
         this.batchDurations.shift()
+      }
+
+      // Save checkpoint periodically
+      this.batchesSinceCheckpoint++
+      if (this.persistence && this.batchesSinceCheckpoint >= this.config.persistence.checkpointInterval) {
+        await this.saveCheckpoint()
+        this.batchesSinceCheckpoint = 0
       }
 
       // Emit callback
@@ -709,6 +1008,15 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
       this.stats.failedBatches++
+
+      // Mark WAL entry as failed
+      if (this.persistence && walEntryId) {
+        try {
+          await this.persistence.failWAL(walEntryId, error)
+        } catch {
+          // Best-effort WAL update
+        }
+      }
 
       // Create failed batch info for logging and DLQ
       const failedBatch: FailedBatch<T> = {
@@ -764,6 +1072,18 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
       case 'queue':
         // Add to dead-letter queue for later replay
         this.deadLetterQueue.push(failedBatch)
+
+        // Persist to disk if persistence enabled (survives crashes)
+        if (this.persistence) {
+          try {
+            await this.persistence.persistDLQ(failedBatch)
+          } catch (persistError) {
+            console.error(
+              `[StreamProcessor:${this.config.name}] Failed to persist DLQ entry to disk:`,
+              persistError
+            )
+          }
+        }
 
         // Apply backpressure if DLQ is getting full
         if (this.deadLetterQueue.length >= this.config.maxDeadLetterQueueSize) {

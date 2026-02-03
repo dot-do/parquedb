@@ -84,7 +84,7 @@ import {
 } from './types'
 
 import { validateNamespace, validateFilter, validateUpdateOperators, normalizeNamespace, toFullId } from './validation'
-import { CollectionImpl } from './collection'
+import { CollectionManager } from './collections'
 import { EventLogImpl, pruneArchivedEvents } from './events'
 import {
   getEntityStore,
@@ -108,7 +108,7 @@ import {
   invalidateReconstructionCache,
 } from './store'
 import type { IStorageRouter, StorageMode } from '../storage/router'
-import type { CollectionOptions } from '../db'
+import type { CollectionOptions } from '../types/collection-options'
 import type { EmbeddingProvider } from '../embeddings/provider'
 import { normalizeVectorFilter, isTextVectorQuery } from '../query/vector-query'
 import { SnapshotManagerImpl } from './snapshots'
@@ -124,7 +124,7 @@ export class ParqueDBImpl {
   private storage: StorageBackend
   private schema: Schema = {}
   private schemaValidator: SchemaValidator | null = null
-  private collections = new Map<string, CollectionImpl>()
+  private collectionManager: CollectionManager | null = null
   private entities: Map<string, Entity> // Shared via global store
   private events: Event[] // Shared via global store
   private archivedEvents: Event[] // Shared via global store for archived events
@@ -276,7 +276,9 @@ export class ParqueDBImpl {
     this.flushPromise = null
 
     // Clear instance state
-    this.collections.clear()
+    if (this.collectionManager) {
+      this.collectionManager.clear()
+    }
 
     // Clear global state for this storage backend
     clearGlobalState(this.storage)
@@ -293,15 +295,15 @@ export class ParqueDBImpl {
 
 
   /**
-   * Get a collection by namespace
+   * Get a collection by namespace.
+   * Uses CollectionManager for caching and namespace normalization.
    */
   collection<T = Record<string, unknown>>(namespace: string): Collection<T> {
-    const normalizedNs = normalizeNamespace(namespace)
-    if (!this.collections.has(normalizedNs)) {
-      this.collections.set(normalizedNs, new CollectionImpl(this, normalizedNs))
+    // Lazy initialize the collection manager
+    if (!this.collectionManager) {
+      this.collectionManager = new CollectionManager(this)
     }
-
-    return this.collections.get(normalizedNs)! as Collection<T>
+    return this.collectionManager.get<T>(namespace)
   }
 
 
@@ -1199,13 +1201,16 @@ export class ParqueDBImpl {
     }
 
 
-    // Record DELETE event - always use null for after since entity is being deleted
+    // Record DELETE event
+    // For soft delete, after state is the soft-deleted entity
+    // For hard delete, after state is null
     const [eventNs, ...eventIdParts] = fullId.split('/')
+    const afterState = options?.hard ? null : this.entities.get(fullId)
     await this.recordEvent(
       'DELETE',
       entityTarget(eventNs ?? '', eventIdParts.join('/')),
       beforeEntityForEvent,
-      null,
+      afterState ?? null,
       actor
     )
 
@@ -2395,16 +2400,15 @@ export class ParqueDBImpl {
    * flush operation.
    *
    * Behavior:
-   * - Returns immediately if inside a transaction (flush deferred to commit)
    * - Returns existing promise if a flush is already scheduled
    * - Otherwise, schedules a new flush via Promise.resolve().then()
+   *
+   * Note: Callers should not call this method when in a transaction.
+   * Transaction flush is deferred to commit() instead.
    *
    * @returns A promise that resolves when the flush completes
    */
   private scheduleFlush(): Promise<void> {
-    // Don't schedule if in a transaction - wait for commit
-    if (this.inTransaction) return Promise.resolve()
-
     // If a flush is already scheduled, return that promise
     if (this.flushPromise) return this.flushPromise
 
@@ -2440,6 +2444,14 @@ export class ParqueDBImpl {
       return JSON.parse(JSON.stringify(obj))
     }
 
+    // For DELETE operations, null after state is meaningful (hard delete)
+    // so we preserve it as null instead of converting to undefined
+    // For all other cases, null means "no value" and should be undefined
+    const processAfter = (obj: Entity | null): import('../types').Variant | null | undefined => {
+      if (op === 'DELETE' && obj === null) return null
+      return deepCopy(obj) as import('../types').Variant | undefined
+    }
+
 
     const event: Event = {
       id: generateId(),
@@ -2447,7 +2459,7 @@ export class ParqueDBImpl {
       op,
       target,
       before: deepCopy(before) as import('../types').Variant | undefined,
-      after: deepCopy(after) as import('../types').Variant | undefined,
+      after: processAfter(after),
       actor: actor as string | undefined,
       metadata: meta as import('../types').Variant | undefined,
     }
@@ -2468,7 +2480,8 @@ export class ParqueDBImpl {
     this.pendingEvents.push(event)
 
     // Schedule a batched flush (unless in transaction)
-    const flushPromise = this.scheduleFlush()
+    // When in transaction, skip scheduling entirely - flush happens at commit
+    const flushPromise = this.inTransaction ? null : this.scheduleFlush()
 
     // Perform event log rotation if needed (fire-and-forget)
     this.maybeRotateEventLog()
@@ -2499,7 +2512,9 @@ export class ParqueDBImpl {
     }
 
 
-    return flushPromise
+    // Return flush promise if one was scheduled, otherwise return resolved promise
+    // (maintains API compatibility while avoiding unnecessary microtask yields in transactions)
+    return flushPromise ?? Promise.resolve()
   }
 
 
