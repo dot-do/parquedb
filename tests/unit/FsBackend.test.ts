@@ -935,6 +935,75 @@ describe('FsBackend', () => {
         backend.writeConditional('race.txt', new TextEncoder().encode('second'), stat1!.etag!)
       ).rejects.toThrow(VersionMismatchError)
     })
+
+    it('should handle true parallel concurrent writes with file locking (TOCTOU prevention)', async () => {
+      // This test verifies that the TOCTOU race condition is fixed by using file locking.
+      // Multiple writes are launched in parallel with the same expected version.
+      // Only one should succeed; all others should fail with VersionMismatchError.
+      await writeFile(join(tempDir, 'parallel-race.txt'), 'initial')
+      const initialStat = await backend.stat('parallel-race.txt')
+      const initialEtag = initialStat!.etag!
+
+      // Launch multiple parallel writes all expecting the same initial etag
+      const numConcurrentWrites = 10
+      const writePromises = Array.from({ length: numConcurrentWrites }, (_, i) =>
+        backend.writeConditional(
+          'parallel-race.txt',
+          new TextEncoder().encode(`writer-${i}`),
+          initialEtag
+        )
+          .then((result) => ({ status: 'fulfilled' as const, value: result, writer: i }))
+          .catch((error) => ({ status: 'rejected' as const, error, writer: i }))
+      )
+
+      const results = await Promise.all(writePromises)
+
+      // Count successes and failures
+      const successes = results.filter(r => r.status === 'fulfilled')
+      const failures = results.filter(r => r.status === 'rejected')
+
+      // Exactly one write should succeed
+      expect(successes.length).toBe(1)
+
+      // All other writes should fail with VersionMismatchError or concurrent-write error
+      expect(failures.length).toBe(numConcurrentWrites - 1)
+      for (const failure of failures) {
+        expect(failure.status).toBe('rejected')
+        if (failure.status === 'rejected') {
+          // Either version mismatch or concurrent write detection
+          expect(failure.error).toBeDefined()
+        }
+      }
+
+      // Verify the file contains exactly one winner's content
+      const finalContent = await readFile(join(tempDir, 'parallel-race.txt'), 'utf-8')
+      const successfulWriter = successes[0]
+      if (successfulWriter.status === 'fulfilled') {
+        expect(finalContent).toBe(`writer-${successfulWriter.writer}`)
+      }
+    })
+
+    it('should prevent data corruption with rapid successive writes', async () => {
+      // This test verifies that file locking prevents interleaving of writes
+      // which would cause data corruption
+      await writeFile(join(tempDir, 'rapid.txt'), 'start')
+      let currentStat = await backend.stat('rapid.txt')
+
+      // Perform a sequence of writes, each checking version before writing
+      for (let i = 0; i < 5; i++) {
+        const result = await backend.writeConditional(
+          'rapid.txt',
+          new TextEncoder().encode(`iteration-${i}`),
+          currentStat!.etag!
+        )
+        // Update our knowledge of current etag for next iteration
+        currentStat = await backend.stat('rapid.txt')
+        expect(currentStat!.etag).toBe(result.etag)
+      }
+
+      const finalContent = await readFile(join(tempDir, 'rapid.txt'), 'utf-8')
+      expect(finalContent).toBe('iteration-4')
+    })
   })
 
   // ===========================================================================

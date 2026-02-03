@@ -516,7 +516,9 @@ export class FsBackend implements StorageBackend {
     options?: WriteOptions
   ): Promise<WriteResult> {
     const fullPath = this.resolvePath(path)
-    const lockPath = `${fullPath}.lock.${Date.now()}.${getRandomBase36(10)}`
+    // Use deterministic lock path so all concurrent writes compete for same lock
+    const lockPath = `${fullPath}.lock`
+    // Temp file still uses random suffix to avoid collisions
     const tempPath = `${fullPath}.tmp.${Date.now()}.${getRandomBase36(10)}`
 
     // Create parent directories
@@ -524,16 +526,51 @@ export class FsBackend implements StorageBackend {
 
     // Acquire lock using exclusive create (O_CREAT | O_EXCL via 'wx' flag)
     // This is atomic on POSIX filesystems
+    // Retry with exponential backoff if lock is held
+    const maxRetries = 10
+    const baseDelayMs = 10
     let lockHandle: import('node:fs/promises').FileHandle | undefined
-    try {
-      lockHandle = await fs.open(lockPath, 'wx')
-    } catch (error: unknown) {
-      if (error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST') {
-        // Lock file exists - another process is writing
-        // In practice this is rare since we use random suffixes, but handle it
-        throw new ETagMismatchError(path, expectedVersion, 'concurrent-write')
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        lockHandle = await fs.open(lockPath, 'wx')
+        break // Lock acquired successfully
+      } catch (error: unknown) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST') {
+          // Lock file exists - another process is writing
+          // Check if lock is stale (older than 30 seconds)
+          try {
+            const lockStat = await fs.stat(lockPath)
+            const lockAge = Date.now() - lockStat.mtimeMs
+            if (lockAge > 30000) {
+              // Stale lock - try to remove it
+              try {
+                await fs.unlink(lockPath)
+                continue // Retry immediately after removing stale lock
+              } catch {
+                // Another process may have removed it or acquired it
+              }
+            }
+          } catch {
+            // Lock file may have been removed, retry
+            continue
+          }
+
+          if (attempt < maxRetries - 1) {
+            // Wait with exponential backoff + jitter before retrying
+            const delay = baseDelayMs * Math.pow(2, attempt) + Math.random() * baseDelayMs
+            await new Promise(resolve => setTimeout(resolve, delay))
+            continue
+          }
+          // Max retries exceeded
+          throw new ETagMismatchError(path, expectedVersion, 'concurrent-write')
+        }
+        throw error
       }
-      throw error
+    }
+
+    if (!lockHandle) {
+      throw new ETagMismatchError(path, expectedVersion, 'concurrent-write')
     }
 
     try {
