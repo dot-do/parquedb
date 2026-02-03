@@ -489,7 +489,12 @@ function readAvroBlock(data: Uint8Array, offset: number): { count: number; data:
  */
 export function decodeManifestListFromAvroOrJson(data: Uint8Array): ManifestFile[] {
   if (isAvroFormat(data)) return decodeManifestListFromAvro(data)
-  return JSON.parse(new TextDecoder().decode(data)) as ManifestFile[]
+  try {
+    return JSON.parse(new TextDecoder().decode(data)) as ManifestFile[]
+  } catch {
+    // Invalid JSON in manifest list - return empty array
+    return []
+  }
 }
 
 function decodeManifestListFromAvro(data: Uint8Array): ManifestFile[] {
@@ -569,6 +574,13 @@ function decodeManifestListEntryFromBlock(
     if (arrayCount.value > 0) offset = readVarLong(data, offset).newOffset
   }
 
+  // Skip optional first_row_id (v3 field) - union [null, long]
+  const firstRowIdUnion = readVarLong(data, offset)
+  offset = firstRowIdUnion.newOffset
+  if (firstRowIdUnion.value === 1) {
+    offset = readVarLong(data, offset).newOffset // skip the long value
+  }
+
   return {
     manifest: {
       'manifest-path': manifestPath.value,
@@ -595,7 +607,12 @@ function decodeManifestListEntryFromBlock(
  */
 export function decodeManifestFromAvroOrJson(data: Uint8Array): ManifestEntry[] {
   if (isAvroFormat(data)) return decodeManifestFromAvro(data)
-  return JSON.parse(new TextDecoder().decode(data)) as ManifestEntry[]
+  try {
+    return JSON.parse(new TextDecoder().decode(data)) as ManifestEntry[]
+  } catch {
+    // Invalid JSON in manifest - return empty array
+    return []
+  }
 }
 
 function decodeManifestFromAvro(data: Uint8Array): ManifestEntry[] {

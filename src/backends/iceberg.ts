@@ -67,20 +67,15 @@ import {
   type StorageBackend as IcebergStorageBackend,
   type ManifestEntry,
   type ManifestFile,
-  // Avro encoding for Iceberg manifest files (required for DuckDB/Spark/Snowflake interop)
-  AvroEncoder,
-  AvroFileWriter,
-  createManifestEntrySchema,
-  createManifestListSchema,
-  encodeManifestEntry,
-  encodeManifestListEntry,
-  type EncodableManifestEntry,
-  type EncodableManifestListEntry,
-  type PartitionFieldDef,
 } from '@dotdo/iceberg'
 
-// Avro magic bytes for detecting Avro container files
-const AVRO_MAGIC = new Uint8Array([0x4f, 0x62, 0x6a, 0x01]) // 'Obj' + version 1
+// Import Avro encoding/decoding for Iceberg manifest files (required for DuckDB/Spark/Snowflake interop)
+import {
+  encodeManifestToAvro,
+  encodeManifestListToAvro,
+  decodeManifestListFromAvroOrJson,
+  decodeManifestFromAvroOrJson,
+} from './iceberg-avro'
 
 // Import Parquet utilities
 import { ParquetWriter } from '../parquet/writer'
@@ -817,7 +812,7 @@ export class IcebergBackend implements EntityBackend {
 
       manifestGenerator.addDataFile({
         'file-path': dataFilePath,
-        'file-format': 'PARQUET',
+        'file-format': 'parquet',
         'record-count': entities.length,
         'file-size-in-bytes': writeResult.size,
         partition: {},
@@ -825,12 +820,12 @@ export class IcebergBackend implements EntityBackend {
 
       const manifestResult = manifestGenerator.generate()
 
-      // Step 3: Write manifest file (as JSON for now, Avro in production)
+      // Step 3: Write manifest file in Avro format (required for DuckDB/Spark/Snowflake interop)
       const manifestId = generateUUID()
       const manifestPath = `${location}/metadata/${manifestId}-m0.avro`
 
-      // Write manifest entries as JSON (simplified)
-      const manifestContent = new TextEncoder().encode(JSON.stringify(manifestResult.entries, null, 2))
+      // Write manifest entries as Avro binary
+      const manifestContent = encodeManifestToAvro(manifestResult.entries, sequenceNumber)
       await this.storage.write(manifestPath, manifestContent)
 
       // Step 4: Create manifest list that includes manifests from parent snapshot
@@ -855,17 +850,20 @@ export class IcebergBackend implements EntityBackend {
         if (parentSnapshot?.['manifest-list']) {
           try {
             const parentManifestListData = await this.storage.read(parentSnapshot['manifest-list'])
-            const parentManifests = JSON.parse(new TextDecoder().decode(parentManifestListData)) as ManifestFile[]
+            const parentManifests = decodeManifestListFromAvroOrJson(parentManifestListData)
             for (const manifest of parentManifests) {
               // Add parent manifest to new manifest list
               manifestListGenerator.addManifestWithStats(
                 manifest['manifest-path'],
                 manifest['manifest-length'],
-                manifest['partition-spec-id'],
+                manifest['partition-spec-id'] ?? 0,
                 {
-                  'added-data-files': String(manifest['added-data-files-count'] ?? 0),
-                  'added-records': String(manifest['added-rows-count'] ?? 0),
-                  'added-files-size': String(0),
+                  addedFiles: manifest['added-files-count'] ?? 0,
+                  existingFiles: manifest['existing-files-count'] ?? 0,
+                  deletedFiles: manifest['deleted-files-count'] ?? 0,
+                  addedRows: manifest['added-rows-count'] ?? 0,
+                  existingRows: manifest['existing-rows-count'] ?? 0,
+                  deletedRows: manifest['deleted-rows-count'] ?? 0,
                 },
                 manifest.content === 1 // is delete manifest
               )
@@ -876,13 +874,11 @@ export class IcebergBackend implements EntityBackend {
         }
       }
 
-      // Step 5: Write manifest list
+      // Step 5: Write manifest list in Avro format
       const manifestListId = generateUUID()
       const manifestListPath = `${location}/metadata/snap-${snapshotId}-${manifestListId}.avro`
 
-      const manifestListContent = new TextEncoder().encode(
-        JSON.stringify(manifestListGenerator.getManifests(), null, 2)
-      )
+      const manifestListContent = encodeManifestListToAvro(manifestListGenerator.getManifests())
       await this.storage.write(manifestListPath, manifestListContent)
 
       // Step 6: Build new snapshot
@@ -998,8 +994,7 @@ export class IcebergBackend implements EntityBackend {
     let manifestFiles: ManifestFile[]
     try {
       const manifestListData = await this.storage.read(manifestListPath)
-      const manifestListJson = new TextDecoder().decode(manifestListData)
-      manifestFiles = JSON.parse(manifestListJson) as ManifestFile[]
+      manifestFiles = decodeManifestListFromAvroOrJson(manifestListData)
     } catch {
       return [] // Manifest list doesn't exist or is invalid
     }
@@ -1013,8 +1008,7 @@ export class IcebergBackend implements EntityBackend {
 
       try {
         const manifestData = await this.storage.read(manifestFile['manifest-path'])
-        const manifestJson = new TextDecoder().decode(manifestData)
-        const entries = JSON.parse(manifestJson) as ManifestEntry[]
+        const entries = decodeManifestFromAvroOrJson(manifestData)
 
         for (const entry of entries) {
           // Only include ADDED (1) and EXISTING (0) entries, not DELETED (2)

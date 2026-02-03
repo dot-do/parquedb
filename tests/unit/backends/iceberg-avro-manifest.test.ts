@@ -11,12 +11,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { IcebergBackend, createIcebergBackend } from '../../../src/backends/iceberg'
 import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import {
-  AvroDecoder,
-  decodeManifestEntry,
-  decodeManifestListEntry,
-  type EncodableManifestEntry,
-  type EncodableManifestListEntry,
-} from '@dotdo/iceberg'
+  decodeManifestFromAvroOrJson,
+  decodeManifestListFromAvroOrJson,
+} from '../../../src/backends/iceberg-avro'
 
 // Avro container file magic bytes
 const AVRO_MAGIC = new Uint8Array([0x4f, 0x62, 0x6a, 0x01]) // 'Obj' + version 1
@@ -50,16 +47,62 @@ function isJsonFile(data: Uint8Array): boolean {
 }
 
 /**
+ * Read a zig-zag encoded varint from a buffer
+ */
+function readVarLong(data: Uint8Array, offset: number): { value: number; newOffset: number } {
+  let value = 0
+  let shift = 0
+  while (offset < data.length) {
+    const b = data[offset++]!
+    value |= (b & 0x7f) << shift
+    if ((b & 0x80) === 0) break
+    shift += 7
+  }
+  // Zig-zag decode
+  value = (value >>> 1) ^ -(value & 1)
+  return { value, newOffset: offset }
+}
+
+/**
  * Parse Avro container file header to extract schema
  */
 function parseAvroHeader(data: Uint8Array): { schema: unknown; syncMarker: Uint8Array } | null {
   if (!isAvroFile(data)) return null
 
   try {
-    const decoder = new AvroDecoder(data.slice(4)) // Skip magic bytes
+    let offset = 4 // Skip magic bytes
 
     // Read header metadata map
-    const metadata = decoder.readMap(() => decoder.readBytes())
+    // Maps are encoded as: count, [key, value], ..., 0
+    const metadata = new Map<string, Uint8Array>()
+    while (true) {
+      const countResult = readVarLong(data, offset)
+      offset = countResult.newOffset
+
+      if (countResult.value === 0) break
+
+      let count = countResult.value
+      if (count < 0) {
+        count = -count
+        offset = readVarLong(data, offset).newOffset // Skip block size
+      }
+
+      for (let i = 0; i < count; i++) {
+        // Read key (string)
+        const keyLenResult = readVarLong(data, offset)
+        offset = keyLenResult.newOffset
+        const key = new TextDecoder().decode(data.slice(offset, offset + keyLenResult.value))
+        offset += keyLenResult.value
+
+        // Read value (bytes)
+        const valueLenResult = readVarLong(data, offset)
+        offset = valueLenResult.newOffset
+        const value = data.slice(offset, offset + valueLenResult.value)
+        offset += valueLenResult.value
+
+        metadata.set(key, value)
+      }
+    }
 
     // Get schema from metadata
     const schemaBytes = metadata.get('avro.schema')
@@ -69,7 +112,7 @@ function parseAvroHeader(data: Uint8Array): { schema: unknown; syncMarker: Uint8
     const schema = JSON.parse(schemaJson)
 
     // Read 16-byte sync marker
-    const syncMarker = decoder.readFixed(16)
+    const syncMarker = data.slice(offset, offset + 16)
 
     return { schema, syncMarker }
   } catch {
@@ -288,11 +331,62 @@ describe('IcebergBackend Avro Manifest Format', () => {
         name: 'Item 1',
       })
 
+      // Check after first write
+      let items = await backend.find('items', {})
+      expect(items.length).toBe(1)
+
+      // Check manifest list after first write
+      let metadataFiles = await storage.list('warehouse/testdb/items/metadata/')
+      let snapFiles = metadataFiles.files.filter(f => f.includes('/snap-') && f.endsWith('.avro'))
+      expect(snapFiles.length).toBe(1)
+
+      // Decode first manifest list and verify manifest entries
+      let manifestListData = await storage.read(snapFiles[0]!)
+      let manifestList = decodeManifestListFromAvroOrJson(manifestListData)
+      expect(manifestList.length).toBe(1) // First snapshot should have 1 manifest
+
+      // Verify the manifest can be decoded and has correct entry
+      let manifestData = await storage.read(manifestList[0]!['manifest-path'])
+      let manifestEntries = decodeManifestFromAvroOrJson(manifestData)
+      expect(manifestEntries.length).toBe(1) // First manifest should have 1 entry
+
       // Second write (creates new snapshot with manifest including previous data)
       await backend.create('items', {
         $type: 'Item',
         name: 'Item 2',
       })
+
+      // Check manifest list after second write
+      metadataFiles = await storage.list('warehouse/testdb/items/metadata/')
+      snapFiles = metadataFiles.files.filter(f => f.includes('/snap-') && f.endsWith('.avro'))
+      expect(snapFiles.length).toBe(2)
+
+      // Get the latest manifest list (by snapshot ID in filename)
+      const sortedSnapFiles = [...snapFiles].sort()
+      manifestListData = await storage.read(sortedSnapFiles[sortedSnapFiles.length - 1]!)
+      manifestList = decodeManifestListFromAvroOrJson(manifestListData)
+
+      // Second snapshot should have 2 manifests (new + inherited from first)
+      expect(manifestList.length).toBe(2)
+
+      // Manifest list should contain 2 manifests
+
+      // Verify both manifests have valid paths
+      expect(manifestList[0]!['manifest-path']).toBeTruthy()
+      expect(manifestList[1]!['manifest-path']).toBeTruthy()
+
+      // Verify we can read entries from both manifests
+      let totalEntries = 0
+      for (const manifest of manifestList) {
+        manifestData = await storage.read(manifest['manifest-path'])
+        manifestEntries = decodeManifestFromAvroOrJson(manifestData)
+        totalEntries += manifestEntries.length
+      }
+      expect(totalEntries).toBe(2) // Should have 2 data file entries total
+
+      // Check after second write
+      items = await backend.find('items', {})
+      expect(items.length).toBe(2)
 
       // Third write
       await backend.create('items', {
@@ -301,7 +395,7 @@ describe('IcebergBackend Avro Manifest Format', () => {
       })
 
       // Should be able to read all items
-      const items = await backend.find('items', {})
+      items = await backend.find('items', {})
       expect(items.length).toBe(3)
 
       // Should have multiple snapshots
