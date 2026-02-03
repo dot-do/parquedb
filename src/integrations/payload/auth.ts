@@ -202,6 +202,24 @@ function parseCookies(cookieHeader: string): Record<string, string> {
 // JWT Verification
 // =============================================================================
 
+// JWKS cache to avoid fetching on every request
+const jwksCache = new Map<string, { jwks: ReturnType<typeof createRemoteJWKSet>; expiresAt: number }>()
+const JWKS_CACHE_TTL = 3600 * 1000 // 1 hour
+
+// Import jose for JWT verification
+import { createRemoteJWKSet, jwtVerify } from 'jose'
+
+function getJWKS(jwksUri: string) {
+  const cached = jwksCache.get(jwksUri)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.jwks
+  }
+
+  const jwks = createRemoteJWKSet(new URL(jwksUri))
+  jwksCache.set(jwksUri, { jwks, expiresAt: Date.now() + JWKS_CACHE_TTL })
+  return jwks
+}
+
 /**
  * Verify JWT token against oauth.do/WorkOS JWKS
  */
@@ -210,22 +228,21 @@ export async function verifyOAuthToken(
   config: ResolvedOAuthConfig
 ): Promise<{ valid: boolean; payload?: OAuthJWTPayload; error?: string }> {
   try {
-    // Dynamic import to avoid bundling jose in main bundle
-    const { verifyJWT } = await import('oauth.do')
+    const jwks = getJWKS(config.jwksUri)
 
-    const result = await verifyJWT(token, {
-      jwksUri: config.jwksUri,
-      audience: config.clientId,
-      clockTolerance: config.clockTolerance,
-    })
-
-    if (!result.valid) {
-      return { valid: false, error: result.error || 'Token verification failed' }
+    const verifyOptions: { clockTolerance?: number; audience?: string } = {}
+    if (config.clockTolerance) {
+      verifyOptions.clockTolerance = config.clockTolerance
     }
+    if (config.clientId) {
+      verifyOptions.audience = config.clientId
+    }
+
+    const { payload } = await jwtVerify(token, jwks, verifyOptions)
 
     return {
       valid: true,
-      payload: result.payload as OAuthJWTPayload,
+      payload: payload as unknown as OAuthJWTPayload,
     }
   } catch (error) {
     return {
@@ -466,8 +483,8 @@ export function oauthUsers(config: OAuthConfig) {
     },
     access: {
       // Only admins can manage users
-      read: ({ req }) => {
-        const user = req.user as OAuthUser | null
+      read: ({ req }: { req: { user?: OAuthUser | null } }) => {
+        const user = req.user
         if (!user) return false
         const role = getPayloadRole(
           { sub: user.externalId, roles: user.roles } as OAuthJWTPayload,
@@ -476,8 +493,8 @@ export function oauthUsers(config: OAuthConfig) {
         return role === 'admin'
       },
       create: () => false, // Users are created via oauth.do
-      update: ({ req }) => {
-        const user = req.user as OAuthUser | null
+      update: ({ req }: { req: { user?: OAuthUser | null } }) => {
+        const user = req.user
         if (!user) return false
         const role = getPayloadRole(
           { sub: user.externalId, roles: user.roles } as OAuthJWTPayload,

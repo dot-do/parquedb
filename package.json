@@ -90,6 +90,7 @@
     "hyparquet": "github:dot-do/hyparquet#variant-shredding",
     "hyparquet-compressors": "^1.1.1",
     "hyparquet-writer": "github:dot-do/hyparquet-writer#variant-shredding",
+    "jose": "^6.1.3",
     "oauth.do": "^0.2.6",
     "pluralize": "^8.0.0",
     "snappyjs": "^0.7.0",

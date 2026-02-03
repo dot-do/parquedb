@@ -529,7 +529,7 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
   /**
    * Handle HTTP requests
    */
-  async fetch(request: Request): Promise<Response> {
+  override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
     const path = url.pathname
 
