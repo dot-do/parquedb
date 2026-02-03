@@ -5,7 +5,7 @@
  */
 
 export {
-  parqueAuth,
+  auth,
   requireAuth,
   getActor,
   getUser,
@@ -13,5 +13,5 @@ export {
   assertRole,
   type AuthUser,
   type AuthVariables,
-  type ParqueAuthOptions,
+  type AuthOptions,
 } from './auth'

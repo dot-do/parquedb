@@ -4,20 +4,38 @@
  * Integrates oauth.do authentication with Hono-based Workers.
  * Provides JWT verification and user context for ParqueDB operations.
  *
+ * The actor from auth middleware flows to createdBy/updatedBy audit fields:
+ * - auth() sets c.var.actor (EntityId like "users/abc123")
+ * - Pass { actor: c.var.actor } to mutations
+ * - ParqueDB automatically populates createdBy, updatedBy, deletedBy
+ *
  * @example
  * ```typescript
  * import { Hono } from 'hono'
- * import { parqueAuth, requireAuth } from 'parquedb/hono'
+ * import { auth, requireAuth, getActor } from 'parquedb/hono'
+ * import { db } from 'parquedb'
  *
  * const app = new Hono()
  *
  * // Add auth middleware (populates c.var.user and c.var.actor)
- * app.use('*', parqueAuth())
+ * app.use('*', auth({ jwksUri: env.JWKS_URI }))
  *
- * // Protected route
+ * // Protected route - actor flows to createdBy/updatedBy
  * app.post('/api/posts', requireAuth(), async (c) => {
- *   const actor = c.var.actor
- *   await db.Posts.create(data, { actor })
+ *   const post = await db.Posts.create(
+ *     { $type: 'Post', name: 'My Post', title: '...' },
+ *     { actor: c.var.actor }  // → createdBy: "users/abc123"
+ *   )
+ *   return c.json(post)
+ * })
+ *
+ * // Update also tracks updatedBy
+ * app.patch('/api/posts/:id', requireAuth(), async (c) => {
+ *   await db.Posts.update(
+ *     { $id: c.req.param('id') },
+ *     { $set: { title: 'Updated' } },
+ *     { actor: c.var.actor }  // → updatedBy: "users/abc123"
+ *   )
  * })
  * ```
  */
@@ -49,9 +67,9 @@ export interface AuthVariables {
 }
 
 /**
- * Options for parqueAuth middleware
+ * Options for auth middleware
  */
-export interface ParqueAuthOptions {
+export interface AuthOptions {
   /**
    * JWKS URI for token verification (from WorkOS)
    * Required for JWT verification
@@ -83,12 +101,18 @@ function defaultExtractToken(c: Context): string | null {
  *
  * @example
  * ```typescript
- * app.use('*', parqueAuth({
+ * import { auth, requireAuth } from 'parquedb/hono'
+ *
+ * app.use('*', auth({
  *   jwksUri: 'https://api.workos.com/sso/jwks/client_xxx'
  * }))
+ *
+ * app.post('/api/posts', requireAuth(), async (c) => {
+ *   await db.Posts.create(data, { actor: c.var.actor })
+ * })
  * ```
  */
-export function parqueAuth(options: ParqueAuthOptions): MiddlewareHandler {
+export function auth(options: AuthOptions): MiddlewareHandler {
   const {
     extractToken = defaultExtractToken,
     actorNamespace = 'users',
