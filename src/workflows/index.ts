@@ -71,6 +71,14 @@ export {
   type MigrationWorkflowParams,
 } from './migration-workflow'
 
+// Vacuum Workflow (orphan cleanup)
+export {
+  VacuumWorkflow,
+  type VacuumWorkflowParams,
+  type VacuumResult,
+  type OrphanedFileInfo,
+} from './vacuum-workflow'
+
 // Utilities and Type Guards
 export {
   toInternalR2Bucket,

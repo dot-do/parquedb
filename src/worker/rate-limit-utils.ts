@@ -107,6 +107,13 @@ export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
   /** Compaction status endpoint */
   compaction: { maxRequests: 30, windowMs: 60 * 1000 }, // 30 req/min
 
+  // ==========================================================================
+  // Vacuum endpoints - strict limits (long-running operations)
+  // ==========================================================================
+
+  /** Vacuum endpoints (/vacuum/*) */
+  vacuum: { maxRequests: 5, windowMs: 60 * 1000 }, // 5 req/min
+
   /** Global fallback */
   default: { maxRequests: 100, windowMs: 60 * 1000 }, // 100 req/min
 }
@@ -205,6 +212,7 @@ export type EndpointType =
   | 'sync_file'
   | 'datasets'
   | 'compaction'
+  | 'vacuum'
   | 'default'
 
 /**
@@ -243,6 +251,11 @@ export function getEndpointTypeFromPath(path: string, method: string): EndpointT
   // Compaction status
   if (path.startsWith('/compaction/')) {
     return 'compaction'
+  }
+
+  // Vacuum endpoints
+  if (path.startsWith('/vacuum/')) {
+    return 'vacuum'
   }
 
   // Sync routes

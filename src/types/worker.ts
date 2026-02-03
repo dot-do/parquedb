@@ -70,6 +70,12 @@ export interface Env {
     get(id: string): Promise<{ status(): Promise<unknown> }>
   }
 
+  /** Vacuum Workflow binding */
+  VACUUM_WORKFLOW?: {
+    create(options: { params: unknown }): Promise<{ id: string }>
+    get(id: string): Promise<{ status(): Promise<unknown> }>
+  }
+
   // =============================================================================
   // Queues (for R2 event notifications and compaction batching)
   // =============================================================================

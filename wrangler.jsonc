@@ -69,6 +69,11 @@
       "name": "migration-workflow",
       "binding": "MIGRATION_WORKFLOW",
       "class_name": "MigrationWorkflow"
+    },
+    {
+      "name": "vacuum-workflow",
+      "binding": "VACUUM_WORKFLOW",
+      "class_name": "VacuumWorkflow"
     }
   ],
 

@@ -110,6 +110,30 @@ export {
 } from './delta'
 
 // =============================================================================
+// Commit Utilities (for external use)
+// =============================================================================
+
+export {
+  // Iceberg commit utilities
+  IcebergCommitter,
+  createIcebergCommitter,
+  commitToIcebergTable,
+  type IcebergCommitConfig,
+  type DataFileInfo as IcebergDataFileInfo,
+  type IcebergCommitResult,
+} from './iceberg-commit'
+
+export {
+  // Delta commit utilities
+  DeltaCommitter,
+  createDeltaCommitter,
+  commitToDeltaTable,
+  type DeltaCommitConfig,
+  type DeltaDataFileInfo,
+  type DeltaCommitResult,
+} from './delta-commit'
+
+// =============================================================================
 // Shared Parquet Utilities
 // =============================================================================
 
@@ -198,8 +222,10 @@ export async function createBackend(config: BackendConfig): Promise<EntityBacken
       // TODO: Implement NativeBackend
       throw new Error('Native backend not yet implemented - use createBackendWithMigration to auto-migrate to iceberg or delta')
 
-    default:
-      throw new Error(`Unknown backend type: ${(config as BackendConfig).type}`)
+    default: {
+      const _exhaustive: never = config.type
+      throw new Error(`Unknown backend type: ${_exhaustive}`)
+    }
   }
 
   await backend.initialize()

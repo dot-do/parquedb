@@ -153,6 +153,7 @@ export { MigrationDO } from './MigrationDO'
 // Export Workflows and supporting DOs
 export { CompactionMigrationWorkflow } from '../workflows/compaction-migration'
 export { MigrationWorkflow } from '../workflows/migration-workflow'
+export { VacuumWorkflow } from '../workflows/vacuum-workflow'
 export { CompactionStateDO, handleCompactionQueue } from '../workflows/compaction-queue-consumer'
 
 // Re-export cache invalidation utilities
@@ -985,6 +986,86 @@ export default {
       }
 
       // =======================================================================
+      // Vacuum - Orphaned file cleanup workflow
+      // Rate limited via 'vacuum' endpoint type (5 req/min)
+      //
+      // Endpoints:
+      // - POST /vacuum/start - Start vacuum { namespace: string, retentionMs?: number, dryRun?: boolean }
+      // - GET /vacuum/status/:id - Get vacuum workflow status
+      // =======================================================================
+      if (path === '/vacuum/start' && request.method === 'POST') {
+        if (!env.VACUUM_WORKFLOW) {
+          return withRateLimitHeaders(buildErrorResponse(request, new Error('Vacuum Workflow not available'), 500, startTime))
+        }
+
+        try {
+          const body = await request.json() as {
+            namespace?: string
+            format?: 'iceberg' | 'delta' | 'auto'
+            retentionMs?: number
+            dryRun?: boolean
+            warehouse?: string
+            database?: string
+          }
+
+          if (!body.namespace) {
+            return withRateLimitHeaders(buildErrorResponse(
+              request,
+              new Error('namespace is required'),
+              400,
+              startTime
+            ))
+          }
+
+          // Start vacuum workflow
+          const instance = await env.VACUUM_WORKFLOW.create({
+            params: {
+              namespace: body.namespace,
+              format: body.format ?? 'auto',
+              retentionMs: body.retentionMs ?? 24 * 60 * 60 * 1000, // 24 hours default
+              dryRun: body.dryRun ?? false,
+              warehouse: body.warehouse ?? '',
+              database: body.database ?? '',
+            },
+          })
+
+          return withRateLimitHeaders(new Response(JSON.stringify({
+            success: true,
+            workflowId: instance.id,
+            message: `Vacuum workflow started for namespace '${body.namespace}'`,
+            statusUrl: `/vacuum/status/${instance.id}`,
+          }, null, 2), {
+            status: 202,
+            headers: { 'Content-Type': 'application/json' },
+          }))
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error))
+          return withRateLimitHeaders(buildErrorResponse(request, err, 500, startTime))
+        }
+      }
+
+      // GET /vacuum/status/:id - Get vacuum workflow status
+      const vacuumStatusMatch = path.match(/^\/vacuum\/status\/([^/]+)$/)
+      if (vacuumStatusMatch && request.method === 'GET') {
+        if (!env.VACUUM_WORKFLOW) {
+          return withRateLimitHeaders(buildErrorResponse(request, new Error('Vacuum Workflow not available'), 500, startTime))
+        }
+
+        const workflowId = vacuumStatusMatch[1]!
+        try {
+          const instance = await env.VACUUM_WORKFLOW.get(workflowId)
+          const status = await instance.status()
+
+          return withRateLimitHeaders(new Response(JSON.stringify(status, null, 2), {
+            headers: { 'Content-Type': 'application/json' },
+          }))
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error))
+          return withRateLimitHeaders(buildErrorResponse(request, err, 404, startTime))
+        }
+      }
+
+      // =======================================================================
       // Compaction Status - Event-driven compaction tracking (namespace-sharded)
       // Rate limited via 'compaction' endpoint type (30 req/min)
       //
@@ -1069,6 +1150,115 @@ export default {
           note: 'Each namespace has its own CompactionStateDO instance for scalability.',
         }, null, 2), {
           status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        }))
+      }
+
+      // =======================================================================
+      // Compaction Health - Aggregated health check for alerting/monitoring
+      // Rate limited via 'compaction' endpoint type (30 req/min)
+      //
+      // Query parameters:
+      // - namespaces: Comma-separated list of namespaces to check (required)
+      // - maxPendingWindows: Threshold for degraded status (default: 10)
+      // - maxWindowAgeHours: Threshold for degraded status (default: 2)
+      //
+      // Returns aggregated health status with alerts for monitoring systems
+      // =======================================================================
+      if (path === '/compaction/health') {
+        if (!env.COMPACTION_STATE) {
+          return withRateLimitHeaders(buildErrorResponse(request, new Error('Compaction State DO not available'), 500, startTime))
+        }
+
+        const namespacesParam = url.searchParams.get('namespaces')
+        if (!namespacesParam) {
+          return withRateLimitHeaders(new Response(JSON.stringify({
+            error: 'namespaces parameter is required',
+            usage: '/compaction/health?namespaces=users,posts,comments',
+            optional: {
+              maxPendingWindows: 'Threshold for degraded status (default: 10)',
+              maxWindowAgeHours: 'Threshold for degraded status (default: 2)',
+            },
+          }, null, 2), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          }))
+        }
+
+        const namespaces = namespacesParam.split(',').map(ns => ns.trim()).filter(Boolean)
+        if (namespaces.length === 0) {
+          return withRateLimitHeaders(buildErrorResponse(
+            request,
+            new Error('namespaces parameter must contain at least one namespace'),
+            400,
+            startTime
+          ))
+        }
+
+        // Parse optional config parameters
+        const maxPendingWindows = parseInt(url.searchParams.get('maxPendingWindows') ?? '10', 10)
+        const maxWindowAgeHours = parseFloat(url.searchParams.get('maxWindowAgeHours') ?? '2')
+        const healthConfig = { maxPendingWindows, maxWindowAgeHours }
+
+        // Import health evaluation functions
+        const {
+          evaluateNamespaceHealth,
+          aggregateHealthStatus,
+          isCompactionStatusResponse,
+        } = await import('../workflows/compaction-queue-consumer')
+
+        // Query all namespace DOs in parallel
+        const namespaceHealthMap: Record<string, import('../workflows/compaction-queue-consumer').NamespaceHealth> = {}
+
+        await Promise.all(
+          namespaces.map(async (namespace) => {
+            const id = env.COMPACTION_STATE.idFromName(namespace)
+            const stub = env.COMPACTION_STATE.get(id)
+            try {
+              const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
+              const data = await response.json()
+
+              if (isCompactionStatusResponse(data)) {
+                namespaceHealthMap[namespace] = evaluateNamespaceHealth(namespace, data, healthConfig)
+              } else {
+                // Namespace has no data yet - treat as healthy
+                namespaceHealthMap[namespace] = {
+                  namespace,
+                  status: 'healthy',
+                  metrics: {
+                    activeWindows: 0,
+                    oldestWindowAge: 0,
+                    totalPendingFiles: 0,
+                    windowsStuckInProcessing: 0,
+                  },
+                  issues: [],
+                }
+              }
+            } catch (err) {
+              // Error querying namespace - mark as unhealthy
+              namespaceHealthMap[namespace] = {
+                namespace,
+                status: 'unhealthy',
+                metrics: {
+                  activeWindows: 0,
+                  oldestWindowAge: 0,
+                  totalPendingFiles: 0,
+                  windowsStuckInProcessing: 0,
+                },
+                issues: [`Failed to query status: ${err instanceof Error ? err.message : 'Unknown error'}`],
+              }
+            }
+          })
+        )
+
+        // Aggregate health status
+        const healthResponse = aggregateHealthStatus(namespaceHealthMap)
+
+        // Return appropriate HTTP status code based on health
+        const httpStatus = healthResponse.status === 'healthy' ? 200 : healthResponse.status === 'degraded' ? 200 : 503
+
+        return withRateLimitHeaders(new Response(JSON.stringify(healthResponse, null, 2), {
+          status: httpStatus,
           headers: { 'Content-Type': 'application/json' },
         }))
       }

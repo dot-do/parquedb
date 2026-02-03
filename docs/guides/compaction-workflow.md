@@ -131,12 +131,13 @@ curl https://parquedb.workers.do/compaction/status
 Returns:
 ```json
 {
+  "namespace": "users",
   "activeWindows": 3,
   "knownWriters": ["writer1", "writer2"],
   "activeWriters": ["writer1", "writer2"],
   "windows": [
     {
-      "key": "users:1700000000000",
+      "key": "1700000000000",
       "windowStart": "2024-11-14T00:00:00.000Z",
       "windowEnd": "2024-11-14T01:00:00.000Z",
       "writers": ["writer1", "writer2"],
@@ -146,6 +147,10 @@ Returns:
   ]
 }
 ```
+
+Note: Each namespace has its own CompactionStateDO instance, so the namespace is
+shown at the DO level rather than in each window key. The key is just the window
+start timestamp since namespace is implicit per-DO.
 
 ### Check Workflow Status
 

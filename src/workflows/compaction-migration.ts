@@ -43,17 +43,9 @@ import type { BackendType } from '../backends'
 import { commitToIcebergTable } from '../backends/iceberg-commit'
 import { logger } from '../utils/logger'
 import { toInternalR2Bucket } from './utils'
+import type { WorkflowEnv as Env } from './types'
 import { readParquet } from '../parquet/reader'
-import {
-  formatVersion,
-  serializeCommit,
-  createAddAction,
-  createProtocolAction,
-  createMetadataAction,
-  createCommitInfoAction,
-  generateUUID,
-  type LogAction,
-} from '../delta-utils'
+import { commitToDeltaTable } from '../backends/delta-commit'
 
 // =============================================================================
 // Types
@@ -122,19 +114,12 @@ interface WriterWindow {
   totalSize: number
 }
 
-interface Env {
-  BUCKET: R2Bucket
-}
-
 // =============================================================================
 // Constants
 // =============================================================================
 
 /** Default max files per step - leaves room for writes */
 const DEFAULT_MAX_FILES_PER_STEP = 50
-
-/** Default target file size: 128MB */
-const DEFAULT_TARGET_SIZE = 128 * 1024 * 1024
 
 /** Minimum time to wait for late writers (ms) */
 const WRITER_GRACE_PERIOD_MS = 30_000
@@ -159,7 +144,6 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
       deleteSource = true,
     } = params
     const maxFilesPerStep = params.maxFilesPerStep ?? DEFAULT_MAX_FILES_PER_STEP
-    const targetFileSize = params.targetFileSize ?? DEFAULT_TARGET_SIZE
 
     logger.info('Starting compaction workflow', {
       namespace,
@@ -228,8 +212,6 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
       if (timeSinceWindowEnd < WRITER_GRACE_PERIOD_MS) {
         const waitTime = WRITER_GRACE_PERIOD_MS - timeSinceWindowEnd
         logger.info(`Waiting ${waitTime}ms for late writers`)
-        // Note: In a real implementation, we'd use step.sleep here
-        // For now, we just log and continue
       }
 
       return { gracePeriodComplete: true }
@@ -482,11 +464,15 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
         break
 
       case 'native':
-      default:
         // Native ParqueDB path
         outputFile = `data/${namespace}/year=${year}/month=${month}/day=${day}/hour=${hour}/` +
           `compacted-${timestamp}-${batchNum}.parquet`
         break
+
+      default: {
+        const _exhaustive: never = format
+        throw new Error(`Unknown backend format: ${format}`)
+      }
     }
 
     logger.info(`Writing to ${format} format: ${outputFile}`, { rowCount: rows.length })
@@ -585,10 +571,11 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
   /**
    * Commit a Delta log entry for a new data file
    *
-   * Pattern:
-   * 1. Determine next log version by listing _delta_log/ directory
-   * 2. Create add action for the new file
-   * 3. Write {version}.json atomically
+   * Uses commitToDeltaTable which implements proper OCC:
+   * 1. Determines next version by listing _delta_log/ directory
+   * 2. Tries to write commit file atomically with ifNoneMatch: '*'
+   * 3. On conflict (AlreadyExistsError), re-reads version and retries
+   * 4. Uses exponential backoff between retries
    */
   private async commitDeltaLogEntry(params: {
     storage: R2Backend
@@ -601,71 +588,23 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
     error?: string
   }> {
     const { storage, tableLocation, dataFile } = params
-    const logDir = `${tableLocation}/_delta_log`
 
-    try {
-      // Ensure _delta_log directory exists
-      await storage.mkdir(logDir).catch(() => {
-        // Directory might already exist
-      })
+    // Use the DeltaCommitter with proper OCC protection
+    const result = await commitToDeltaTable({
+      storage,
+      tableLocation,
+      dataFiles: [{
+        path: dataFile.path,
+        size: dataFile.size,
+        dataChange: true,
+      }],
+      // Reasonable defaults for compaction workflow
+      maxRetries: 10,
+      baseBackoffMs: 100,
+      maxBackoffMs: 10000,
+    })
 
-      // Determine next log version by listing existing log files
-      let nextVersion = 0
-      try {
-        const logFiles = await storage.list(`${logDir}/`)
-        const commitFiles = logFiles.files
-          .filter(f => f.endsWith('.json') && !f.includes('checkpoint') && !f.includes('_last_checkpoint'))
-          .sort()
-
-        if (commitFiles.length > 0) {
-          const lastCommit = commitFiles[commitFiles.length - 1]!
-          const versionStr = lastCommit.split('/').pop()?.replace('.json', '')
-          const currentVersion = parseInt(versionStr ?? '-1', 10)
-          nextVersion = currentVersion + 1
-        }
-      } catch (error) {
-        // Log directory might not exist yet - start at version 0
-        nextVersion = 0
-      }
-
-      // Build log actions
-      const actions: LogAction[] = []
-
-      // For first commit (version 0), include protocol and metadata
-      if (nextVersion === 0) {
-        actions.push(createProtocolAction())
-        actions.push(createMetadataAction(generateUUID()))
-      }
-
-      // Add action for the new data file
-      actions.push(createAddAction(dataFile.path, dataFile.size, true))
-
-      // Commit info
-      actions.push(createCommitInfoAction(
-        'COMPACTION',
-        nextVersion > 0 ? nextVersion - 1 : undefined,
-        true,
-        { source: 'compaction-workflow' }
-      ))
-
-      // Serialize and write log file
-      const logContent = serializeCommit(actions)
-      const logPath = `${logDir}/${formatVersion(nextVersion)}.json`
-
-      await storage.write(logPath, new TextEncoder().encode(logContent))
-
-      return {
-        success: true,
-        version: nextVersion,
-        logPath,
-      }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
-      return {
-        success: false,
-        error: errorMsg,
-      }
-    }
+    return result
   }
 }
 
