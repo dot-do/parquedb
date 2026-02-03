@@ -121,3 +121,25 @@ export {
   type ParsedRoute,
   type DatabaseRoutingConfig,
 } from './database'
+
+// React Components (for Payload admin UI)
+export {
+  DatabaseCard,
+  DatabaseDashboard,
+  CreateDatabaseModal,
+  DatabaseDashboardView,
+  DatabaseSelectView,
+  type DatabaseCardProps,
+  type DatabaseDashboardProps,
+  type CreateDatabaseModalProps,
+  type DatabaseDashboardViewProps,
+  type DatabaseSelectViewProps,
+} from './components'
+
+// Payload Configuration Factory
+export {
+  createPayloadConfig,
+  createDevConfig,
+  generatePayloadCollections,
+  type PayloadConfigOptions,
+} from './payload-config'
