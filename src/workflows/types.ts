@@ -14,9 +14,9 @@ import type { Env } from '../types/worker'
 
 /**
  * Environment bindings for compaction/migration workflows
- * Only includes the BUCKET binding needed for R2 operations
+ * Includes BUCKET for R2 operations and COMPACTION_STATE for completion notifications
  */
-export type WorkflowEnv = Pick<Env, 'BUCKET'>
+export type WorkflowEnv = Pick<Env, 'BUCKET'> & Required<Pick<Env, 'COMPACTION_STATE'>>
 
 /**
  * Environment bindings for the compaction queue consumer

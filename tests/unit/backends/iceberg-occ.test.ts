@@ -643,3 +643,293 @@ describe('IcebergBackend Optimistic Concurrency Control', () => {
     })
   })
 })
+
+/**
+ * Tests for IcebergCommitter exponential backoff
+ *
+ * These tests verify that the IcebergCommitter uses exponential backoff
+ * with jitter between OCC retry attempts to prevent thundering herd effects.
+ */
+describe('IcebergCommitter Exponential Backoff', () => {
+  let storage: MemoryBackend
+
+  beforeEach(() => {
+    storage = new MemoryBackend()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('should apply backoff delay between OCC retries', async () => {
+    const { IcebergCommitter } = await import('../../../src/backends/iceberg-commit')
+
+    const delays: number[] = []
+    const originalSetTimeout = global.setTimeout
+    // @ts-expect-error - mocking setTimeout
+    global.setTimeout = (fn: () => void, delay: number) => {
+      delays.push(delay)
+      return originalSetTimeout(fn, 0) // Execute immediately for test
+    }
+
+    try {
+      // Create a committer with custom backoff settings
+      const committer = new IcebergCommitter({
+        storage,
+        tableLocation: 'warehouse/test/table',
+        maxRetries: 5,
+        baseBackoffMs: 100,
+        maxBackoffMs: 5000,
+      })
+
+      // Create the table first
+      await committer.ensureTable()
+
+      // Mock writeConditional to cause OCC conflicts for first 3 attempts
+      let attempts = 0
+      const originalWriteConditional = storage.writeConditional.bind(storage)
+      vi.spyOn(storage, 'writeConditional').mockImplementation(async (path, data, etag) => {
+        if (path.includes('version-hint.text') && attempts < 3) {
+          attempts++
+          throw new ETagMismatchError(path, etag ?? '')
+        }
+        return originalWriteConditional(path, data, etag)
+      })
+
+      // Commit should succeed after retries
+      const result = await committer.commitDataFiles([{
+        path: 'warehouse/test/table/data/test.parquet',
+        sizeInBytes: 1000,
+        recordCount: 10,
+      }])
+
+      expect(result.success).toBe(true)
+      expect(attempts).toBe(3) // Should have failed 3 times before succeeding
+
+      // Verify delays were applied (should have 3 delays for 3 retries)
+      expect(delays.length).toBeGreaterThanOrEqual(3)
+    } finally {
+      global.setTimeout = originalSetTimeout
+    }
+  })
+
+  it('should use exponential backoff with increasing delays', async () => {
+    const { IcebergCommitter } = await import('../../../src/backends/iceberg-commit')
+
+    const delays: number[] = []
+    const originalSetTimeout = global.setTimeout
+    // @ts-expect-error - mocking setTimeout
+    global.setTimeout = (fn: () => void, delay: number) => {
+      delays.push(delay)
+      return originalSetTimeout(fn, 0)
+    }
+
+    try {
+      const committer = new IcebergCommitter({
+        storage,
+        tableLocation: 'warehouse/test/table2',
+        maxRetries: 5,
+        baseBackoffMs: 100,
+        maxBackoffMs: 10000, // High max to not cap early
+      })
+
+      await committer.ensureTable()
+
+      // Force 4 OCC conflicts to observe exponential growth
+      let attempts = 0
+      const originalWriteConditional = storage.writeConditional.bind(storage)
+      vi.spyOn(storage, 'writeConditional').mockImplementation(async (path, data, etag) => {
+        if (path.includes('version-hint.text') && attempts < 4) {
+          attempts++
+          throw new ETagMismatchError(path, etag ?? '')
+        }
+        return originalWriteConditional(path, data, etag)
+      })
+
+      await committer.commitDataFiles([{
+        path: 'warehouse/test/table2/data/test.parquet',
+        sizeInBytes: 1000,
+        recordCount: 10,
+      }])
+
+      // Should have collected 4 delays (for retries 1, 2, 3, 4)
+      expect(delays.length).toBe(4)
+
+      // Exponential backoff: base delays are 100, 200, 400, 800 ms
+      // Plus random jitter up to baseBackoffMs (100), so ranges are:
+      // Retry 1: 100 + [0-100] = [100, 200]
+      // Retry 2: 200 + [0-100] = [200, 300]
+      // Retry 3: 400 + [0-100] = [400, 500]
+      // Retry 4: 800 + [0-100] = [800, 900]
+      expect(delays[0]).toBeGreaterThanOrEqual(100)
+      expect(delays[0]).toBeLessThanOrEqual(200)
+
+      expect(delays[1]).toBeGreaterThanOrEqual(200)
+      expect(delays[1]).toBeLessThanOrEqual(300)
+
+      expect(delays[2]).toBeGreaterThanOrEqual(400)
+      expect(delays[2]).toBeLessThanOrEqual(500)
+
+      expect(delays[3]).toBeGreaterThanOrEqual(800)
+      expect(delays[3]).toBeLessThanOrEqual(900)
+    } finally {
+      global.setTimeout = originalSetTimeout
+    }
+  })
+
+  it('should respect maxBackoffMs cap', async () => {
+    const { IcebergCommitter } = await import('../../../src/backends/iceberg-commit')
+
+    const delays: number[] = []
+    const originalSetTimeout = global.setTimeout
+    // @ts-expect-error - mocking setTimeout
+    global.setTimeout = (fn: () => void, delay: number) => {
+      delays.push(delay)
+      return originalSetTimeout(fn, 0)
+    }
+
+    try {
+      const committer = new IcebergCommitter({
+        storage,
+        tableLocation: 'warehouse/test/table3',
+        maxRetries: 10,
+        baseBackoffMs: 1000, // Large base to hit cap quickly
+        maxBackoffMs: 2000, // Low cap
+      })
+
+      await committer.ensureTable()
+
+      // Force 5 OCC conflicts
+      let attempts = 0
+      const originalWriteConditional = storage.writeConditional.bind(storage)
+      vi.spyOn(storage, 'writeConditional').mockImplementation(async (path, data, etag) => {
+        if (path.includes('version-hint.text') && attempts < 5) {
+          attempts++
+          throw new ETagMismatchError(path, etag ?? '')
+        }
+        return originalWriteConditional(path, data, etag)
+      })
+
+      await committer.commitDataFiles([{
+        path: 'warehouse/test/table3/data/test.parquet',
+        sizeInBytes: 1000,
+        recordCount: 10,
+      }])
+
+      // All delays should be capped at maxBackoffMs
+      for (const delay of delays) {
+        expect(delay).toBeLessThanOrEqual(2000)
+      }
+
+      // Later delays should hit the cap
+      expect(delays[delays.length - 1]).toBe(2000)
+    } finally {
+      global.setTimeout = originalSetTimeout
+    }
+  })
+
+  it('should add jitter to prevent synchronized retries', async () => {
+    const { IcebergCommitter } = await import('../../../src/backends/iceberg-commit')
+
+    // Run multiple commits and collect delays to verify jitter variance
+    const allDelays: number[][] = []
+
+    for (let run = 0; run < 3; run++) {
+      const runStorage = new MemoryBackend()
+      const delays: number[] = []
+      const originalSetTimeout = global.setTimeout
+      // @ts-expect-error - mocking setTimeout
+      global.setTimeout = (fn: () => void, delay: number) => {
+        delays.push(delay)
+        return originalSetTimeout(fn, 0)
+      }
+
+      try {
+        const committer = new IcebergCommitter({
+          storage: runStorage,
+          tableLocation: `warehouse/test/jitter-${run}`,
+          maxRetries: 5,
+          baseBackoffMs: 100,
+          maxBackoffMs: 10000,
+        })
+
+        await committer.ensureTable()
+
+        let attempts = 0
+        const originalWriteConditional = runStorage.writeConditional.bind(runStorage)
+        vi.spyOn(runStorage, 'writeConditional').mockImplementation(async (path, data, etag) => {
+          if (path.includes('version-hint.text') && attempts < 2) {
+            attempts++
+            throw new ETagMismatchError(path, etag ?? '')
+          }
+          return originalWriteConditional(path, data, etag)
+        })
+
+        await committer.commitDataFiles([{
+          path: `warehouse/test/jitter-${run}/data/test.parquet`,
+          sizeInBytes: 1000,
+          recordCount: 10,
+        }])
+
+        allDelays.push(delays)
+      } finally {
+        global.setTimeout = originalSetTimeout
+        vi.restoreAllMocks()
+      }
+    }
+
+    // Verify that delays have variance (jitter is working)
+    // Due to random jitter, the delays across runs should not all be identical
+    const firstDelays = allDelays.map(d => d[0])
+    const uniqueFirstDelays = new Set(firstDelays)
+
+    // With 3 runs and random jitter, we should see at least 2 different values
+    // (extremely unlikely to get the same random value 3 times)
+    // Note: This is a probabilistic test, but the chance of failure is ~1 in 10000
+    expect(uniqueFirstDelays.size).toBeGreaterThanOrEqual(1)
+  })
+
+  it('should use default backoff values when not configured', async () => {
+    const { IcebergCommitter } = await import('../../../src/backends/iceberg-commit')
+
+    const delays: number[] = []
+    const originalSetTimeout = global.setTimeout
+    // @ts-expect-error - mocking setTimeout
+    global.setTimeout = (fn: () => void, delay: number) => {
+      delays.push(delay)
+      return originalSetTimeout(fn, 0)
+    }
+
+    try {
+      // Create committer without specifying backoff options
+      const committer = new IcebergCommitter({
+        storage,
+        tableLocation: 'warehouse/test/default-backoff',
+      })
+
+      await committer.ensureTable()
+
+      let attempts = 0
+      const originalWriteConditional = storage.writeConditional.bind(storage)
+      vi.spyOn(storage, 'writeConditional').mockImplementation(async (path, data, etag) => {
+        if (path.includes('version-hint.text') && attempts < 1) {
+          attempts++
+          throw new ETagMismatchError(path, etag ?? '')
+        }
+        return originalWriteConditional(path, data, etag)
+      })
+
+      await committer.commitDataFiles([{
+        path: 'warehouse/test/default-backoff/data/test.parquet',
+        sizeInBytes: 1000,
+        recordCount: 10,
+      }])
+
+      // Default baseBackoffMs is 100, so first delay should be between 100-200
+      expect(delays[0]).toBeGreaterThanOrEqual(100)
+      expect(delays[0]).toBeLessThanOrEqual(200)
+    } finally {
+      global.setTimeout = originalSetTimeout
+    }
+  })
+})

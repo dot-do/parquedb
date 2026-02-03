@@ -61,6 +61,12 @@ export interface CompactionMigrationParams {
   /** Namespace being compacted */
   namespace: string
 
+  /**
+   * Durable Object ID for CompactionStateDO notifications.
+   * If not provided, defaults to namespace.
+   */
+  doId?: string
+
   /** Time window start (ms since epoch) */
   windowStart: number
 
@@ -112,6 +118,9 @@ interface CompactionState {
 
   /** Files successfully processed */
   processedFiles: string[]
+
+  /** Files that failed processing (not deleted, available for retry) */
+  failedFiles: string[]
 
   /** Output files created */
   outputFiles: string[]
@@ -289,6 +298,7 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
     let state: CompactionState = {
       remainingFiles: finalFiles.files,
       processedFiles: [],
+      failedFiles: [],
       outputFiles: [],
       totalRows: 0,
       bytesRead: 0,
@@ -371,20 +381,13 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
             batchNum
           )
 
-          // Delete source files if requested
-          if (deleteSource) {
-            for (const file of batch) {
-              try {
-                await storage.delete(file)
-              } catch (err) {
-                logger.warn(`Failed to delete source file: ${file}`, { error: err })
-              }
-            }
-          }
-
+          // Success! Add batch to processedFiles
+          // Note: Source file deletion happens in a separate step after ALL batches complete
+          // to ensure we only delete files that were successfully processed
           return {
             remainingFiles: remaining,
             processedFiles: [...state.processedFiles, ...batch],
+            failedFiles: state.failedFiles,
             outputFiles: [...state.outputFiles, outputFile],
             totalRows: state.totalRows + rows.length,
             bytesRead: state.bytesRead + bytesRead,
@@ -396,10 +399,13 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
           const errorMsg = err instanceof Error ? err.message : 'Unknown error'
           logger.error(`Batch ${batchNum} failed`, { error: errorMsg })
 
+          // CRITICAL FIX: Do NOT add failed batch to processedFiles!
+          // Failed files go to failedFiles array to prevent data loss.
+          // They will NOT be deleted even if deleteSource=true.
           return {
             ...state,
             remainingFiles: remaining,
-            processedFiles: [...state.processedFiles, ...batch],
+            failedFiles: [...state.failedFiles, ...batch],
             errors: [...state.errors, `Batch ${batchNum}: ${errorMsg}`],
           }
         }
@@ -411,18 +417,51 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
       }
     }
 
+    // Delete source files step: Only delete successfully processed files
+    // This is a separate step to ensure atomicity - we only delete after ALL batches complete
+    if (deleteSource && state.processedFiles.length > 0) {
+      await step.do('delete-source-files', async () => {
+        const storage = new R2Backend(toInternalR2Bucket(this.env.BUCKET))
+        let deletedCount = 0
+        const deleteErrors: string[] = []
+
+        // Only delete files that were successfully processed
+        // Failed files are preserved for retry/recovery
+        for (const file of state.processedFiles) {
+          try {
+            await storage.delete(file)
+            deletedCount++
+          } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : 'Unknown error'
+            deleteErrors.push(`${file}: ${errorMsg}`)
+            logger.warn(`Failed to delete source file: ${file}`, { error: errorMsg })
+          }
+        }
+
+        logger.info(`Deleted ${deletedCount}/${state.processedFiles.length} source files`, {
+          deletedCount,
+          totalProcessed: state.processedFiles.length,
+          failedDeletes: deleteErrors.length,
+        })
+
+        return { deletedCount, deleteErrors }
+      })
+    }
+
     // Final step: Summary
     const summary = await step.do('finalize', async () => {
       const duration = Date.now() - state.startedAt
 
       return {
-        success: state.errors.length === 0,
+        success: state.errors.length === 0 && state.failedFiles.length === 0,
         namespace,
         targetFormat,
         windowStart: new Date(windowStart).toISOString(),
         windowEnd: new Date(windowEnd).toISOString(),
         writersProcessed: writers.length,
         filesProcessed: state.processedFiles.length,
+        filesFailed: state.failedFiles.length,
+        failedFiles: state.failedFiles, // Include list for debugging/retry
         outputFilesCreated: state.outputFiles.length,
         totalRows: state.totalRows,
         bytesRead: state.bytesRead,
@@ -434,6 +473,52 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
     })
 
     logger.info('Compaction workflow completed', summary)
+
+    // Notify CompactionStateDO that the workflow is complete
+    // This allows the DO to clean up the window state and update metrics
+    await step.do('notify-completion', async () => {
+      const doId = params.doId ?? params.namespace
+      try {
+        const stateId = this.env.COMPACTION_STATE.idFromName(doId)
+        const stateDO = this.env.COMPACTION_STATE.get(stateId)
+        const response = await stateDO.fetch('http://internal/workflow-complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            windowKey: String(params.windowStart),
+            workflowId: event.instanceId,
+            success: state.errors.length === 0 && state.failedFiles.length === 0,
+          }),
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          logger.warn('CompactionStateDO notification failed', {
+            doId,
+            windowKey: String(params.windowStart),
+            status: response.status,
+            error: errorText,
+          })
+        } else {
+          logger.info('CompactionStateDO notified of workflow completion', {
+            doId,
+            windowKey: String(params.windowStart),
+            success: state.errors.length === 0 && state.failedFiles.length === 0,
+          })
+        }
+      } catch (err) {
+        // Log but don't fail the workflow - the compaction itself succeeded
+        // The window will eventually be cleaned up by the stuck window recovery mechanism
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error'
+        logger.warn('Failed to notify CompactionStateDO', {
+          doId,
+          windowKey: String(params.windowStart),
+          error: errorMsg,
+        })
+      }
+
+      return { notified: true }
+    })
 
     return summary
   }

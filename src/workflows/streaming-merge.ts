@@ -89,10 +89,12 @@ export interface StreamingMergeOptions {
 export interface StreamingMergeResult {
   /** Total rows processed */
   totalRows: number
-  /** Total bytes read */
+  /** Total bytes read from fully completed files */
   bytesRead: number
-  /** Number of files processed */
+  /** Number of files processed (started reading) */
   filesProcessed: number
+  /** Number of files fully read to completion */
+  filesCompleted: number
   /** Processing duration in milliseconds */
   durationMs: number
 }
@@ -339,10 +341,9 @@ export class StreamingMergeSorter {
     } = this.options
 
     let totalRows = 0
-    let bytesRead = 0
     let filesProcessed = 0
 
-    // Track file sizes for bytesRead
+    // Track file sizes for bytesRead calculation
     const fileSizes = new Map<number, number>()
     for (let i = 0; i < files.length; i++) {
       const path = files[i]
@@ -357,6 +358,9 @@ export class StreamingMergeSorter {
         // Ignore stat errors
       }
     }
+
+    // Track which files have been fully read (iterator exhausted)
+    const completedFiles = new Set<number>()
 
     // Initialize min-heap
     const heap = new MinHeap(sortKey, sortDirection)
@@ -387,8 +391,12 @@ export class StreamingMergeSorter {
             chunkIndex: 0,
           })
           filesProcessed++
-          bytesRead += fileSizes.get(i) ?? 0
+          // Note: bytesRead is tracked when file is fully completed, not here
         }
+      } else if (firstChunk.done) {
+        // Empty file - mark as completed immediately
+        completedFiles.add(i)
+        filesProcessed++
       }
     }
 
@@ -432,8 +440,10 @@ export class StreamingMergeSorter {
             entry.row = nextRow
             heap.push(entry)
           }
+        } else {
+          // Iterator is exhausted - file has been fully read
+          completedFiles.add(entry.fileIndex)
         }
-        // If iterator is exhausted, we don't push back to heap
       }
     }
 
@@ -442,11 +452,18 @@ export class StreamingMergeSorter {
       yield outputBuffer
     }
 
+    // Calculate bytesRead from only fully completed files
+    const bytesRead = Array.from(completedFiles).reduce(
+      (sum, fileIndex) => sum + (fileSizes.get(fileIndex) ?? 0),
+      0
+    )
+
     // Return statistics
     return {
       totalRows,
       bytesRead,
       filesProcessed,
+      filesCompleted: completedFiles.size,
       durationMs: Date.now() - startTime,
     }
   }

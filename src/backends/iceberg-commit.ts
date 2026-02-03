@@ -59,6 +59,12 @@ export interface IcebergCommitConfig {
 
   /** Maximum OCC retries (default: 10) */
   maxRetries?: number
+
+  /** Base backoff in ms for OCC retries (default: 100) */
+  baseBackoffMs?: number
+
+  /** Max backoff in ms for OCC retries (default: 5000) */
+  maxBackoffMs?: number
 }
 
 /**
@@ -192,6 +198,8 @@ export class IcebergCommitter {
   private storage: StorageBackend
   private tableLocation: string
   private maxRetries: number
+  private baseBackoffMs: number
+  private maxBackoffMs: number
 
   // Counter for ensuring unique snapshot IDs within the same millisecond
   private snapshotIdCounter = 0
@@ -201,6 +209,8 @@ export class IcebergCommitter {
     this.storage = config.storage
     this.tableLocation = config.tableLocation
     this.maxRetries = config.maxRetries ?? 10
+    this.baseBackoffMs = config.baseBackoffMs ?? 100
+    this.maxBackoffMs = config.maxBackoffMs ?? 5000
   }
 
   // ===========================================================================
@@ -247,6 +257,11 @@ export class IcebergCommitter {
     const versionHintPath = `${this.tableLocation}/metadata/version-hint.text`
 
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+      // Apply exponential backoff with jitter between retries
+      if (attempt > 0) {
+        await this.backoffDelay(attempt)
+      }
+
       try {
         // Get current version hint ETag for OCC
         let expectedVersionHintEtag = await this.getVersionHintEtag(versionHintPath)
@@ -616,6 +631,26 @@ export class IcebergCommitter {
       throw error
     }
   }
+
+  /**
+   * Apply exponential backoff delay with jitter between retries.
+   * This prevents thundering herd effects when multiple writers retry simultaneously.
+   */
+  private async backoffDelay(retryCount: number): Promise<void> {
+    const jitter = Math.random() * this.baseBackoffMs
+    const backoffMs = Math.min(
+      this.baseBackoffMs * Math.pow(2, retryCount - 1) + jitter,
+      this.maxBackoffMs
+    )
+    await this.sleep(backoffMs)
+  }
+
+  /**
+   * Sleep for specified milliseconds
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms))
+  }
 }
 
 // =============================================================================
@@ -650,11 +685,15 @@ export async function commitToIcebergTable(config: {
   tableLocation: string
   dataFiles: DataFileInfo[]
   maxRetries?: number
+  baseBackoffMs?: number
+  maxBackoffMs?: number
 }): Promise<IcebergCommitResult> {
   const committer = new IcebergCommitter({
     storage: config.storage,
     tableLocation: config.tableLocation,
     maxRetries: config.maxRetries,
+    baseBackoffMs: config.baseBackoffMs,
+    maxBackoffMs: config.maxBackoffMs,
   })
 
   // Ensure table exists

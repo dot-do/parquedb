@@ -1980,6 +1980,114 @@ describe('CompactionMigrationWorkflow', () => {
       expect(needsWait).toBe(false)
     })
   })
+
+  describe('notify-completion step', () => {
+    it('should include doId param for DO identification', () => {
+      const params = {
+        namespace: 'users',
+        doId: 'custom-do-id',
+        windowStart: 1700000000000,
+        windowEnd: 1700003600000,
+        files: ['file.parquet'],
+        writers: ['writer1'],
+        targetFormat: 'native' as const,
+      }
+
+      // doId should be used if provided
+      const doId = params.doId ?? params.namespace
+      expect(doId).toBe('custom-do-id')
+    })
+
+    it('should default doId to namespace when not provided', () => {
+      const params = {
+        namespace: 'users',
+        windowStart: 1700000000000,
+        windowEnd: 1700003600000,
+        files: ['file.parquet'],
+        writers: ['writer1'],
+        targetFormat: 'native' as const,
+      }
+
+      // Should use namespace as default
+      const doId = (params as { doId?: string }).doId ?? params.namespace
+      expect(doId).toBe('users')
+    })
+
+    it('should format notification payload correctly', () => {
+      const params = {
+        namespace: 'users',
+        windowStart: 1700000000000,
+        windowEnd: 1700003600000,
+        files: ['file.parquet'],
+        writers: ['writer1'],
+        targetFormat: 'native' as const,
+      }
+      const workflowId = 'workflow-abc123'
+      const state = {
+        errors: [] as string[],
+        failedFiles: [] as string[],
+      }
+
+      // Simulate the notification payload
+      const payload = {
+        windowKey: String(params.windowStart),
+        workflowId,
+        success: state.errors.length === 0 && state.failedFiles.length === 0,
+      }
+
+      expect(payload.windowKey).toBe('1700000000000')
+      expect(payload.workflowId).toBe('workflow-abc123')
+      expect(payload.success).toBe(true)
+    })
+
+    it('should report failure when errors exist', () => {
+      const params = {
+        namespace: 'users',
+        windowStart: 1700000000000,
+        windowEnd: 1700003600000,
+        files: ['file.parquet'],
+        writers: ['writer1'],
+        targetFormat: 'native' as const,
+      }
+      const workflowId = 'workflow-abc123'
+      const state = {
+        errors: ['Batch 1: Error occurred'],
+        failedFiles: [] as string[],
+      }
+
+      const payload = {
+        windowKey: String(params.windowStart),
+        workflowId,
+        success: state.errors.length === 0 && state.failedFiles.length === 0,
+      }
+
+      expect(payload.success).toBe(false)
+    })
+
+    it('should report failure when failed files exist', () => {
+      const params = {
+        namespace: 'users',
+        windowStart: 1700000000000,
+        windowEnd: 1700003600000,
+        files: ['file.parquet'],
+        writers: ['writer1'],
+        targetFormat: 'native' as const,
+      }
+      const workflowId = 'workflow-abc123'
+      const state = {
+        errors: [] as string[],
+        failedFiles: ['failed-file.parquet'],
+      }
+
+      const payload = {
+        windowKey: String(params.windowStart),
+        workflowId,
+        success: state.errors.length === 0 && state.failedFiles.length === 0,
+      }
+
+      expect(payload.success).toBe(false)
+    })
+  })
 })
 
 // =============================================================================
@@ -2358,6 +2466,306 @@ describe('Writer Activity Tracking', () => {
       const canCompact = waitedLongEnough && hasEnoughFiles
 
       expect(canCompact).toBe(true)
+    })
+  })
+})
+
+// =============================================================================
+// Batch Error Handling Tests (Issue: parquedb-pu5c)
+// Critical: Prevent data loss when batch processing fails
+// =============================================================================
+
+describe('Batch Error Handling - Data Loss Prevention', () => {
+  describe('CompactionState with failedFiles', () => {
+    it('should include failedFiles array in state', () => {
+      const state = {
+        remainingFiles: ['file3.parquet'],
+        processedFiles: ['file1.parquet'],
+        failedFiles: ['file2.parquet'], // NEW: tracks failed batches
+        outputFiles: ['compacted-1.parquet'],
+        totalRows: 1000,
+        bytesRead: 1024 * 100,
+        bytesWritten: 1024 * 50,
+        errors: ['Batch 2: File corrupted'],
+        startedAt: Date.now(),
+      }
+
+      expect(state.failedFiles).toHaveLength(1)
+      expect(state.failedFiles[0]).toBe('file2.parquet')
+    })
+
+    it('should track processed and failed files separately', () => {
+      let state = {
+        remainingFiles: ['file1.parquet', 'file2.parquet', 'file3.parquet', 'file4.parquet'],
+        processedFiles: [] as string[],
+        failedFiles: [] as string[],
+        outputFiles: [] as string[],
+        totalRows: 0,
+        bytesRead: 0,
+        bytesWritten: 0,
+        errors: [] as string[],
+        startedAt: Date.now(),
+      }
+
+      // Simulate first batch success (files 1-2)
+      state = {
+        ...state,
+        remainingFiles: ['file3.parquet', 'file4.parquet'],
+        processedFiles: ['file1.parquet', 'file2.parquet'],
+        failedFiles: [],
+        outputFiles: ['compacted-1.parquet'],
+        totalRows: 500,
+        bytesRead: 2048,
+        bytesWritten: 1024,
+      }
+
+      expect(state.processedFiles).toHaveLength(2)
+      expect(state.failedFiles).toHaveLength(0)
+
+      // Simulate second batch failure (files 3-4)
+      state = {
+        ...state,
+        remainingFiles: [],
+        // CRITICAL: failed files should NOT be added to processedFiles
+        processedFiles: state.processedFiles, // stays at 2
+        failedFiles: ['file3.parquet', 'file4.parquet'], // failed batch goes here
+        errors: ['Batch 2: Connection timeout'],
+      }
+
+      expect(state.processedFiles).toHaveLength(2) // Only successful files
+      expect(state.failedFiles).toHaveLength(2) // Failed batch tracked separately
+      expect(state.errors).toHaveLength(1)
+    })
+  })
+
+  describe('source file deletion safety', () => {
+    it('should only delete processedFiles, not failedFiles', () => {
+      const state = {
+        processedFiles: ['file1.parquet', 'file2.parquet'],
+        failedFiles: ['file3.parquet', 'file4.parquet'],
+      }
+
+      // Simulate deleteSource logic - only delete processedFiles
+      const filesToDelete = state.processedFiles
+      const filesToPreserve = state.failedFiles
+
+      expect(filesToDelete).toContain('file1.parquet')
+      expect(filesToDelete).toContain('file2.parquet')
+      expect(filesToDelete).not.toContain('file3.parquet')
+      expect(filesToDelete).not.toContain('file4.parquet')
+
+      expect(filesToPreserve).toContain('file3.parquet')
+      expect(filesToPreserve).toContain('file4.parquet')
+    })
+
+    it('should not delete any files if all batches fail', () => {
+      const state = {
+        processedFiles: [] as string[],
+        failedFiles: ['file1.parquet', 'file2.parquet', 'file3.parquet'],
+      }
+
+      const filesToDelete = state.processedFiles
+
+      expect(filesToDelete).toHaveLength(0)
+      // All files are preserved for retry
+      expect(state.failedFiles).toHaveLength(3)
+    })
+  })
+
+  describe('workflow summary with failed files', () => {
+    it('should report success=false when there are failed files', () => {
+      const state = {
+        processedFiles: ['file1.parquet'],
+        failedFiles: ['file2.parquet'],
+        errors: ['Batch 2: Parse error'],
+        startedAt: Date.now() - 5000,
+      }
+
+      const summary = {
+        success: state.errors.length === 0 && state.failedFiles.length === 0,
+        filesProcessed: state.processedFiles.length,
+        filesFailed: state.failedFiles.length,
+        failedFiles: state.failedFiles,
+        errors: state.errors,
+        durationMs: Date.now() - state.startedAt,
+      }
+
+      expect(summary.success).toBe(false)
+      expect(summary.filesProcessed).toBe(1)
+      expect(summary.filesFailed).toBe(1)
+      expect(summary.failedFiles).toContain('file2.parquet')
+    })
+
+    it('should report success=true only when no errors and no failed files', () => {
+      const state = {
+        processedFiles: ['file1.parquet', 'file2.parquet'],
+        failedFiles: [] as string[],
+        errors: [] as string[],
+        startedAt: Date.now() - 5000,
+      }
+
+      const summary = {
+        success: state.errors.length === 0 && state.failedFiles.length === 0,
+        filesProcessed: state.processedFiles.length,
+        filesFailed: state.failedFiles.length,
+        failedFiles: state.failedFiles,
+        errors: state.errors,
+        durationMs: Date.now() - state.startedAt,
+      }
+
+      expect(summary.success).toBe(true)
+      expect(summary.filesProcessed).toBe(2)
+      expect(summary.filesFailed).toBe(0)
+    })
+
+    it('should include failed files list for debugging/retry', () => {
+      const failedFiles = [
+        'data/users/1700001234-writer1-0.parquet',
+        'data/users/1700001235-writer1-1.parquet',
+      ]
+
+      const summary = {
+        success: false,
+        filesFailed: failedFiles.length,
+        failedFiles: failedFiles,
+        errors: ['Batch 1: Network error', 'Batch 2: Timeout'],
+      }
+
+      // Failed files list enables:
+      // 1. Debugging which files caused issues
+      // 2. Manual retry of just the failed files
+      // 3. Alerting/monitoring integration
+      expect(summary.failedFiles).toEqual(failedFiles)
+      expect(summary.failedFiles.length).toBe(summary.filesFailed)
+    })
+  })
+
+  describe('partial success scenarios', () => {
+    it('should handle mixed success/failure batches correctly', () => {
+      let state = {
+        remainingFiles: ['f1.parquet', 'f2.parquet', 'f3.parquet', 'f4.parquet', 'f5.parquet', 'f6.parquet'],
+        processedFiles: [] as string[],
+        failedFiles: [] as string[],
+        outputFiles: [] as string[],
+        totalRows: 0,
+        bytesRead: 0,
+        bytesWritten: 0,
+        errors: [] as string[],
+        startedAt: Date.now(),
+      }
+
+      const maxFilesPerBatch = 2
+
+      // Batch 1: Success (f1, f2)
+      const batch1 = state.remainingFiles.slice(0, maxFilesPerBatch)
+      state = {
+        ...state,
+        remainingFiles: state.remainingFiles.slice(maxFilesPerBatch),
+        processedFiles: [...state.processedFiles, ...batch1],
+        outputFiles: ['compacted-1.parquet'],
+        totalRows: 100,
+        bytesRead: 1000,
+        bytesWritten: 500,
+      }
+
+      // Batch 2: Failure (f3, f4)
+      const batch2 = state.remainingFiles.slice(0, maxFilesPerBatch)
+      state = {
+        ...state,
+        remainingFiles: state.remainingFiles.slice(maxFilesPerBatch),
+        // CRITICAL: DO NOT add batch2 to processedFiles
+        failedFiles: [...state.failedFiles, ...batch2],
+        errors: [...state.errors, 'Batch 2: Corrupted file'],
+      }
+
+      // Batch 3: Success (f5, f6)
+      const batch3 = state.remainingFiles.slice(0, maxFilesPerBatch)
+      state = {
+        ...state,
+        remainingFiles: state.remainingFiles.slice(maxFilesPerBatch),
+        processedFiles: [...state.processedFiles, ...batch3],
+        outputFiles: [...state.outputFiles, 'compacted-3.parquet'],
+        totalRows: state.totalRows + 100,
+        bytesRead: state.bytesRead + 1000,
+        bytesWritten: state.bytesWritten + 500,
+      }
+
+      // Final state verification
+      expect(state.remainingFiles).toHaveLength(0)
+      expect(state.processedFiles).toEqual(['f1.parquet', 'f2.parquet', 'f5.parquet', 'f6.parquet'])
+      expect(state.failedFiles).toEqual(['f3.parquet', 'f4.parquet'])
+      expect(state.outputFiles).toEqual(['compacted-1.parquet', 'compacted-3.parquet'])
+      expect(state.errors).toHaveLength(1)
+
+      // Only successfully processed files should be candidates for deletion
+      const filesToDelete = state.processedFiles
+      expect(filesToDelete).not.toContain('f3.parquet')
+      expect(filesToDelete).not.toContain('f4.parquet')
+    })
+
+    it('should calculate correct statistics with partial failures', () => {
+      const state = {
+        processedFiles: ['f1.parquet', 'f2.parquet', 'f5.parquet', 'f6.parquet'],
+        failedFiles: ['f3.parquet', 'f4.parquet'],
+        outputFiles: ['compacted-1.parquet', 'compacted-3.parquet'],
+        totalRows: 200, // Only from successful batches
+        bytesRead: 2000, // Only from successful batches
+        bytesWritten: 1000, // Only from successful batches
+        errors: ['Batch 2: Error'],
+      }
+
+      // Statistics should only reflect successful processing
+      expect(state.totalRows).toBe(200)
+
+      // Compression ratio only considers successfully processed data
+      const compressionRatio = state.bytesWritten / state.bytesRead
+      expect(compressionRatio).toBe(0.5)
+
+      // Total files = processed + failed
+      const totalInputFiles = state.processedFiles.length + state.failedFiles.length
+      expect(totalInputFiles).toBe(6)
+
+      // Success rate
+      const successRate = state.processedFiles.length / totalInputFiles
+      expect(successRate).toBeCloseTo(0.667, 2) // 4/6 = 66.7%
+    })
+  })
+
+  describe('error recovery information', () => {
+    it('should preserve enough information for retry', () => {
+      const originalFiles = [
+        'data/users/1700001234-writer1-0.parquet',
+        'data/users/1700001235-writer1-1.parquet',
+        'data/users/1700001236-writer2-0.parquet',
+      ]
+
+      // After workflow with partial failure
+      const result = {
+        success: false,
+        namespace: 'users',
+        windowStart: '2023-11-14T22:00:00.000Z',
+        windowEnd: '2023-11-14T23:00:00.000Z',
+        filesProcessed: 1,
+        filesFailed: 2,
+        failedFiles: [
+          'data/users/1700001235-writer1-1.parquet',
+          'data/users/1700001236-writer2-0.parquet',
+        ],
+        errors: ['Batch 2: Network timeout'],
+      }
+
+      // Retry workflow should be able to use failedFiles directly
+      const retryParams = {
+        namespace: result.namespace,
+        windowStart: new Date(result.windowStart).getTime(),
+        windowEnd: new Date(result.windowEnd).getTime(),
+        files: result.failedFiles, // Only retry failed files
+        writers: ['writer1', 'writer2'], // Extract from file names
+        targetFormat: 'native' as const,
+      }
+
+      expect(retryParams.files).toHaveLength(2)
+      expect(retryParams.files).toEqual(result.failedFiles)
     })
   })
 })
