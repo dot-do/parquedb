@@ -41,17 +41,41 @@ export {
 export { StoragePaths, parseStoragePath } from '../types/storage'
 
 // =============================================================================
+// Shared Error Classes
+// =============================================================================
+
+// Export all shared error classes and types
+export {
+  StorageError,
+  StorageErrorCode,
+  NotFoundError,
+  AlreadyExistsError,
+  ETagMismatchError,
+  PermissionDeniedError,
+  NetworkError,
+  InvalidPathError,
+  QuotaExceededError,
+  DirectoryNotEmptyError,
+  DirectoryNotFoundError,
+  PathTraversalError,
+  OperationError,
+  // Backward compatibility aliases
+  FileNotFoundError,
+  VersionMismatchError,
+  FileExistsError,
+  // Type guards
+  isStorageError,
+  isNotFoundError,
+  isETagMismatchError,
+  isAlreadyExistsError,
+} from './errors'
+
+// =============================================================================
 // Backend Implementations
 // =============================================================================
 
 // MemoryBackend - In-memory storage for testing
-export {
-  MemoryBackend,
-  FileNotFoundError,
-  VersionMismatchError,
-  FileExistsError,
-  DirectoryNotEmptyError,
-} from './MemoryBackend'
+export { MemoryBackend } from './MemoryBackend'
 
 // Shared validation utilities
 export {
@@ -63,7 +87,7 @@ export {
 } from './validation'
 
 // FsBackend - Node.js filesystem
-export { FsBackend, PathTraversalError } from './FsBackend'
+export { FsBackend } from './FsBackend'
 
 // FsxBackend - Cloudflare fsx
 export { FsxBackend } from './FsxBackend'
@@ -105,6 +129,16 @@ export {
 
 // ObservedBackend - Storage wrapper with observability hooks
 export { ObservedBackend, withObservability } from './ObservedBackend'
+
+// StorageRouter - Routes storage operations based on collection mode
+export {
+  StorageRouter,
+  type IStorageRouter,
+  type StorageMode,
+  type RouterSchema,
+  type StorageRouterOptions,
+  type CollectionSchema,
+} from './router'
 
 // =============================================================================
 // Test Utilities

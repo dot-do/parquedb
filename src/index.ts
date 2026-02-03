@@ -11,10 +11,16 @@
 export {
   DB,
   type CollectionSchema,
+  type CollectionOptions,
   type DBSchema,
   type DBConfig,
   type DBInput,
   type DBInstance,
+  // Collection options helpers
+  DEFAULT_COLLECTION_OPTIONS,
+  extractCollectionOptions,
+  getFieldsWithoutOptions,
+  extractAllCollectionOptions,
 } from './db'
 
 // Auto-configured db and sql (lazy initialization)

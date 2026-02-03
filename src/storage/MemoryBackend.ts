@@ -14,60 +14,22 @@ import type {
   RmdirOptions,
 } from '../types/storage'
 import { validateRange } from './validation'
+import {
+  NotFoundError,
+  AlreadyExistsError,
+  ETagMismatchError,
+  DirectoryNotEmptyError as SharedDirectoryNotEmptyError,
+  DirectoryNotFoundError as SharedDirectoryNotFoundError,
+} from './errors'
 
-/**
- * Error thrown when a file is not found
- */
-export class FileNotFoundError extends Error {
-  override readonly name = 'FileNotFoundError'
-  constructor(path: string) {
-    super(`File not found: ${path}`)
-    Object.setPrototypeOf(this, FileNotFoundError.prototype)
-  }
-}
-
-/**
- * Error thrown when a conditional write fails due to version mismatch
- */
-export class VersionMismatchError extends Error {
-  override readonly name = 'VersionMismatchError'
-  constructor(path: string, expected: string | null, actual: string | null) {
-    super(`Version mismatch for ${path}: expected ${expected}, got ${actual}`)
-    Object.setPrototypeOf(this, VersionMismatchError.prototype)
-  }
-}
-
-/**
- * Error thrown when a file already exists (for ifNoneMatch: '*')
- */
-export class FileExistsError extends Error {
-  override readonly name = 'FileExistsError'
-  constructor(path: string) {
-    super(`File already exists: ${path}`)
-    Object.setPrototypeOf(this, FileExistsError.prototype)
-  }
-}
-
-/**
- * Error thrown when directory is not empty
- */
-export class DirectoryNotEmptyError extends Error {
-  override readonly name = 'DirectoryNotEmptyError'
-  constructor(path: string) {
-    super(`Directory not empty: ${path}`)
-    Object.setPrototypeOf(this, DirectoryNotEmptyError.prototype)
-  }
-}
-
-/**
- * Error thrown when a directory is not found
- */
-export class DirectoryNotFoundError extends Error {
-  override readonly name = 'DirectoryNotFoundError'
-  constructor(path: string) {
-    super(`Directory not found: ${path}`)
-    Object.setPrototypeOf(this, DirectoryNotFoundError.prototype)
-  }
+// Re-export shared errors with their original names for backward compatibility
+// These are deprecated - use imports from './errors' or '../storage' instead
+export {
+  NotFoundError as FileNotFoundError,
+  ETagMismatchError as VersionMismatchError,
+  AlreadyExistsError as FileExistsError,
+  SharedDirectoryNotEmptyError as DirectoryNotEmptyError,
+  SharedDirectoryNotFoundError as DirectoryNotFoundError,
 }
 
 /** Stored file entry */
@@ -134,7 +96,7 @@ export class MemoryBackend implements StorageBackend {
     path = this.normalizePath(path)
     const entry = this.files.get(path)
     if (!entry) {
-      throw new FileNotFoundError(path)
+      throw new NotFoundError(path)
     }
     // Return a copy to prevent external mutation
     return new Uint8Array(entry.data)
@@ -150,7 +112,7 @@ export class MemoryBackend implements StorageBackend {
     path = this.normalizePath(path)
     const entry = this.files.get(path)
     if (!entry) {
-      throw new FileNotFoundError(path)
+      throw new NotFoundError(path)
     }
 
     // Handle edge cases
@@ -327,14 +289,14 @@ export class MemoryBackend implements StorageBackend {
 
     // Check ifNoneMatch option (only create if not exists)
     if (options.ifNoneMatch === '*' && this.files.has(path)) {
-      throw new FileExistsError(path)
+      throw new AlreadyExistsError(path)
     }
 
     // Check ifMatch option (only update if version matches)
     if (options.ifMatch) {
       const existing = this.files.get(path)
       if (!existing || existing.metadata.etag !== options.ifMatch) {
-        throw new VersionMismatchError(
+        throw new ETagMismatchError(
           path,
           options.ifMatch,
           existing?.metadata.etag || null
@@ -449,7 +411,7 @@ export class MemoryBackend implements StorageBackend {
     const dirExists = this.directories.has(path) || hasFiles
 
     if (!dirExists) {
-      throw new DirectoryNotFoundError(path)
+      throw new SharedDirectoryNotFoundError(path)
     }
 
     if (hasFiles) {
@@ -467,7 +429,7 @@ export class MemoryBackend implements StorageBackend {
           }
         }
       } else {
-        throw new DirectoryNotEmptyError(path)
+        throw new SharedDirectoryNotEmptyError(path)
       }
     }
 
@@ -492,15 +454,15 @@ export class MemoryBackend implements StorageBackend {
     if (expectedVersion === null) {
       // Expecting file to not exist
       if (existing) {
-        throw new VersionMismatchError(path, expectedVersion, currentVersion)
+        throw new ETagMismatchError(path, expectedVersion, currentVersion)
       }
     } else {
       // Expecting file to exist with specific version
       if (!existing) {
-        throw new VersionMismatchError(path, expectedVersion, null)
+        throw new ETagMismatchError(path, expectedVersion, null)
       }
       if (currentVersion !== expectedVersion) {
-        throw new VersionMismatchError(path, expectedVersion, currentVersion)
+        throw new ETagMismatchError(path, expectedVersion, currentVersion)
       }
     }
 
@@ -516,7 +478,7 @@ export class MemoryBackend implements StorageBackend {
 
     const sourceEntry = this.files.get(source)
     if (!sourceEntry) {
-      throw new FileNotFoundError(source)
+      throw new NotFoundError(source)
     }
 
     // Copy data and create new metadata for destination
@@ -535,7 +497,7 @@ export class MemoryBackend implements StorageBackend {
 
     const sourceEntry = this.files.get(source)
     if (!sourceEntry) {
-      throw new FileNotFoundError(source)
+      throw new NotFoundError(source)
     }
 
     // Copy to destination then delete source

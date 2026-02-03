@@ -98,8 +98,38 @@ export type LayoutConfig =
   | Record<string, (string | string[])[]>  // Tabs: object with tab names
 
 /**
+ * Per-collection storage and behavior options
+ *
+ * @example
+ * ```typescript
+ * const db = DB({
+ *   Occupation: {
+ *     $options: {
+ *       includeDataVariant: true,  // Include $data variant column (default: true)
+ *     },
+ *     name: 'string!',
+ *     socCode: 'string!#',
+ *   },
+ *   Logs: {
+ *     $options: { includeDataVariant: false },  // Omit $data for write-heavy logs
+ *     level: 'string',
+ *     message: 'string',
+ *   }
+ * })
+ * ```
+ */
+export interface CollectionOptions {
+  /** Include $data variant column for fast full-row reads (default: true) */
+  includeDataVariant?: boolean
+  // Future options can be added here:
+  // compression?: 'snappy' | 'gzip' | 'zstd' | 'none'
+  // partitionBy?: string[]
+  // rowGroupSize?: number
+}
+
+/**
  * Schema definition for a single collection
- * Supports field definitions plus optional layout/studio config
+ * Supports field definitions plus optional layout/studio/options config
  *
  * @example
  * ```typescript
@@ -108,6 +138,9 @@ export type LayoutConfig =
  *   slug: 'string!',
  *   content: 'text',
  *   status: 'string',
+ *
+ *   // Storage/behavior options
+ *   $options: { includeDataVariant: true },
  *
  *   // Layout - array = no tabs, object = tabs
  *   $layout: [['title', 'slug'], 'content'],
@@ -126,6 +159,8 @@ export type LayoutConfig =
  * ```
  */
 export interface CollectionSchemaWithLayout {
+  /** Storage and behavior options */
+  $options?: CollectionOptions
   /** Layout: array = rows, object = tabs with rows */
   $layout?: LayoutConfig
   /** Sidebar fields */
@@ -133,7 +168,7 @@ export interface CollectionSchemaWithLayout {
   /** UI/studio configuration */
   $studio?: InlineStudioConfig
   /** Field definitions (type strings like 'string!', 'int', '-> User') */
-  [field: string]: string | LayoutConfig | string[] | InlineStudioConfig | undefined
+  [field: string]: string | CollectionOptions | LayoutConfig | string[] | InlineStudioConfig | undefined
 }
 
 /**
@@ -228,6 +263,57 @@ function getFlexibleCollections(schema: DBSchema): string[] {
   return Object.entries(schema)
     .filter(([, collectionSchema]) => isCollectionFlexible(collectionSchema))
     .map(([name]) => name)
+}
+
+// =============================================================================
+// Collection Options Helpers
+// =============================================================================
+
+/**
+ * Default collection options
+ */
+export const DEFAULT_COLLECTION_OPTIONS: Required<CollectionOptions> = {
+  includeDataVariant: true,
+}
+
+/**
+ * Extract $options from a collection schema
+ * Returns default options if not specified or for flexible collections
+ */
+export function extractCollectionOptions(schema: CollectionSchema): CollectionOptions {
+  if (schema === 'flexible') {
+    return { ...DEFAULT_COLLECTION_OPTIONS }
+  }
+  return { ...DEFAULT_COLLECTION_OPTIONS, ...schema.$options }
+}
+
+/**
+ * Get field definitions from a collection schema, excluding $-prefixed config
+ * Returns empty object for flexible collections
+ */
+export function getFieldsWithoutOptions(schema: CollectionSchema): Record<string, string> {
+  if (schema === 'flexible') {
+    return {}
+  }
+  const fields: Record<string, string> = {}
+  for (const [key, value] of Object.entries(schema)) {
+    if (!key.startsWith('$') && typeof value === 'string') {
+      fields[key] = value
+    }
+  }
+  return fields
+}
+
+/**
+ * Extract all collection options from a database schema
+ * Returns a map of collection name -> options
+ */
+export function extractAllCollectionOptions(schema: DBSchema): Map<string, CollectionOptions> {
+  const optionsMap = new Map<string, CollectionOptions>()
+  for (const [name, collectionSchema] of Object.entries(schema)) {
+    optionsMap.set(name, extractCollectionOptions(collectionSchema))
+  }
+  return optionsMap
 }
 
 // =============================================================================

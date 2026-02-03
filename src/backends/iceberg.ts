@@ -43,12 +43,32 @@ import {
   SchemaEvolutionBuilder,
   // Partition operations
   createUnpartitionedSpec,
+  // Manifest operations
+  ManifestGenerator,
+  ManifestListGenerator,
+  // Atomic commit operations
+  AtomicCommitter,
+  SnapshotBuilder,
+  generateUUID,
+  // Avro encoding for manifests
+  AvroFileWriter,
+  createManifestEntrySchema,
+  createManifestListSchema,
   // Types
   type TableMetadata,
   type IcebergSchema,
   type Snapshot,
   type StorageBackend as IcebergStorageBackend,
+  type ManifestEntry,
+  type ManifestFile,
+  type PendingCommit,
 } from '@dotdo/iceberg'
+
+// Import Parquet utilities
+import { ParquetWriter } from '../parquet/writer'
+import { readParquet } from '../parquet/reader'
+import { encodeVariant, decodeVariant } from '../parquet/variant'
+import type { ParquetSchema } from '../parquet/types'
 
 // =============================================================================
 // Iceberg Backend Implementation
@@ -641,22 +661,180 @@ export class IcebergBackend implements EntityBackend {
   private async appendEntities<T>(ns: string, entities: Entity<T>[]): Promise<void> {
     if (entities.length === 0) return
 
-    const existingMetadata = await this.getTableMetadata(ns)
+    let metadata = await this.getTableMetadata(ns)
     // Ensure table exists
-    if (!existingMetadata) {
-      await this.createTable(ns)
+    if (!metadata) {
+      metadata = await this.createTable(ns)
     }
 
-    // TODO: Write entities to Parquet file using the metadata
-    // TODO: Create manifest with file info
-    // TODO: Create new snapshot
-    // TODO: Commit metadata
+    const location = this.getTableLocation(ns)
+    const icebergStorage = this.toIcebergStorage()
 
-    // For now, store in-memory (placeholder)
-    // This should be replaced with actual Parquet writing
+    // Step 1: Write entities to Parquet file
+    const dataFileId = generateUUID()
+    const dataFilePath = `${location}/data/${dataFileId}.parquet`
+
+    // Build parquet schema and data
+    const parquetSchema = this.buildParquetSchema()
+    const rows = entities.map(entity => this.entityToRow(entity))
+
+    // Write parquet file
+    const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
+    const writeResult = await writer.write(dataFilePath, rows, parquetSchema)
+
+    // Step 2: Create manifest entry
+    const sequenceNumber = (metadata['last-sequence-number'] ?? 0) + 1
+    const snapshotId = Date.now()
+
+    const manifestGenerator = new ManifestGenerator({
+      sequenceNumber,
+      snapshotId,
+    })
+
+    manifestGenerator.addDataFile({
+      'file-path': dataFilePath,
+      'file-format': 'PARQUET',
+      'record-count': entities.length,
+      'file-size-in-bytes': writeResult.size,
+      partition: {},
+    })
+
+    const manifestResult = manifestGenerator.generate()
+
+    // Step 3: Write manifest file (as JSON for now, Avro in production)
+    const manifestId = generateUUID()
+    const manifestPath = `${location}/metadata/${manifestId}-m0.avro`
+
+    // Write manifest entries as JSON (simplified)
+    const manifestContent = new TextEncoder().encode(JSON.stringify(manifestResult.entries, null, 2))
+    await this.storage.write(manifestPath, manifestContent)
+
+    // Step 4: Create manifest list
+    const manifestListGenerator = new ManifestListGenerator({
+      snapshotId,
+      sequenceNumber,
+    })
+
+    manifestListGenerator.addManifestWithStats(
+      manifestPath,
+      manifestContent.length,
+      0, // partition spec ID
+      manifestResult.summary,
+      false // not a delete manifest
+    )
+
+    // Step 5: Write manifest list
+    const manifestListId = generateUUID()
+    const manifestListPath = `${location}/metadata/snap-${snapshotId}-${manifestListId}.avro`
+
+    const manifestListContent = new TextEncoder().encode(
+      JSON.stringify(manifestListGenerator.getManifests(), null, 2)
+    )
+    await this.storage.write(manifestListPath, manifestListContent)
+
+    // Step 6: Commit the snapshot using AtomicCommitter
+    const committer = new AtomicCommitter(icebergStorage, location)
+
+    await committer.commit(async (currentMetadata) => {
+      const baseMetadata = currentMetadata ?? metadata!
+      const currentSeqNum = baseMetadata['last-sequence-number'] ?? 0
+      const newSequenceNumber = currentSeqNum + 1
+      const currentSnapshotId = baseMetadata['current-snapshot-id']
+
+      const snapshotBuilder = new SnapshotBuilder({
+        sequenceNumber: newSequenceNumber,
+        snapshotId,
+        parentSnapshotId: currentSnapshotId ?? undefined,
+        manifestListPath,
+        operation: 'append',
+        schemaId: baseMetadata['current-schema-id'],
+      })
+
+      // Calculate totals
+      const existingSnapshot = currentSnapshotId ? getSnapshotById(baseMetadata, currentSnapshotId) : undefined
+      const existingSummary = existingSnapshot?.summary as Record<string, string> | undefined
+      const prevTotalRecords = existingSummary?.['total-records'] ? parseInt(existingSummary['total-records']) : 0
+      const prevTotalSize = existingSummary?.['total-files-size'] ? parseInt(existingSummary['total-files-size']) : 0
+      const prevTotalFiles = existingSummary?.['total-data-files'] ? parseInt(existingSummary['total-data-files']) : 0
+
+      snapshotBuilder.setSummary(
+        1, // added files
+        0, // deleted files
+        entities.length, // added records
+        0, // deleted records
+        writeResult.size, // added size
+        0, // removed size
+        prevTotalRecords + entities.length, // total records
+        prevTotalSize + writeResult.size, // total size
+        prevTotalFiles + 1 // total files
+      )
+
+      const pendingCommit: PendingCommit = {
+        baseMetadata,
+        snapshot: snapshotBuilder.build(),
+      }
+
+      return pendingCommit
+    })
 
     // Invalidate cache
     this.tableCache.delete(ns)
+  }
+
+  /**
+   * Convert an entity to a Parquet row
+   */
+  private entityToRow<T>(entity: Entity<T>): Record<string, unknown> {
+    // Extract core fields
+    const {
+      $id,
+      $type,
+      name,
+      createdAt,
+      createdBy,
+      updatedAt,
+      updatedBy,
+      deletedAt,
+      deletedBy,
+      version,
+      ...dataFields
+    } = entity as Entity<T> & { deletedAt?: Date; deletedBy?: string }
+
+    // Encode remaining fields as Variant $data
+    const $data = encodeVariant(dataFields)
+
+    return {
+      $id,
+      $type,
+      name,
+      createdAt: createdAt.toISOString(),
+      createdBy,
+      updatedAt: updatedAt.toISOString(),
+      updatedBy,
+      deletedAt: deletedAt?.toISOString() ?? null,
+      deletedBy: deletedBy ?? null,
+      version,
+      $data,
+    }
+  }
+
+  /**
+   * Build ParquetSchema for entity storage
+   */
+  private buildParquetSchema(): ParquetSchema {
+    return {
+      $id: { type: 'UTF8', optional: false },
+      $type: { type: 'UTF8', optional: false },
+      name: { type: 'UTF8', optional: false },
+      createdAt: { type: 'UTF8', optional: false }, // ISO timestamp string
+      createdBy: { type: 'UTF8', optional: false },
+      updatedAt: { type: 'UTF8', optional: false },
+      updatedBy: { type: 'UTF8', optional: false },
+      deletedAt: { type: 'UTF8', optional: true },
+      deletedBy: { type: 'UTF8', optional: true },
+      version: { type: 'INT32', optional: false },
+      $data: { type: 'BYTE_ARRAY', optional: true }, // Variant encoded
+    }
   }
 
   /**
@@ -675,18 +853,242 @@ export class IcebergBackend implements EntityBackend {
   private async readEntitiesFromSnapshot<T>(
     _ns: string,
     _metadata: TableMetadata,
-    _snapshot: Snapshot,
-    _filter?: Filter,
-    _options?: FindOptions
+    snapshot: Snapshot,
+    filter?: Filter,
+    options?: FindOptions
   ): Promise<Entity<T>[]> {
-    // TODO: Read manifest list from snapshot
-    // TODO: Read manifests to get data file list
-    // TODO: Apply predicate pushdown from filter
-    // TODO: Read Parquet files and apply remaining filters
-    // TODO: Apply sort, limit, skip
+    // Step 1: Read manifest list from snapshot
+    const manifestListPath = snapshot['manifest-list']
+    if (!manifestListPath) {
+      return []
+    }
 
-    // Placeholder: return empty array
-    return []
+    let manifestFiles: ManifestFile[]
+    try {
+      const manifestListData = await this.storage.read(manifestListPath)
+      const manifestListJson = new TextDecoder().decode(manifestListData)
+      manifestFiles = JSON.parse(manifestListJson) as ManifestFile[]
+    } catch {
+      return [] // Manifest list doesn't exist or is invalid
+    }
+
+    // Step 2: Read manifest entries from each manifest file
+    const dataFilePaths: string[] = []
+    for (const manifestFile of manifestFiles) {
+      if (manifestFile.content === 1) {
+        continue // Skip delete manifests for now
+      }
+
+      try {
+        const manifestData = await this.storage.read(manifestFile['manifest-path'])
+        const manifestJson = new TextDecoder().decode(manifestData)
+        const entries = JSON.parse(manifestJson) as ManifestEntry[]
+
+        for (const entry of entries) {
+          // Only include ADDED (1) and EXISTING (0) entries, not DELETED (2)
+          if (entry.status !== 2) {
+            dataFilePaths.push(entry['data-file']['file-path'])
+          }
+        }
+      } catch {
+        // Skip invalid manifest files
+      }
+    }
+
+    // Step 3: Read entities from each data file
+    const allEntities: Entity<T>[] = []
+    for (const dataFilePath of dataFilePaths) {
+      try {
+        const rows = await readParquet<Record<string, unknown>>(this.storage, dataFilePath)
+
+        for (const row of rows) {
+          const entity = this.rowToEntity<T>(row)
+
+          // Apply filter if provided
+          if (filter && !this.matchesFilter(entity, filter)) {
+            continue
+          }
+
+          allEntities.push(entity)
+        }
+      } catch {
+        // Skip unreadable files
+      }
+    }
+
+    // Step 4: Apply sorting
+    if (options?.sort) {
+      const sortFields = Object.entries(options.sort)
+      allEntities.sort((a, b) => {
+        for (const [field, direction] of sortFields) {
+          const aVal = (a as Record<string, unknown>)[field]
+          const bVal = (b as Record<string, unknown>)[field]
+
+          let cmp = 0
+          if (aVal === bVal) {
+            cmp = 0
+          } else if (aVal === null || aVal === undefined) {
+            cmp = 1
+          } else if (bVal === null || bVal === undefined) {
+            cmp = -1
+          } else if (typeof aVal === 'string' && typeof bVal === 'string') {
+            cmp = aVal.localeCompare(bVal)
+          } else if (typeof aVal === 'number' && typeof bVal === 'number') {
+            cmp = aVal - bVal
+          } else if (aVal instanceof Date && bVal instanceof Date) {
+            cmp = aVal.getTime() - bVal.getTime()
+          } else {
+            cmp = String(aVal).localeCompare(String(bVal))
+          }
+
+          if (cmp !== 0) {
+            return direction === -1 ? -cmp : cmp
+          }
+        }
+        return 0
+      })
+    }
+
+    // Step 5: Apply skip and limit
+    let result = allEntities
+    if (options?.skip) {
+      result = result.slice(options.skip)
+    }
+    if (options?.limit) {
+      result = result.slice(0, options.limit)
+    }
+
+    return result
+  }
+
+  /**
+   * Convert a Parquet row back to an Entity
+   */
+  private rowToEntity<T>(row: Record<string, unknown>): Entity<T> {
+    const {
+      $id,
+      $type,
+      name,
+      createdAt,
+      createdBy,
+      updatedAt,
+      updatedBy,
+      deletedAt,
+      deletedBy,
+      version,
+      $data,
+    } = row
+
+    // Decode Variant $data
+    let dataFields: Record<string, unknown> = {}
+    if ($data instanceof Uint8Array && $data.length > 0) {
+      dataFields = decodeVariant($data) as Record<string, unknown>
+    } else if ($data && typeof $data === 'object') {
+      // If $data came back as an object (some parquet readers might do this)
+      dataFields = $data as Record<string, unknown>
+    }
+
+    return {
+      $id: $id as EntityId,
+      $type: $type as string,
+      name: name as string,
+      createdAt: typeof createdAt === 'string' ? new Date(createdAt) : createdAt as Date,
+      createdBy: createdBy as EntityId,
+      updatedAt: typeof updatedAt === 'string' ? new Date(updatedAt) : updatedAt as Date,
+      updatedBy: updatedBy as EntityId,
+      ...(deletedAt ? { deletedAt: typeof deletedAt === 'string' ? new Date(deletedAt) : deletedAt as Date } : {}),
+      ...(deletedBy ? { deletedBy: deletedBy as EntityId } : {}),
+      version: version as number,
+      ...dataFields,
+    } as Entity<T>
+  }
+
+  /**
+   * Check if an entity matches a filter
+   */
+  private matchesFilter(entity: Record<string, unknown>, filter: Filter): boolean {
+    for (const [key, condition] of Object.entries(filter)) {
+      // Handle logical operators
+      if (key === '$and') {
+        const conditions = condition as Filter[]
+        if (!conditions.every(c => this.matchesFilter(entity, c))) {
+          return false
+        }
+        continue
+      }
+      if (key === '$or') {
+        const conditions = condition as Filter[]
+        if (!conditions.some(c => this.matchesFilter(entity, c))) {
+          return false
+        }
+        continue
+      }
+      if (key === '$nor') {
+        const conditions = condition as Filter[]
+        if (conditions.some(c => this.matchesFilter(entity, c))) {
+          return false
+        }
+        continue
+      }
+      if (key === '$not') {
+        if (this.matchesFilter(entity, condition as Filter)) {
+          return false
+        }
+        continue
+      }
+
+      const value = entity[key]
+
+      // Simple equality check
+      if (condition === null || typeof condition !== 'object') {
+        if (value !== condition) {
+          return false
+        }
+        continue
+      }
+
+      // Handle comparison operators
+      const ops = condition as Record<string, unknown>
+      for (const [op, expected] of Object.entries(ops)) {
+        switch (op) {
+          case '$eq':
+            if (value !== expected) return false
+            break
+          case '$ne':
+            if (value === expected) return false
+            break
+          case '$gt':
+            if (!(typeof value === 'number' && value > (expected as number))) return false
+            break
+          case '$gte':
+            if (!(typeof value === 'number' && value >= (expected as number))) return false
+            break
+          case '$lt':
+            if (!(typeof value === 'number' && value < (expected as number))) return false
+            break
+          case '$lte':
+            if (!(typeof value === 'number' && value <= (expected as number))) return false
+            break
+          case '$in':
+            if (!(expected as unknown[]).includes(value)) return false
+            break
+          case '$nin':
+            if ((expected as unknown[]).includes(value)) return false
+            break
+          case '$exists':
+            if (expected && value === undefined) return false
+            if (!expected && value !== undefined) return false
+            break
+          case '$regex': {
+            const regex = expected instanceof RegExp ? expected : new RegExp(expected as string)
+            if (!regex.test(String(value))) return false
+            break
+          }
+        }
+      }
+    }
+
+    return true
   }
 
   /**

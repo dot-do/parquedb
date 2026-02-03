@@ -110,3 +110,28 @@ export {
   compressLz4Hadoop,
   writeCompressors,
 } from './compression'
+
+// =============================================================================
+// Schema Generator (for typed collections)
+// =============================================================================
+
+export {
+  // Functions
+  iceTypeToParquet,
+  generateParquetSchema,
+  generateMinimalSchema,
+  schemaToColumnSources,
+  validateSchemaTree,
+  getSchemaColumnNames,
+  schemaHasColumn,
+  getRequiredColumns,
+  getOptionalColumns,
+} from './schema-generator'
+
+export type {
+  // Types
+  ParquetType,
+  SchemaField,
+  SchemaTree,
+  SchemaGeneratorOptions,
+} from './schema-generator'

@@ -22,24 +22,17 @@ import type {
   RmdirOptions,
 } from '../types/storage'
 import {
-  FileNotFoundError,
-  VersionMismatchError,
-  FileExistsError,
+  NotFoundError,
+  ETagMismatchError,
+  AlreadyExistsError,
   DirectoryNotEmptyError,
-} from './MemoryBackend'
+  PathTraversalError,
+} from './errors'
 import { validateRange } from './validation'
 import { getRandomBase36 } from '../utils'
 
-/**
- * Error thrown when a path traversal attempt is detected
- */
-export class PathTraversalError extends Error {
-  override readonly name = 'PathTraversalError'
-  constructor(path: string) {
-    super(`Path traversal attempt detected: ${path}`)
-    Object.setPrototypeOf(this, PathTraversalError.prototype)
-  }
-}
+// Re-export PathTraversalError for backward compatibility
+export { PathTraversalError }
 
 /**
  * Node.js filesystem storage backend
@@ -118,7 +111,7 @@ export class FsBackend implements StorageBackend {
       return new Uint8Array(buffer)
     } catch (error: unknown) {
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-        throw new FileNotFoundError(path)
+        throw new NotFoundError(path)
       }
       throw error
     }
@@ -148,7 +141,7 @@ export class FsBackend implements StorageBackend {
       return new Uint8Array(buffer)
     } catch (error: unknown) {
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-        throw new FileNotFoundError(path)
+        throw new NotFoundError(path)
       }
       throw error
     } finally {
@@ -318,9 +311,9 @@ export class FsBackend implements StorageBackend {
     if (options?.ifNoneMatch === '*') {
       try {
         await fs.access(fullPath)
-        throw new FileExistsError(path)
+        throw new AlreadyExistsError(path)
       } catch (error: unknown) {
-        if (error instanceof FileExistsError) {
+        if (error instanceof AlreadyExistsError) {
           throw error
         }
         // File doesn't exist, proceed with write
@@ -348,9 +341,9 @@ export class FsBackend implements StorageBackend {
     if (options?.ifNoneMatch === '*') {
       try {
         await fs.access(fullPath)
-        throw new FileExistsError(path)
+        throw new AlreadyExistsError(path)
       } catch (error: unknown) {
-        if (error instanceof FileExistsError) {
+        if (error instanceof AlreadyExistsError) {
           throw error
         }
         // File doesn't exist, proceed with write
@@ -546,16 +539,16 @@ export class FsBackend implements StorageBackend {
     if (expectedVersion === null) {
       // Expecting file to not exist
       if (currentStat !== null) {
-        throw new VersionMismatchError(path, null, this.generateEtag(currentStat))
+        throw new ETagMismatchError(path, null, this.generateEtag(currentStat))
       }
     } else {
       // Expecting specific version
       if (currentStat === null) {
-        throw new VersionMismatchError(path, expectedVersion, null)
+        throw new ETagMismatchError(path, expectedVersion, null)
       }
       const currentEtag = this.generateEtag(currentStat)
       if (currentEtag !== expectedVersion) {
-        throw new VersionMismatchError(path, expectedVersion, currentEtag)
+        throw new ETagMismatchError(path, expectedVersion, currentEtag)
       }
     }
 
@@ -572,7 +565,7 @@ export class FsBackend implements StorageBackend {
       await fs.access(sourceFullPath)
     } catch (error: unknown) {
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-        throw new FileNotFoundError(source)
+        throw new NotFoundError(source)
       }
       throw error
     }
@@ -593,7 +586,7 @@ export class FsBackend implements StorageBackend {
       await fs.access(sourceFullPath)
     } catch (error: unknown) {
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-        throw new FileNotFoundError(source)
+        throw new NotFoundError(source)
       }
       throw error
     }
