@@ -792,3 +792,225 @@ createEvaliteAdapter({
   collectionPrefix: 'evalite_prod',
 })
 ```
+
+## Materialized Views Integration
+
+ParqueDB provides stream collections and materialized views for advanced evaluation analytics. This enables real-time aggregated insights into evaluation trends, scorer performance, and model behavior.
+
+### Stream Collections
+
+Import the pre-defined stream collections from `parquedb/evalite`:
+
+```typescript
+import { DB } from 'parquedb'
+import { EvalRuns, EvalScores, EvalSuites, EvalTraces, EvalResults } from 'parquedb/evalite'
+
+const db = DB({
+  // Stream collections - data flows in via evalite adapter
+  EvalRuns,       // Evaluation runs
+  EvalSuites,     // Test suites within runs
+  EvalScores,     // Scorer outputs
+  EvalTraces,     // LLM execution traces with token usage
+  EvalResults,    // Individual evaluation input/output/expected
+
+  // Your other collections...
+}, { storage })
+```
+
+Each stream collection uses the `$ingest: 'evalite'` directive to automatically wire up data ingestion from the Evalite adapter:
+
+```typescript
+// What EvalScores looks like internally
+export const EvalScores = {
+  $type: 'EvalScore',
+  runId: 'int!',
+  suiteId: 'int!',
+  evalId: 'int!',
+  suiteName: 'string!',
+  scorerName: 'string!',
+  score: 'decimal(5,4)!',
+  timestamp: 'timestamp!',
+  $ingest: 'evalite',  // Wires up adapter ingestion
+}
+```
+
+### Materialized Views for Analytics
+
+Create materialized views from stream collections using `$from`:
+
+```typescript
+import { DB } from 'parquedb'
+import { EvalRuns, EvalScores, EvalSuites, EvalTraces } from 'parquedb/evalite'
+
+const db = DB({
+  // Stream collections
+  EvalRuns,
+  EvalScores,
+  EvalSuites,
+  EvalTraces,
+
+  // ==========================================================================
+  // Materialized Views (computed from stream collections)
+  // ==========================================================================
+
+  // Score trends over time by suite and scorer
+  EvalTrends: {
+    $from: 'EvalScores',
+    $groupBy: ['suiteName', 'scorerName', { week: '$timestamp' }],
+    $compute: {
+      avgScore: { $avg: 'score' },
+      minScore: { $min: 'score' },
+      maxScore: { $max: 'score' },
+      runCount: { $count: '*' },
+    },
+  },
+
+  // Score trends by scorer only (simpler view)
+  ScoreTrends: {
+    $from: 'EvalScores',
+    $groupBy: ['scorerName', { week: '$timestamp' }],
+    $compute: {
+      avgScore: { $avg: 'score' },
+      evalCount: { $count: '*' },
+    },
+  },
+
+  // Token usage analytics
+  TokenUsage: {
+    $from: 'EvalTraces',
+    $groupBy: [{ day: '$timestamp' }],
+    $compute: {
+      totalTokens: { $sum: 'tokens' },
+      inputTokens: { $sum: 'inputTokens' },
+      outputTokens: { $sum: 'outputTokens' },
+      traceCount: { $count: '*' },
+    },
+  },
+
+  // Suite performance summary
+  SuitePerformance: {
+    $from: 'EvalSuites',
+    $groupBy: ['suiteName'],
+    $compute: {
+      avgDuration: { $avg: 'duration' },
+      runCount: { $count: '*' },
+      successRate: { $avg: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] } },
+    },
+  },
+
+}, {
+  storage: { type: 'fs', path: './data' },
+})
+```
+
+### Querying Eval Analytics
+
+Query the materialized views like regular collections:
+
+```typescript
+// Get score trends for a specific suite
+const trends = await db.EvalTrends.find({
+  suiteName: 'accuracy-suite',
+})
+
+// Get weekly score trends for all scorers
+const scoreTrends = await db.ScoreTrends.find({
+  week: { $gte: new Date('2024-01-01') },
+})
+
+// Get token usage over the last 30 days
+const tokenUsage = await db.TokenUsage.find({
+  day: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+})
+
+// Get suite performance sorted by success rate
+const suiteStats = await db.SuitePerformance.find(
+  {},
+  { sort: { successRate: -1 } }
+)
+```
+
+### Refresh Modes
+
+By default, MVs use streaming refresh (updates on every write). Override with `$refresh`:
+
+```typescript
+// Hourly refresh instead of streaming
+EvalTrends: {
+  $from: 'EvalScores',
+  $groupBy: ['suiteName', { week: '$timestamp' }],
+  $compute: { avgScore: { $avg: 'score' } },
+  $refresh: { mode: 'scheduled', schedule: '0 * * * *' },
+}
+
+// Manual refresh only
+AdHocReport: {
+  $from: 'EvalScores',
+  $refresh: { mode: 'manual' },
+}
+```
+
+### Complete Example
+
+```typescript
+// analytics.ts
+import { DB } from 'parquedb'
+import { EvalRuns, EvalScores, EvalSuites, EvalTraces } from 'parquedb/evalite'
+import { FSBackend } from 'parquedb/storage'
+
+// Schema with stream collections and MVs
+const db = DB({
+  EvalRuns,
+  EvalScores,
+  EvalSuites,
+  EvalTraces,
+
+  EvalTrends: {
+    $from: 'EvalScores',
+    $groupBy: ['suiteName', 'scorerName', { week: '$timestamp' }],
+    $compute: {
+      avgScore: { $avg: 'score' },
+      minScore: { $min: 'score' },
+      maxScore: { $max: 'score' },
+      runCount: { $count: '*' },
+    },
+  },
+
+  ScoreTrends: {
+    $from: 'EvalScores',
+    $groupBy: ['scorerName', { week: '$timestamp' }],
+    $compute: {
+      avgScore: { $avg: 'score' },
+      evalCount: { $count: '*' },
+    },
+  },
+}, {
+  storage: new FSBackend('./evalite-data'),
+})
+
+// Dashboard data function
+async function getEvalDashboard() {
+  // Recent runs
+  const recentRuns = await db.EvalRuns.find(
+    {},
+    { sort: { timestamp: -1 }, limit: 10 }
+  )
+
+  // Score trends by suite (last 4 weeks)
+  const fourWeeksAgo = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000)
+  const trends = await db.EvalTrends.find({
+    week: { $gte: fourWeeksAgo },
+  })
+
+  // Overall scorer trends
+  const scorerTrends = await db.ScoreTrends.find({
+    week: { $gte: fourWeeksAgo },
+  })
+
+  return {
+    recentRuns,
+    trendsBySuite: trends,
+    scorerTrends,
+  }
+}
+```

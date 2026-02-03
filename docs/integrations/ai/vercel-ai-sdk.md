@@ -553,6 +553,179 @@ export default {
 }
 ```
 
+## Materialized Views Integration
+
+ParqueDB's AI SDK integration includes **stream collections** that can be used as sources for materialized views (MVs). This enables powerful analytics capabilities like daily usage tracking, error monitoring, and cost analysis.
+
+### Stream Collections
+
+Import the `AIRequests` and `Generations` stream collections from `parquedb/ai-sdk`:
+
+```typescript
+import { DB } from 'parquedb'
+import { AIRequests, Generations, createParqueDBMiddleware } from 'parquedb/ai-sdk'
+import { wrapLanguageModel, generateText } from 'ai'
+import { openai } from '@ai-sdk/openai'
+
+const db = DB({
+  // Stream collections - auto-wire ingestion via $ingest: 'ai-sdk'
+  AIRequests,
+  Generations,
+
+  // Your other collections...
+  User: {
+    email: 'string!',
+    name: 'string?',
+  },
+}, {
+  storage: { type: 'fs', path: './data' },
+})
+```
+
+The `$ingest: 'ai-sdk'` directive on these collections automatically wires up the middleware to write request/generation data when included in your schema.
+
+### Example Schema with MVs
+
+Combine stream collections with materialized views for AI analytics:
+
+```typescript
+import { DB } from 'parquedb'
+import { AIRequests, Generations, createParqueDBMiddleware } from 'parquedb/ai-sdk'
+
+const db = DB({
+  // =========================================================================
+  // Stream Collections (imported - handle ingestion automatically)
+  // =========================================================================
+  AIRequests,     // All AI SDK requests (generate/stream)
+  Generations,    // Generated text/objects
+
+  // =========================================================================
+  // Materialized Views (use $from - computed from stream collections)
+  // =========================================================================
+
+  // Daily usage aggregates by model
+  DailyAIUsage: {
+    $from: 'AIRequests',
+    $groupBy: [{ date: '$timestamp' }, 'modelId'],
+    $compute: {
+      requestCount: { $count: '*' },
+      totalTokens: { $sum: 'tokens' },
+      avgLatency: { $avg: 'latencyMs' },
+      cacheHitRate: { $avg: { $cond: ['$cached', 1, 0] } },
+      errorCount: { $sum: { $cond: [{ $exists: '$error' }, 1, 0] } },
+    },
+  },
+
+  // AI errors for alerting and debugging
+  AIErrors: {
+    $from: 'AIRequests',
+    $filter: { error: { $exists: true } },
+  },
+
+  // Generated objects (filtered from all generations)
+  GeneratedObjects: {
+    $from: 'Generations',
+    $filter: { contentType: 'object' },
+  },
+
+}, {
+  storage: { type: 'fs', path: './data' },
+})
+```
+
+### How It Works
+
+1. **Stream Collections**: `AIRequests` and `Generations` are regular collections with a special `$ingest: 'ai-sdk'` directive
+2. **Auto-wiring**: When these collections are in your schema, `createParqueDBMiddleware({ db })` automatically writes to them
+3. **MVs via $from**: Collections with `$from` are materialized views - they compute data from source collections
+4. **Streaming Refresh**: MVs update automatically when source data changes (default mode)
+
+### Wiring Up the Middleware
+
+After defining your schema with stream collections, create the middleware:
+
+```typescript
+// Middleware automatically writes to AIRequests and Generations
+const middleware = createParqueDBMiddleware({
+  db,
+  cache: { enabled: true, ttlSeconds: 3600 },
+  logging: { enabled: true, level: 'standard' },
+})
+
+const model = wrapLanguageModel({
+  model: openai('gpt-4'),
+  middleware,
+})
+
+// Use the model - data flows to collections and MVs automatically
+const result = await generateText({ model, prompt: 'Hello!' })
+```
+
+### Querying AI Analytics
+
+Query the MVs just like any other collection:
+
+```typescript
+// Get daily usage for a specific model
+const gpt4Usage = await db.DailyAIUsage.find({
+  modelId: 'gpt-4',
+  date: { $gte: '2024-01-01', $lte: '2024-01-31' },
+})
+
+// Get all errors from the last 24 hours
+const recentErrors = await db.AIErrors.find({
+  timestamp: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+})
+
+// Get generated objects
+const objects = await db.GeneratedObjects.find({
+  modelId: 'gpt-4',
+})
+
+// Calculate totals across days
+const januaryUsage = await db.DailyAIUsage.find({
+  date: { $gte: '2024-01-01', $lt: '2024-02-01' },
+})
+const totalTokens = januaryUsage.reduce((sum, day) => sum + day.totalTokens, 0)
+const avgCacheHitRate = januaryUsage.reduce((sum, day) => sum + day.cacheHitRate, 0) / januaryUsage.length
+```
+
+### Available MV Patterns
+
+| MV Pattern | Use Case | Key Fields |
+|------------|----------|------------|
+| `DailyAIUsage` | Cost tracking, usage trends | `date`, `modelId`, `requestCount`, `totalTokens` |
+| `AIErrors` | Error monitoring, alerting | `error`, `modelId`, `timestamp` |
+| `GeneratedObjects` | Structured output analytics | `contentType`, `content`, `modelId` |
+| `CacheHitRates` | Cache effectiveness | `modelId`, `hitRate`, `cachedRequests` |
+| `ModelErrorRates` | Reliability tracking | `modelId`, `errorRate`, `totalRequests` |
+
+### Stream Collection Schemas
+
+**AIRequests** - Captures all AI SDK requests:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `modelId` | `string!` | Model ID (e.g., 'gpt-4') |
+| `providerId` | `string!` | Provider ID (e.g., 'openai') |
+| `requestType` | `string!` | 'generate' or 'stream' |
+| `tokens` | `int?` | Total tokens used |
+| `latencyMs` | `int!` | Request latency |
+| `cached` | `boolean!` | Whether from cache |
+| `error` | `variant?` | Error info if failed |
+| `timestamp` | `timestamp!` | Request timestamp |
+
+**Generations** - Captures generated content:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `modelId` | `string!` | Model ID |
+| `contentType` | `string!` | 'text' or 'object' |
+| `content` | `variant!` | Generated content |
+| `prompt` | `string?` | Original prompt |
+| `tokens` | `int?` | Tokens used |
+| `timestamp` | `timestamp!` | Generation timestamp |
+
 ## Best Practices
 
 ### 1. Use Appropriate Cache TTL
