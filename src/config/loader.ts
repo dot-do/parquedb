@@ -1,0 +1,165 @@
+/**
+ * Config File Loader
+ *
+ * Loads parquedb.config.ts/js files for configuration.
+ * Similar to vite.config.ts, next.config.js patterns.
+ */
+
+import type { StorageBackend } from '../types'
+import type { DBSchema } from '../db'
+import { detectRuntime } from './runtime'
+import { detectStoragePaths } from './env'
+
+/**
+ * ParqueDB configuration options
+ */
+export interface ParqueDBConfig {
+  /** Storage backend instance or configuration */
+  storage?:
+    | StorageBackend
+    | 'memory'
+    | 'fs'
+    | { type: 'fs'; path: string }
+    | { type: 'r2'; bucket: string }
+    | { type: 's3'; bucket: string; region?: string }
+
+  /** Database schema definition */
+  schema?: DBSchema
+
+  /** Default namespace for collections */
+  defaultNamespace?: string
+
+  /** Enable debug logging */
+  debug?: boolean
+
+  /** Default actor for mutations */
+  actor?: string
+
+  /** Environment-specific overrides */
+  environments?: {
+    development?: Partial<ParqueDBConfig>
+    production?: Partial<ParqueDBConfig>
+    test?: Partial<ParqueDBConfig>
+  }
+}
+
+/**
+ * Define configuration with type safety
+ *
+ * @example
+ * ```typescript
+ * // parquedb.config.ts
+ * import { defineConfig } from 'parquedb/config'
+ *
+ * export default defineConfig({
+ *   storage: { type: 'fs', path: './data' },
+ *   schema: {
+ *     User: { email: 'string!#', name: 'string' }
+ *   }
+ * })
+ * ```
+ */
+export function defineConfig(config: ParqueDBConfig): ParqueDBConfig {
+  return config
+}
+
+// Module-scoped cache
+let _config: ParqueDBConfig | null = null
+let _configLoaded = false
+
+/**
+ * Load configuration from parquedb.config.ts/js
+ *
+ * Only works in Node.js/Bun/Deno environments.
+ * Returns null in Workers/Browser (no filesystem access).
+ */
+export async function loadConfig(): Promise<ParqueDBConfig | null> {
+  if (_configLoaded) return _config
+
+  const runtime = detectRuntime()
+
+  // Can't load config files in Workers or Browser
+  if (runtime === 'cloudflare-workers' || runtime === 'browser') {
+    _configLoaded = true
+    return null
+  }
+
+  try {
+    const paths = await detectStoragePaths()
+    if (!paths?.configFile) {
+      _configLoaded = true
+      return null
+    }
+
+    // Dynamic import the config file
+    // Works with .ts in Bun, tsx, ts-node
+    // Works with .js/.mjs in Node.js
+    const configModule = await import(paths.configFile)
+
+    // Support both default export and named 'config' export
+    const config = configModule.default ?? configModule.config ?? configModule.parquedb
+
+    if (config && typeof config === 'object') {
+      _config = config as ParqueDBConfig
+      _configLoaded = true
+
+      // Apply environment-specific overrides
+      const env = detectEnvironment()
+      if (env && _config.environments?.[env]) {
+        _config = { ..._config, ..._config.environments[env] }
+      }
+
+      return _config
+    }
+
+    _configLoaded = true
+    return null
+  } catch (error) {
+    // Config file exists but failed to load
+    if (process.env.DEBUG || process.env.PARQUEDB_DEBUG) {
+      console.warn('[ParqueDB] Failed to load config:', error)
+    }
+    _configLoaded = true
+    return null
+  }
+}
+
+/**
+ * Get cached config (must call loadConfig first)
+ */
+export function getConfig(): ParqueDBConfig | null {
+  return _config
+}
+
+/**
+ * Set config manually (useful for testing or explicit configuration)
+ */
+export function setConfig(config: ParqueDBConfig): void {
+  _config = config
+  _configLoaded = true
+}
+
+/**
+ * Clear cached config (useful for testing)
+ */
+export function clearConfig(): void {
+  _config = null
+  _configLoaded = false
+}
+
+/**
+ * Detect current environment (development/production/test)
+ */
+function detectEnvironment(): 'development' | 'production' | 'test' | null {
+  // Check common environment variables
+  const env =
+    process.env.NODE_ENV ??
+    process.env.ENVIRONMENT ??
+    process.env.CF_ENVIRONMENT
+
+  if (env === 'development' || env === 'dev') return 'development'
+  if (env === 'production' || env === 'prod') return 'production'
+  if (env === 'test' || env === 'testing') return 'test'
+
+  return null
+}

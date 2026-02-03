@@ -10,13 +10,27 @@
 
 export {
   DB,
-  db,
   type CollectionSchema,
   type DBSchema,
   type DBConfig,
   type DBInput,
   type DBInstance,
 } from './db'
+
+// Auto-configured db and sql (lazy initialization)
+export { db, sql, initializeDB, getDB, resetDB } from './config/auto'
+
+// Configuration utilities
+export {
+  defineConfig,
+  detectRuntime,
+  isServer,
+  isWorkers,
+  isBrowser,
+  loadWorkersEnv,
+  type ParqueDBConfig as AutoConfig,
+  type Runtime,
+} from './config'
 
 // =============================================================================
 // Main Classes

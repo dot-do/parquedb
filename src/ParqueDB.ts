@@ -226,6 +226,12 @@ export class ParqueDB {
           return undefined
         }
 
+        // Check if property was explicitly set (e.g., db.sql = ...)
+        // This allows attaching custom properties like SQL executor
+        if (prop in _target) {
+          return (_target as any)[prop]
+        }
+
         // Handle dynamic collection access for any string property
         // (Posts, Users, posts, users, etc.)
         if (typeof prop === 'string') {
