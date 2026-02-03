@@ -111,7 +111,7 @@ export interface EntityBackend {
   /**
    * Update an existing entity
    */
-  update<T = Record<string, unknown>>(
+  update<T extends EntityData = EntityData>(
     ns: string,
     id: string,
     update: Update,
@@ -130,7 +130,7 @@ export interface EntityBackend {
   /**
    * Create multiple entities
    */
-  bulkCreate<T = Record<string, unknown>>(
+  bulkCreate<T extends EntityData = EntityData>(
     ns: string,
     inputs: CreateInput<T>[],
     options?: CreateOptions

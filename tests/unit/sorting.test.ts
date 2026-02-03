@@ -60,8 +60,16 @@ describe('Sorting', () => {
   })
 
   afterEach(async () => {
+    // Dispose of the database to clean up internal state before removing temp dir
+    db.dispose()
+    // Add a small delay to allow any background operations to settle
+    await new Promise(resolve => setTimeout(resolve, 50))
     // Clean up temp directory after each test
-    await rm(tempDir, { recursive: true, force: true })
+    try {
+      await rm(tempDir, { recursive: true, force: true })
+    } catch {
+      // Ignore cleanup errors - may already be removed or still in use
+    }
   })
 
   // Helper to create test posts
