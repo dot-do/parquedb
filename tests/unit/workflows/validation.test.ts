@@ -3,30 +3,25 @@
  *
  * Tests the runtime type validation for JSON responses from Durable Objects
  * and other external sources in workflow code.
+ *
+ * IMPORTANT: This file imports type guards from production code to ensure
+ * tests fail if production behavior changes.
  */
 
 import { describe, it, expect } from 'vitest'
 
-// Import the type guards from compaction-queue-consumer
-// Since they're not exported, we'll test them indirectly through the module
-// For direct testing, we recreate the type guard logic here
+// Import the type guard from production code
+import { isWindowsReadyResponse } from '@/workflows/compaction-queue-consumer'
 
 // =============================================================================
-// Type Guard Implementations (mirrored from compaction-queue-consumer.ts)
+// Type Definitions for Test Data
 // =============================================================================
 
-interface WindowReadyEntry {
-  namespace: string
-  windowStart: number
-  windowEnd: number
-  files: string[]
-  writers: string[]
-}
-
-interface WindowsReadyResponse {
-  windowsReady: WindowReadyEntry[]
-}
-
+/**
+ * UpdateRequestBody type guard - used for validating incoming request bodies
+ * Note: This is tested here but could be moved to production if validation
+ * is needed at runtime in the actual code.
+ */
 interface UpdateRequestBody {
   updates: Array<{
     namespace: string
@@ -44,40 +39,8 @@ interface UpdateRequestBody {
 }
 
 /**
- * Type guard for WindowsReadyResponse
- */
-function isWindowsReadyResponse(data: unknown): data is WindowsReadyResponse {
-  if (typeof data !== 'object' || data === null) {
-    return false
-  }
-  if (!('windowsReady' in data)) {
-    return false
-  }
-  const { windowsReady } = data as { windowsReady: unknown }
-  if (!Array.isArray(windowsReady)) {
-    return false
-  }
-  // Validate each entry has required fields
-  for (const entry of windowsReady) {
-    if (typeof entry !== 'object' || entry === null) {
-      return false
-    }
-    const e = entry as Record<string, unknown>
-    if (
-      typeof e.namespace !== 'string' ||
-      typeof e.windowStart !== 'number' ||
-      typeof e.windowEnd !== 'number' ||
-      !Array.isArray(e.files) ||
-      !Array.isArray(e.writers)
-    ) {
-      return false
-    }
-  }
-  return true
-}
-
-/**
  * Type guard for UpdateRequestBody
+ * Validates incoming request bodies have correct structure and types.
  */
 function isUpdateRequestBody(data: unknown): data is UpdateRequestBody {
   if (typeof data !== 'object' || data === null) {
@@ -127,17 +90,19 @@ function isUpdateRequestBody(data: unknown): data is UpdateRequestBody {
 // =============================================================================
 
 describe('Workflow JSON Response Validation', () => {
-  describe('isWindowsReadyResponse', () => {
+  describe('isWindowsReadyResponse (production import)', () => {
     it('should accept valid response with empty windowsReady array', () => {
       const response = { windowsReady: [] }
       expect(isWindowsReadyResponse(response)).toBe(true)
     })
 
     it('should accept valid response with populated windowsReady array', () => {
+      // Note: Production code requires windowKey field
       const response = {
         windowsReady: [
           {
             namespace: 'users',
+            windowKey: '1700000000000',
             windowStart: 1700000000000,
             windowEnd: 1700003600000,
             files: ['data/users/1700000000-writer1-1.parquet'],
@@ -145,6 +110,7 @@ describe('Workflow JSON Response Validation', () => {
           },
           {
             namespace: 'posts',
+            windowKey: '1700000000000',
             windowStart: 1700000000000,
             windowEnd: 1700003600000,
             files: ['data/posts/1700000000-writer1-1.parquet', 'data/posts/1700000000-writer2-1.parquet'],
@@ -185,6 +151,23 @@ describe('Workflow JSON Response Validation', () => {
       const response = {
         windowsReady: [
           {
+            windowKey: '1700000000000',
+            windowStart: 1700000000000,
+            windowEnd: 1700003600000,
+            files: [],
+            writers: [],
+          },
+        ],
+      }
+      expect(isWindowsReadyResponse(response)).toBe(false)
+    })
+
+    it('should reject response with invalid window entry - missing windowKey', () => {
+      // Production code requires windowKey - this test ensures we validate it
+      const response = {
+        windowsReady: [
+          {
+            namespace: 'users',
             windowStart: 1700000000000,
             windowEnd: 1700003600000,
             files: [],
@@ -200,6 +183,7 @@ describe('Workflow JSON Response Validation', () => {
         windowsReady: [
           {
             namespace: 123,
+            windowKey: '1700000000000',
             windowStart: 1700000000000,
             windowEnd: 1700003600000,
             files: [],
@@ -215,6 +199,7 @@ describe('Workflow JSON Response Validation', () => {
         windowsReady: [
           {
             namespace: 'users',
+            windowKey: '1700000000000',
             windowEnd: 1700003600000,
             files: [],
             writers: [],
@@ -229,6 +214,7 @@ describe('Workflow JSON Response Validation', () => {
         windowsReady: [
           {
             namespace: 'users',
+            windowKey: '1700000000000',
             windowStart: '1700000000000',
             windowEnd: 1700003600000,
             files: [],
@@ -244,6 +230,7 @@ describe('Workflow JSON Response Validation', () => {
         windowsReady: [
           {
             namespace: 'users',
+            windowKey: '1700000000000',
             windowStart: 1700000000000,
             windowEnd: 1700003600000,
             files: 'not-an-array',
@@ -259,6 +246,7 @@ describe('Workflow JSON Response Validation', () => {
         windowsReady: [
           {
             namespace: 'users',
+            windowKey: '1700000000000',
             windowStart: 1700000000000,
             windowEnd: 1700003600000,
             files: [],

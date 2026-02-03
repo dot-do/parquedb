@@ -11,353 +11,15 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-// =============================================================================
-// Types
-// =============================================================================
-
-interface WindowState {
-  windowStart: number
-  windowEnd: number
-  filesByWriter: Map<string, string[]>
-  writers: Set<string>
-  lastActivityAt: number
-  totalSize: number
-}
-
-interface StoredWindowState {
-  windowStart: number
-  windowEnd: number
-  filesByWriter: Record<string, string[]>
-  writers: string[]
-  lastActivityAt: number
-  totalSize: number
-}
-
-interface StoredState {
-  namespace: string
-  windows: Record<string, StoredWindowState>
-  knownWriters: string[]
-  writerLastSeen: Record<string, number>
-}
-
-interface UpdateRequest {
-  namespace: string
-  updates: Array<{
-    namespace: string
-    writerId: string
-    file: string
-    timestamp: number
-    size: number
-  }>
-  config: {
-    windowSizeMs: number
-    minFilesToCompact: number
-    maxWaitTimeMs: number
-    targetFormat: string
-  }
-}
-
-interface WindowReadyEntry {
-  namespace: string
-  windowStart: number
-  windowEnd: number
-  files: string[]
-  writers: string[]
-}
-
-// =============================================================================
-// Mock Classes
-// =============================================================================
-
-class MockDurableObjectStorage {
-  private data: Map<string, unknown> = new Map()
-
-  async get<T>(key: string): Promise<T | undefined> {
-    return this.data.get(key) as T | undefined
-  }
-
-  async put<T>(key: string, value: T): Promise<void> {
-    this.data.set(key, value)
-  }
-
-  async delete(key: string): Promise<boolean> {
-    return this.data.delete(key)
-  }
-
-  async list(): Promise<Map<string, unknown>> {
-    return new Map(this.data)
-  }
-
-  // Test helpers
-  clear(): void {
-    this.data.clear()
-  }
-
-  getData(key: string): unknown {
-    return this.data.get(key)
-  }
-
-  setData(key: string, value: unknown): void {
-    this.data.set(key, value)
-  }
-}
-
-class MockDurableObjectState {
-  storage: MockDurableObjectStorage
-
-  constructor() {
-    this.storage = new MockDurableObjectStorage()
-  }
-
-  clear(): void {
-    this.storage.clear()
-  }
-
-  getData(key: string): unknown {
-    return this.storage.getData(key)
-  }
-
-  setData(key: string, value: unknown): void {
-    this.storage.setData(key, value)
-  }
-}
-
-/**
- * Testable CompactionStateDO implementation
- * Mirrors production implementation for testing
- */
-class TestableCompactionStateDO {
-  private state: MockDurableObjectState
-  private namespace: string = ''
-  private windows: Map<string, WindowState> = new Map()
-  private knownWriters: Set<string> = new Set()
-  private writerLastSeen: Map<string, number> = new Map()
-  private initialized = false
-
-  private static WRITER_INACTIVE_THRESHOLD_MS = 30 * 60 * 1000
-
-  constructor(state: MockDurableObjectState) {
-    this.state = state
-  }
-
-  private async ensureInitialized(): Promise<void> {
-    if (this.initialized) return
-
-    const stored = await this.state.storage.get<StoredState>('compactionState')
-    if (stored) {
-      this.namespace = stored.namespace ?? ''
-      for (const [key, sw] of Object.entries(stored.windows)) {
-        this.windows.set(key, {
-          windowStart: sw.windowStart,
-          windowEnd: sw.windowEnd,
-          filesByWriter: new Map(Object.entries(sw.filesByWriter)),
-          writers: new Set(sw.writers),
-          lastActivityAt: sw.lastActivityAt,
-          totalSize: sw.totalSize,
-        })
-      }
-      this.knownWriters = new Set(stored.knownWriters)
-      this.writerLastSeen = new Map(Object.entries(stored.writerLastSeen))
-    }
-
-    this.initialized = true
-  }
-
-  private async saveState(): Promise<void> {
-    const stored: StoredState = {
-      namespace: this.namespace,
-      windows: {},
-      knownWriters: Array.from(this.knownWriters),
-      writerLastSeen: Object.fromEntries(this.writerLastSeen),
-    }
-
-    for (const [key, window] of this.windows) {
-      stored.windows[key] = {
-        windowStart: window.windowStart,
-        windowEnd: window.windowEnd,
-        filesByWriter: Object.fromEntries(window.filesByWriter),
-        writers: Array.from(window.writers),
-        lastActivityAt: window.lastActivityAt,
-        totalSize: window.totalSize,
-      }
-    }
-
-    await this.state.storage.put('compactionState', stored)
-  }
-
-  async fetch(request: Request): Promise<Response> {
-    await this.ensureInitialized()
-    const url = new URL(request.url)
-
-    if (url.pathname === '/update' && request.method === 'POST') {
-      return this.handleUpdate(request)
-    }
-
-    if (url.pathname === '/status') {
-      return this.handleStatus()
-    }
-
-    return new Response('Not Found', { status: 404 })
-  }
-
-  private async handleUpdate(request: Request): Promise<Response> {
-    const body = await request.json() as UpdateRequest
-
-    const { namespace, updates, config } = body
-    const now = Date.now()
-    const windowsReady: WindowReadyEntry[] = []
-
-    // Set namespace on first update
-    if (!this.namespace) {
-      this.namespace = namespace
-    }
-
-    // Process updates
-    for (const update of updates) {
-      const { writerId, file, timestamp, size } = update
-
-      this.knownWriters.add(writerId)
-      this.writerLastSeen.set(writerId, now)
-
-      const windowStart = Math.floor(timestamp / config.windowSizeMs) * config.windowSizeMs
-      const windowEnd = windowStart + config.windowSizeMs
-      const windowKey = String(windowStart)
-
-      let window = this.windows.get(windowKey)
-      if (!window) {
-        window = {
-          windowStart,
-          windowEnd,
-          filesByWriter: new Map(),
-          writers: new Set(),
-          lastActivityAt: now,
-          totalSize: 0,
-        }
-        this.windows.set(windowKey, window)
-      }
-
-      const writerFiles = window.filesByWriter.get(writerId) ?? []
-      writerFiles.push(file)
-      window.filesByWriter.set(writerId, writerFiles)
-      window.writers.add(writerId)
-      window.lastActivityAt = now
-      window.totalSize += size
-    }
-
-    // Check for windows ready for compaction
-    const activeWriters = this.getActiveWriters(now)
-
-    for (const [windowKey, window] of this.windows) {
-      if (now < window.windowEnd + config.maxWaitTimeMs) continue
-
-      let totalFiles = 0
-      for (const files of window.filesByWriter.values()) {
-        totalFiles += files.length
-      }
-
-      if (totalFiles < config.minFilesToCompact) continue
-
-      const missingWriters = activeWriters.filter(w => !window.writers.has(w))
-      const waitedLongEnough = (now - window.lastActivityAt) > config.maxWaitTimeMs
-
-      if (missingWriters.length === 0 || waitedLongEnough) {
-        const allFiles: string[] = []
-        for (const files of window.filesByWriter.values()) {
-          allFiles.push(...files)
-        }
-
-        windowsReady.push({
-          namespace: this.namespace,
-          windowStart: window.windowStart,
-          windowEnd: window.windowEnd,
-          files: allFiles.sort(),
-          writers: Array.from(window.writers),
-        })
-
-        this.windows.delete(windowKey)
-      }
-    }
-
-    await this.saveState()
-
-    return new Response(JSON.stringify({ windowsReady }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-
-  private handleStatus(): Response {
-    const status = {
-      namespace: this.namespace,
-      activeWindows: this.windows.size,
-      knownWriters: Array.from(this.knownWriters),
-      activeWriters: this.getActiveWriters(Date.now()),
-      windows: Array.from(this.windows.entries()).map(([key, w]) => ({
-        key,
-        windowStart: new Date(w.windowStart).toISOString(),
-        windowEnd: new Date(w.windowEnd).toISOString(),
-        writers: Array.from(w.writers),
-        fileCount: Array.from(w.filesByWriter.values()).reduce((sum, f) => sum + f.length, 0),
-        totalSize: w.totalSize,
-      })),
-    }
-
-    return new Response(JSON.stringify(status, null, 2), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-
-  private getActiveWriters(now: number): string[] {
-    const active: string[] = []
-    for (const [writerId, lastSeen] of this.writerLastSeen) {
-      if (now - lastSeen < TestableCompactionStateDO.WRITER_INACTIVE_THRESHOLD_MS) {
-        active.push(writerId)
-      }
-    }
-    return active
-  }
-
-  // Test helpers
-  getWindowCount(): number {
-    return this.windows.size
-  }
-
-  getKnownWriters(): string[] {
-    return Array.from(this.knownWriters)
-  }
-
-  getNamespace(): string {
-    return this.namespace
-  }
-}
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
-
-function createUpdateRequest(overrides: Partial<UpdateRequest> = {}): UpdateRequest {
-  return {
-    namespace: 'users',
-    updates: [],
-    config: {
-      windowSizeMs: 3600000, // 1 hour
-      minFilesToCompact: 10,
-      maxWaitTimeMs: 300000, // 5 minutes
-      targetFormat: 'native',
-    },
-    ...overrides,
-  }
-}
-
-function createUpdate(overrides: Partial<UpdateRequest['updates'][0]> = {}) {
-  return {
-    namespace: 'users',
-    writerId: 'writer1',
-    file: 'data/users/1700001234-writer1-0.parquet',
-    timestamp: 1700001234000,
-    size: 1024,
-    ...overrides,
-  }
-}
+// Import shared test utilities
+import {
+  TestableCompactionStateDO,
+  MockDurableObjectState,
+  createUpdateRequest,
+  createUpdate,
+  type StoredState,
+  type WindowReadyEntry,
+} from './__helpers__/testable-compaction-state-do'
 
 // =============================================================================
 // /update Endpoint Tests
@@ -574,8 +236,11 @@ describe('CompactionStateDO - /update Endpoint', () => {
       expect(body.windowsReady).toHaveLength(0)
     })
 
-    it('should remove ready windows from tracking', async () => {
+    it('should mark ready windows as processing (not delete them)', async () => {
       const oldTimestamp = Date.now() - (3600000 + 400000)
+      const windowStart = Math.floor(oldTimestamp / 3600000) * 3600000
+      const windowKey = String(windowStart)
+
       const request = new Request('http://internal/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -588,8 +253,10 @@ describe('CompactionStateDO - /update Endpoint', () => {
 
       await compactionDO.fetch(request)
 
-      // Window should be removed after being marked ready
-      expect(compactionDO.getWindowCount()).toBe(0)
+      // Window should still exist but be in processing state (two-phase commit)
+      expect(compactionDO.getWindowCount()).toBe(1)
+      const status = compactionDO.getWindowProcessingStatus(windowKey)
+      expect(status?.state).toBe('processing')
     })
 
     it('should include sorted file list in ready window', async () => {
@@ -1085,6 +752,387 @@ describe('CompactionStateDO - Edge Cases', () => {
       }
 
       expect(status.windows[0].totalSize).toBe(6000)
+    })
+  })
+})
+
+// =============================================================================
+// Two-Phase Commit Tests
+// =============================================================================
+
+describe('CompactionStateDO - Two-Phase Commit', () => {
+  let state: MockDurableObjectState
+  let compactionDO: TestableCompactionStateDO
+
+  beforeEach(() => {
+    state = new MockDurableObjectState()
+    compactionDO = new TestableCompactionStateDO(state)
+  })
+
+  describe('/confirm-dispatch endpoint', () => {
+    it('should mark window as dispatched', async () => {
+      // First create a ready window
+      const oldTimestamp = Date.now() - (3600000 + 400000)
+      const windowStart = Math.floor(oldTimestamp / 3600000) * 3600000
+      const windowKey = String(windowStart)
+
+      await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: Array.from({ length: 15 }, (_, i) =>
+            createUpdate({ timestamp: oldTimestamp, file: `file${i}.parquet` })
+          ),
+        })),
+      }))
+
+      // Confirm dispatch
+      const response = await compactionDO.fetch(new Request('http://internal/confirm-dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey, workflowId: 'workflow-123' }),
+      }))
+
+      expect(response.status).toBe(200)
+      const body = await response.json() as { success: boolean }
+      expect(body.success).toBe(true)
+
+      // Check status
+      const status = compactionDO.getWindowProcessingStatus(windowKey)
+      expect(status?.state).toBe('dispatched')
+      if (status?.state === 'dispatched') {
+        expect(status.workflowId).toBe('workflow-123')
+      }
+    })
+
+    it('should return 404 for non-existent window', async () => {
+      const response = await compactionDO.fetch(new Request('http://internal/confirm-dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey: 'nonexistent', workflowId: 'workflow-123' }),
+      }))
+
+      expect(response.status).toBe(404)
+    })
+
+    it('should return 409 if window is not in processing state', async () => {
+      // Create a window but don't let it become ready
+      const timestamp = Date.now()
+      const windowStart = Math.floor(timestamp / 3600000) * 3600000
+      const windowKey = String(windowStart)
+
+      await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: [createUpdate({ timestamp })],
+        })),
+      }))
+
+      // Try to confirm dispatch on pending window
+      const response = await compactionDO.fetch(new Request('http://internal/confirm-dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey, workflowId: 'workflow-123' }),
+      }))
+
+      expect(response.status).toBe(409)
+    })
+  })
+
+  describe('/rollback-processing endpoint', () => {
+    it('should reset window to pending state', async () => {
+      // Create a ready window (goes to processing)
+      const oldTimestamp = Date.now() - (3600000 + 400000)
+      const windowStart = Math.floor(oldTimestamp / 3600000) * 3600000
+      const windowKey = String(windowStart)
+
+      await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: Array.from({ length: 15 }, (_, i) =>
+            createUpdate({ timestamp: oldTimestamp, file: `file${i}.parquet` })
+          ),
+        })),
+      }))
+
+      // Rollback processing
+      const response = await compactionDO.fetch(new Request('http://internal/rollback-processing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey }),
+      }))
+
+      expect(response.status).toBe(200)
+      const body = await response.json() as { success: boolean }
+      expect(body.success).toBe(true)
+
+      // Check status is back to pending
+      const status = compactionDO.getWindowProcessingStatus(windowKey)
+      expect(status?.state).toBe('pending')
+    })
+
+    it('should return 404 for non-existent window', async () => {
+      const response = await compactionDO.fetch(new Request('http://internal/rollback-processing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey: 'nonexistent' }),
+      }))
+
+      expect(response.status).toBe(404)
+    })
+  })
+
+  describe('/workflow-complete endpoint', () => {
+    it('should delete window on successful completion', async () => {
+      // Create a ready window and confirm dispatch
+      const oldTimestamp = Date.now() - (3600000 + 400000)
+      const windowStart = Math.floor(oldTimestamp / 3600000) * 3600000
+      const windowKey = String(windowStart)
+
+      await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: Array.from({ length: 15 }, (_, i) =>
+            createUpdate({ timestamp: oldTimestamp, file: `file${i}.parquet` })
+          ),
+        })),
+      }))
+
+      await compactionDO.fetch(new Request('http://internal/confirm-dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey, workflowId: 'workflow-123' }),
+      }))
+
+      // Complete workflow successfully
+      const response = await compactionDO.fetch(new Request('http://internal/workflow-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey, workflowId: 'workflow-123', success: true }),
+      }))
+
+      expect(response.status).toBe(200)
+      expect(compactionDO.getWindowCount()).toBe(0)
+    })
+
+    it('should reset window to pending on failed completion', async () => {
+      // Create a ready window and confirm dispatch
+      const oldTimestamp = Date.now() - (3600000 + 400000)
+      const windowStart = Math.floor(oldTimestamp / 3600000) * 3600000
+      const windowKey = String(windowStart)
+
+      await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: Array.from({ length: 15 }, (_, i) =>
+            createUpdate({ timestamp: oldTimestamp, file: `file${i}.parquet` })
+          ),
+        })),
+      }))
+
+      await compactionDO.fetch(new Request('http://internal/confirm-dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey, workflowId: 'workflow-123' }),
+      }))
+
+      // Complete workflow with failure
+      const response = await compactionDO.fetch(new Request('http://internal/workflow-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey, workflowId: 'workflow-123', success: false }),
+      }))
+
+      expect(response.status).toBe(200)
+      expect(compactionDO.getWindowCount()).toBe(1)
+      expect(compactionDO.getWindowProcessingStatus(windowKey)?.state).toBe('pending')
+    })
+
+    it('should reject mismatched workflow ID', async () => {
+      // Create a ready window and confirm dispatch
+      const oldTimestamp = Date.now() - (3600000 + 400000)
+      const windowStart = Math.floor(oldTimestamp / 3600000) * 3600000
+      const windowKey = String(windowStart)
+
+      await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: Array.from({ length: 15 }, (_, i) =>
+            createUpdate({ timestamp: oldTimestamp, file: `file${i}.parquet` })
+          ),
+        })),
+      }))
+
+      await compactionDO.fetch(new Request('http://internal/confirm-dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey, workflowId: 'workflow-123' }),
+      }))
+
+      // Try to complete with wrong workflow ID
+      const response = await compactionDO.fetch(new Request('http://internal/workflow-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey, workflowId: 'wrong-workflow', success: true }),
+      }))
+
+      expect(response.status).toBe(409)
+    })
+
+    it('should handle already-deleted window gracefully', async () => {
+      const response = await compactionDO.fetch(new Request('http://internal/workflow-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey: 'nonexistent', workflowId: 'workflow-123', success: true }),
+      }))
+
+      expect(response.status).toBe(200)
+      const body = await response.json() as { success: boolean; alreadyDeleted: boolean }
+      expect(body.success).toBe(true)
+      expect(body.alreadyDeleted).toBe(true)
+    })
+  })
+
+  describe('stuck window cleanup', () => {
+    it('should reset stuck processing windows on next update', async () => {
+      // Pre-populate storage with a stuck processing window
+      const oldWindowStart = Date.now() - (2 * 3600000) // 2 hours ago
+      const windowKey = String(oldWindowStart)
+      const stuckStartedAt = Date.now() - (10 * 60 * 1000) // 10 minutes ago (past 5 min timeout)
+
+      const preloadedState: StoredState = {
+        namespace: 'users',
+        windows: {
+          [windowKey]: {
+            windowStart: oldWindowStart,
+            windowEnd: oldWindowStart + 3600000,
+            filesByWriter: { 'writer1': ['stuck-file.parquet'] },
+            writers: ['writer1'],
+            lastActivityAt: stuckStartedAt,
+            totalSize: 1024,
+            processingStatus: { state: 'processing', startedAt: stuckStartedAt },
+          },
+        },
+        knownWriters: ['writer1'],
+        writerLastSeen: { 'writer1': stuckStartedAt },
+      }
+
+      state.setData('compactionState', preloadedState)
+
+      // Create new DO (simulates restart)
+      const newDO = new TestableCompactionStateDO(state)
+
+      // Send any update to trigger cleanup
+      await newDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: [createUpdate({ timestamp: Date.now() })],
+        })),
+      }))
+
+      // Stuck window should now be pending
+      expect(newDO.getWindowProcessingStatus(windowKey)?.state).toBe('pending')
+    })
+  })
+
+  describe('window state transitions', () => {
+    it('should not return processing windows as ready again', async () => {
+      // Create a ready window
+      const oldTimestamp = Date.now() - (3600000 + 400000)
+      const windowStart = Math.floor(oldTimestamp / 3600000) * 3600000
+      const windowKey = String(windowStart)
+
+      const firstResponse = await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: Array.from({ length: 15 }, (_, i) =>
+            createUpdate({ timestamp: oldTimestamp, file: `file${i}.parquet` })
+          ),
+        })),
+      }))
+
+      const firstBody = await firstResponse.json() as { windowsReady: WindowReadyEntry[] }
+      expect(firstBody.windowsReady).toHaveLength(1)
+
+      // Send another update - processing window should not be returned again
+      const secondResponse = await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: [createUpdate({ timestamp: Date.now() })],
+        })),
+      }))
+
+      const secondBody = await secondResponse.json() as { windowsReady: WindowReadyEntry[] }
+      // The processing window should not appear again
+      const processingWindowReady = secondBody.windowsReady.find(w => w.windowKey === windowKey)
+      expect(processingWindowReady).toBeUndefined()
+    })
+
+    it('should not add new files to processing windows', async () => {
+      // Create a ready window
+      const oldTimestamp = Date.now() - (3600000 + 400000)
+      const windowStart = Math.floor(oldTimestamp / 3600000) * 3600000
+      const windowKey = String(windowStart)
+
+      const firstResponse = await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: Array.from({ length: 15 }, (_, i) =>
+            createUpdate({ timestamp: oldTimestamp, file: `file${i}.parquet` })
+          ),
+        })),
+      }))
+
+      const firstBody = await firstResponse.json() as { windowsReady: WindowReadyEntry[] }
+      const originalFileCount = firstBody.windowsReady[0].files.length
+
+      // Try to add more files to the same window
+      await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: Array.from({ length: 5 }, (_, i) =>
+            createUpdate({ timestamp: oldTimestamp, file: `extra-file${i}.parquet` })
+          ),
+        })),
+      }))
+
+      // Check that status shows same file count (files not added)
+      const statusResponse = await compactionDO.fetch(new Request('http://internal/status'))
+      const status = await statusResponse.json() as {
+        windows: Array<{ key: string; fileCount: number }>
+      }
+
+      const windowStatus = status.windows.find(w => w.key === windowKey)
+      expect(windowStatus?.fileCount).toBe(originalFileCount)
+    })
+
+    it('should include windowKey in ready window response', async () => {
+      const oldTimestamp = Date.now() - (3600000 + 400000)
+      const windowStart = Math.floor(oldTimestamp / 3600000) * 3600000
+      const expectedWindowKey = String(windowStart)
+
+      const response = await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: Array.from({ length: 15 }, (_, i) =>
+            createUpdate({ timestamp: oldTimestamp, file: `file${i}.parquet` })
+          ),
+        })),
+      }))
+
+      const body = await response.json() as { windowsReady: WindowReadyEntry[] }
+      expect(body.windowsReady[0].windowKey).toBe(expectedWindowKey)
     })
   })
 })
