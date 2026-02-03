@@ -3,14 +3,25 @@ title: Collection API
 description: Complete API reference for ParqueDB Collection class methods
 ---
 
+# Collection API Reference
+
 The Collection class provides a MongoDB-style API for querying, mutating, and managing entities in ParqueDB. Each collection represents a namespace of entities with a consistent schema.
+
+**Important:** This documentation describes the Collection API interface, which is implemented by:
+- **Standalone `Collection` class** (`src/Collection.ts`) - In-memory implementation for testing and development
+- **`ParqueDB` collections** (`src/ParqueDB/`) - Production implementation with persistent storage backends
+
+For production use, always instantiate collections via the `ParqueDB` class with a storage backend. The standalone `Collection` class is useful for unit tests and quick prototyping but does not persist data.
 
 ## Overview
 
 Collections are accessed via the database instance using property notation:
 
 ```typescript
-import { db } from 'parquedb'
+import { ParqueDB, MemoryBackend } from 'parquedb'
+
+// For production use with persistent storage
+const db = new ParqueDB({ storage: new MemoryBackend() })
 
 const posts = db.Posts        // Collection<Post>
 const users = db.Users        // Collection<User>
@@ -22,6 +33,8 @@ Or explicitly created with `collection()`:
 ```typescript
 const posts = db.collection('posts')
 ```
+
+**Note:** The standalone `Collection` class exported from the package is a simplified in-memory implementation intended for testing and development only. For production use with persistent storage backends (MemoryBackend, FsBackend, R2Backend, etc.), always use the `ParqueDB` class which properly integrates with storage backends.
 
 ## Query Methods
 
@@ -152,12 +165,12 @@ async get(id: string, options?: GetOptions): Promise<Entity<T>>
 ```
 
 **Parameters:**
-- `id`: Entity ID (with or without namespace prefix)
+- `id`: Entity ID (with or without namespace prefix). If no namespace prefix is provided (no `/`), the collection's namespace is automatically prepended.
 - `options` (optional): Get options
 
-**Returns:** Entity with traversal methods for relationships
+**Returns:** Entity with `related()` and `referencedBy()` methods for relationship traversal
 
-**Throws:** Error if entity not found
+**Throws:** Error if entity not found or if entity is soft-deleted (unless `includeDeleted: true` is set)
 
 **Examples:**
 
@@ -216,9 +229,9 @@ const comments = await post.referencedBy('comments', {
 })
 
 console.log(categories.items)    // Array of Category entities
-console.log(categories.total)    // Total count
+console.log(categories.total)    // Total count (optional)
 console.log(categories.hasMore)  // Boolean
-console.log(categories.nextCursor) // Cursor for next page
+console.log(categories.nextCursor) // Cursor for next page (optional)
 ```
 
 ---
@@ -245,7 +258,7 @@ async findPaginated(
 ```typescript
 interface PaginatedResult<T> {
   items: T[]           // Current page items
-  total: number        // Total matching documents
+  total?: number       // Total matching documents (optional)
   hasMore: boolean     // Whether more results exist
   nextCursor?: string  // Cursor for next page
 }
@@ -424,7 +437,7 @@ const user = await db.Users.create({
   email: 'alice@example.com'
 })
 
-// With relationships
+// With relationships (object format with display names as keys)
 const post = await db.Posts.create({
   $type: 'Post',
   name: 'my-post',
@@ -433,6 +446,19 @@ const post = await db.Posts.create({
   categories: {
     'Tech': 'categories/tech',
     'Database': 'categories/db'
+  }
+})
+
+// Alternatively, use $link operator after creation
+const post = await db.Posts.create({
+  $type: 'Post',
+  name: 'my-post',
+  title: 'My Post'
+})
+await db.Posts.update(post.$id, {
+  $link: {
+    author: 'users/alice',
+    categories: ['categories/tech', 'categories/db']
   }
 })
 
@@ -472,20 +498,20 @@ console.log(post.createdBy) // 'users/alice'
 
 Create multiple entities in a single operation.
 
-**Signature:**
+**Note:** This method is not yet implemented in the current Collection API. Use individual `create()` calls in a loop or see the "Bulk Operations" section for workarounds.
+
+**Planned Signature:**
 ```typescript
 async createMany(dataArray: CreateInput<T>[]): Promise<Entity<T>[]>
 ```
 
-**Parameters:**
+**Planned Parameters:**
 - `dataArray`: Array of entity data objects
 
-**Returns:** Array of created entities
-
-**Examples:**
+**Planned Usage:**
 
 ```typescript
-// Create multiple posts
+// Create multiple posts (when implemented)
 const posts = await db.Posts.createMany([
   {
     $type: 'Post',
@@ -509,6 +535,22 @@ const posts = await db.Posts.createMany([
 
 console.log(posts.length) // 3
 console.log(posts[0].$id) // 'posts/...'
+```
+
+**Current Workaround:**
+
+```typescript
+// Use individual creates in a loop
+const posts: Entity<Post>[] = []
+for (const data of postDataArray) {
+  const post = await db.Posts.create(data)
+  posts.push(post)
+}
+
+// Or use Promise.all for parallel creation
+const posts = await Promise.all(
+  postDataArray.map(data => db.Posts.create(data))
+)
 ```
 
 ---
@@ -646,6 +688,7 @@ Relationship operators:
 
 Advanced:
 - `$bit`: Bitwise operations
+- `$embed`: Generate embeddings (ParqueDB AI feature)
 
 See [Update Operators](./updates.md) for detailed documentation.
 
@@ -1118,9 +1161,9 @@ const posts = await user.referencedBy('posts', {
 })
 
 console.log(posts.items)      // Array of Post entities
-console.log(posts.total)      // Total count
+console.log(posts.total)      // Total count (optional)
 console.log(posts.hasMore)    // Boolean
-console.log(posts.nextCursor) // Pagination cursor
+console.log(posts.nextCursor) // Pagination cursor (optional)
 ```
 
 ---
@@ -1194,23 +1237,27 @@ console.log(result.deletedCount)   // 1
 Use individual operations in sequence:
 
 ```typescript
-// Create multiple
-await db.Posts.createMany([...])
+// Create multiple (use individual creates)
+const posts: Entity<Post>[] = []
+for (const data of postDataArray) {
+  const post = await db.Posts.create(data)
+  posts.push(post)
+}
 
 // Update multiple
 for (const id of ids) {
   await db.Posts.update(id, update)
 }
 
-// Delete multiple
+// Delete multiple (use deleteMany)
 await db.Posts.deleteMany(filter)
 ```
 
 **Performance Considerations:**
 
 For bulk operations:
-- Use `createMany()` instead of individual `create()` calls
-- Use `updateMany()` or `deleteMany()` when possible
+- Use `Promise.all()` for parallel creates when order doesn't matter
+- Use `updateMany()` or `deleteMany()` when possible to update/delete by filter
 - Batch operations in groups of 100-1000 for optimal performance
 - Consider using transactions for consistency (when available)
 
@@ -1270,6 +1317,17 @@ const page2 = await db.Posts.builder()
   .limit(20)
   .cursor(page1[page1.length - 1].$id)
   .find()
+
+// Find one
+const latest = await db.Posts.builder()
+  .where('status', 'eq', 'published')
+  .orderBy('createdAt', 'desc')
+  .findOne()
+
+// Count
+const publishedCount = await db.Posts.builder()
+  .where('status', 'eq', 'published')
+  .count()
 ```
 
 **Builder Methods:**
@@ -1283,6 +1341,8 @@ const page2 = await db.Posts.builder()
 - `select(fields)`: Set projection
 - `build()`: Build filter and options
 - `find()`: Execute query and return results
+- `findOne()`: Execute query and return first result or null
+- `count()`: Execute count query and return count
 
 ---
 
@@ -1290,7 +1350,7 @@ const page2 = await db.Posts.builder()
 
 ### Time-Travel Queries
 
-Query entity state at any point in time:
+Query entity state at any point in time using the event log:
 
 ```typescript
 // Get historical state
@@ -1310,6 +1370,8 @@ const pastStats = await db.Posts.aggregate(
   { asOf: new Date('2024-01-01') }
 )
 ```
+
+**Note:** Time-travel queries rely on the event log. The standalone in-memory `Collection` class has basic event log support for testing. For production time-travel with persistent storage, use `ParqueDB` with a storage backend that implements event log persistence.
 
 ### Optimistic Concurrency
 
@@ -1474,12 +1536,15 @@ try {
 ```
 
 **Common Errors:**
-- `Entity not found` - ID doesn't exist
-- `Version mismatch` - Optimistic concurrency conflict
+- `Entity not found: {id}` - ID doesn't exist or entity is soft-deleted
+- `Version mismatch: expected {N}, got {M}` - Optimistic concurrency conflict
 - `$type is required` - Missing required field on create
 - `name is required` - Missing required field on create
-- `Invalid filter operator` - Unknown filter operator
-- `Invalid cursor` - Malformed pagination cursor
+- `Invalid filter operator: {operator}` - Unknown filter operator
+- `Invalid cursor format: malformed cursor` - Malformed pagination cursor
+- `Invalid cursor: tampered or expired cursor` - Tampered cursor detected
+- `Limit cannot be negative` - Negative limit value
+- `Skip cannot be negative` - Negative skip value
 
 ---
 
@@ -1500,9 +1565,9 @@ try {
    )
    ```
 
-3. **Batch creates with createMany():**
+3. **Batch creates with Promise.all():**
    ```typescript
-   await db.Posts.createMany([...])  // Better than multiple create()
+   await Promise.all(dataArray.map(data => db.Posts.create(data)))  // Parallel creation
    ```
 
 4. **Use estimatedDocumentCount() for fast counts:**
