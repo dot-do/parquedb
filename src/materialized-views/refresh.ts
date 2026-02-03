@@ -789,7 +789,7 @@ function finalizePartialState(
       result[field] = state.pushes[field] ?? []
     } else if (isAddToSetAccumulator(spec)) {
       const set = state.sets[field]
-      result[field] = set ? Array.from(set).map(s => JSON.parse(s) as unknown) : []
+      result[field] = set ? Array.from(set).map(s => JSON.parse(s)) : []
     }
   }
 
@@ -897,7 +897,7 @@ async function fullRefreshChunkedAggregation(
 
     for (const [keyStr, items] of chunkGroups) {
       if (!partialStates.has(keyStr)) {
-        partialStates.set(keyStr, { key: JSON.parse(keyStr) as unknown, state: createEmptyPartialState() })
+        partialStates.set(keyStr, { key: JSON.parse(keyStr), state: createEmptyPartialState() })
       }
       updatePartialState(partialStates.get(keyStr)!.state, items, groupSpec)
     }

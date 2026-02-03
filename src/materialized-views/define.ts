@@ -524,9 +524,9 @@ export function parseSchema(schema: Record<string, unknown>): ParsedSchema {
 
     const obj = entry as Record<string, unknown>
 
-    if ('$from' in obj && typeof obj.$from === 'string') {
+    if (isMVDefinition(obj)) {
       // MV (has $from)
-      materializedViews.set(name, applyMVDefaults(obj as unknown as MVDefinition))
+      materializedViews.set(name, applyMVDefaults(obj))
     } else if ('$ingest' in obj && typeof obj.$ingest === 'string') {
       // Stream collection (has $ingest)
       streamCollections.set(name, obj as CollectionDefinition)
