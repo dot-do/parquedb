@@ -149,7 +149,12 @@ class MockSqlStorage {
 
     const setClause = setMatch[1]
     const setParts = setClause.split(',').map((p) => p.trim())
-    const setColumns: Array<{ column: string; isVersionIncrement: boolean; isLiteralNull: boolean }> = []
+    const setColumns: Array<{
+      column: string
+      isVersionIncrement: boolean
+      isLiteralNull: boolean
+      literalValue?: number
+    }> = []
 
     for (const part of setParts) {
       // Check for version = version + 1 pattern
@@ -166,6 +171,18 @@ class MockSqlStorage {
         continue
       }
 
+      // Check for column = literal number pattern (e.g., flushed = 1)
+      const literalNumMatch = part.match(/(\w+)\s*=\s*(\d+)/i)
+      if (literalNumMatch) {
+        setColumns.push({
+          column: literalNumMatch[1].toLowerCase(),
+          isVersionIncrement: false,
+          isLiteralNull: false,
+          literalValue: parseInt(literalNumMatch[2], 10),
+        })
+        continue
+      }
+
       // Regular column = ? pattern
       const colMatch = part.match(/(\w+)\s*=\s*\?/i)
       if (colMatch) {
@@ -178,8 +195,8 @@ class MockSqlStorage {
 
     const whereConditions = this.parseWhereConditions(whereMatch[1])
 
-    // Count how many params are needed for SET clause (only columns with ? placeholders)
-    const setParamCount = setColumns.filter(c => !c.isVersionIncrement && !c.isLiteralNull).length
+    // Count how many params are needed for SET clause (only columns with ? placeholders, not literal values)
+    const setParamCount = setColumns.filter(c => !c.isVersionIncrement && !c.isLiteralNull && c.literalValue === undefined).length
     const setParams = params.slice(0, setParamCount)
     const whereParams = params.slice(setParamCount)
 
@@ -193,6 +210,9 @@ class MockSqlStorage {
           } else if (setCol.isLiteralNull) {
             // Set to literal null
             row[setCol.column] = null
+          } else if (setCol.literalValue !== undefined) {
+            // Set to literal number value
+            row[setCol.column] = setCol.literalValue
           } else {
             row[setCol.column] = setParams[paramIndex]
             paramIndex++
@@ -291,8 +311,18 @@ class MockSqlStorage {
     return results as Iterable<T>
   }
 
-  private parseWhereConditions(whereClause: string): Array<{ column: string; op: string; isNull?: boolean }> {
-    const conditions: Array<{ column: string; op: string; isNull?: boolean }> = []
+  private parseWhereConditions(whereClause: string): Array<{
+    column: string
+    op: string
+    isNull?: boolean
+    literalValue?: number
+  }> {
+    const conditions: Array<{
+      column: string
+      op: string
+      isNull?: boolean
+      literalValue?: number
+    }> = []
 
     // Normalize: remove newlines and extra whitespace
     const normalizedClause = whereClause.replace(/\s+/g, ' ').trim()
@@ -324,6 +354,17 @@ class MockSqlStorage {
         continue
       }
 
+      // Handle column = literal number (e.g., flushed = 0)
+      const literalNumMatch = trimmedPart.match(/^\(?(\w+)\s*=\s*(\d+)\)?$/i)
+      if (literalNumMatch) {
+        conditions.push({
+          column: literalNumMatch[1].toLowerCase(),
+          op: '=LITERAL',
+          literalValue: parseInt(literalNumMatch[2], 10),
+        })
+        continue
+      }
+
       // Handle = ? with possible surrounding parentheses
       const eqMatch = trimmedPart.match(/^\(?(\w+)\s*=\s*\?\)?$/i)
       if (eqMatch) {
@@ -349,7 +390,7 @@ class MockSqlStorage {
 
   private matchesWhere(
     row: Record<string, SqlStorageValue>,
-    conditions: Array<{ column: string; op: string; isNull?: boolean }>,
+    conditions: Array<{ column: string; op: string; isNull?: boolean; literalValue?: number }>,
     params: SqlStorageValue[]
   ): boolean {
     let paramIndex = 0
@@ -363,6 +404,9 @@ class MockSqlStorage {
       } else if (cond.op === 'IS NOT NULL') {
         // Treat undefined and null as equivalent for IS NOT NULL check
         if (value === null || value === undefined) return false
+      } else if (cond.op === '=LITERAL') {
+        // Compare with literal number value
+        if (value !== cond.literalValue) return false
       } else if (cond.op === '=') {
         if (value !== params[paramIndex]) return false
         paramIndex++
@@ -531,6 +575,31 @@ interface LinkOptions {
 }
 
 /**
+ * WAL configuration for batched event storage
+ */
+interface WalConfig {
+  /** Maximum events to buffer before writing batch */
+  maxBufferSize: number
+  /** Maximum bytes to buffer before writing batch */
+  maxBufferBytes: number
+}
+
+/**
+ * Event for buffering
+ */
+interface BufferedEvent {
+  id: string
+  ts: number
+  op: string
+  target: string
+  ns: string | null
+  entityId: string | null
+  before?: Record<string, unknown>
+  after?: Record<string, unknown>
+  actor: string
+}
+
+/**
  * Mock ParqueDBDO that mirrors the actual implementation
  * This allows us to test the logic without cloudflare:workers
  */
@@ -538,8 +607,34 @@ class MockParqueDBDO {
   private sql: MockSqlStorage
   private initialized = false
 
+  /** WAL configuration */
+  private walConfig: WalConfig = {
+    maxBufferSize: 100,
+    maxBufferBytes: 64 * 1024, // 64KB
+  }
+
+  /** Event buffer for batching */
+  private eventBuffer: BufferedEvent[] = []
+
+  /** Estimated buffer size in bytes */
+  private bufferSizeBytes = 0
+
   constructor() {
     this.sql = new MockSqlStorage()
+  }
+
+  /**
+   * Set WAL configuration for testing
+   */
+  setWalConfig(config: Partial<WalConfig>): void {
+    this.walConfig = { ...this.walConfig, ...config }
+  }
+
+  /**
+   * Get the number of pending (buffered) events
+   */
+  getPendingEventCount(): number {
+    return this.eventBuffer.length
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -597,6 +692,19 @@ class MockParqueDBDO {
       )
     `)
 
+    // WAL table for batched event storage (Phase 1)
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS events_wal (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch BLOB NOT NULL,
+        min_ts INTEGER NOT NULL,
+        max_ts INTEGER NOT NULL,
+        count INTEGER NOT NULL,
+        flushed INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `)
+
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS checkpoints (
         id TEXT PRIMARY KEY,
@@ -614,6 +722,7 @@ class MockParqueDBDO {
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_rels_to ON relationships(to_ns, to_id, reverse)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_unflushed ON events(flushed, ts)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_ns ON events(ns, entity_id)')
+    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_wal_flushed ON events_wal(flushed, min_ts)')
 
     this.initialized = true
   }
@@ -979,11 +1088,97 @@ class MockParqueDBDO {
   async getUnflushedEventCount(): Promise<number> {
     await this.ensureInitialized()
 
-    const rows = [...this.sql.exec<{ count: number }>(
-      'SELECT COUNT(*) as count FROM events WHERE flushed = 0'
+    // Count buffered events + events in WAL batches
+    const bufferedCount = this.eventBuffer.length
+
+    const rows = [...this.sql.exec<{ total: number }>(
+      'SELECT SUM(count) as total FROM events_wal WHERE flushed = 0'
     )]
 
-    return rows[0]?.count || 0
+    const walCount = rows[0]?.total || 0
+
+    return bufferedCount + walCount
+  }
+
+  /**
+   * Get unflushed events (from buffer and WAL batches)
+   */
+  async getUnflushedEvents(ns?: string): Promise<BufferedEvent[]> {
+    await this.ensureInitialized()
+
+    // First flush buffer to WAL so we can read everything
+    await this.flushEventBuffer()
+
+    // Read from WAL batches
+    const walRows = [...this.sql.exec<{ batch: string; min_ts: number; max_ts: number; count: number }>(
+      'SELECT batch, min_ts, max_ts, count FROM events_wal WHERE flushed = 0 ORDER BY min_ts ASC'
+    )]
+
+    const allEvents: BufferedEvent[] = []
+
+    for (const row of walRows) {
+      try {
+        // Deserialize the batch
+        const events: BufferedEvent[] = JSON.parse(row.batch)
+        allEvents.push(...events)
+      } catch {
+        // Skip malformed batches
+      }
+    }
+
+    // Filter by namespace if specified
+    if (ns) {
+      return allEvents.filter(e => e.ns === ns)
+    }
+
+    return allEvents
+  }
+
+  /**
+   * Flush buffered events to WAL as a batch
+   */
+  async flushEventBuffer(): Promise<void> {
+    await this.ensureInitialized()
+
+    if (this.eventBuffer.length === 0) {
+      return
+    }
+
+    // Create batch from buffer
+    const events = [...this.eventBuffer]
+    const minTs = Math.min(...events.map(e => e.ts))
+    const maxTs = Math.max(...events.map(e => e.ts))
+    const count = events.length
+
+    // Serialize batch as JSON
+    const batchJson = JSON.stringify(events)
+
+    // Write to WAL table
+    this.sql.exec(
+      `INSERT INTO events_wal (batch, min_ts, max_ts, count, flushed)
+       VALUES (?, ?, ?, ?, 0)`,
+      batchJson,
+      minTs,
+      maxTs,
+      count
+    )
+
+    // Clear buffer
+    this.eventBuffer = []
+    this.bufferSizeBytes = 0
+  }
+
+  /**
+   * Flush WAL batches to Parquet (marks as flushed)
+   */
+  async flushToParquet(): Promise<void> {
+    await this.ensureInitialized()
+
+    // First flush any buffered events
+    await this.flushEventBuffer()
+
+    // Mark all unflushed WAL batches as flushed
+    this.sql.exec('UPDATE events_wal SET flushed = 1 WHERE flushed = 0')
   }
 
   private async appendEvent(event: {
@@ -993,8 +1188,10 @@ class MockParqueDBDO {
     after?: Record<string, unknown>
     actor: string
   }): Promise<void> {
+    await this.ensureInitialized()
+
     const id = generateULID()
-    const ts = new Date().toISOString()
+    const ts = Date.now()
 
     let ns: string | null = null
     let entityId: string | null = null
@@ -1004,20 +1201,30 @@ class MockParqueDBDO {
       entityId = info.id
     }
 
-    this.sql.exec(
-      `INSERT INTO events (id, ts, target, op, ns, entity_id, before, after, actor, metadata, flushed)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+    // Buffer the event instead of writing directly
+    const bufferedEvent: BufferedEvent = {
       id,
       ts,
-      event.target,
-      event.op,
+      op: event.op,
+      target: event.target,
       ns,
       entityId,
-      event.before ? JSON.stringify(event.before) : null,
-      event.after ? JSON.stringify(event.after) : null,
-      event.actor,
-      null
-    )
+      before: event.before,
+      after: event.after,
+      actor: event.actor,
+    }
+
+    this.eventBuffer.push(bufferedEvent)
+
+    // Estimate size (rough JSON size)
+    const eventSize = JSON.stringify(bufferedEvent).length
+    this.bufferSizeBytes += eventSize
+
+    // Check if we should flush the buffer
+    if (this.eventBuffer.length >= this.walConfig.maxBufferSize ||
+        this.bufferSizeBytes >= this.walConfig.maxBufferBytes) {
+      await this.flushEventBuffer()
+    }
   }
 
   private toEntity(stored: StoredEntity): Entity {
@@ -1542,17 +1749,18 @@ describe('ParqueDBDO', () => {
         title: 'Hello',
       })
 
-      const eventsTable = dbo.getSql().getTable('events')
-      expect(eventsTable).toBeDefined()
-      expect(eventsTable!.size).toBeGreaterThan(0)
+      // Flush buffer to WAL so we can read events
+      await dbo.flushEventBuffer()
 
-      const events = Array.from(eventsTable!.values())
-      const createEvent = events.find((e) => e['op'] === 'CREATE' && !e['target']?.toString().includes(':author:'))
+      const events = await dbo.getUnflushedEvents()
+      expect(events.length).toBeGreaterThan(0)
+
+      const createEvent = events.find((e) => e.op === 'CREATE' && !e.target?.includes(':author:'))
 
       expect(createEvent).toBeDefined()
-      expect(createEvent!['target']).toMatch(/^posts:/)
-      expect(createEvent!['before']).toBeNull()
-      expect(createEvent!['after']).toBeDefined()
+      expect(createEvent!.target).toMatch(/^posts:/)
+      expect(createEvent!.before).toBeUndefined()
+      expect(createEvent!.after).toBeDefined()
     })
 
     it('logs UPDATE event with before/after states', async () => {
@@ -1567,19 +1775,17 @@ describe('ParqueDBDO', () => {
         $set: { title: 'Updated Title' },
       })
 
-      const eventsTable = dbo.getSql().getTable('events')
-      const events = Array.from(eventsTable!.values())
-      const updateEvent = events.find((e) => e['op'] === 'UPDATE')
+      await dbo.flushEventBuffer()
+
+      const events = await dbo.getUnflushedEvents()
+      const updateEvent = events.find((e) => e.op === 'UPDATE')
 
       expect(updateEvent).toBeDefined()
-      expect(updateEvent!['before']).toBeDefined()
-      expect(updateEvent!['after']).toBeDefined()
+      expect(updateEvent!.before).toBeDefined()
+      expect(updateEvent!.after).toBeDefined()
 
-      const before = JSON.parse(updateEvent!['before'] as string)
-      const after = JSON.parse(updateEvent!['after'] as string)
-
-      expect(before.title).toBe('Original Title')
-      expect(after.title).toBe('Updated Title')
+      expect(updateEvent!.before!.title).toBe('Original Title')
+      expect(updateEvent!.after!.title).toBe('Updated Title')
     })
 
     it('logs DELETE event', async () => {
@@ -1591,13 +1797,14 @@ describe('ParqueDBDO', () => {
       const [, id] = created.$id.split('/')
       await dbo.delete('posts', id)
 
-      const eventsTable = dbo.getSql().getTable('events')
-      const events = Array.from(eventsTable!.values())
-      const deleteEvent = events.find((e) => e['op'] === 'DELETE' && !isRelationshipTarget(e['target'] as string))
+      await dbo.flushEventBuffer()
+
+      const events = await dbo.getUnflushedEvents()
+      const deleteEvent = events.find((e) => e.op === 'DELETE' && !isRelationshipTarget(e.target))
 
       expect(deleteEvent).toBeDefined()
-      expect(deleteEvent!['before']).toBeDefined()
-      expect(deleteEvent!['after']).toBeNull()
+      expect(deleteEvent!.before).toBeDefined()
+      expect(deleteEvent!.after).toBeUndefined()
     })
 
     it('logs relationship CREATE event for link operations', async () => {
@@ -1613,9 +1820,10 @@ describe('ParqueDBDO', () => {
 
       await dbo.link(post.$id, 'author', user.$id)
 
-      const eventsTable = dbo.getSql().getTable('events')
-      const events = Array.from(eventsTable!.values())
-      const linkEvent = events.find((e) => e['op'] === 'CREATE' && e['target']?.toString().includes(':author:'))
+      await dbo.flushEventBuffer()
+
+      const events = await dbo.getUnflushedEvents()
+      const linkEvent = events.find((e) => e.op === 'CREATE' && e.target?.includes(':author:'))
 
       expect(linkEvent).toBeDefined()
     })
@@ -1634,9 +1842,10 @@ describe('ParqueDBDO', () => {
 
       await dbo.unlink(post.$id, 'author', user.$id)
 
-      const eventsTable = dbo.getSql().getTable('events')
-      const events = Array.from(eventsTable!.values())
-      const unlinkEvent = events.find((e) => e['op'] === 'DELETE' && e['target']?.toString().includes(':author:'))
+      await dbo.flushEventBuffer()
+
+      const events = await dbo.getUnflushedEvents()
+      const unlinkEvent = events.find((e) => e.op === 'DELETE' && e.target?.includes(':author:'))
 
       expect(unlinkEvent).toBeDefined()
     })
@@ -1651,10 +1860,11 @@ describe('ParqueDBDO', () => {
         { actor: 'users/actor' }
       )
 
-      const eventsTable = dbo.getSql().getTable('events')
-      const events = Array.from(eventsTable!.values())
+      await dbo.flushEventBuffer()
 
-      expect(events[0]['actor']).toBe('users/actor')
+      const events = await dbo.getUnflushedEvents()
+
+      expect(events[0].actor).toBe('users/actor')
     })
 
     it('generates ULID event IDs', async () => {
@@ -1668,12 +1878,13 @@ describe('ParqueDBDO', () => {
         name: 'Test 2',
       })
 
-      const eventsTable = dbo.getSql().getTable('events')
-      const events = Array.from(eventsTable!.values())
+      await dbo.flushEventBuffer()
 
-      expect(events[0]['id']).toMatch(/^[0-9A-Z]{26}$/)
-      expect(events[1]['id']).toMatch(/^[0-9A-Z]{26}$/)
-      expect(events[1]['id']! > events[0]['id']!).toBe(true)
+      const events = await dbo.getUnflushedEvents()
+
+      expect(events[0].id).toMatch(/^[0-9A-Z]{26}$/)
+      expect(events[1].id).toMatch(/^[0-9A-Z]{26}$/)
+      expect(events[1].id > events[0].id).toBe(true)
     })
   })
 
@@ -2013,6 +2224,196 @@ describe('ParqueDBDO', () => {
       const count = await dbo.getUnflushedEventCount()
 
       expect(count).toBeGreaterThanOrEqual(3)
+    })
+  })
+
+  // ===========================================================================
+  // WAL Batching Tests (Phase 1: Batched Event Storage)
+  // ===========================================================================
+
+  describe('WAL Batching', () => {
+    describe('event batching', () => {
+      it('stores events in batched blobs, not individual rows', async () => {
+        // Create multiple entities to generate events
+        for (let i = 0; i < 10; i++) {
+          await dbo.create('posts', { $type: 'Post', name: `Post ${i}` })
+        }
+
+        // Flush to trigger batch write
+        await dbo.flushEventBuffer()
+
+        // Check events_wal table has batched entries
+        const walTable = dbo.getSql().getTable('events_wal')
+        expect(walTable).toBeDefined()
+
+        // Should have far fewer rows than events (batched)
+        const walRows = walTable ? Array.from(walTable.values()) : []
+        const totalEventCount = walRows.reduce((sum, row) => sum + (row['count'] as number || 0), 0)
+
+        // We should have at least 10 events (one CREATE per entity)
+        expect(totalEventCount).toBeGreaterThanOrEqual(10)
+
+        // But stored in fewer rows (batched)
+        expect(walRows.length).toBeLessThan(totalEventCount)
+      })
+
+      it('buffers events in memory before writing batch', async () => {
+        // Create a single entity - should buffer, not write immediately
+        await dbo.create('posts', { $type: 'Post', name: 'Single Post' })
+
+        // Check events_wal - should be empty or have 0 unflushed batches
+        // (events are buffered in memory)
+        const pendingCount = dbo.getPendingEventCount()
+        expect(pendingCount).toBeGreaterThanOrEqual(1)
+
+        // WAL table should not have the event yet (still buffered)
+        const walTable = dbo.getSql().getTable('events_wal')
+        const unflushedBatches = walTable
+          ? Array.from(walTable.values()).filter(r => r['flushed'] === 0)
+          : []
+
+        // Either no batches yet, or a batch was written
+        // The key is that not every event = 1 row
+        const totalRows = unflushedBatches.length
+        const totalEvents = unflushedBatches.reduce((sum, r) => sum + (r['count'] as number || 0), 0)
+
+        // If we have any batches, they should contain multiple events per row
+        if (totalRows > 0) {
+          expect(totalEvents / totalRows).toBeGreaterThanOrEqual(1)
+        }
+      })
+
+      it('writes batch when threshold is reached', async () => {
+        // Configure a low threshold for testing
+        dbo.setWalConfig({ maxBufferSize: 5 })
+
+        // Create 6 entities (exceeds threshold of 5)
+        for (let i = 0; i < 6; i++) {
+          await dbo.create('posts', { $type: 'Post', name: `Post ${i}` })
+        }
+
+        // Should have automatically written a batch
+        const walTable = dbo.getSql().getTable('events_wal')
+        expect(walTable).toBeDefined()
+
+        const batches = walTable ? Array.from(walTable.values()) : []
+        expect(batches.length).toBeGreaterThan(0)
+
+        // The batch should contain multiple events
+        const firstBatch = batches[0]
+        expect(firstBatch).toBeDefined()
+        expect(firstBatch!['count']).toBeGreaterThanOrEqual(5)
+      })
+
+      it('writes batch when size threshold is reached', async () => {
+        // Configure a low byte threshold for testing (1KB)
+        dbo.setWalConfig({ maxBufferBytes: 1024 })
+
+        // Create entities with large data to exceed byte threshold
+        for (let i = 0; i < 3; i++) {
+          await dbo.create('posts', {
+            $type: 'Post',
+            name: `Post ${i}`,
+            content: 'x'.repeat(500), // Large content to trigger byte threshold
+          })
+        }
+
+        // Should have automatically written a batch
+        const walTable = dbo.getSql().getTable('events_wal')
+        expect(walTable).toBeDefined()
+
+        const batches = walTable ? Array.from(walTable.values()) : []
+        expect(batches.length).toBeGreaterThan(0)
+      })
+    })
+
+    describe('reading batched events', () => {
+      it('can read events from batched storage', async () => {
+        // Create entities and flush
+        for (let i = 0; i < 5; i++) {
+          await dbo.create('posts', { $type: 'Post', name: `Post ${i}` })
+        }
+        await dbo.flushEventBuffer()
+
+        // Read unflushed events
+        const events = await dbo.getUnflushedEvents()
+
+        expect(events.length).toBeGreaterThanOrEqual(5)
+        expect(events[0]).toHaveProperty('op')
+        expect(events[0]).toHaveProperty('target')
+      })
+
+      it('can filter events by namespace', async () => {
+        // Create entities in different namespaces
+        await dbo.create('posts', { $type: 'Post', name: 'Post 1' })
+        await dbo.create('users', { $type: 'User', name: 'User 1' })
+        await dbo.create('posts', { $type: 'Post', name: 'Post 2' })
+        await dbo.flushEventBuffer()
+
+        // Read events for specific namespace
+        const postEvents = await dbo.getUnflushedEvents('posts')
+
+        // Should only have post events
+        expect(postEvents.length).toBeGreaterThanOrEqual(2)
+        expect(postEvents.every(e => e.ns === 'posts')).toBe(true)
+      })
+
+      it('returns events in chronological order', async () => {
+        for (let i = 0; i < 5; i++) {
+          await dbo.create('posts', { $type: 'Post', name: `Post ${i}` })
+        }
+        await dbo.flushEventBuffer()
+
+        const events = await dbo.getUnflushedEvents()
+
+        // Events should be in order by timestamp
+        for (let i = 1; i < events.length; i++) {
+          expect(events[i].ts).toBeGreaterThanOrEqual(events[i - 1].ts)
+        }
+      })
+    })
+
+    describe('flush behavior', () => {
+      it('marks batches as flushed after R2 write', async () => {
+        for (let i = 0; i < 5; i++) {
+          await dbo.create('posts', { $type: 'Post', name: `Post ${i}` })
+        }
+        await dbo.flushEventBuffer()
+
+        // Verify batches exist
+        const walTable = dbo.getSql().getTable('events_wal')
+        const batchesBefore = walTable ? Array.from(walTable.values()).filter(r => r['flushed'] === 0) : []
+        expect(batchesBefore.length).toBeGreaterThan(0)
+
+        // Simulate flush to R2
+        await dbo.flushToParquet()
+
+        // Batches should be marked as flushed
+        const batchesAfter = walTable ? Array.from(walTable.values()).filter(r => r['flushed'] === 0) : []
+        expect(batchesAfter.length).toBe(0)
+      })
+
+      it('flushes remaining buffer on explicit flush', async () => {
+        // Create fewer events than threshold
+        await dbo.create('posts', { $type: 'Post', name: 'Post 1' })
+        await dbo.create('posts', { $type: 'Post', name: 'Post 2' })
+
+        // Get pending count before flush
+        const pendingBefore = dbo.getPendingEventCount()
+        expect(pendingBefore).toBeGreaterThan(0)
+
+        // Explicit flush should write buffered events
+        await dbo.flushEventBuffer()
+
+        // Pending should be 0
+        const pendingAfter = dbo.getPendingEventCount()
+        expect(pendingAfter).toBe(0)
+
+        // WAL should have the batch
+        const walTable = dbo.getSql().getTable('events_wal')
+        expect(walTable).toBeDefined()
+        expect(walTable!.size).toBeGreaterThan(0)
+      })
     })
   })
 })

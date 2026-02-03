@@ -174,6 +174,10 @@ interface StoredEvent {
  * - Relationship graph in SQLite
  * - Event log that gets periodically flushed to Parquet
  */
+/** WAL batch thresholds */
+const EVENT_BATCH_COUNT_THRESHOLD = 100
+const EVENT_BATCH_SIZE_THRESHOLD = 64 * 1024 // 64KB
+
 export class ParqueDBDO extends DurableObject<Env> {
   /** SQLite storage */
   private sql: SqlStorage
@@ -191,6 +195,12 @@ export class ParqueDBDO extends DurableObject<Env> {
 
   /** Pending flush alarm */
   private flushAlarmSet = false
+
+  /** Event buffer for WAL batching (reduces SQLite row costs) */
+  private eventBuffer: Event[] = []
+
+  /** Approximate size of buffered events in bytes */
+  private eventBufferSize = 0
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -244,6 +254,21 @@ export class ParqueDBDO extends DurableObject<Env> {
       )
     `)
 
+    // NEW: Event batches table for WAL batching (reduces SQLite row costs)
+    // Each row contains a batch of events serialized as a blob
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS event_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch BLOB NOT NULL,
+        min_ts INTEGER NOT NULL,
+        max_ts INTEGER NOT NULL,
+        event_count INTEGER NOT NULL,
+        flushed INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `)
+
+    // Legacy events table - kept for backward compatibility during migration
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY,
@@ -276,6 +301,8 @@ export class ParqueDBDO extends DurableObject<Env> {
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_entities_updated ON entities(ns, updated_at)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_rels_from ON relationships(from_ns, from_id, predicate)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_rels_to ON relationships(to_ns, to_id, reverse)')
+    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_event_batches_flushed ON event_batches(flushed, min_ts)')
+    // Legacy index kept for backward compatibility
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_unflushed ON events(flushed, ts)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_ns ON events(ns, entity_id)')
 
@@ -787,51 +814,165 @@ export class ParqueDBDO extends DurableObject<Env> {
   }
 
   // ===========================================================================
-  // Event Log
+  // Event Log with WAL Batching
   // ===========================================================================
 
   /**
    * Append an event to the log
+   *
+   * Events are buffered in memory and flushed as batches to reduce SQLite row costs.
+   * Each batch is stored as a single row with events serialized as a blob.
    */
   async appendEvent(event: Event): Promise<void> {
     await this.ensureInitialized()
 
-    // Extract ns and entity_id from target for SQLite storage
-    let ns: string | null = null
-    let entityId: string | null = null
-    if (!isRelationshipTarget(event.target)) {
-      const info = parseEntityTarget(event.target)
-      ns = info.ns
-      entityId = info.id
-    }
+    // Buffer the event
+    this.eventBuffer.push(event)
 
-    this.sql.exec(
-      `INSERT INTO events (id, ts, target, op, ns, entity_id, before, after, actor, metadata, flushed)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-      event.id,
-      new Date(event.ts).toISOString(),
-      event.target,
-      event.op,
-      ns,
-      entityId,
-      event.before ? JSON.stringify(event.before) : null,
-      event.after ? JSON.stringify(event.after) : null,
-      event.actor || null,
-      event.metadata ? JSON.stringify(event.metadata) : null
-    )
+    // Estimate size (rough approximation)
+    const eventJson = JSON.stringify(event)
+    this.eventBufferSize += eventJson.length
+
+    // Check if we should flush the batch
+    if (this.eventBuffer.length >= EVENT_BATCH_COUNT_THRESHOLD ||
+        this.eventBufferSize >= EVENT_BATCH_SIZE_THRESHOLD) {
+      await this.flushEventBatch()
+    }
   }
 
   /**
-   * Get unflushed event count
+   * Flush buffered events as a single batch row
+   *
+   * This is called automatically when thresholds are reached,
+   * and should also be called on DO shutdown to persist partial batches.
+   */
+  async flushEventBatch(): Promise<void> {
+    if (this.eventBuffer.length === 0) return
+
+    await this.ensureInitialized()
+
+    const events = this.eventBuffer
+    const minTs = Math.min(...events.map(e => e.ts))
+    const maxTs = Math.max(...events.map(e => e.ts))
+
+    // Serialize events to blob
+    const json = JSON.stringify(events)
+    const data = new TextEncoder().encode(json)
+
+    this.sql.exec(
+      `INSERT INTO event_batches (batch, min_ts, max_ts, event_count, flushed)
+       VALUES (?, ?, ?, ?, 0)`,
+      data,
+      minTs,
+      maxTs,
+      events.length
+    )
+
+    // Clear buffer
+    this.eventBuffer = []
+    this.eventBufferSize = 0
+  }
+
+  /**
+   * Get unflushed event count (from batches + buffer)
    */
   async getUnflushedEventCount(): Promise<number> {
     await this.ensureInitialized()
 
+    // Count events in unflushed batches
+    const rows = [...this.sql.exec<{ total: number }>(
+      'SELECT SUM(event_count) as total FROM event_batches WHERE flushed = 0'
+    )]
+
+    const batchCount = rows[0]?.total || 0
+
+    // Add buffered events not yet written
+    return batchCount + this.eventBuffer.length
+  }
+
+  /**
+   * Get unflushed batch count
+   */
+  async getUnflushedBatchCount(): Promise<number> {
+    await this.ensureInitialized()
+
     const rows = [...this.sql.exec<{ count: number }>(
-      'SELECT COUNT(*) as count FROM events WHERE flushed = 0'
+      'SELECT COUNT(*) as count FROM event_batches WHERE flushed = 0'
     )]
 
     return rows[0]?.count || 0
+  }
+
+  /**
+   * Read all unflushed events (from batches + buffer)
+   */
+  async readUnflushedEvents(): Promise<Event[]> {
+    await this.ensureInitialized()
+
+    const allEvents: Event[] = []
+
+    // Read from batches
+    interface EventBatchRow {
+      id: number
+      batch: Uint8Array | ArrayBuffer
+      min_ts: number
+      max_ts: number
+      event_count: number
+    }
+
+    const rows = [...this.sql.exec<EventBatchRow>(
+      `SELECT id, batch, min_ts, max_ts, event_count
+       FROM event_batches
+       WHERE flushed = 0
+       ORDER BY min_ts ASC`
+    )]
+
+    for (const row of rows) {
+      const batchEvents = this.deserializeEventBatch(row.batch)
+      allEvents.push(...batchEvents)
+    }
+
+    // Add buffer events
+    allEvents.push(...this.eventBuffer)
+
+    return allEvents
+  }
+
+  /**
+   * Mark event batches as flushed (after writing to R2/Parquet)
+   */
+  async markEventBatchesFlushed(batchIds: number[]): Promise<void> {
+    if (batchIds.length === 0) return
+
+    await this.ensureInitialized()
+
+    const placeholders = batchIds.map(() => '?').join(',')
+    this.sql.exec(
+      `UPDATE event_batches SET flushed = 1 WHERE id IN (${placeholders})`,
+      ...batchIds
+    )
+  }
+
+  /**
+   * Deserialize a batch blob back to events
+   */
+  private deserializeEventBatch(batch: Uint8Array | ArrayBuffer): Event[] {
+    if (!batch) return []
+
+    let data: Uint8Array
+    if (batch instanceof Uint8Array) {
+      data = batch
+    } else if (batch instanceof ArrayBuffer) {
+      data = new Uint8Array(batch)
+    } else if (ArrayBuffer.isView(batch)) {
+      data = new Uint8Array((batch as ArrayBufferView).buffer)
+    } else {
+      // Assume it's already a buffer-like object
+      data = new Uint8Array(batch as ArrayBuffer)
+    }
+
+    const json = new TextDecoder().decode(data)
+    return JSON.parse(json) as Event[]
   }
 
   /**
@@ -840,40 +981,61 @@ export class ParqueDBDO extends DurableObject<Env> {
   async flushToParquet(): Promise<void> {
     await this.ensureInitialized()
 
-    // Get unflushed events
-    const events = [...this.sql.exec<StoredEvent>(
-      'SELECT * FROM events WHERE flushed = 0 ORDER BY ts LIMIT ?',
-      this.flushConfig.maxEvents
+    // First flush any buffered events to a batch
+    await this.flushEventBatch()
+
+    // Get unflushed batches
+    interface EventBatchRow {
+      id: number
+      batch: Uint8Array | ArrayBuffer
+      min_ts: number
+      max_ts: number
+      event_count: number
+    }
+
+    const batches = [...this.sql.exec<EventBatchRow>(
+      `SELECT id, batch, min_ts, max_ts, event_count
+       FROM event_batches
+       WHERE flushed = 0
+       ORDER BY min_ts ASC`
     )]
 
-    if (events.length < this.flushConfig.minEvents) {
+    // Collect all events and count
+    let totalCount = 0
+    const allEvents: Event[] = []
+    const batchIds: number[] = []
+
+    for (const batch of batches) {
+      const events = this.deserializeEventBatch(batch.batch)
+      allEvents.push(...events)
+      totalCount += events.length
+      batchIds.push(batch.id)
+
+      if (totalCount >= this.flushConfig.maxEvents) break
+    }
+
+    if (totalCount < this.flushConfig.minEvents) {
       // Not enough events to flush
       return
     }
 
-    const firstEvent = events[0]!
-    const lastEvent = events[events.length - 1]!
+    const firstEvent = allEvents[0]!
+    const lastEvent = allEvents[allEvents.length - 1]!
     const checkpointId = generateULID()
-
-    // TODO: Actually write Parquet file to R2
-    // For now, we'll just mark events as flushed
 
     // Generate parquet path
     const date = new Date(firstEvent.ts)
     const datePath = `${date.getUTCFullYear()}/${String(date.getUTCMonth() + 1).padStart(2, '0')}/${String(date.getUTCDate()).padStart(2, '0')}`
     const parquetPath = `events/archive/${datePath}/${checkpointId}.parquet`
 
+    // TODO: Actually write Parquet file to R2
     // In a real implementation, we would:
     // 1. Convert events to Parquet format
     // 2. Write to R2: this.env.BUCKET.put(parquetPath, parquetBuffer)
     // 3. Verify the write succeeded
 
-    // Mark events as flushed
-    const eventIds = events.map(e => e.id)
-    this.sql.exec(
-      `UPDATE events SET flushed = 1 WHERE id IN (${eventIds.map(() => '?').join(',')})`,
-      ...eventIds
-    )
+    // Mark batches as flushed
+    await this.markEventBatchesFlushed(batchIds)
 
     // Record checkpoint
     this.sql.exec(
@@ -881,7 +1043,7 @@ export class ParqueDBDO extends DurableObject<Env> {
        VALUES (?, ?, ?, ?, ?, ?)`,
       checkpointId,
       new Date().toISOString(),
-      events.length,
+      allEvents.length,
       firstEvent.id,
       lastEvent.id,
       parquetPath
@@ -897,6 +1059,11 @@ export class ParqueDBDO extends DurableObject<Env> {
    */
   override async alarm(): Promise<void> {
     this.flushAlarmSet = false
+
+    // First flush any buffered events to a batch
+    await this.flushEventBatch()
+
+    // Then flush batches to Parquet/R2
     await this.flushToParquet()
   }
 
