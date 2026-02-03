@@ -450,21 +450,21 @@ export type SchemaChangeType =
  * A single schema change
  */
 export interface SchemaChange {
-  type: SchemaChangeType
-  collection: string
-  field?: string
-  before?: unknown
-  after?: unknown
-  breaking: boolean
-  description: string
+  readonly type: SchemaChangeType
+  readonly collection: string
+  readonly field?: string
+  readonly before?: unknown
+  readonly after?: unknown
+  readonly breaking: boolean
+  readonly description: string
 }
 
 /**
  * Set of schema changes with metadata
  */
 export interface SchemaChanges {
-  changes: SchemaChange[]
-  breakingChanges: SchemaChange[]
-  compatible: boolean
-  summary: string
+  readonly changes: readonly SchemaChange[]
+  readonly breakingChanges: readonly SchemaChange[]
+  readonly compatible: boolean
+  readonly summary: string
 }

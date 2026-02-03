@@ -824,7 +824,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
    * Emit an event
    */
   async emit(optionsOrType: CreateEventOptions | string, data?: unknown): Promise<DBEvent> {
-    const eventsNamespace = '_events'
+    const eventsNamespace = 'sysevents'
 
     let eventData: DBEvent
 
@@ -882,7 +882,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
     until?: Date
     limit?: number
   }): Promise<DBEvent[]> {
-    const eventsNamespace = '_events'
+    const eventsNamespace = 'sysevents'
 
     const filter: Filter = {}
 
@@ -956,7 +956,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
   async createAction(
     options: CreateActionOptions | { type: string; data: unknown; total?: number }
   ): Promise<DBAction> {
-    const actionsNamespace = '_actions'
+    const actionsNamespace = 'sysactions'
 
     let actionData: DBAction
 
@@ -1004,7 +1004,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
    * Get an action by ID
    */
   async getAction(id: string): Promise<DBAction | null> {
-    const actionsNamespace = '_actions'
+    const actionsNamespace = 'sysactions'
     const entity = await this.db.get(actionsNamespace, id)
 
     if (!entity) return null
@@ -1019,7 +1019,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
     id: string,
     updates: Partial<Pick<DBAction, 'status' | 'progress' | 'result' | 'error'>>
   ): Promise<DBAction> {
-    const actionsNamespace = '_actions'
+    const actionsNamespace = 'sysactions'
 
     const updateData: Record<string, unknown> = { ...updates }
 
@@ -1052,7 +1052,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
     until?: Date
     limit?: number
   }): Promise<DBAction[]> {
-    const actionsNamespace = '_actions'
+    const actionsNamespace = 'sysactions'
 
     const filter: Filter = {}
 
