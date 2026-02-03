@@ -646,10 +646,29 @@ export interface EntityRecord {
  * const title = entity.title // unknown
  * ```
  */
-export type Entity<TData extends EntityData = EntityData> = EntityRef & AuditFields & TData & {
+export type Entity<TData = EntityData> = EntityRef & AuditFields & TData & {
   /** Data fields and relationships - allows additional properties */
   [key: string]: unknown
 }
+
+/**
+ * Strictly-typed entity with enforced data shape constraints
+ *
+ * Use this type when you want to ensure the generic type parameter
+ * is a valid EntityData shape. This provides compile-time checking
+ * that the data type doesn't conflict with reserved fields.
+ *
+ * @typeParam TData - Must extend EntityData
+ *
+ * @example
+ * ```typescript
+ * interface Post { title: string; content: string; views: number }
+ *
+ * // Compile-time verification that Post is valid entity data
+ * const post: StrictEntity<Post> = await db.Posts.get('post-1')
+ * ```
+ */
+export type StrictEntity<TData extends EntityData> = Entity<StrictEntityData<TData>>
 
 // =============================================================================
 // Input Types
@@ -679,7 +698,7 @@ export type Entity<TData extends EntityData = EntityData> = EntityRef & AuditFie
  * const post = await db.Posts.create(input)
  * ```
  */
-export interface CreateInput<T extends EntityData = EntityData> {
+export interface CreateInput<T = EntityData> {
   /**
    * Entity type name (required)
    * Must match a type defined in the schema if schema validation is enabled
@@ -720,7 +739,7 @@ export interface CreateInput<T extends EntityData = EntityData> {
  * await db.Posts.replace('post-1', replacement)
  * ```
  */
-export interface ReplaceInput<T extends EntityData = EntityData> extends CreateInput<T> {
+export interface ReplaceInput<T = EntityData> extends CreateInput<T> {
   /**
    * Expected version for optimistic concurrency control
    * If specified and doesn't match current version, the operation fails
