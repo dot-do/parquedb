@@ -711,6 +711,9 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
         loader.load('Post', 'post-0', 'author')
       )
 
+      // Advance timers to trigger the batch flush (windowMs is 10ms)
+      await vi.advanceTimersByTimeAsync(15)
+
       await Promise.all(loadPromises)
 
       // With batching and deduplication, identical requests should result in just 1 call
@@ -723,6 +726,9 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
       const loadPromises = Array.from({ length: 5 }, () =>
         loader.load('Post', 'post-0', 'author')
       )
+
+      // Advance timers to trigger the batch flush
+      await vi.advanceTimersByTimeAsync(15)
 
       const results = await Promise.all(loadPromises)
 
@@ -741,6 +747,9 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
         loader.load('Post', 'post-1', 'comments'),
       ]
 
+      // Advance timers to trigger the batch flush
+      await vi.advanceTimersByTimeAsync(15)
+
       const results = await Promise.all(loadPromises)
 
       expect(results[0]).toHaveLength(1) // author
@@ -758,7 +767,12 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
         relation: 'author',
       }))
 
-      const results = await loader.loadMany(requests)
+      const resultsPromise = loader.loadMany(requests)
+
+      // Advance timers to trigger the batch flush
+      await vi.advanceTimersByTimeAsync(15)
+
+      const results = await resultsPromise
 
       expect(results).toHaveLength(20)
       expect(results.every(r => r.results.length === 1)).toBe(true)
@@ -781,6 +795,9 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
           }))
         ),
       ]
+
+      // Advance timers to trigger the batch flush
+      await vi.advanceTimersByTimeAsync(15)
 
       const [results1, results2] = await Promise.all(loadManyPromises)
 
@@ -812,14 +829,19 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
     })
 
     it('should reset state correctly after clear', async () => {
-      // First batch
-      await loader.load('Post', 'post-0', 'author')
+      // First batch - start loading and advance timers
+      const firstPromise = loader.load('Post', 'post-0', 'author')
+      await vi.advanceTimersByTimeAsync(15)
+      const firstResult = await firstPromise
+      expect(firstResult).toHaveLength(1)
 
-      // Clear
+      // Clear and reset call count
       loader.clear()
 
       // New batch should work independently
-      const result = await loader.load('Post', 'post-1', 'author')
+      const resultPromise = loader.load('Post', 'post-1', 'author')
+      await vi.advanceTimersByTimeAsync(15)
+      const result = await resultPromise
       expect(result).toHaveLength(1)
     })
   })
@@ -855,10 +877,15 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
         failingLoader.load('Post', `post-${i}`, 'author')
       )
 
+      // Attach handlers immediately to prevent unhandled rejection warnings
+      // This wraps each promise so errors are caught before timer advances
+      const settledPromise = Promise.allSettled(loadPromises)
+
       // Advance timers to trigger the batch flush
       await vi.advanceTimersByTimeAsync(15)
 
-      const results = await Promise.allSettled(loadPromises)
+      // Then wait for all promises to settle
+      const results = await settledPromise
 
       // Most should succeed
       const successful = results.filter(r => r.status === 'fulfilled')
@@ -878,14 +905,17 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
         loader.load('Post', `post-${i}`, 'author')
       )
 
-      // Check stats immediately
+      // Check stats immediately - should have pending requests
       const stats = loader.getStats()
       expect(stats.pendingRequests).toBeGreaterThanOrEqual(0)
+
+      // Advance timers to trigger the batch flush
+      await vi.advanceTimersByTimeAsync(15)
 
       // Wait for completion
       await Promise.all(loadPromises)
 
-      // Stats should be cleared
+      // Stats should be cleared after flush
       const finalStats = loader.getStats()
       expect(finalStats.pendingRequests).toBe(0)
     })
