@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   createParqueDBRPCClient,
+  createBatchLoaderDB,
   type ParqueDBRPCClient,
   type BatchedRequest,
   type BatchedResponse,

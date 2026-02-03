@@ -212,6 +212,7 @@ export {
 // rpc.do integration (promise pipelining and batching)
 export {
   createParqueDBRPCClient,
+  createBatchLoaderDB,
   type ParqueDBRPCClientOptions,
   type ParqueDBRPCClient,
   type RPCCollection,
@@ -220,4 +221,5 @@ export {
   type BatchedRequest,
   type BatchedResponse,
   type Transport as RPCTransport,
+  type RPCBatchLoaderDB,
 } from './rpc-do'

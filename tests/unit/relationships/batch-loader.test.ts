@@ -477,10 +477,12 @@ describe('RelationshipBatchLoader', () => {
       expect(stats.pendingBatches).toBe(0)
       expect(stats.cachedPromises).toBe(0)
 
-      // Queue some requests
-      loader.load('Post', 'post-1', 'author')
-      loader.load('Post', 'post-2', 'author')
-      loader.load('User', 'user-1', 'posts')
+      // Queue some requests and capture them to catch rejections
+      const promises = [
+        loader.load('Post', 'post-1', 'author'),
+        loader.load('Post', 'post-2', 'author'),
+        loader.load('User', 'user-1', 'posts'),
+      ]
 
       stats = loader.getStats()
       expect(stats.pendingRequests).toBe(3)
@@ -488,6 +490,9 @@ describe('RelationshipBatchLoader', () => {
       expect(stats.cachedPromises).toBe(3)
 
       loader.clear()
+
+      // Catch all the rejection errors from clear()
+      await Promise.allSettled(promises)
     })
   })
 

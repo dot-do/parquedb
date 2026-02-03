@@ -13,33 +13,39 @@ export interface Octokit {
 }
 
 interface ListCommentsParams {
-  owner: string
-  repo: string
-  issue_number: number
+  readonly owner: string
+  readonly repo: string
+  readonly issue_number: number
 }
 
 interface CreateCommentParams {
-  owner: string
-  repo: string
-  issue_number: number
-  body: string
+  readonly owner: string
+  readonly repo: string
+  readonly issue_number: number
+  readonly body: string
 }
 
 interface UpdateCommentParams {
-  owner: string
-  repo: string
-  comment_id: number
-  body: string
+  readonly owner: string
+  readonly repo: string
+  readonly comment_id: number
+  readonly body: string
 }
 
 interface Comment {
-  id: number
-  user: { login: string } | null
-  body?: string
+  readonly id: number
+  readonly user: { readonly login: string } | null
+  readonly body?: string
+}
+
+export interface CollectionDiffCounts {
+  readonly added: number
+  readonly removed: number
+  readonly modified: number
 }
 
 export interface DiffData {
-  collections: Record<string, { added: number; removed: number; modified: number }>
+  readonly collections: Readonly<Record<string, CollectionDiffCounts>>
 }
 
 export interface PreviewUrlOptions {

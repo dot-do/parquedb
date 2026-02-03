@@ -28,6 +28,7 @@
 
 export {
   createParqueDBRPCClient,
+  createBatchLoaderDB,
   type ParqueDBRPCClientOptions,
   type ParqueDBRPCClient,
   type RPCCollection,
@@ -36,4 +37,5 @@ export {
   type BatchedRequest,
   type BatchedResponse,
   type Transport,
+  type RPCBatchLoaderDB,
 } from './client'

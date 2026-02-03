@@ -535,6 +535,81 @@ export function createParqueDBRPCClient(options: ParqueDBRPCClientOptions): Parq
 }
 
 // =============================================================================
+// Integration with ai-database Adapter
+// =============================================================================
+
+/**
+ * Interface matching BatchLoaderDB from the relationships module.
+ * This allows the RPC client to be used as a data source for the
+ * RelationshipBatchLoader in the ai-database integration.
+ */
+export interface RPCBatchLoaderDB {
+  getRelated<T = Record<string, unknown>>(
+    namespace: string,
+    id: string,
+    relationField: string,
+    options?: Record<string, unknown>
+  ): Promise<{ items: Entity<T>[]; total?: number; hasMore?: boolean }>
+
+  getByIds?<T = Record<string, unknown>>(
+    namespace: string,
+    ids: string[]
+  ): Promise<Entity<T>[]>
+}
+
+/**
+ * Create a BatchLoaderDB-compatible interface from the RPC client.
+ *
+ * This allows the RelationshipBatchLoader from ai-database to use
+ * an RPC client as its data source, enabling efficient batched
+ * relationship loading over RPC.
+ *
+ * @example
+ * ```typescript
+ * import { createParqueDBRPCClient, createBatchLoaderDB } from 'parquedb/integrations/rpc-do'
+ * import { RelationshipBatchLoader } from 'parquedb/relationships'
+ *
+ * const client = createParqueDBRPCClient({
+ *   url: 'https://my-parquedb.workers.dev/rpc',
+ *   batchingOptions: { windowMs: 10, maxBatchSize: 50 }
+ * })
+ *
+ * // Create a BatchLoaderDB-compatible interface
+ * const loaderDB = createBatchLoaderDB(client)
+ *
+ * // Use with RelationshipBatchLoader
+ * const loader = new RelationshipBatchLoader(loaderDB)
+ *
+ * // Now relationship loads will use RPC with automatic batching
+ * const authors = await Promise.all([
+ *   loader.load('Post', 'post-1', 'author'),
+ *   loader.load('Post', 'post-2', 'author'),
+ *   loader.load('Post', 'post-3', 'author'),
+ * ])
+ * ```
+ */
+export function createBatchLoaderDB(client: ParqueDBRPCClient): RPCBatchLoaderDB {
+  return {
+    async getRelated<T = Record<string, unknown>>(
+      namespace: string,
+      id: string,
+      relationField: string,
+      options?: Record<string, unknown>
+    ): Promise<{ items: Entity<T>[]; total?: number; hasMore?: boolean }> {
+      return client.collection<T>(namespace).getRelated(id, relationField)
+    },
+
+    async getByIds<T = Record<string, unknown>>(
+      namespace: string,
+      ids: string[]
+    ): Promise<Entity<T>[]> {
+      const results = await client.batchGet<T>(namespace, ids)
+      return results.filter((r): r is Entity<T> => r !== null)
+    },
+  }
+}
+
+// =============================================================================
 // Re-exports
 // =============================================================================
 

@@ -296,7 +296,8 @@ async function getCommitParents(
 
   try {
     const commit = await loadCommit(storage, commitHash)
-    const parents = commit.parents
+    // Copy to mutable array since commit.parents may be readonly
+    const parents = [...commit.parents]
 
     // Cache the result
     if (cache) {
@@ -368,7 +369,7 @@ export async function findAllCommonAncestors(
 
   // Find intersection (common ancestors)
   const commonAncestors = new Set<string>()
-  for (const hash of ancestors1) {
+  for (const hash of Array.from(ancestors1)) {
     if (ancestors2.has(hash)) {
       commonAncestors.add(hash)
     }
@@ -393,9 +394,10 @@ export async function findAllCommonAncestors(
 
   // A commit is a merge base if no other common ancestor is its descendant
   const mergeBases: string[] = []
-  for (const candidate of commonAncestors) {
+  const commonAncestorArray = Array.from(commonAncestors)
+  for (const candidate of commonAncestorArray) {
     let isMergeBase = true
-    for (const other of commonAncestors) {
+    for (const other of commonAncestorArray) {
       if (other !== candidate) {
         const otherAncestors = ancestorAncestors.get(other)!
         if (otherAncestors.has(candidate)) {

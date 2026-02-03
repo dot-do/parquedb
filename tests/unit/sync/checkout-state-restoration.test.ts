@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { BranchManager, createBranchManager } from '../../../src/sync/branch-manager'
 import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import { createRefManager } from '../../../src/sync/refs'
-import { createCommit, saveCommit, type DatabaseState } from '../../../src/sync/commit'
+import { createCommit, saveCommit, loadCommit, type DatabaseState } from '../../../src/sync/commit'
 import {
   storeObject,
   loadObject,
@@ -167,20 +167,46 @@ describe('checkout-state-restoration', () => {
       await refManager.updateRef('main', commit1)
 
       // Create a second branch with different data
-      await branchManager.create('feature')
-      const commit2 = await createCommitWithData(
-        'Feature commit',
+      // Note: We create the commit but NOT the actual files yet - the files
+      // will be created when we checkout the branch
+      const featurePostsData = new TextEncoder().encode('feature posts data')
+      const featureUsersData = new TextEncoder().encode('feature users data')
+      const featurePostsHash = await storeObject(storage, featurePostsData)
+      const featureUsersHash = await storeObject(storage, featureUsersData)
+
+      const commit2 = await createCommit(
         {
           collections: {
-            posts: { data: 'feature posts data' },
-            users: { data: 'feature users data' },
+            posts: {
+              dataHash: featurePostsHash,
+              schemaHash: '',
+              rowCount: 1,
+            },
+            users: {
+              dataHash: featureUsersHash,
+              schemaHash: '',
+              rowCount: 1,
+            },
+          },
+          relationships: {
+            forwardHash: await storeObject(storage, new TextEncoder().encode('{}')),
+            reverseHash: await storeObject(storage, new TextEncoder().encode('{}')),
+          },
+          eventLogPosition: {
+            segmentId: 'initial',
+            offset: 0,
           },
         },
-        [commit1]
+        {
+          message: 'Feature commit',
+          author: 'test-author',
+          parents: [commit1],
+        }
       )
-      await refManager.updateRef('feature', commit2)
+      await saveCommit(storage, commit2)
+      await refManager.updateRef('feature', commit2.hash)
 
-      // Checkout feature branch
+      // Checkout feature branch - this should restore the feature data
       await branchManager.checkout('feature')
 
       // Verify data was restored

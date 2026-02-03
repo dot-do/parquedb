@@ -426,13 +426,11 @@ const PROTECTED_BRANCHES = ['main', 'master']
  * Payload for create (branch/tag) webhook
  */
 export interface CreatePayload {
-  ref: string
-  ref_type: 'branch' | 'tag'
-  repository: {
-    full_name: string
-  }
-  installation?: {
-    id: number
+  readonly ref: string
+  readonly ref_type: 'branch' | 'tag'
+  readonly repository: RepositoryRef
+  readonly installation?: {
+    readonly id: number
   }
 }
 
@@ -482,13 +480,11 @@ export async function handleCreate(
  * Payload for delete (branch/tag) webhook
  */
 export interface DeletePayload {
-  ref: string
-  ref_type: 'branch' | 'tag'
-  repository: {
-    full_name: string
-  }
-  installation?: {
-    id: number
+  readonly ref: string
+  readonly ref_type: 'branch' | 'tag'
+  readonly repository: RepositoryRef
+  readonly installation?: {
+    readonly id: number
   }
 }
 
@@ -535,27 +531,40 @@ export async function handleDelete(
 // =============================================================================
 
 /**
+ * Pull request branch reference
+ */
+export interface PullRequestBranchRef {
+  readonly ref: string
+  readonly sha?: string
+}
+
+/**
+ * Pull request base reference
+ */
+export interface PullRequestBaseRef {
+  readonly ref: string
+}
+
+/**
+ * Pull request data
+ */
+export interface PullRequestData {
+  readonly merged?: boolean
+  readonly head: PullRequestBranchRef
+  readonly base: PullRequestBaseRef
+  readonly merge_commit_sha?: string
+}
+
+/**
  * Payload for pull_request webhook
  */
 export interface PullRequestPayload {
-  action: 'opened' | 'synchronize' | 'closed'
-  number: number
-  pull_request: {
-    merged?: boolean
-    head: {
-      ref: string
-      sha?: string
-    }
-    base: {
-      ref: string
-    }
-    merge_commit_sha?: string
-  }
-  repository: {
-    full_name: string
-  }
-  installation?: {
-    id: number
+  readonly action: 'opened' | 'synchronize' | 'closed'
+  readonly number: number
+  readonly pull_request: PullRequestData
+  readonly repository: RepositoryRef
+  readonly installation?: {
+    readonly id: number
   }
 }
 

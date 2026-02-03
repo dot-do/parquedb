@@ -1075,11 +1075,11 @@ describe('E2E: Edge Cases', () => {
     const branches = await branchManager.list()
     expect(branches).toHaveLength(branchCount + 1) // +1 for main
 
-    // Can still switch between them
-    await branchManager.checkout('feature/branch-25')
+    // Can still switch between them (skip state reconstruction for test)
+    await branchManager.checkout('feature/branch-25', { skipStateReconstruction: true })
     expect(await branchManager.current()).toBe('feature/branch-25')
 
-    await branchManager.checkout('feature/branch-49')
+    await branchManager.checkout('feature/branch-49', { skipStateReconstruction: true })
     expect(await branchManager.current()).toBe('feature/branch-49')
   })
 

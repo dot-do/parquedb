@@ -29,4 +29,15 @@ export {
   type CreateEventOptions,
   type CreateActionOptions,
   type EmbeddingsConfig,
+  type ParqueDBAdapterOptions,
 } from './adapter'
+
+// Re-export batch loader types for advanced usage
+export {
+  RelationshipBatchLoader,
+  createBatchLoader,
+  type BatchLoadRequest,
+  type BatchLoadResult,
+  type BatchLoaderOptions,
+  type BatchLoaderDB,
+} from '../../relationships/batch-loader'

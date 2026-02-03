@@ -4,12 +4,11 @@ import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import { createRefManager } from '../../../src/sync/refs'
 import { createCommit, saveCommit, type DatabaseState } from '../../../src/sync/commit'
 import {
-  saveObject,
-  loadObject,
   computeObjectHash,
-  ObjectStore,
+  type ObjectStore,
   createObjectStore,
 } from '../../../src/sync/object-store'
+import { storeObject } from '../../../src/sync/state-store'
 import { StoragePaths } from '../../../src/types/storage'
 
 describe('checkout state reconstruction', () => {
@@ -32,6 +31,9 @@ describe('checkout state reconstruction', () => {
 
   /**
    * Helper to create a full database state with objects stored
+   *
+   * Note: The state-store uses a manifest-based format for relationships.
+   * The manifest is a JSON object mapping file paths to content hashes.
    */
   async function createDatabaseStateWithObjects(
     collections: Record<string, string>,
@@ -55,11 +57,29 @@ describe('checkout state reconstruction', () => {
       }
     }
 
-    // Store relationship objects
+    // Store relationship objects using the manifest format expected by state-store
+    // The state-store stores relationships as a manifest JSON that maps file paths to content hashes
     const forwardData = createSampleData(relationships?.forward ?? 'forward-rels')
     const reverseData = createSampleData(relationships?.reverse ?? 'reverse-rels')
-    const forwardHash = await objectStore.save(forwardData)
-    const reverseHash = await objectStore.save(reverseData)
+
+    // Store the actual relationship data
+    const forwardFileHash = await objectStore.save(forwardData)
+    const reverseFileHash = await objectStore.save(reverseData)
+
+    // Create manifests (JSON mapping file path to content hash)
+    const forwardManifest: Record<string, string> = {
+      'rels/forward/default.parquet': forwardFileHash,
+    }
+    const reverseManifest: Record<string, string> = {
+      'rels/reverse/default.parquet': reverseFileHash,
+    }
+
+    // Store manifests and get their hashes (this is what goes in the commit state)
+    const forwardManifestData = createSampleData(JSON.stringify(forwardManifest, Object.keys(forwardManifest).sort()))
+    const reverseManifestData = createSampleData(JSON.stringify(reverseManifest, Object.keys(reverseManifest).sort()))
+
+    const forwardHash = await objectStore.save(forwardManifestData)
+    const reverseHash = await objectStore.save(reverseManifestData)
 
     return {
       collections: collectionStates,
