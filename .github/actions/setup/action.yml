@@ -1,0 +1,23 @@
+name: 'Setup ParqueDB'
+description: 'Setup ParqueDB CLI for GitHub Actions'
+author: 'ParqueDB'
+
+inputs:
+  version:
+    description: 'Version of ParqueDB CLI to install (or "latest")'
+    required: false
+    default: 'latest'
+  token:
+    description: 'ParqueDB authentication token from oauth.do'
+    required: false
+    default: ''
+
+outputs:
+  parquedb-version:
+    description: 'The version of ParqueDB CLI that was installed'
+  cache-hit:
+    description: 'Whether the CLI was restored from cache'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

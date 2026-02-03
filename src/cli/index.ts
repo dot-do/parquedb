@@ -38,6 +38,7 @@ import { conflictsCommand } from './commands/conflicts'
 import { resolveCommand } from './commands/resolve'
 import { typesCommand } from './commands/types'
 import { schemaCommand } from './commands/schema'
+import { ciCommand } from './commands/ci'
 
 // =============================================================================
 // Register Built-in Commands
@@ -241,6 +242,18 @@ registry.register({
   usage: 'parquedb schema show|diff|check [options]',
   category: 'Development',
   execute: schemaCommand,
+})
+
+// =============================================================================
+// CI Commands
+// =============================================================================
+
+registry.register({
+  name: 'ci',
+  description: 'CI/CD integration commands',
+  usage: 'parquedb ci <command> [options]',
+  category: 'CI',
+  execute: ciCommand,
 })
 
 // =============================================================================

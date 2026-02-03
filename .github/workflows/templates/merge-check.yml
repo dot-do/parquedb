@@ -1,0 +1,54 @@
+name: Merge Check
+
+on:
+  pull_request:
+
+concurrency:
+  group: merge-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check Merge Conflicts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: parquedb/setup-action@v1
+
+      - name: Create check run
+        uses: actions/github-script@v7
+        id: check
+        with:
+          check-name: ParqueDB Merge Check
+          script: |
+            const check = await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'ParqueDB Merge Check',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'in_progress'
+            });
+            return check.data.id;
+
+      - name: Run merge check
+        id: merge-check
+        run: parquedb ci check-merge
+        env:
+          PARQUEDB_TOKEN: ${{ secrets.PARQUEDB_TOKEN }}
+
+      - name: Update check run status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const conclusion = '${{ steps.merge-check.outcome }}' === 'success' ? 'success' : 'failure';
+            await github.rest.checks.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              check_run_id: ${{ steps.check.outputs.result }},
+              status: 'completed',
+              conclusion: conclusion
+            });

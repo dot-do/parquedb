@@ -1,0 +1,51 @@
+name: PR Preview Database
+
+on:
+  pull_request:
+    types: [opened, synchronize, closed]
+
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: Create/Update Preview
+    runs-on: ubuntu-latest
+    if: github.event.action != 'closed'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: parquedb/setup-action@v1
+
+      - name: Create preview branch
+        run: parquedb ci preview create --pr ${{ github.event.pull_request.number }}
+        env:
+          PARQUEDB_TOKEN: ${{ secrets.PARQUEDB_TOKEN }}
+
+      - name: Post preview URL comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const previewUrl = `https://preview-${prNumber}.parquedb.dev`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: `## Preview Database\n\nYour preview database is ready at: ${previewUrl}`
+            });
+
+  cleanup:
+    name: Cleanup Preview
+    runs-on: ubuntu-latest
+    if: github.event.action == 'closed'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: parquedb/setup-action@v1
+
+      - name: Delete preview branch
+        run: parquedb ci preview delete --pr ${{ github.event.pull_request.number }}
+        env:
+          PARQUEDB_TOKEN: ${{ secrets.PARQUEDB_TOKEN }}

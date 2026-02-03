@@ -1,0 +1,37 @@
+name: Auto Merge Database
+
+on:
+  pull_request:
+    types: [closed]
+
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: Merge Database Branch
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: parquedb/setup-action@v1
+
+      - name: Merge database branch
+        run: parquedb merge --branch preview-${{ github.event.pull_request.number }}
+        env:
+          PARQUEDB_TOKEN: ${{ secrets.PARQUEDB_TOKEN }}
+
+      - name: Push merged changes
+        run: parquedb push
+        env:
+          PARQUEDB_TOKEN: ${{ secrets.PARQUEDB_TOKEN }}
+
+      - name: Cleanup preview branch
+        run: |
+          git push --delete origin preview-${{ github.event.pull_request.number }} || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

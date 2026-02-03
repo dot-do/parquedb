@@ -1,0 +1,67 @@
+name: Database Diff
+
+on:
+  pull_request:
+
+concurrency:
+  group: database-diff-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  diff:
+    name: Generate Database Diff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: parquedb/setup-action@v1
+
+      - name: Run database diff
+        id: diff
+        run: |
+          parquedb ci diff > diff_output.txt
+          echo "diff<<EOF" >> $GITHUB_OUTPUT
+          cat diff_output.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        env:
+          PARQUEDB_TOKEN: ${{ secrets.PARQUEDB_TOKEN }}
+
+      - name: Find existing comment
+        id: find-comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number
+            });
+            const botComment = comments.data.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('## Database Diff')
+            );
+            return botComment ? botComment.id : null;
+
+      - name: Update or create comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const diff = `${{ steps.diff.outputs.diff }}`;
+            const body = `## Database Diff\n\n\`\`\`diff\n${diff}\n\`\`\``;
+            const commentId = ${{ steps.find-comment.outputs.result }};
+
+            if (commentId) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: commentId,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: body
+              });
+            }
