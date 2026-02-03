@@ -10,6 +10,22 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./payload": {
+      "import": "./dist/integrations/payload/index.js",
+      "types": "./dist/integrations/payload/index.d.ts"
+    },
+    "./sql": {
+      "import": "./dist/integrations/sql/index.js",
+      "types": "./dist/integrations/sql/index.d.ts"
+    }
+  },
+  "peerDependencies": {
+    "payload": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "payload": {
+      "optional": true
     }
   },
   "bin": {
@@ -59,7 +75,8 @@
     "hyparquet-compressors": "^1.1.1",
     "hyparquet-writer": "github:dot-do/hyparquet-writer#variant-shredding",
     "pluralize": "^8.0.0",
-    "snappyjs": "^0.7.0"
+    "snappyjs": "^0.7.0",
+    "sqids": "^0.3.0"
   },
   "optionalDependencies": {
     "@aws-sdk/client-s3": "^3.980.0"

@@ -1,0 +1,26 @@
+{
+  "name": "payload-parquedb-example",
+  "version": "1.0.0",
+  "description": "Example Payload CMS app using ParqueDB as the database",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx --watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev:workers": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "parquedb": "file:../..",
+    "payload": "^3.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^25.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^3.99.0"
+  }
+}

@@ -67,3 +67,52 @@ export {
   type NativeDataFile,
   type NativeCommitResult,
 } from './iceberg-native'
+
+// Payload CMS integration
+export {
+  parquedbAdapter,
+  PayloadAdapter,
+  translatePayloadFilter,
+  translatePayloadSort,
+  toPayloadDoc,
+  toPayloadDocs,
+  type PayloadAdapterConfig,
+} from './payload'
+
+// SQL integration (sql``, Drizzle, Prisma)
+export {
+  // SQL Template Tag
+  createSQL,
+  buildQuery,
+  escapeIdentifier,
+  escapeString,
+  type SQLExecutor,
+  type CreateSQLOptions,
+
+  // Drizzle ORM Adapter
+  createDrizzleProxy,
+  getTableName,
+  type DrizzleProxyOptions,
+
+  // Prisma Driver Adapter
+  PrismaParqueDBAdapter,
+  createPrismaAdapter,
+  type PrismaAdapterOptions,
+
+  // Parser & Translator (advanced)
+  parseSQL,
+  translateSelect,
+  translateInsert,
+  translateUpdate,
+  translateDelete,
+  translateStatement,
+  translateWhere,
+  whereToFilter,
+
+  // Types
+  type SQLStatement,
+  type SQLQueryOptions,
+  type SQLQueryResult,
+  type DrizzleProxyCallback,
+  type PrismaDriverAdapter,
+} from './sql'
