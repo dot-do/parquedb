@@ -53,6 +53,35 @@ const globalQueryStats = new WeakMap<StorageBackend, Map<string, SnapshotQuerySt
  */
 const globalReverseRelIndex = new WeakMap<StorageBackend, Map<string, Map<string, Set<string>>>>()
 
+/**
+ * Entity event index for O(1) lookups of events by entity target.
+ * Maps: entityTarget (e.g., "posts:abc123") -> Event[]
+ *
+ * Events are stored in chronological order (sorted by timestamp, then by ID).
+ * This eliminates the O(n) filter pattern in reconstructEntityAtTime by providing
+ * direct access to an entity's events without scanning all events.
+ *
+ * Example: When reconstructing "posts/abc" at a specific time:
+ * - Without index: O(n) scan of all events, then sort
+ * - With index: O(1) lookup, events already sorted
+ */
+const globalEntityEventIndex = new WeakMap<StorageBackend, Map<string, Event[]>>()
+
+/**
+ * LRU cache for recent entity reconstructions.
+ * Maps: cacheKey (e.g., "posts/abc:1704067200000") -> Entity
+ *
+ * This avoids replaying events for frequently accessed time-travel queries.
+ * The cache key combines entity ID and asOf timestamp for uniqueness.
+ */
+const globalReconstructionCache = new WeakMap<StorageBackend, Map<string, { entity: Entity | null; timestamp: number }>>()
+
+/** Maximum number of entries in the reconstruction cache */
+const RECONSTRUCTION_CACHE_MAX_SIZE = 1000
+
+/** Maximum age of cache entries in milliseconds (5 minutes) */
+const RECONSTRUCTION_CACHE_MAX_AGE = 5 * 60 * 1000
+
 // =============================================================================
 // Store Accessor Functions
 // =============================================================================
@@ -270,6 +299,172 @@ export function removeAllFromReverseRelIndex(
 }
 
 /**
+ * Get or create the entity event index for a storage backend.
+ *
+ * @param storage - The storage backend to get the index for
+ * @returns Map of entity targets to their sorted events
+ */
+export function getEntityEventIndex(storage: StorageBackend): Map<string, Event[]> {
+  if (!globalEntityEventIndex.has(storage)) {
+    globalEntityEventIndex.set(storage, new Map())
+  }
+  return globalEntityEventIndex.get(storage)!
+}
+
+/**
+ * Add an event to the entity event index.
+ * Maintains sorted order by timestamp, then by ID.
+ *
+ * @param index - The entity event index
+ * @param entityTarget - The entity target (e.g., "posts:abc123")
+ * @param event - The event to add
+ */
+export function addToEntityEventIndex(
+  index: Map<string, Event[]>,
+  entityTarget: string,
+  event: Event
+): void {
+  let events = index.get(entityTarget)
+  if (!events) {
+    events = []
+    index.set(entityTarget, events)
+  }
+
+  // Insert in sorted order (by timestamp, then by ID)
+  // Most events are appended at the end, so check that case first
+  if (events.length === 0 || compareEvents(event, events[events.length - 1]!) >= 0) {
+    events.push(event)
+  } else {
+    // Binary search to find insertion point
+    let left = 0
+    let right = events.length
+    while (left < right) {
+      const mid = Math.floor((left + right) / 2)
+      if (compareEvents(event, events[mid]!) < 0) {
+        right = mid
+      } else {
+        left = mid + 1
+      }
+    }
+    events.splice(left, 0, event)
+  }
+}
+
+/**
+ * Compare two events for sorting (by timestamp, then by ID).
+ * Returns negative if a < b, positive if a > b, 0 if equal.
+ */
+function compareEvents(a: Event, b: Event): number {
+  const timeDiff = a.ts - b.ts
+  if (timeDiff !== 0) return timeDiff
+  return a.id.localeCompare(b.id)
+}
+
+/**
+ * Get events for an entity from the index.
+ *
+ * @param index - The entity event index
+ * @param entityTarget - The entity target (e.g., "posts:abc123")
+ * @returns Array of events for the entity, sorted by timestamp
+ */
+export function getFromEntityEventIndex(
+  index: Map<string, Event[]>,
+  entityTarget: string
+): Event[] {
+  return index.get(entityTarget) || []
+}
+
+/**
+ * Get or create the reconstruction cache for a storage backend.
+ *
+ * @param storage - The storage backend to get the cache for
+ * @returns Map of cache keys to cached entities
+ */
+export function getReconstructionCache(storage: StorageBackend): Map<string, { entity: Entity | null; timestamp: number }> {
+  if (!globalReconstructionCache.has(storage)) {
+    globalReconstructionCache.set(storage, new Map())
+  }
+  return globalReconstructionCache.get(storage)!
+}
+
+/**
+ * Get a cached reconstruction result.
+ *
+ * @param cache - The reconstruction cache
+ * @param fullId - The entity ID (e.g., "posts/abc123")
+ * @param asOfTime - The timestamp of the reconstruction
+ * @returns The cached entity or undefined if not cached/expired
+ */
+export function getFromReconstructionCache(
+  cache: Map<string, { entity: Entity | null; timestamp: number }>,
+  fullId: string,
+  asOfTime: number
+): Entity | null | undefined {
+  const cacheKey = `${fullId}:${asOfTime}`
+  const entry = cache.get(cacheKey)
+  if (!entry) return undefined
+
+  // Check if entry has expired
+  if (Date.now() - entry.timestamp > RECONSTRUCTION_CACHE_MAX_AGE) {
+    cache.delete(cacheKey)
+    return undefined
+  }
+
+  return entry.entity
+}
+
+/**
+ * Add a reconstruction result to the cache.
+ *
+ * @param cache - The reconstruction cache
+ * @param fullId - The entity ID (e.g., "posts/abc123")
+ * @param asOfTime - The timestamp of the reconstruction
+ * @param entity - The reconstructed entity (or null if didn't exist)
+ */
+export function addToReconstructionCache(
+  cache: Map<string, { entity: Entity | null; timestamp: number }>,
+  fullId: string,
+  asOfTime: number,
+  entity: Entity | null
+): void {
+  const cacheKey = `${fullId}:${asOfTime}`
+
+  // Evict oldest entries if cache is full (simple LRU approximation)
+  if (cache.size >= RECONSTRUCTION_CACHE_MAX_SIZE) {
+    // Delete first 10% of entries (oldest by insertion order in Map)
+    const toDelete = Math.floor(RECONSTRUCTION_CACHE_MAX_SIZE * 0.1)
+    let deleted = 0
+    for (const key of cache.keys()) {
+      if (deleted >= toDelete) break
+      cache.delete(key)
+      deleted++
+    }
+  }
+
+  cache.set(cacheKey, { entity, timestamp: Date.now() })
+}
+
+/**
+ * Invalidate cache entries for an entity.
+ * Called when an entity is modified.
+ *
+ * @param cache - The reconstruction cache
+ * @param fullId - The entity ID to invalidate
+ */
+export function invalidateReconstructionCache(
+  cache: Map<string, { entity: Entity | null; timestamp: number }>,
+  fullId: string
+): void {
+  // Remove all entries for this entity (any timestamp)
+  const prefix = `${fullId}:`
+  for (const key of cache.keys()) {
+    if (key.startsWith(prefix)) {
+      cache.delete(key)
+    }
+  }
+}
+
+/**
  * Clear global state for a specific storage backend.
  * This is called by dispose() for explicit cleanup.
  */
@@ -280,4 +475,6 @@ export function clearGlobalState(storage: StorageBackend): void {
   globalSnapshotStore.delete(storage)
   globalQueryStats.delete(storage)
   globalReverseRelIndex.delete(storage)
+  globalEntityEventIndex.delete(storage)
+  globalReconstructionCache.delete(storage)
 }

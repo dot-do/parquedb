@@ -85,7 +85,7 @@ import {
 
 import { validateNamespace, validateFilter, validateUpdateOperators, normalizeNamespace, toFullId } from './validation'
 import { CollectionImpl } from './collection'
-import { EventLogImpl } from './events'
+import { EventLogImpl, pruneArchivedEvents } from './events'
 import {
   getEntityStore,
   getEventStore,
@@ -99,6 +99,13 @@ import {
   getAllFromReverseRelIndexByNs,
   removeAllFromReverseRelIndex,
   clearGlobalState,
+  getEntityEventIndex,
+  addToEntityEventIndex,
+  getFromEntityEventIndex,
+  getReconstructionCache,
+  getFromReconstructionCache,
+  addToReconstructionCache,
+  invalidateReconstructionCache,
 } from './store'
 import type { IStorageRouter, StorageMode } from '../storage/router'
 import type { CollectionOptions } from '../db'
@@ -124,6 +131,8 @@ export class ParqueDBImpl {
   private snapshots: Snapshot[] // Shared via global store
   private queryStats: Map<string, SnapshotQueryStats> // Shared via global store
   private reverseRelIndex: Map<string, Map<string, Set<string>>> // Reverse relationship index for O(1) lookups
+  private entityEventIndex: Map<string, Event[]> // Entity event index for O(1) lookups by entity target
+  private reconstructionCache: Map<string, { entity: Entity | null; timestamp: number }> // LRU cache for reconstructions
   private snapshotConfig: SnapshotConfig
   private eventLogConfig: Required<EventLogConfig>
   private pendingEvents: Event[] = [] // Buffer for batched writes
@@ -150,6 +159,8 @@ export class ParqueDBImpl {
     this.snapshots = getSnapshotStore(config.storage)
     this.queryStats = getQueryStatsStore(config.storage)
     this.reverseRelIndex = getReverseRelIndex(config.storage)
+    this.entityEventIndex = getEntityEventIndex(config.storage)
+    this.reconstructionCache = getReconstructionCache(config.storage)
     // Initialize index manager
     this.indexManager = new IndexManager(config.storage)
     // Initialize storage router and collection options if provided
@@ -276,6 +287,8 @@ export class ParqueDBImpl {
     this.snapshots.length = 0
     this.queryStats.clear()
     this.reverseRelIndex.clear()
+    this.entityEventIndex.clear()
+    this.reconstructionCache.clear()
   }
 
 
@@ -844,8 +857,25 @@ export class ParqueDBImpl {
     validateNamespace(namespace)
 
     const now = new Date()
-    const id = generateId()
-    const fullId = `${namespace}/${id}` as EntityId
+
+    // Use provided $id if present, otherwise generate a new one
+    let fullId: EntityId
+    let id: string
+    if (data.$id) {
+      // If $id is provided, use it (could be full "ns/id" or just "id")
+      const providedId = String(data.$id)
+      if (providedId.includes('/')) {
+        fullId = providedId as EntityId
+        id = providedId.split('/').slice(1).join('/')
+      } else {
+        id = providedId
+        fullId = `${namespace}/${id}` as EntityId
+      }
+    } else {
+      id = generateId()
+      fullId = `${namespace}/${id}` as EntityId
+    }
+
     const actor = options?.actor || ('system/anonymous' as EntityId)
 
     // Auto-derive $type from namespace if not provided
@@ -2074,43 +2104,64 @@ export class ParqueDBImpl {
 
     const asOfTime = asOf.getTime()
 
-    // Get all events for this entity, sorted by time and ID
-    const allEvents = this.events
-      .filter(e => {
-        if (isRelationshipTarget(e.target)) return false
-        const info = parseEntityTarget(e.target)
-        return info.ns === ns && info.id === entityId
-      })
-      .sort((a, b) => {
-        const timeDiff = a.ts - b.ts
-        if (timeDiff !== 0) return timeDiff
-        return a.id.localeCompare(b.id)
-      })
-
-    if (allEvents.length === 0) {
-      return null
+    // Check cache first for O(1) lookup of recent reconstructions
+    const cachedResult = getFromReconstructionCache(this.reconstructionCache, fullId, asOfTime)
+    if (cachedResult !== undefined) {
+      return cachedResult
     }
 
+    // Use entity event index for O(1) lookup instead of O(n) filter
+    // The target format in events is "ns:id", so construct the entity target
+    const target = entityTarget(ns ?? '', entityId)
+    const indexedEvents = getFromEntityEventIndex(this.entityEventIndex, target)
 
-    // Find the target event. We include all events at or before the target timestamp.
-    // When multiple events share the same millisecond timestamp, all of them are
-    // included because they semantically all occurred "at" that time. This may result
-    // in including slightly more events than a caller who passed a specific event's
-    // timestamp might expect, but it's the correct interpretation of "as of" semantics.
-    let targetEventIndex = -1
+    // If index is empty but we have events, fall back to building from events array
+    // This handles the case where the index hasn't been populated yet (e.g., loaded from storage)
+    if (indexedEvents.length === 0) {
+      // Fall back to O(n) filter for backwards compatibility
+      const filteredEvents = this.events
+        .filter(e => {
+          if (isRelationshipTarget(e.target)) return false
+          const info = parseEntityTarget(e.target)
+          return info.ns === ns && info.id === entityId
+        })
+        .sort((a, b) => {
+          const timeDiff = a.ts - b.ts
+          if (timeDiff !== 0) return timeDiff
+          return a.id.localeCompare(b.id)
+        })
 
-    for (let i = 0; i < allEvents.length; i++) {
-      const event = allEvents[i]!  // loop bounds ensure valid index
-      if (event.ts <= asOfTime) {
-        targetEventIndex = i
-      } else {
-        break
+      if (filteredEvents.length === 0) {
+        // Cache the null result
+        addToReconstructionCache(this.reconstructionCache, fullId, asOfTime, null)
+        return null
       }
 
+      // Populate the index for future queries
+      for (const event of filteredEvents) {
+        addToEntityEventIndex(this.entityEventIndex, target, event)
+      }
+
+      // Use the filtered events
+      return this.reconstructFromEvents(fullId, asOfTime, filteredEvents)
     }
 
+    // Events are already sorted in the index
+    return this.reconstructFromEvents(fullId, asOfTime, indexedEvents)
+  }
+
+  /**
+   * Helper method to reconstruct entity state from a sorted array of events.
+   * Extracted to avoid code duplication between indexed and fallback paths.
+   */
+  private reconstructFromEvents(fullId: string, asOfTime: number, allEvents: Event[]): Entity | null {
+    // Find the target event using binary search since events are sorted by time
+    // We want the last event with ts <= asOfTime
+    const targetEventIndex = this.binarySearchLastEventBeforeTime(allEvents, asOfTime)
 
     if (targetEventIndex === -1) {
+      // No events at or before asOfTime
+      addToReconstructionCache(this.reconstructionCache, fullId, asOfTime, null)
       return null
     }
 
@@ -2174,7 +2225,40 @@ export class ParqueDBImpl {
     // Store stats for this entity
     this.queryStats.set(fullId, stats)
 
+    // Cache the result for future queries
+    addToReconstructionCache(this.reconstructionCache, fullId, asOfTime, entity)
+
     return entity
+  }
+
+  /**
+   * Binary search to find the last event with timestamp <= target.
+   * Returns -1 if no such event exists.
+   *
+   * This replaces the O(n) linear scan with O(log n) binary search.
+   */
+  private binarySearchLastEventBeforeTime(events: Event[], targetTime: number): number {
+    if (events.length === 0) return -1
+
+    let left = 0
+    let right = events.length - 1
+    let result = -1
+
+    while (left <= right) {
+      const mid = Math.floor((left + right) / 2)
+      const event = events[mid]!
+
+      if (event.ts <= targetTime) {
+        // This event is a candidate, but there might be a later one
+        result = mid
+        left = mid + 1
+      } else {
+        // This event is too late
+        right = mid - 1
+      }
+    }
+
+    return result
   }
 
 
@@ -2370,6 +2454,16 @@ export class ParqueDBImpl {
 
     this.events.push(event)
 
+    // Update entity event index for O(1) lookups (only for entity events, not relationships)
+    if (!isRelationshipTarget(target)) {
+      addToEntityEventIndex(this.entityEventIndex, target, event)
+
+      // Invalidate reconstruction cache for this entity since its state changed
+      const { ns, id } = parseEntityTarget(target)
+      const fullId = `${ns}/${id}`
+      invalidateReconstructionCache(this.reconstructionCache, fullId)
+    }
+
     // Add to pending events buffer
     this.pendingEvents.push(event)
 
@@ -2424,7 +2518,7 @@ export class ParqueDBImpl {
    * held by other components.
    */
   private maybeRotateEventLog(): void {
-    const { maxEvents, maxAge, archiveOnRotation } = this.eventLogConfig
+    const { maxEvents, maxAge, archiveOnRotation, maxArchivedEvents } = this.eventLogConfig
     const now = Date.now()
 
     // Calculate cutoff time for age-based rotation
@@ -2461,6 +2555,8 @@ export class ParqueDBImpl {
       if (archiveOnRotation) {
         // Move to archived events
         this.archivedEvents.push(...eventsToRotate)
+        // Prune archived events if exceeding limit (keep newest)
+        pruneArchivedEvents(this.archivedEvents, maxArchivedEvents)
       }
 
       // Update the events array in place to maintain reference
@@ -2481,10 +2577,11 @@ export class ParqueDBImpl {
     const now = Date.now()
     const olderThanTs = options?.olderThan?.getTime() ?? (now - this.eventLogConfig.maxAge)
     const maxEventsToKeep = options?.maxEvents ?? this.eventLogConfig.maxEvents
-    const { archiveOnRotation } = this.eventLogConfig
+    const { archiveOnRotation, maxArchivedEvents } = this.eventLogConfig
 
     let archivedCount = 0
     let droppedCount = 0
+    let prunedCount = 0
     let newestArchivedTs: number | undefined
     let eventsToArchive: Event[] = []
     let eventsToKeep: Event[] = []
@@ -2525,6 +2622,8 @@ export class ParqueDBImpl {
     if (archiveOnRotation) {
       this.archivedEvents.push(...eventsToArchive)
       archivedCount = eventsToArchive.length
+      // Prune archived events if exceeding limit (keep newest)
+      prunedCount = pruneArchivedEvents(this.archivedEvents, maxArchivedEvents)
     } else {
       droppedCount = eventsToArchive.length
     }
@@ -2541,6 +2640,7 @@ export class ParqueDBImpl {
     return {
       archivedCount,
       droppedCount,
+      prunedCount,
       oldestEventTs,
       newestArchivedTs,
     }
