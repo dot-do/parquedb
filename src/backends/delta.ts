@@ -195,7 +195,6 @@ export class DeltaBackend implements EntityBackend {
     filter?: Filter,
     options?: FindOptions
   ): Promise<Entity<T>[]> {
-    const tableLocation = this.getTableLocation(ns)
     const currentVersion = await this.getCurrentVersion(ns)
 
     if (currentVersion < 0) {
@@ -802,15 +801,17 @@ export class DeltaBackend implements EntityBackend {
     operation: string
   ): Promise<void> {
     const tableLocation = this.getTableLocation(ns)
-    let currentVersion = await this.getCurrentVersion(ns)
+    const currentVersion = await this.getCurrentVersion(ns)
+    const isNewTable = currentVersion < 0
 
-    // Create table if it doesn't exist
-    if (currentVersion < 0) {
-      await this.createTable(ns)
-      currentVersion = 0
+    // Create directories if new table
+    if (isNewTable) {
+      await this.storage.mkdir(tableLocation).catch(() => {})
+      await this.storage.mkdir(`${tableLocation}/_delta_log`).catch(() => {})
     }
 
-    const newVersion = currentVersion + 1
+    // Determine version for this commit
+    const newVersion = isNewTable ? 0 : currentVersion + 1
 
     // Step 1: Write entities to Parquet file
     const dataFileId = this.generateUUID()
@@ -840,22 +841,41 @@ export class DeltaBackend implements EntityBackend {
         timestamp: Date.now(),
         operation,
         operationParameters: {},
-        readVersion: currentVersion,
+        readVersion: isNewTable ? undefined : currentVersion,
         isBlindAppend: true,
       },
     }
 
-    // Step 4: Write commit file
+    // Step 4: Build actions array
     const actions: DeltaAction[] = []
 
-    // First commit needs protocol and metadata
-    if (newVersion === 1) {
-      // Table was just created, protocol and metadata already exist
+    // First commit (version 0) needs protocol and metadata
+    if (isNewTable) {
+      const protocol: ProtocolAction = {
+        protocol: {
+          minReaderVersion: 1,
+          minWriterVersion: 2,
+        },
+      }
+
+      const deltaSchema = this.createDefaultDeltaSchema()
+      const metaData: MetaDataAction = {
+        metaData: {
+          id: this.generateUUID(),
+          schemaString: JSON.stringify(deltaSchema),
+          partitionColumns: [],
+          createdTime: Date.now(),
+        },
+      }
+
+      actions.push(protocol)
+      actions.push(metaData)
     }
 
     actions.push(add)
     actions.push(commitInfo)
 
+    // Step 5: Write commit file
     const commitContent = actions.map(a => JSON.stringify(a)).join('\n')
     const commitPath = `${tableLocation}/_delta_log/${this.formatVersion(newVersion)}.json`
     await this.storage.write(commitPath, new TextEncoder().encode(commitContent))
@@ -863,8 +883,8 @@ export class DeltaBackend implements EntityBackend {
     // Update version cache
     this.versionCache.set(ns, newVersion)
 
-    // Check if we should create a checkpoint
-    if ((newVersion + 1) % CHECKPOINT_THRESHOLD === 0) {
+    // Check if we should create a checkpoint (at version 10, 20, 30, etc.)
+    if (newVersion > 0 && newVersion % CHECKPOINT_THRESHOLD === 0) {
       await this.createCheckpoint(ns, newVersion)
     }
   }

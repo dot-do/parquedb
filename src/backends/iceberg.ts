@@ -625,22 +625,34 @@ export class IcebergBackend implements EntityBackend {
    * Ensures concurrent writes to the same namespace are serialized
    */
   private async acquireWriteLock(ns: string): Promise<() => void> {
-    // Wait for any existing lock to be released
+    // Get the existing lock (if any) to wait on
     const existingLock = this.writeLocks.get(ns)
-    if (existingLock) {
-      await existingLock
-    }
 
-    // Create a new lock
+    // Create a new lock promise
     let releaseLock: () => void
     const lockPromise = new Promise<void>(resolve => {
       releaseLock = resolve
     })
-    this.writeLocks.set(ns, lockPromise)
+
+    // Chain this lock onto the existing lock
+    // This ensures operations are truly serialized
+    const chainedLock = existingLock
+      ? existingLock.then(() => lockPromise)
+      : lockPromise
+
+    // Store the chained lock immediately (before awaiting)
+    // This way other concurrent callers will see this lock in the chain
+    this.writeLocks.set(ns, chainedLock)
+
+    // Wait for our turn
+    if (existingLock) {
+      await existingLock
+    }
 
     return () => {
       releaseLock!()
-      this.writeLocks.delete(ns)
+      // Don't delete from map - let it be overwritten by next operation
+      // This ensures the chain remains intact
     }
   }
 
@@ -725,134 +737,172 @@ export class IcebergBackend implements EntityBackend {
   private async appendEntities<T>(ns: string, entities: Entity<T>[]): Promise<void> {
     if (entities.length === 0) return
 
-    let metadata = await this.getTableMetadata(ns)
-    // Ensure table exists
-    if (!metadata) {
-      metadata = await this.createTable(ns)
+    // Acquire write lock for this namespace to prevent concurrent writes
+    const releaseLock = await this.acquireWriteLock(ns)
+
+    try {
+      // Invalidate cache to get fresh metadata
+      this.tableCache.delete(ns)
+
+      let metadata = await this.getTableMetadata(ns)
+      // Ensure table exists
+      if (!metadata) {
+        metadata = await this.createTable(ns)
+      }
+
+      const location = this.getTableLocation(ns)
+
+      // Step 1: Write entities to Parquet file
+      const dataFileId = generateUUID()
+      const dataFilePath = `${location}/data/${dataFileId}.parquet`
+
+      // Build parquet schema and data
+      const parquetSchema = buildEntityParquetSchema()
+      const rows = entities.map(entity => entityToRow(entity))
+
+      // Write parquet file
+      const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
+      const writeResult = await writer.write(dataFilePath, rows, parquetSchema)
+
+      // Step 2: Create manifest entry
+      const sequenceNumber = (metadata['last-sequence-number'] ?? 0) + 1
+      const snapshotId = this.generateSnapshotId()
+
+      const manifestGenerator = new ManifestGenerator({
+        sequenceNumber,
+        snapshotId,
+      })
+
+      manifestGenerator.addDataFile({
+        'file-path': dataFilePath,
+        'file-format': 'PARQUET',
+        'record-count': entities.length,
+        'file-size-in-bytes': writeResult.size,
+        partition: {},
+      })
+
+      const manifestResult = manifestGenerator.generate()
+
+      // Step 3: Write manifest file (as JSON for now, Avro in production)
+      const manifestId = generateUUID()
+      const manifestPath = `${location}/metadata/${manifestId}-m0.avro`
+
+      // Write manifest entries as JSON (simplified)
+      const manifestContent = new TextEncoder().encode(JSON.stringify(manifestResult.entries, null, 2))
+      await this.storage.write(manifestPath, manifestContent)
+
+      // Step 4: Create manifest list that includes manifests from parent snapshot
+      const manifestListGenerator = new ManifestListGenerator({
+        snapshotId,
+        sequenceNumber,
+      })
+
+      // Add the new manifest
+      manifestListGenerator.addManifestWithStats(
+        manifestPath,
+        manifestContent.length,
+        0, // partition spec ID
+        manifestResult.summary,
+        false // not a delete manifest
+      )
+
+      // Include manifests from parent snapshot (to inherit existing data)
+      const currentSnapshotId = metadata['current-snapshot-id']
+      if (currentSnapshotId) {
+        const parentSnapshot = getSnapshotById(metadata, currentSnapshotId)
+        if (parentSnapshot?.['manifest-list']) {
+          try {
+            const parentManifestListData = await this.storage.read(parentSnapshot['manifest-list'])
+            const parentManifests = JSON.parse(new TextDecoder().decode(parentManifestListData)) as ManifestFile[]
+            for (const manifest of parentManifests) {
+              // Add parent manifest to new manifest list
+              manifestListGenerator.addManifestWithStats(
+                manifest['manifest-path'],
+                manifest['manifest-length'],
+                manifest['partition-spec-id'],
+                {
+                  'added-data-files': String(manifest['added-data-files-count'] ?? 0),
+                  'added-records': String(manifest['added-rows-count'] ?? 0),
+                  'added-files-size': String(0),
+                },
+                manifest.content === 1 // is delete manifest
+              )
+            }
+          } catch {
+            // Parent manifest list not found or invalid
+          }
+        }
+      }
+
+      // Step 5: Write manifest list
+      const manifestListId = generateUUID()
+      const manifestListPath = `${location}/metadata/snap-${snapshotId}-${manifestListId}.avro`
+
+      const manifestListContent = new TextEncoder().encode(
+        JSON.stringify(manifestListGenerator.getManifests(), null, 2)
+      )
+      await this.storage.write(manifestListPath, manifestListContent)
+
+      // Step 6: Build new snapshot
+      const existingSnapshot = currentSnapshotId ? getSnapshotById(metadata, currentSnapshotId) : undefined
+      const existingSummary = existingSnapshot?.summary as Record<string, string> | undefined
+      const prevTotalRecords = existingSummary?.['total-records'] ? parseInt(existingSummary['total-records']) : 0
+      const prevTotalSize = existingSummary?.['total-files-size'] ? parseInt(existingSummary['total-files-size']) : 0
+      const prevTotalFiles = existingSummary?.['total-data-files'] ? parseInt(existingSummary['total-data-files']) : 0
+
+      const snapshotBuilder = new SnapshotBuilder({
+        sequenceNumber,
+        snapshotId,
+        parentSnapshotId: currentSnapshotId ?? undefined,
+        manifestListPath,
+        operation: 'append',
+        schemaId: metadata['current-schema-id'],
+      })
+
+      snapshotBuilder.setSummary(
+        1, // added files
+        0, // deleted files
+        entities.length, // added records
+        0, // deleted records
+        writeResult.size, // added size
+        0, // removed size
+        prevTotalRecords + entities.length, // total records
+        prevTotalSize + writeResult.size, // total size
+        prevTotalFiles + 1 // total files
+      )
+
+      const newSnapshot = snapshotBuilder.build()
+
+      // Step 7: Update metadata with new snapshot
+      const newMetadata: TableMetadata = {
+        ...metadata,
+        'last-sequence-number': sequenceNumber,
+        'last-updated-ms': Date.now(),
+        'current-snapshot-id': snapshotId,
+        snapshots: [...metadata.snapshots, newSnapshot],
+        'snapshot-log': [
+          ...(metadata['snapshot-log'] ?? []),
+          { 'timestamp-ms': Date.now(), 'snapshot-id': snapshotId },
+        ],
+      }
+
+      // Step 8: Write new metadata file
+      const metadataVersion = sequenceNumber
+      const metadataUuid = generateUUID()
+      const metadataPath = `${location}/metadata/${metadataVersion}-${metadataUuid}.metadata.json`
+
+      const metadataJson = JSON.stringify(newMetadata, null, 2)
+      await this.storage.write(metadataPath, new TextEncoder().encode(metadataJson))
+
+      // Step 9: Update version-hint.text (note: Iceberg spec uses .text, not .txt)
+      const versionHintPath = `${location}/metadata/version-hint.text`
+      await this.storage.write(versionHintPath, new TextEncoder().encode(metadataPath))
+
+      // Invalidate cache
+      this.tableCache.delete(ns)
+    } finally {
+      releaseLock()
     }
-
-    const location = this.getTableLocation(ns)
-
-    // Step 1: Write entities to Parquet file
-    const dataFileId = generateUUID()
-    const dataFilePath = `${location}/data/${dataFileId}.parquet`
-
-    // Build parquet schema and data
-    const parquetSchema = buildEntityParquetSchema()
-    const rows = entities.map(entity => entityToRow(entity))
-
-    // Write parquet file
-    const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
-    const writeResult = await writer.write(dataFilePath, rows, parquetSchema)
-
-    // Step 2: Create manifest entry
-    const sequenceNumber = (metadata['last-sequence-number'] ?? 0) + 1
-    const snapshotId = Date.now()
-
-    const manifestGenerator = new ManifestGenerator({
-      sequenceNumber,
-      snapshotId,
-    })
-
-    manifestGenerator.addDataFile({
-      'file-path': dataFilePath,
-      'file-format': 'PARQUET',
-      'record-count': entities.length,
-      'file-size-in-bytes': writeResult.size,
-      partition: {},
-    })
-
-    const manifestResult = manifestGenerator.generate()
-
-    // Step 3: Write manifest file (as JSON for now, Avro in production)
-    const manifestId = generateUUID()
-    const manifestPath = `${location}/metadata/${manifestId}-m0.avro`
-
-    // Write manifest entries as JSON (simplified)
-    const manifestContent = new TextEncoder().encode(JSON.stringify(manifestResult.entries, null, 2))
-    await this.storage.write(manifestPath, manifestContent)
-
-    // Step 4: Create manifest list
-    const manifestListGenerator = new ManifestListGenerator({
-      snapshotId,
-      sequenceNumber,
-    })
-
-    manifestListGenerator.addManifestWithStats(
-      manifestPath,
-      manifestContent.length,
-      0, // partition spec ID
-      manifestResult.summary,
-      false // not a delete manifest
-    )
-
-    // Step 5: Write manifest list
-    const manifestListId = generateUUID()
-    const manifestListPath = `${location}/metadata/snap-${snapshotId}-${manifestListId}.avro`
-
-    const manifestListContent = new TextEncoder().encode(
-      JSON.stringify(manifestListGenerator.getManifests(), null, 2)
-    )
-    await this.storage.write(manifestListPath, manifestListContent)
-
-    // Step 6: Build new snapshot
-    const currentSnapshotId = metadata['current-snapshot-id']
-    const existingSnapshot = currentSnapshotId ? getSnapshotById(metadata, currentSnapshotId) : undefined
-    const existingSummary = existingSnapshot?.summary as Record<string, string> | undefined
-    const prevTotalRecords = existingSummary?.['total-records'] ? parseInt(existingSummary['total-records']) : 0
-    const prevTotalSize = existingSummary?.['total-files-size'] ? parseInt(existingSummary['total-files-size']) : 0
-    const prevTotalFiles = existingSummary?.['total-data-files'] ? parseInt(existingSummary['total-data-files']) : 0
-
-    const snapshotBuilder = new SnapshotBuilder({
-      sequenceNumber,
-      snapshotId,
-      parentSnapshotId: currentSnapshotId ?? undefined,
-      manifestListPath,
-      operation: 'append',
-      schemaId: metadata['current-schema-id'],
-    })
-
-    snapshotBuilder.setSummary(
-      1, // added files
-      0, // deleted files
-      entities.length, // added records
-      0, // deleted records
-      writeResult.size, // added size
-      0, // removed size
-      prevTotalRecords + entities.length, // total records
-      prevTotalSize + writeResult.size, // total size
-      prevTotalFiles + 1 // total files
-    )
-
-    const newSnapshot = snapshotBuilder.build()
-
-    // Step 7: Update metadata with new snapshot
-    const newMetadata: TableMetadata = {
-      ...metadata,
-      'last-sequence-number': sequenceNumber,
-      'last-updated-ms': Date.now(),
-      'current-snapshot-id': snapshotId,
-      snapshots: [...metadata.snapshots, newSnapshot],
-      'snapshot-log': [
-        ...(metadata['snapshot-log'] ?? []),
-        { 'timestamp-ms': Date.now(), 'snapshot-id': snapshotId },
-      ],
-    }
-
-    // Step 8: Write new metadata file
-    const metadataVersion = sequenceNumber
-    const metadataUuid = generateUUID()
-    const metadataPath = `${location}/metadata/${metadataVersion}-${metadataUuid}.metadata.json`
-
-    const metadataJson = JSON.stringify(newMetadata, null, 2)
-    await this.storage.write(metadataPath, new TextEncoder().encode(metadataJson))
-
-    // Step 9: Update version-hint.text (note: Iceberg spec uses .text, not .txt)
-    const versionHintPath = `${location}/metadata/version-hint.text`
-    await this.storage.write(versionHintPath, new TextEncoder().encode(metadataPath))
-
-    // Invalidate cache
-    this.tableCache.delete(ns)
   }
 
   /**
@@ -914,24 +964,34 @@ export class IcebergBackend implements EntityBackend {
     }
 
     // Step 3: Read entities from each data file
-    const allEntities: Entity<T>[] = []
+    // Use a Map to deduplicate by entity ID, keeping the highest version
+    const entityMap = new Map<string, Entity<T>>()
     for (const dataFilePath of dataFilePaths) {
       try {
         const rows = await readParquet<Record<string, unknown>>(this.storage, dataFilePath)
 
         for (const row of rows) {
           const entity = rowToEntity<T>(row)
+          const existingEntity = entityMap.get(entity.$id)
 
-          // Apply filter if provided
-          if (filter && !matchesFilter(entity, filter)) {
-            continue
+          // Keep the entity with the highest version number
+          if (!existingEntity || entity.version > existingEntity.version) {
+            entityMap.set(entity.$id, entity)
           }
-
-          allEntities.push(entity)
         }
       } catch {
         // Skip unreadable files
       }
+    }
+
+    // Convert map values to array and apply filter
+    const allEntities: Entity<T>[] = []
+    for (const entity of entityMap.values()) {
+      // Apply filter if provided
+      if (filter && !matchesFilter(entity as unknown as Record<string, unknown>, filter)) {
+        continue
+      }
+      allEntities.push(entity)
     }
 
     // Step 4: Apply sorting
