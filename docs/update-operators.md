@@ -167,20 +167,20 @@ Renames a field in a document.
 ```typescript
 // Rename single field
 await db.Posts.update(post.$id, {
-  $rename: { 'oldFieldName': 'newFieldName' }
+  $rename: { oldFieldName: 'newFieldName' }
 })
 
 // Rename multiple fields
 await db.Posts.update(post.$id, {
   $rename: {
-    'legacy_status': 'status',
-    'old_category': 'category'
+    legacy_status: 'status',
+    old_category: 'category'
   }
 })
 
 // Move field to nested location
 await db.Users.update(user.$id, {
-  $rename: { 'bio': 'profile.bio' }
+  $rename: { bio: 'profile.bio' }
 })
 
 // Move from nested to top-level
@@ -192,7 +192,7 @@ await db.Users.update(user.$id, {
 **Notes:**
 - No-op if source field doesn't exist
 - Creates nested structure for target if needed
-- Cannot rename to an existing field (will overwrite)
+- Overwrites existing field if target name already exists
 
 ### $setOnInsert - Set Only on Insert
 
@@ -621,10 +621,10 @@ await db.Queue.update(queue.$id, {
 ```
 
 **Modifier Notes:**
-- $each is required when using other modifiers
-- Modifiers are applied in order: $each → $position → $sort → $slice
-- $sort can be 1 (ascending), -1 (descending), or object for field-based sorting
-- $slice can be positive (first N), negative (last N), or 0 (empty)
+- `$each` is required when using other modifiers
+- Modifiers are applied in order: position → sort → slice
+- `$sort` can be `1` (ascending), `-1` (descending), or an object for field-based sorting
+- `$slice` can be positive (keep first N), negative (keep last N), or `0` (empty array)
 
 ### $pull - Remove from Array
 
@@ -644,7 +644,7 @@ await db.Posts.update(post.$id, {
   $pull: { tags: 'deprecated' }
 })
 
-// Remove all occurrences
+// Remove all occurrences of a value
 await db.Posts.update(post.$id, {
   $pull: { tags: 'spam' }
 })
@@ -661,15 +661,15 @@ await db.Posts.update(post.$id, {
 })
 // Removes all scores >= 100
 
-// Remove objects matching condition
+// Remove objects matching a field condition
 await db.Posts.update(post.$id, {
   $pull: {
     comments: { author: 'users/spammer' }
   }
 })
-// Removes all comments by spammer
+// Removes all comments where author field matches 'users/spammer'
 
-// Remove with complex condition
+// Remove with complex conditions (AND logic)
 await db.Posts.update(post.$id, {
   $pull: {
     items: { status: 'deleted', age: { $gt: 30 } }
@@ -683,6 +683,7 @@ await db.Posts.update(post.$id, {
     tags: { $in: ['obsolete', 'deprecated', 'old'] }
   }
 })
+// Removes tags that match any value in the array
 ```
 
 **Supported Comparison Operators:**
@@ -696,10 +697,11 @@ await db.Posts.update(post.$id, {
 - `$nin` - Not in array
 
 **Notes:**
-- Removes all matching elements, not just first match
+- Removes all matching elements, not just the first match
 - No-op if field doesn't exist or is not an array
-- For objects, can match exact object or use conditions on fields
-- All conditions in object must match (AND logic)
+- For primitive values, uses exact equality matching
+- For objects in arrays, can match by field values using conditions
+- Multiple conditions within an object use AND logic (all must match)
 
 ### $pullAll - Remove Multiple Values
 
@@ -782,6 +784,7 @@ await db.Collections.update(collection.$id, {
     items: { id: 'item-1', name: 'Widget' }
   }
 })
+// Only adds if no existing item with same structure
 
 // Creates array if doesn't exist
 await db.Posts.update(post.$id, {
@@ -791,11 +794,11 @@ await db.Posts.update(post.$id, {
 ```
 
 **Notes:**
-- Uses deep equality for comparison (works with objects)
+- Uses deep equality comparison (works with objects)
 - Creates array if field doesn't exist
-- No-op if value already exists
-- $each allows adding multiple unique values
-- Order is not guaranteed
+- No-op if value already exists in the array
+- Use `$each` modifier to add multiple unique values at once
+- Order of existing elements is preserved
 
 ### $pop - Remove First or Last Element
 
@@ -834,7 +837,7 @@ await db.Stack.update(stack.$id, {
 **Notes:**
 - Value must be 1 (remove last) or -1 (remove first)
 - No-op on empty array
-- Creates empty array if field doesn't exist
+- No-op if field doesn't exist or is not an array
 
 ## Date Operators
 
@@ -893,9 +896,10 @@ await db.Posts.update(post.$id, {
 - `{ $type: 'timestamp' }` - Stores as number (milliseconds since epoch)
 
 **Notes:**
-- Always uses current server time
+- Always uses current server time (or timestamp from options)
 - Creates field if it doesn't exist
-- Useful for automatic timestamp tracking
+- Useful for automatic timestamp tracking (e.g., updatedAt, lastModified)
+- Both `date` and `timestamp` types represent the same moment in time, just in different formats
 
 ## Relationship Operators
 
@@ -973,7 +977,7 @@ await db.Posts.update(post.$id, {
   }
 })
 
-// Remove all relationships of a type
+// Remove all relationships of a type using '$all'
 await db.Posts.update(post.$id, {
   $unlink: { relatedPosts: '$all' }
 })
@@ -988,7 +992,7 @@ await db.Posts.update(post.$id, {
 ```
 
 **Notes:**
-- '$all' removes all relationships for the predicate
+- Use the special value `'$all'` to remove all relationships for a given predicate
 - Specific entity IDs remove only those relationships
 - No-op if relationship doesn't exist
 - Updates both forward and reverse relationship indexes
@@ -1061,9 +1065,10 @@ await db.Permissions.update(perm.$id, {
 3. `xor` - Applied last
 
 **Notes:**
-- Creates field with value 0 if it doesn't exist
-- All operations are applied sequentially
-- Useful for permission flags, feature flags, and bit masks
+- Creates field with value `0` if it doesn't exist
+- Non-numeric fields are treated as `0`
+- All operations are applied sequentially in the specified order
+- Useful for permission flags, feature flags, and bitmask operations
 - Works only with integer values
 
 ## Update Options
@@ -1204,12 +1209,12 @@ try {
 ```
 
 **Common Error Codes:**
-- `VERSION_MISMATCH` - Optimistic locking failure
+- `VERSION_MISMATCH` - Optimistic locking failure (when using expectedVersion)
 - `NOT_FOUND` - Document doesn't exist (and upsert not enabled)
 - `VALIDATION_ERROR` - Schema validation failure
 - `INVALID_OPERATOR` - Unknown or invalid operator
 - `CONFLICTING_OPERATORS` - Same field modified by multiple operators
-- `TYPE_ERROR` - Operator applied to wrong type (e.g., $inc on string)
+- `TYPE_ERROR` - Operator applied to wrong type (e.g., $inc on non-numeric field)
 
 ## Security Considerations
 
@@ -1292,6 +1297,51 @@ await db.Posts.update(
   { expectedVersion: post.version }
 )
 ```
+
+## AI/ML Operators
+
+### $embed - Generate Embeddings (Experimental)
+
+The `$embed` operator generates vector embeddings for text fields using AI models. This operator is currently defined in the type system but not yet fully implemented.
+
+**Planned Syntax:**
+
+```typescript
+{ $embed: { <sourceField>: <targetField> | <options> } }
+```
+
+**Planned Examples:**
+
+```typescript
+// Embed a single field
+await db.Posts.update(post.$id, {
+  $embed: { description: 'embedding' }
+})
+
+// Embed multiple fields into separate vectors
+await db.Posts.update(post.$id, {
+  $embed: {
+    title: 'title_embedding',
+    content: 'content_embedding'
+  }
+})
+
+// Embed with custom model
+await db.Posts.update(post.$id, {
+  $embed: {
+    description: {
+      field: 'embedding',
+      model: '@cf/baai/bge-small-en-v1.5',
+      overwrite: true
+    }
+  }
+})
+```
+
+**Status:**
+- Type definitions exist in `src/types/update.ts`
+- Implementation pending in `src/mutation/operators.ts`
+- Validation support added
 
 ## See Also
 
