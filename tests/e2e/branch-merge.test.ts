@@ -374,8 +374,8 @@ describe('Checkout Operations', () => {
     it('force checkout bypasses uncommitted changes check', async () => {
       await branchManager.create('develop')
 
-      // Currently all checkouts succeed since we don't track uncommitted changes
-      await branchManager.checkout('develop')
+      // Use skipStateReconstruction since test commits don't have real data objects
+      await branchManager.checkout('develop', { skipStateReconstruction: true })
 
       const current = await branchManager.current()
       expect(current).toBe('develop')
@@ -399,7 +399,8 @@ describe('Checkout Operations', () => {
     })
 
     it('creates branch with create option', async () => {
-      await branchManager.checkout('new-feature', { create: true })
+      // Use skipStateReconstruction since test commits don't have real data objects
+      await branchManager.checkout('new-feature', { create: true, skipStateReconstruction: true })
 
       const exists = await branchManager.exists('new-feature')
       expect(exists).toBe(true)

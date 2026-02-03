@@ -131,20 +131,51 @@ export interface SchemaDiffResult {
   readonly breakingChanges: readonly BreakingChange[]
 }
 
+export interface CreateCommentOpts {
+  readonly owner: string
+  readonly repo: string
+  readonly issue_number: number
+  readonly body: string
+}
+
+export interface CreateReactionOpts {
+  readonly owner: string
+  readonly repo: string
+  readonly comment_id: number
+  readonly content: string
+}
+
+export interface GetCollaboratorPermissionOpts {
+  readonly owner: string
+  readonly repo: string
+  readonly username: string
+}
+
+export interface PermissionLevel {
+  readonly data: { readonly permission: string }
+}
+
+export interface CheckUpdateOpts {
+  readonly owner: string
+  readonly repo: string
+  readonly check_run_id: number
+  readonly status: string
+}
+
 export interface OctokitClient {
-  rest: {
-    issues: {
-      createComment: (opts: { owner: string; repo: string; issue_number: number; body: string }) => Promise<unknown>
+  readonly rest: {
+    readonly issues: {
+      readonly createComment: (opts: CreateCommentOpts) => Promise<unknown>
     }
-    reactions: {
-      createForIssueComment: (opts: { owner: string; repo: string; comment_id: number; content: string }) => Promise<unknown>
+    readonly reactions: {
+      readonly createForIssueComment: (opts: CreateReactionOpts) => Promise<unknown>
     }
-    repos: {
-      getCollaboratorPermissionLevel: (opts: { owner: string; repo: string; username: string }) => Promise<{ data: { permission: string } }>
+    readonly repos: {
+      readonly getCollaboratorPermissionLevel: (opts: GetCollaboratorPermissionOpts) => Promise<PermissionLevel>
     }
   }
-  checks: {
-    update: (opts: { owner: string; repo: string; check_run_id: number; status: string }) => Promise<unknown>
+  readonly checks: {
+    readonly update: (opts: CheckUpdateOpts) => Promise<unknown>
   }
 }
 

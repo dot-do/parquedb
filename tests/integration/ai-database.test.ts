@@ -429,47 +429,33 @@ describe('ai-database Integration', () => {
       // No error means success
     })
 
-    it('should perform semantic search', async () => {
-      // Create some articles
+    it('should throw error for semantic search without embedding provider', async () => {
+      // Create some documents
       await provider.create('Document', undefined, {
         title: 'Machine Learning Basics',
         content: 'Introduction to neural networks and deep learning',
       })
-      await provider.create('Document', undefined, {
-        title: 'Data Structures',
-        content: 'Arrays, linked lists, trees, and graphs',
-      })
 
-      // Semantic search (will use vector similarity when available)
-      const results = await provider.semanticSearch('Document', 'AI and neural networks', {
-        limit: 5,
-      })
-
-      expect(Array.isArray(results)).toBe(true)
-      // Results should have score
-      if (results.length > 0) {
-        expect(results[0].$score).toBeDefined()
-      }
+      // Semantic search with text query requires embedding provider
+      await expect(
+        provider.semanticSearch('Document', 'AI and neural networks', { limit: 5 })
+      ).rejects.toThrow(/embedding provider/)
     })
 
-    it('should perform hybrid search', async () => {
+    it('should throw error for hybrid search without embedding provider', async () => {
       await provider.create('Document', undefined, {
         title: 'Python Programming',
         content: 'Learn Python for data science and machine learning',
       })
 
-      const results = await provider.hybridSearch('Document', 'Python data science', {
-        limit: 5,
-        ftsWeight: 0.5,
-        semanticWeight: 0.5,
-      })
-
-      expect(Array.isArray(results)).toBe(true)
-      if (results.length > 0) {
-        expect(results[0].$rrfScore).toBeDefined()
-        expect(results[0].$ftsRank).toBeDefined()
-        expect(results[0].$semanticRank).toBeDefined()
-      }
+      // Hybrid search includes semantic component which needs embeddings
+      await expect(
+        provider.hybridSearch('Document', 'Python data science', {
+          limit: 5,
+          ftsWeight: 0.5,
+          semanticWeight: 0.5,
+        })
+      ).rejects.toThrow(/embedding provider/)
     })
   })
 
