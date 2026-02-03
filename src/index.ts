@@ -489,6 +489,8 @@ export {
   // Cache
   DEFAULT_CACHE_TTL,
   MAX_CACHE_SIZE,
+  DATA_CACHE_TTL_MS,
+  DATA_CACHE_MAX_ENTRIES,
   // Parquet
   DEFAULT_ROW_GROUP_SIZE,
   DEFAULT_PARQUET_PAGE_SIZE,
@@ -717,6 +719,30 @@ export {
   type CsrfValidationResult,
   type CsrfTokenPayload,
 } from './security'
+
+// =============================================================================
+// Search Client (Tree-Shakable)
+// =============================================================================
+
+export {
+  search,
+  vectorSearch,
+  hybridSearch,
+  suggest,
+  createSearchClient,
+  imdb,
+  onet,
+  type Dataset,
+  type SearchMode,
+  type SearchParams,
+  type VectorParams,
+  type HybridParams,
+  type SearchResponse,
+  type SuggestResponse,
+  type SearchClient,
+  type IMDBTitle,
+  type ONETOccupation,
+} from './search'
 
 // =============================================================================
 // Version
