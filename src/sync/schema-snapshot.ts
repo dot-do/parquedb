@@ -60,7 +60,7 @@ export interface SchemaSnapshot {
   readonly configHash: string        // SHA256 of parquedb.config.ts content (if available)
   readonly collections: Readonly<Record<string, CollectionSchemaSnapshot>>
   readonly capturedAt: number        // Timestamp
-  readonly commitHash?: string       // Associated commit hash
+  commitHash?: string                // Associated commit hash (mutable for backward compatibility)
 }
 
 /**
@@ -143,20 +143,12 @@ function extractFields(schema: CollectionSchemaWithLayout): SchemaFieldSnapshot[
  * - 'string[]' → array of strings
  */
 function parseFieldDefinition(name: string, def: string): SchemaFieldSnapshot {
-  const field: SchemaFieldSnapshot = {
-    name,
-    type: def,
-    required: def.includes('!'),
-    indexed: def.includes('#'),
-    unique: def.includes('@'),
-    array: def.includes('[]')
-  }
-
-  // Parse relationships
+  // Parse relationship if present
+  let relationship: SchemaFieldRelationship | undefined
   if (def.includes('->')) {
     const match = def.match(/\->\s*([^\s.[\]]+)(?:\.([^\s[\]]+))?/)
     if (match) {
-      field.relationship = {
+      relationship = {
         target: match[1] ?? 'unknown',
         reverse: match[2],
         direction: 'outbound'
@@ -165,7 +157,7 @@ function parseFieldDefinition(name: string, def: string): SchemaFieldSnapshot {
   } else if (def.includes('<-')) {
     const match = def.match(/\<-\s*([^\s.[\]]+)(?:\.([^\s[\]]+))?/)
     if (match) {
-      field.relationship = {
+      relationship = {
         target: match[1] ?? 'unknown',
         reverse: match[2],
         direction: 'inbound'
@@ -173,7 +165,15 @@ function parseFieldDefinition(name: string, def: string): SchemaFieldSnapshot {
     }
   }
 
-  return field
+  return {
+    name,
+    type: def,
+    required: def.includes('!'),
+    indexed: def.includes('#'),
+    unique: def.includes('@'),
+    array: def.includes('[]'),
+    relationship
+  }
 }
 
 /**

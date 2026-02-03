@@ -190,9 +190,9 @@ export function parseCommand(comment: string): ParsedCommand | null {
   // Commands at start of line can have arguments; commands in middle of text don't
   const startOfLineMatch = comment.match(/(?:^|\n)\s*\/parquedb\s+(\S+)(?:\s+([^\n]*))?/)
 
-  if (startOfLineMatch) {
+  if (startOfLineMatch && startOfLineMatch[1]) {
     const command = startOfLineMatch[1]
-    const rest = startOfLineMatch[2] || ''
+    const rest = startOfLineMatch[2] ?? ''
 
     // Parse args and flags from the rest
     const parts = rest.split(/\s+/).filter(Boolean)
@@ -213,7 +213,7 @@ export function parseCommand(comment: string): ParsedCommand | null {
 
   // Command is in the middle of text - just parse the command name, no arguments
   const midMatch = comment.match(/\/parquedb\s+(\S+)/)
-  if (midMatch) {
+  if (midMatch && midMatch[1]) {
     return { command: midMatch[1], args: [], flags: {} }
   }
 
@@ -565,25 +565,29 @@ function levenshteinDistance(a: string, b: string): number {
     matrix[i] = [i]
   }
 
+  // matrix[0] is guaranteed to exist after the loop above
+  const row0 = matrix[0]!
   for (let j = 0; j <= a.length; j++) {
-    matrix[0][j] = j
+    row0[j] = j
   }
 
   for (let i = 1; i <= b.length; i++) {
+    const currentRow = matrix[i]!
+    const prevRow = matrix[i - 1]!
     for (let j = 1; j <= a.length; j++) {
       if (b.charAt(i - 1) === a.charAt(j - 1)) {
-        matrix[i][j] = matrix[i - 1][j - 1]
+        currentRow[j] = prevRow[j - 1]!
       } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1, // substitution
-          matrix[i][j - 1] + 1, // insertion
-          matrix[i - 1][j] + 1 // deletion
+        currentRow[j] = Math.min(
+          prevRow[j - 1]! + 1, // substitution
+          currentRow[j - 1]! + 1, // insertion
+          prevRow[j]! + 1 // deletion
         )
       }
     }
   }
 
-  return matrix[b.length][a.length]
+  return matrix[b.length]![a.length]!
 }
 
 /**

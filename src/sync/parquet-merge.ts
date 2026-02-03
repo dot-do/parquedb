@@ -46,13 +46,13 @@ import {
  */
 export interface ParquetMergeResult {
   /** Whether merge succeeded (no unresolved conflicts) */
-  success: boolean
+  readonly success: boolean
 
   /** Updated manifest (only if success) */
-  manifest?: EventManifest
+  readonly manifest?: EventManifest
 
   /** Conflicts detected during merge */
-  conflicts: MergeConflict[]
+  readonly conflicts: readonly MergeConflict[]
 
   /** Statistics about the merge */
   stats: {

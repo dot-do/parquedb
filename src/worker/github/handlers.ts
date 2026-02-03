@@ -782,7 +782,7 @@ export async function handlePullRequestClosed(
 /**
  * Check if a string matches any of the given glob patterns
  */
-function matchesPattern(value: string, patterns: string[]): boolean {
+function matchesPattern(value: string, patterns: readonly string[]): boolean {
   for (const pattern of patterns) {
     if (pattern.endsWith('*')) {
       // Prefix match

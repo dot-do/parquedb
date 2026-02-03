@@ -37,3 +37,7 @@ export * from './common-ancestor'
 
 // Distributed locking
 export * from './lock'
+
+// Schema evolution and snapshots
+export * from './schema-snapshot'
+export * from './schema-evolution'

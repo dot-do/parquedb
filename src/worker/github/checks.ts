@@ -143,7 +143,9 @@ export async function updateCheckSuccess(
 
     for (const name of collectionNames) {
       const c = collections[name]
-      text += `| ${name} | +${c.added} | -${c.removed} | ~${c.modified} |\n`
+      if (c) {
+        text += `| ${name} | +${c.added} | -${c.removed} | ~${c.modified} |\n`
+      }
     }
   } else {
     text = 'No entity changes detected.\n'

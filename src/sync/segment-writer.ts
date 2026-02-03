@@ -70,7 +70,7 @@ export interface SegmentWriterOptions {
  */
 export async function writeEventsToSegment(
   storage: StorageBackend,
-  events: Event[],
+  events: readonly Event[],
   opts: SegmentWriterOptions = {}
 ): Promise<EventSegment> {
   const {
@@ -157,7 +157,7 @@ export async function writeEventsToSegment(
  */
 export async function writeEvents(
   storage: StorageBackend,
-  events: Event[],
+  events: readonly Event[],
   opts: SegmentWriterOptions = {}
 ): Promise<EventSegment[]> {
   const {

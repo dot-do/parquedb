@@ -90,13 +90,13 @@ export interface MergeBranchesOptions {
  */
 export interface MergeBranchesResult {
   /** Whether the merge was successful */
-  success: boolean
+  readonly success: boolean
 
   /** Error message if merge failed */
-  error?: string
+  readonly error?: string
 
   /** Conflicts detected during merge */
-  conflicts: MergeConflict[]
+  readonly conflicts: readonly MergeConflict[]
 
   /** Whether this was a dry-run */
   dryRun?: boolean

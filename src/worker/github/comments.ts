@@ -129,18 +129,22 @@ export function formatDiffComment(diff: DiffData): string {
 
     for (const name of displayCollections) {
       const c = diff.collections[name]
-      comment += `| ${name} | +${c.added} | -${c.removed} | ~${c.modified} |\n`
-      totalAdded += c.added
-      totalRemoved += c.removed
-      totalModified += c.modified
+      if (c) {
+        comment += `| ${name} | +${c.added} | -${c.removed} | ~${c.modified} |\n`
+        totalAdded += c.added
+        totalRemoved += c.removed
+        totalModified += c.modified
+      }
     }
 
     // Add totals from remaining collections
     for (const name of collections.slice(MAX_COLLECTIONS)) {
       const c = diff.collections[name]
-      totalAdded += c.added
-      totalRemoved += c.removed
-      totalModified += c.modified
+      if (c) {
+        totalAdded += c.added
+        totalRemoved += c.removed
+        totalModified += c.modified
+      }
     }
 
     if (remainingCount > 0) {
@@ -212,6 +216,8 @@ export function formatSchemaChanges(changes: SchemaChanges): string {
 
   for (const collection of collections) {
     const change = changes[collection]
+    if (!change) continue
+
     const hasChanges =
       change.added.length > 0 || change.removed.length > 0 || change.modified.length > 0
 

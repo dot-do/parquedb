@@ -1,4 +1,5 @@
 import type { StorageBackend } from '../types/storage'
+import type { SchemaSnapshot } from './schema-snapshot'
 import { hashObject } from './hash'
 
 /**
@@ -33,6 +34,7 @@ export interface CommitState {
   readonly collections: Readonly<Record<string, CollectionState>>
   readonly relationships: RelationshipState
   readonly eventLogPosition: EventLogPosition
+  readonly schema?: SchemaSnapshot   // Schema snapshot at this commit
 }
 
 /**
@@ -58,11 +60,13 @@ export interface CommitOptions {
 
 /**
  * Database state snapshot for commit creation
+ * Note: Mutable because it's built incrementally during snapshot
  */
 export interface DatabaseState {
-  readonly collections: Readonly<Record<string, CollectionState>>
-  readonly relationships: RelationshipState
-  readonly eventLogPosition: EventLogPosition
+  collections: Record<string, CollectionState>
+  relationships: RelationshipState
+  eventLogPosition: EventLogPosition
+  schema?: SchemaSnapshot   // Optional schema snapshot
 }
 
 /**
@@ -88,6 +92,60 @@ export async function createCommit(
   return {
     hash,
     ...commitWithoutHash
+  }
+}
+
+/**
+ * Create a new commit from database state with schema snapshot
+ *
+ * This function embeds the schema snapshot directly in the commit state,
+ * enabling strongly-typed time travel queries and schema evolution tracking.
+ *
+ * @param state Current database state (without schema)
+ * @param schema Schema snapshot to embed
+ * @param opts Commit options (message, author, parents)
+ * @returns DatabaseCommit with embedded schema and computed hash
+ */
+export async function createCommitWithSchema(
+  state: Omit<DatabaseState, 'schema'>,
+  schema: SchemaSnapshot,
+  opts: CommitOptions
+): Promise<DatabaseCommit> {
+  // Clone schema and add commitHash after we compute the hash
+  // We need to compute the hash first, then set commitHash
+  const commitWithoutHash = {
+    parents: opts.parents || [],
+    timestamp: Date.now(),
+    author: opts.author || 'anonymous',
+    message: opts.message,
+    state: {
+      ...state,
+      schema: {
+        ...schema,
+        commitHash: '' // Placeholder - will be set after hash computation
+      }
+    }
+  }
+
+  // Compute hash with placeholder commitHash
+  const hash = hashCommit(commitWithoutHash)
+
+  // Now set the actual commitHash
+  const stateWithSchema: CommitState = {
+    ...state,
+    schema: {
+      ...schema,
+      commitHash: hash
+    }
+  }
+
+  return {
+    hash,
+    parents: commitWithoutHash.parents,
+    timestamp: commitWithoutHash.timestamp,
+    author: commitWithoutHash.author,
+    message: commitWithoutHash.message,
+    state: stateWithSchema
   }
 }
 

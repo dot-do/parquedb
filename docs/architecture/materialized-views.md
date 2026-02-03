@@ -53,7 +53,72 @@ $refresh: {
 
 ## MV Definition API
 
-### Basic Definition
+### Inline in DB() Config (Recommended)
+
+Define MVs directly in the database configuration alongside collections:
+
+```typescript
+import { DB } from 'parquedb'
+
+const db = DB({
+  // Storage configuration
+  storage: { type: 'fs', path: './data' },
+  backend: 'native',
+
+  // Collections (source data)
+  collections: {
+    orders: { $type: 'Order', /* schema */ },
+    customers: { $type: 'Customer', /* schema */ },
+  },
+
+  // Materialized Views
+  views: {
+    // Collection-based MV (denormalized view of orders)
+    orderAnalytics: {
+      $type: 'OrderAnalyticsView',
+      $projection: 'olap',
+      $from: 'orders',
+      $expand: ['customer', 'items.product'],
+      $flatten: { 'customer': 'buyer' },
+      $refresh: { mode: 'streaming' },
+    },
+
+    // Aggregated MV
+    dailySales: {
+      $type: 'DailySales',
+      $projection: 'olap',
+      $from: 'orders',
+      $groupBy: [{ date: '$createdAt' }],
+      $compute: {
+        orderCount: { $count: '*' },
+        revenue: { $sum: 'total' },
+      },
+      $refresh: { mode: 'scheduled', schedule: '0 * * * *' },
+    },
+
+    // Stream-based MV (external source)
+    aiRequests: {
+      $type: 'AIRequest',
+      $stream: 'ai-sdk',
+      $schema: {
+        modelId: 'string!',
+        latencyMs: 'int!',
+        tokens: 'int?',
+        timestamp: 'timestamp!',
+      },
+      $refresh: { mode: 'streaming' },
+    },
+  },
+})
+
+// Access MVs like collections
+const analytics = await db.orderAnalytics.find({ status: 'completed' })
+const sales = await db.dailySales.find({ date: { $gte: '2024-01-01' } })
+```
+
+### Standalone Definition
+
+For reusable MV definitions or external packages:
 
 ```typescript
 import { defineView } from 'parquedb'
@@ -83,6 +148,53 @@ const OrderAnalytics = defineView({
     orderValue: { $sum: 'items.price' },
   }
 })
+
+// Register later
+db.registerView(OrderAnalytics)
+
+// Or use in DB() config
+const db = DB({
+  storage,
+  views: {
+    orderAnalytics: OrderAnalytics,  // Use pre-defined view
+  },
+})
+```
+
+### Pre-built AI/Evalite Views
+
+Import and use pre-built views from integrations:
+
+```typescript
+import { DB } from 'parquedb'
+import { AIRequestsMV, AIUsageMV, GeneratedContentMV } from 'parquedb/ai-sdk'
+import { EvalScoresMV, EvalTrendsMV } from 'parquedb/evalite'
+
+const db = DB({
+  storage: { type: 'fs', path: './data' },
+
+  views: {
+    // Pre-built AI observability
+    aiRequests: AIRequestsMV,
+    aiUsage: AIUsageMV,
+    generatedContent: GeneratedContentMV,
+
+    // Pre-built evalite analytics
+    evalScores: EvalScoresMV,
+    evalTrends: EvalTrendsMV,
+
+    // Custom views alongside pre-built
+    myCustomView: {
+      $type: 'MyView',
+      $projection: 'olap',
+      $from: 'myCollection',
+    },
+  },
+})
+
+// Query any view
+const usage = await db.aiUsage.find({ date: '2024-01-15' })
+const trends = await db.evalTrends.find({ suiteName: 'my-eval' })
 ```
 
 ### Projection Types

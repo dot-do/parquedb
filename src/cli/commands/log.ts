@@ -144,7 +144,7 @@ export async function logCommand(parsed: ParsedArgs): Promise<number> {
         commits.push(commit)
 
         // Add parents to queue (oldest first for chronological order)
-        queue.push(...commit.parents.reverse())
+        queue.push(...[...commit.parents].reverse())
       } catch (error) {
         // Commit not found - this might be OK if it's a dangling reference
         // Just skip it and continue
@@ -202,7 +202,7 @@ function displayOneline(
 function displayFull(
   commits: Array<{
     hash: string
-    parents: string[]
+    parents: readonly string[]
     timestamp: number
     author: string
     message: string

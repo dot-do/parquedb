@@ -127,7 +127,8 @@ function getObjectPath(hash: string): string {
  * @returns DatabaseState with hashes pointing to stored objects
  */
 export async function snapshotState(storage: StorageBackend): Promise<DatabaseState> {
-  const collections: DatabaseState['collections'] = {}
+  // Use mutable type during construction
+  const collections: Record<string, { dataHash: string; schemaHash: string; rowCount: number }> = {}
 
   // Snapshot all collection data files
   const dataFiles = await listDataFiles(storage)
@@ -321,7 +322,7 @@ export async function reconstructState(
     await updateEventLogPosition(storage, state.eventLogPosition)
 
     // Success - clean up backups
-    for (const backupPath of backupPaths.values()) {
+    for (const backupPath of Array.from(backupPaths.values())) {
       try {
         await storage.delete(backupPath)
       } catch {
@@ -330,7 +331,7 @@ export async function reconstructState(
     }
   } catch (error) {
     // Rollback - restore from backups
-    for (const [originalPath, backupPath] of backupPaths) {
+    for (const [originalPath, backupPath] of Array.from(backupPaths.entries())) {
       try {
         if (await storage.exists(backupPath)) {
           await storage.copy(backupPath, originalPath)
