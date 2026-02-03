@@ -1,0 +1,17 @@
+# ParqueDB Apex Search Worker (v8)
+name = "parquedb-search-apex"
+main = "search-apex.ts"
+compatibility_date = "2024-09-02"
+compatibility_flags = ["nodejs_compat"]
+account_id = "b6641681fe423910342b9ffa1364c76d"
+
+[[routes]]
+pattern = "cdn.workers.do/search-v8/*"
+zone_id = "7cdc309f5238b228485fc7e4ff29772b"
+
+[[r2_buckets]]
+binding = "DATA"
+bucket_name = "parquedb-search-data"
+
+[observability]
+enabled = true
