@@ -106,3 +106,18 @@ export {
   createStudioServer,
   printDiscoverySummary,
 } from './server'
+
+// Database routing (multi-database mode)
+export {
+  parseRoute,
+  isValidDatabaseId,
+  buildDatabaseUrl,
+  buildPublicDatabaseUrl,
+  resolveDatabase,
+  databaseMiddleware,
+  generateDatabaseSelectHtml,
+  generateDatabaseNotFoundHtml,
+  type DatabaseContext,
+  type ParsedRoute,
+  type DatabaseRoutingConfig,
+} from './database'

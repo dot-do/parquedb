@@ -176,7 +176,7 @@ export interface StudioConfig {
   /** Explicit collection paths (if not auto-discovering) */
   collections?: string[]
   /** Authentication mode */
-  auth: 'none' | 'local' | 'env'
+  auth: 'none' | 'local' | 'env' | 'oauth'
   /** Local admin credentials (for auth: 'local') */
   adminEmail?: string
   adminPassword?: string
@@ -188,6 +188,21 @@ export interface StudioConfig {
   theme?: 'light' | 'dark' | 'auto'
   /** Default sidebar fields */
   defaultSidebar?: string[]
+
+  // Multi-database configuration
+  /** Enable multi-database mode (path-based routing) */
+  multiDatabase?: {
+    /** Enable multi-database mode */
+    enabled: boolean
+    /** Path prefix for admin routes (default: '/admin') */
+    pathPrefix?: string
+    /** WorkOS JWKS URI for oauth.do authentication */
+    jwksUri?: string
+    /** OAuth client ID */
+    clientId?: string
+    /** Default database ID (redirect if accessing /admin directly) */
+    defaultDatabase?: string
+  }
 }
 
 /**

@@ -106,3 +106,17 @@ export {
   buildEntityId,
   buildPaginationInfo,
 } from './transform'
+
+// OAuth.do authentication
+export {
+  oauthUsers,
+  createOAuthMiddleware,
+  createOAuthActorResolver,
+  extractToken,
+  verifyOAuthToken,
+  canAccessPayloadAdmin,
+  getPayloadRole,
+  type OAuthConfig,
+  type OAuthUser,
+  type OAuthJWTPayload,
+} from './auth'

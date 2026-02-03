@@ -26,6 +26,8 @@
 
 import { DurableObject } from 'cloudflare:workers'
 import type { EntityId } from '../types'
+import type { Visibility } from '../types/visibility'
+import { DEFAULT_VISIBILITY, isValidVisibility } from '../types/visibility'
 
 // =============================================================================
 // Types
@@ -61,6 +63,17 @@ export interface DatabaseInfo {
   schemaVersion?: number
   /** Custom metadata */
   metadata?: Record<string, unknown>
+  /**
+   * Visibility level for the database
+   * - 'public': Discoverable and accessible by anyone
+   * - 'unlisted': Accessible with direct link, not discoverable
+   * - 'private': Requires authentication (default)
+   */
+  visibility: Visibility
+  /** URL-friendly slug for public access (e.g., 'my-dataset') */
+  slug?: string
+  /** Owner username (for public URL: username/slug) */
+  owner?: string
 }
 
 /**
@@ -77,6 +90,12 @@ export interface RegisterDatabaseOptions {
   prefix?: string
   /** Custom metadata */
   metadata?: Record<string, unknown>
+  /** Visibility level (default: 'private') */
+  visibility?: Visibility
+  /** URL-friendly slug for public access */
+  slug?: string
+  /** Owner username */
+  owner?: string
 }
 
 /**
@@ -95,6 +114,10 @@ export interface UpdateDatabaseOptions {
   }
   /** Custom metadata to merge */
   metadata?: Record<string, unknown>
+  /** New visibility level */
+  visibility?: Visibility
+  /** New URL-friendly slug */
+  slug?: string
 }
 
 /**
@@ -145,13 +168,38 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
         entity_count INTEGER DEFAULT 0,
         schema_version INTEGER DEFAULT 1,
         metadata TEXT,
-        deleted_at INTEGER
+        deleted_at INTEGER,
+        visibility TEXT DEFAULT 'private',
+        slug TEXT,
+        owner TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_databases_name ON databases(name);
       CREATE INDEX IF NOT EXISTS idx_databases_created ON databases(created_at);
       CREATE INDEX IF NOT EXISTS idx_databases_accessed ON databases(last_accessed_at);
+      CREATE INDEX IF NOT EXISTS idx_databases_visibility ON databases(visibility);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_databases_owner_slug ON databases(owner, slug) WHERE slug IS NOT NULL AND deleted_at IS NULL;
     `)
+
+    // Migration: add columns if they don't exist (for existing databases)
+    this.migrateSchema()
+  }
+
+  /**
+   * Migrate schema for existing databases
+   */
+  private migrateSchema(): void {
+    // Check if visibility column exists by attempting a query
+    try {
+      this.sql.exec(`SELECT visibility FROM databases LIMIT 1`)
+    } catch {
+      // Column doesn't exist, add it
+      this.sql.exec(`ALTER TABLE databases ADD COLUMN visibility TEXT DEFAULT 'private'`)
+      this.sql.exec(`ALTER TABLE databases ADD COLUMN slug TEXT`)
+      this.sql.exec(`ALTER TABLE databases ADD COLUMN owner TEXT`)
+      this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_databases_visibility ON databases(visibility)`)
+      this.sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_databases_owner_slug ON databases(owner, slug) WHERE slug IS NOT NULL AND deleted_at IS NULL`)
+    }
   }
 
   /**
@@ -194,6 +242,69 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
   }
 
   /**
+   * Get a database by owner and slug (for public URL access)
+   *
+   * @example
+   * ```typescript
+   * // Find database at parque.db/username/my-dataset
+   * const db = await index.getBySlug('username', 'my-dataset')
+   * ```
+   */
+  async getBySlug(owner: string, slug: string): Promise<DatabaseInfo | null> {
+    const rows = this.sql.exec(`
+      SELECT * FROM databases
+      WHERE owner = ? AND slug = ? AND deleted_at IS NULL
+    `, owner, slug).toArray()
+
+    if (rows.length === 0) return null
+    return this.rowToDatabase(rows[0]!)
+  }
+
+  /**
+   * List all public (discoverable) databases
+   * Used for public database directory
+   */
+  async listPublic(): Promise<DatabaseInfo[]> {
+    const rows = this.sql.exec(`
+      SELECT * FROM databases
+      WHERE visibility = 'public' AND deleted_at IS NULL
+      ORDER BY last_accessed_at DESC, created_at DESC
+    `).toArray()
+
+    return rows.map((row) => this.rowToDatabase(row))
+  }
+
+  /**
+   * List databases by visibility level
+   */
+  async listByVisibility(visibility: Visibility): Promise<DatabaseInfo[]> {
+    const rows = this.sql.exec(`
+      SELECT * FROM databases
+      WHERE visibility = ? AND deleted_at IS NULL
+      ORDER BY last_accessed_at DESC, created_at DESC
+    `, visibility).toArray()
+
+    return rows.map((row) => this.rowToDatabase(row))
+  }
+
+  /**
+   * Set visibility and optionally slug for a database
+   *
+   * @example
+   * ```typescript
+   * // Make database public with a custom slug
+   * await index.setVisibility(dbId, 'public', 'my-dataset')
+   * ```
+   */
+  async setVisibility(
+    id: string,
+    visibility: Visibility,
+    slug?: string
+  ): Promise<DatabaseInfo | null> {
+    return this.update(id, { visibility, slug })
+  }
+
+  /**
    * Register a new database
    */
   async register(
@@ -202,10 +313,24 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
   ): Promise<DatabaseInfo> {
     const id = this.generateId()
     const now = Date.now()
+    const visibility = options.visibility ?? DEFAULT_VISIBILITY
+
+    // Validate slug if provided
+    if (options.slug && !this.isValidSlug(options.slug)) {
+      throw new Error('Invalid slug: must be lowercase alphanumeric with hyphens')
+    }
+
+    // Check for duplicate slug within owner
+    if (options.slug && options.owner) {
+      const existing = await this.getBySlug(options.owner, options.slug)
+      if (existing) {
+        throw new Error(`Slug '${options.slug}' already exists for owner '${options.owner}'`)
+      }
+    }
 
     this.sql.exec(`
-      INSERT INTO databases (id, name, description, bucket, prefix, created_at, created_by, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO databases (id, name, description, bucket, prefix, created_at, created_by, metadata, visibility, slug, owner)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
       id,
       options.name,
@@ -214,7 +339,10 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
       options.prefix ?? null,
       now,
       actor,
-      options.metadata ? JSON.stringify(options.metadata) : null
+      options.metadata ? JSON.stringify(options.metadata) : null,
+      visibility,
+      options.slug ?? null,
+      options.owner ?? null
     )
 
     return {
@@ -226,6 +354,9 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
       createdAt: new Date(now),
       createdBy: actor,
       metadata: options.metadata,
+      visibility,
+      slug: options.slug,
+      owner: options.owner,
     }
   }
 
@@ -268,6 +399,29 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
       const merged = { ...db.metadata, ...options.metadata }
       updates.push('metadata = ?')
       values.push(JSON.stringify(merged))
+    }
+
+    if (options.visibility !== undefined) {
+      if (!isValidVisibility(options.visibility)) {
+        throw new Error(`Invalid visibility: ${options.visibility}`)
+      }
+      updates.push('visibility = ?')
+      values.push(options.visibility)
+    }
+
+    if (options.slug !== undefined) {
+      if (options.slug && !this.isValidSlug(options.slug)) {
+        throw new Error('Invalid slug: must be lowercase alphanumeric with hyphens')
+      }
+      // Check for duplicate slug within owner
+      if (options.slug && db.owner) {
+        const existing = await this.getBySlug(db.owner, options.slug)
+        if (existing && existing.id !== id) {
+          throw new Error(`Slug '${options.slug}' already exists for owner '${db.owner}'`)
+        }
+      }
+      updates.push('slug = ?')
+      values.push(options.slug || null)
     }
 
     if (updates.length === 0) {
@@ -448,6 +602,37 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
         return Response.json({ databases })
       }
 
+      // GET /public - list public databases
+      if (request.method === 'GET' && path === '/public') {
+        const databases = await this.listPublic()
+        return Response.json({ databases })
+      }
+
+      // GET /databases/by-slug/:owner/:slug - get by owner/slug
+      if (request.method === 'GET' && path.startsWith('/databases/by-slug/')) {
+        const parts = path.slice('/databases/by-slug/'.length).split('/')
+        if (parts.length !== 2) {
+          return Response.json({ error: 'Invalid path: expected /databases/by-slug/:owner/:slug' }, { status: 400 })
+        }
+        const [owner, slug] = parts
+        const database = await this.getBySlug(owner!, slug!)
+        if (!database) {
+          return Response.json({ error: 'Database not found' }, { status: 404 })
+        }
+        return Response.json(database)
+      }
+
+      // PUT /databases/:id/visibility - set visibility
+      if (request.method === 'PUT' && path.endsWith('/visibility')) {
+        const id = path.slice('/databases/'.length, -'/visibility'.length)
+        const body = await request.json() as { visibility: Visibility; slug?: string }
+        const database = await this.setVisibility(id, body.visibility, body.slug)
+        if (!database) {
+          return Response.json({ error: 'Database not found' }, { status: 404 })
+        }
+        return Response.json(database)
+      }
+
       return Response.json({ error: 'Not found' }, { status: 404 })
     } catch (error) {
       console.error('[DatabaseIndexDO] Error:', error)
@@ -470,6 +655,7 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
   }
 
   private rowToDatabase(row: Record<string, unknown>): DatabaseInfo {
+    const visibility = row.visibility as string | undefined
     return {
       id: row.id as string,
       name: row.name as string,
@@ -488,7 +674,18 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
       metadata: row.metadata
         ? JSON.parse(row.metadata as string)
         : undefined,
+      visibility: isValidVisibility(visibility) ? visibility : DEFAULT_VISIBILITY,
+      slug: row.slug as string | undefined,
+      owner: row.owner as string | undefined,
     }
+  }
+
+  /**
+   * Validate slug format
+   * Must be lowercase alphanumeric with hyphens, 3-64 characters
+   */
+  private isValidSlug(slug: string): boolean {
+    return /^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(slug) || /^[a-z0-9]{1,3}$/.test(slug)
   }
 }
 
