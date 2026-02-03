@@ -198,7 +198,7 @@ export interface TypeDefinition {
    * - 'unlisted': Accessible with direct link, not discoverable
    * - 'private': Requires authentication (default)
    *
-   * Inherits from database-level $visibility if not specified
+   * Inherits from database-level visibility if not specified
    */
   $visibility?: Visibility
 

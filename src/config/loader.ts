@@ -7,7 +7,7 @@
 
 import type { StorageBackend } from '../types'
 import type { EntityId } from '../types/entity'
-import type { Visibility } from '../types/visibility'
+import type { Visibility, CorsConfig } from '../types/visibility'
 import type { DBSchema } from '../db'
 import { detectRuntime } from './runtime'
 import { detectStoragePaths } from './env'
@@ -128,7 +128,26 @@ export interface ParqueDBConfig {
    *
    * Collections inherit this unless they specify their own $visibility
    */
-  $visibility?: Visibility
+  visibility?: Visibility
+
+  /**
+   * CORS configuration for public/unlisted database access
+   *
+   * Controls which origins can access the database via browser requests.
+   * Only applies to public and unlisted databases.
+   *
+   * @example
+   * ```typescript
+   * defineConfig({
+   *   visibility: 'public',
+   *   cors: {
+   *     origins: ['https://myapp.com'],
+   *     credentials: true
+   *   }
+   * })
+   * ```
+   */
+  cors?: CorsConfig
 
   /** Environment-specific overrides */
   environments?: {

@@ -100,8 +100,8 @@ export async function pushCommand(parsed: ParsedArgs): Promise<number> {
     }
 
     // Get visibility from config if not specified
-    if (!visibilityArg && config.$visibility) {
-      visibility = config.$visibility
+    if (!visibilityArg && config.visibility) {
+      visibility = config.visibility
     }
 
     // Create storage backends

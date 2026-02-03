@@ -250,14 +250,8 @@ import { defineConfig, defineSchema } from 'parquedb/config'
 export default defineConfig({
   storage: { type: 'fs', path: './data' },
 
-  // Database-level visibility
-  $visibility: 'public',
-
-  // Optional: Owner for public URL
-  $owner: 'username',
-
-  // Optional: URL slug
-  $slug: 'my-dataset',
+  // Database-level visibility (no $ prefix at config level)
+  visibility: 'public',
 
   schema: defineSchema({
     Post: {
@@ -271,17 +265,17 @@ export default defineConfig({
 
 ### Collection-Level Visibility
 
-You can also set visibility per collection:
+You can also set visibility per collection using `$visibility`:
 
 ```typescript
 export default defineConfig({
   storage: { type: 'fs', path: './data' },
 
-  // Default visibility for all collections
-  $visibility: 'private',
+  // Default visibility for all collections (config level = no $)
+  visibility: 'private',
 
   schema: defineSchema({
-    // Public collection
+    // Public collection (collection level = use $)
     Post: {
       $visibility: 'public',
       title: 'string!',
