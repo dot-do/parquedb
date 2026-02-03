@@ -38,6 +38,11 @@ import {
   emitCompactionMetrics,
   type CompactionMetrics,
 } from '../observability/compaction'
+import {
+  BackpressureManager,
+  createDefaultBackpressureManager,
+  type BackpressureConfig,
+} from './backpressure'
 
 // =============================================================================
 // Types
@@ -97,6 +102,12 @@ export interface CompactionConsumerConfig {
    * When enabled, DOs are sharded by namespace + time bucket for extreme concurrency (>1000 writes/sec)
    */
   timeBucketSharding?: TimeBucketShardingConfig
+
+  /**
+   * Backpressure configuration for overload protection
+   * Controls rate limiting, circuit breaker, and backpressure detection
+   */
+  backpressure?: BackpressureConfig
 }
 
 /**
@@ -140,8 +151,134 @@ export function shouldUseTimeBucketSharding(
 /** Processing status for two-phase commit */
 type WindowProcessingStatus =
   | { state: 'pending' }
-  | { state: 'processing'; startedAt: number }
+  | { state: 'processing'; startedAt: number; provisionalWorkflowId: string }
   | { state: 'dispatched'; workflowId: string; dispatchedAt: number }
+
+// =============================================================================
+// State Machine Definition
+// =============================================================================
+
+/** Window state names for state machine */
+export type WindowStateName = 'pending' | 'processing' | 'dispatched' | 'deleted'
+
+/**
+ * Window Processing State Machine
+ *
+ * Defines all valid state transitions for compaction window processing.
+ * This ensures consistency and prevents invalid state changes.
+ *
+ * State Diagram:
+ * ```
+ *                    ┌─────────────────────────────────────┐
+ *                    │                                     │
+ *                    ▼                                     │
+ *   [NEW] ──► (pending) ──► (processing) ──► (dispatched) ─┴─► [DELETED]
+ *                 ▲              │                │
+ *                 │              │                │
+ *                 │   rollback/  │    failure     │
+ *                 │    timeout   │                │
+ *                 └──────────────┴────────────────┘
+ * ```
+ *
+ * Transitions:
+ * - pending → processing: Window is ready, picked up for workflow dispatch
+ * - processing → dispatched: Workflow successfully created
+ * - processing → pending: Workflow creation failed (rollback) or stuck timeout
+ * - dispatched → deleted: Workflow completed successfully
+ * - dispatched → pending: Workflow failed, retry
+ */
+export const WINDOW_STATE_TRANSITIONS: Record<WindowStateName, WindowStateName[]> = {
+  pending: ['processing'],
+  processing: ['dispatched', 'pending'],
+  dispatched: ['deleted', 'pending'],
+  deleted: [], // Terminal state, no transitions out
+}
+
+/**
+ * Descriptions of each state transition for logging and documentation
+ */
+export const TRANSITION_DESCRIPTIONS: Record<string, string> = {
+  'pending→processing': 'Window ready for compaction, starting workflow dispatch',
+  'processing→dispatched': 'Workflow successfully created, awaiting completion',
+  'processing→pending': 'Workflow dispatch failed or timed out, will retry',
+  'dispatched→deleted': 'Workflow completed successfully, window cleaned up',
+  'dispatched→pending': 'Workflow failed, resetting for retry',
+}
+
+/**
+ * Error class for invalid state transitions
+ */
+export class InvalidStateTransitionError extends Error {
+  constructor(
+    public readonly fromState: WindowStateName,
+    public readonly toState: WindowStateName,
+    public readonly windowKey: string,
+    public readonly reason?: string
+  ) {
+    const validTransitions = WINDOW_STATE_TRANSITIONS[fromState]
+    const message = reason
+      ? `Invalid state transition for window '${windowKey}': ${fromState} → ${toState}. ${reason}. Valid transitions from '${fromState}': [${validTransitions.join(', ')}]`
+      : `Invalid state transition for window '${windowKey}': ${fromState} → ${toState}. Valid transitions from '${fromState}': [${validTransitions.join(', ')}]`
+    super(message)
+    this.name = 'InvalidStateTransitionError'
+  }
+}
+
+/**
+ * Validate that a state transition is allowed
+ * @param fromState - Current window state
+ * @param toState - Target window state
+ * @returns true if the transition is valid
+ */
+export function isValidStateTransition(
+  fromState: WindowStateName,
+  toState: WindowStateName
+): boolean {
+  const validTransitions = WINDOW_STATE_TRANSITIONS[fromState]
+  return validTransitions.includes(toState)
+}
+
+/**
+ * Validate a state transition and throw if invalid
+ * @param fromState - Current window state
+ * @param toState - Target window state
+ * @param windowKey - Window identifier for error messages
+ * @param reason - Optional additional context for error message
+ * @throws InvalidStateTransitionError if transition is invalid
+ */
+export function validateStateTransition(
+  fromState: WindowStateName,
+  toState: WindowStateName,
+  windowKey: string,
+  reason?: string
+): void {
+  if (!isValidStateTransition(fromState, toState)) {
+    throw new InvalidStateTransitionError(fromState, toState, windowKey, reason)
+  }
+}
+
+/**
+ * Get the state name from a WindowProcessingStatus
+ * @param status - The processing status object
+ * @returns The state name
+ */
+export function getStateName(status: WindowProcessingStatus): WindowStateName {
+  return status.state
+}
+
+/**
+ * Get the transition description for logging
+ * @param fromState - Current window state
+ * @param toState - Target window state
+ * @returns Description of the transition
+ */
+export function getTransitionDescription(
+  fromState: WindowStateName,
+  toState: WindowStateName
+): string {
+  const key = `${fromState}→${toState}`
+  return TRANSITION_DESCRIPTIONS[key] ?? `${fromState} → ${toState}`
+}
 
 /** Tracked state for a time window */
 interface WindowState {
@@ -348,6 +485,8 @@ export interface WindowReadyEntry {
   writers: string[]
   /** Namespace priority for workflow queue routing */
   priority?: NamespacePriority
+  /** Provisional workflow ID generated before workflow.create() for crash recovery */
+  provisionalWorkflowId: string
 }
 
 /** Response from CompactionStateDO */
@@ -371,7 +510,7 @@ export interface CompactionStatusResponse {
     writers: string[]
     fileCount: number
     totalSize: number
-    processingStatus: { state: 'pending' } | { state: 'processing'; startedAt: number } | { state: 'dispatched'; workflowId: string; dispatchedAt: number }
+    processingStatus: { state: 'pending' } | { state: 'processing'; startedAt: number; provisionalWorkflowId: string } | { state: 'dispatched'; workflowId: string; dispatchedAt: number }
   }>
 }
 
@@ -507,7 +646,7 @@ export interface AggregatedCompactionStatusResponse {
     writers: string[]
     fileCount: number
     totalSize: number
-    processingStatus: { state: 'pending' } | { state: 'processing'; startedAt: number } | { state: 'dispatched'; workflowId: string; dispatchedAt: number }
+    processingStatus: { state: 'pending' } | { state: 'processing'; startedAt: number; provisionalWorkflowId: string } | { state: 'dispatched'; workflowId: string; dispatchedAt: number }
   }>
 }
 
@@ -705,7 +844,14 @@ export async function handleCompactionQueue(
     targetFormat = 'native',
     namespacePrefix = 'data/',
     timeBucketSharding,
+    backpressure: backpressureConfig,
   } = config
+
+  // Initialize backpressure manager for overload protection
+  // Provides rate limiting, circuit breaker, and backpressure detection
+  const backpressureManager = backpressureConfig
+    ? new BackpressureManager(backpressureConfig)
+    : createDefaultBackpressureManager()
 
   // Collect all updates first
   const allUpdates: Array<{
@@ -840,10 +986,35 @@ export async function handleCompactionQueue(
   )
 
   // Phase 2: Trigger workflows for ready windows with two-phase commit
+  // Use BackpressureManager for rate limiting, circuit breaker, and overload protection
   for (const window of allWindowsReady) {
     // Use the doId that was tracked with the ready window
     const stateId = env.COMPACTION_STATE.idFromName(window.doId)
     const stateDO = env.COMPACTION_STATE.get(stateId)
+
+    // Check if we can dispatch (rate limit, circuit breaker, backpressure)
+    // High-priority namespaces can bypass backpressure but still respect rate limits
+    if (!backpressureManager.canDispatch(window.namespace)) {
+      const status = backpressureManager.getStatus()
+      logger.warn('Workflow dispatch blocked by backpressure manager', {
+        namespace: window.namespace,
+        doId: window.doId,
+        windowKey: window.windowKey,
+        rateLimitActive: status.rateLimitActive,
+        circuitBreakerOpen: status.circuitBreakerOpen,
+        backpressureActive: status.backpressureSignalActive,
+      })
+
+      // Rollback to pending state so window can be retried later
+      await stateDO.fetch('http://internal/rollback-processing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          windowKey: window.windowKey,
+        }),
+      })
+      continue
+    }
 
     logger.info('Triggering compaction workflow', {
       namespace: window.namespace,
@@ -854,8 +1025,10 @@ export async function handleCompactionQueue(
       writers: window.writers.length,
     })
 
-    try {
-      const instance = await env.COMPACTION_WORKFLOW.create({
+    // Execute workflow creation with backpressure protection
+    // This handles rate limiting, circuit breaker state, and records success/failure
+    const result = await backpressureManager.executeWorkflowCreate(
+      () => env.COMPACTION_WORKFLOW.create({
         params: {
           namespace: window.namespace,
           windowStart: window.windowStart,
@@ -866,9 +1039,12 @@ export async function handleCompactionQueue(
           // Include doId so workflow can notify correct DO on completion
           doId: window.doId,
         },
-      })
+      }),
+      window.namespace
+    )
 
-      logger.info('Workflow started', { workflowId: instance.id, doId: window.doId })
+    if (result.success && result.result) {
+      logger.info('Workflow started', { workflowId: result.result.id, doId: window.doId })
 
       // Phase 2a: Confirm dispatch success - mark as dispatched
       await stateDO.fetch('http://internal/confirm-dispatch', {
@@ -876,12 +1052,30 @@ export async function handleCompactionQueue(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           windowKey: window.windowKey,
-          workflowId: instance.id,
+          workflowId: result.result.id,
         }),
       })
-    } catch (err) {
+    } else if (result.skipped) {
+      // Skipped due to rate limiting, circuit breaker, or backpressure
+      logger.warn('Workflow dispatch skipped', {
+        reason: result.reason,
+        namespace: window.namespace,
+        doId: window.doId,
+        windowKey: window.windowKey,
+      })
+
+      // Rollback to pending state so window can be retried later
+      await stateDO.fetch('http://internal/rollback-processing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          windowKey: window.windowKey,
+        }),
+      })
+    } else {
+      // Workflow creation failed - circuit breaker will track this
       logger.error('Failed to start compaction workflow', {
-        error: err instanceof Error ? err.message : 'Unknown',
+        error: result.error?.message ?? 'Unknown',
         namespace: window.namespace,
         doId: window.doId,
         windowKey: window.windowKey,
@@ -897,6 +1091,142 @@ export async function handleCompactionQueue(
       })
     }
   }
+
+  // Log backpressure status at end of batch for observability
+  const finalStatus = backpressureManager.getStatus()
+  if (finalStatus.rateLimitActive || finalStatus.circuitBreakerOpen || finalStatus.backpressureSignalActive) {
+    logger.info('Backpressure manager status after batch', {
+      rateLimitActive: finalStatus.rateLimitActive,
+      tokensRemaining: finalStatus.tokensRemaining,
+      circuitBreakerOpen: finalStatus.circuitBreakerOpen,
+      circuitBreakerResetMs: finalStatus.circuitBreakerResetMs,
+      consecutiveFailures: finalStatus.consecutiveFailures,
+      backpressureActive: finalStatus.backpressureSignalActive,
+      dispatchesInWindow: finalStatus.dispatchesInWindow,
+    })
+  }
+}
+
+// =============================================================================
+// Stuck Window Recovery
+// =============================================================================
+
+/** Stuck window info returned from /get-stuck-windows */
+export interface StuckWindowInfo {
+  windowKey: string
+  provisionalWorkflowId: string
+  startedAt: number
+  stuckDurationMs: number
+}
+
+/** Response from /get-stuck-windows endpoint */
+export interface StuckWindowsResponse {
+  namespace: string
+  stuckWindows: StuckWindowInfo[]
+}
+
+/**
+ * Recover stuck windows by checking workflow status and either confirming or rolling back
+ *
+ * This function should be called periodically (e.g., by a cron trigger or at the start
+ * of each queue batch) to recover windows that got stuck in "processing" state due to
+ * crashes between workflow.create() and confirm-dispatch.
+ *
+ * The recovery process:
+ * 1. Get stuck windows from each DO via /get-stuck-windows
+ * 2. Check workflow status using the provisional workflow ID
+ * 3. If workflow is running/complete: call /confirm-dispatch (workflow was created successfully)
+ * 4. If workflow doesn't exist or errored: call /rollback-processing (safe to retry)
+ *
+ * @param doIds - Array of DO IDs to check for stuck windows
+ * @param env - Environment with COMPACTION_STATE and COMPACTION_WORKFLOW bindings
+ */
+export async function recoverStuckWindows(
+  doIds: string[],
+  env: Env
+): Promise<{ recovered: number; failed: number }> {
+  let recovered = 0
+  let failed = 0
+
+  for (const doId of doIds) {
+    try {
+      const stateId = env.COMPACTION_STATE.idFromName(doId)
+      const stateDO = env.COMPACTION_STATE.get(stateId)
+
+      // Get stuck windows
+      const response = await stateDO.fetch('http://internal/get-stuck-windows')
+      const data = await response.json() as StuckWindowsResponse
+
+      for (const stuckWindow of data.stuckWindows) {
+        try {
+          // Check workflow status using the provisional ID
+          let workflowExists = false
+          let workflowRunning = false
+
+          try {
+            const workflow = await env.COMPACTION_WORKFLOW.get(stuckWindow.provisionalWorkflowId)
+            const status = await workflow.status()
+            workflowExists = true
+            workflowRunning = status.status === 'queued' || status.status === 'running' || status.status === 'complete'
+          } catch {
+            // Workflow doesn't exist - this means workflow.create() failed or was never called
+            workflowExists = false
+          }
+
+          if (workflowExists && workflowRunning) {
+            // Workflow was created successfully - confirm the dispatch
+            logger.info('Recovering stuck window: workflow exists, confirming dispatch', {
+              namespace: data.namespace,
+              windowKey: stuckWindow.windowKey,
+              provisionalWorkflowId: stuckWindow.provisionalWorkflowId,
+            })
+
+            await stateDO.fetch('http://internal/confirm-dispatch', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                windowKey: stuckWindow.windowKey,
+                workflowId: stuckWindow.provisionalWorkflowId,
+              }),
+            })
+            recovered++
+          } else {
+            // Workflow doesn't exist or errored - safe to rollback and retry
+            logger.info('Recovering stuck window: workflow does not exist or errored, rolling back', {
+              namespace: data.namespace,
+              windowKey: stuckWindow.windowKey,
+              provisionalWorkflowId: stuckWindow.provisionalWorkflowId,
+              workflowExists,
+            })
+
+            await stateDO.fetch('http://internal/rollback-processing', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                windowKey: stuckWindow.windowKey,
+              }),
+            })
+            recovered++
+          }
+        } catch (err) {
+          logger.error('Failed to recover stuck window', {
+            namespace: data.namespace,
+            windowKey: stuckWindow.windowKey,
+            error: err instanceof Error ? err.message : 'Unknown',
+          })
+          failed++
+        }
+      }
+    } catch (err) {
+      logger.error('Failed to get stuck windows from DO', {
+        doId,
+        error: err instanceof Error ? err.message : 'Unknown',
+      })
+      failed++
+    }
+  }
+
+  return { recovered, failed }
 }
 
 // =============================================================================
@@ -906,7 +1236,7 @@ export async function handleCompactionQueue(
 /** Serializable processing status for storage */
 type StoredProcessingStatus =
   | { state: 'pending' }
-  | { state: 'processing'; startedAt: number }
+  | { state: 'processing'; startedAt: number; provisionalWorkflowId: string }
   | { state: 'dispatched'; workflowId: string; dispatchedAt: number }
 
 /** Serializable window state for storage */
@@ -1091,6 +1421,10 @@ export class CompactionStateDO {
       return this.handleWorkflowComplete(request)
     }
 
+    if (url.pathname === '/get-stuck-windows' && request.method === 'GET') {
+      return this.handleGetStuckWindows()
+    }
+
     if (url.pathname === '/status') {
       return this.handleStatus()
     }
@@ -1173,14 +1507,7 @@ export class CompactionStateDO {
 
     const { namespace, updates, config } = body
     const now = Date.now()
-    const windowsReady: Array<{
-      namespace: string
-      windowKey: string
-      windowStart: number
-      windowEnd: number
-      files: string[]
-      writers: string[]
-    }> = []
+    const windowsReady: WindowReadyEntry[] = []
 
     // Set namespace on first update (each DO instance handles one namespace)
     if (!this.namespace) {
@@ -1271,8 +1598,10 @@ export class CompactionStateDO {
       const waitedLongEnough = (now - window.lastActivityAt) > effectiveMaxWaitTimeMs
 
       if (missingWriters.length === 0 || waitedLongEnough) {
-        // Window is ready! Mark as processing (Phase 1 of two-phase commit)
-        window.processingStatus = { state: 'processing', startedAt: now }
+        // Window is ready! Generate provisional workflow ID and mark as processing
+        // The provisional ID is stored so we can check workflow status on timeout recovery
+        const provisionalWorkflowId = `compaction-${this.namespace}-${windowKey}-${now}`
+        window.processingStatus = { state: 'processing', startedAt: now, provisionalWorkflowId }
 
         const allFiles: string[] = []
         for (const files of window.filesByWriter.values()) {
@@ -1287,6 +1616,7 @@ export class CompactionStateDO {
           files: allFiles.sort(),
           writers: Array.from(window.writers),
           priority: this.priority,
+          provisionalWorkflowId,
         })
       }
     }
@@ -1380,10 +1710,18 @@ export class CompactionStateDO {
       })
     }
 
-    if (window.processingStatus.state !== 'processing') {
+    // Validate state transition using state machine
+    const currentState = getStateName(window.processingStatus)
+    const targetState: WindowStateName = 'dispatched'
+
+    if (!isValidStateTransition(currentState, targetState)) {
+      const validTransitions = WINDOW_STATE_TRANSITIONS[currentState]
       return new Response(JSON.stringify({
-        error: 'Window not in processing state',
-        currentState: window.processingStatus.state,
+        error: `Invalid state transition: ${currentState} → ${targetState}`,
+        currentState,
+        targetState,
+        validTransitions,
+        description: getTransitionDescription(currentState, targetState),
       }), {
         status: 409,
         headers: { 'Content-Type': 'application/json' },
@@ -1403,6 +1741,7 @@ export class CompactionStateDO {
       namespace: this.namespace,
       windowKey,
       workflowId,
+      transition: getTransitionDescription(currentState, targetState),
     })
 
     return new Response(JSON.stringify({ success: true }), {
@@ -1429,10 +1768,18 @@ export class CompactionStateDO {
       })
     }
 
-    if (window.processingStatus.state !== 'processing') {
+    // Validate state transition using state machine
+    const currentState = getStateName(window.processingStatus)
+    const targetState: WindowStateName = 'pending'
+
+    if (!isValidStateTransition(currentState, targetState)) {
+      const validTransitions = WINDOW_STATE_TRANSITIONS[currentState]
       return new Response(JSON.stringify({
-        error: 'Window not in processing state',
-        currentState: window.processingStatus.state,
+        error: `Invalid state transition: ${currentState} → ${targetState}`,
+        currentState,
+        targetState,
+        validTransitions,
+        description: getTransitionDescription(currentState, targetState),
       }), {
         status: 409,
         headers: { 'Content-Type': 'application/json' },
@@ -1447,6 +1794,7 @@ export class CompactionStateDO {
     logger.info('Window processing rolled back', {
       namespace: this.namespace,
       windowKey,
+      transition: getTransitionDescription(currentState, targetState),
     })
 
     return new Response(JSON.stringify({ success: true }), {
@@ -1475,17 +1823,26 @@ export class CompactionStateDO {
       })
     }
 
-    if (window.processingStatus.state !== 'dispatched') {
+    // Validate state transition using state machine
+    const currentState = getStateName(window.processingStatus)
+    const targetState: WindowStateName = success ? 'deleted' : 'pending'
+
+    if (!isValidStateTransition(currentState, targetState)) {
+      const validTransitions = WINDOW_STATE_TRANSITIONS[currentState]
       return new Response(JSON.stringify({
-        error: 'Window not in dispatched state',
-        currentState: window.processingStatus.state,
+        error: `Invalid state transition: ${currentState} → ${targetState}`,
+        currentState,
+        targetState,
+        validTransitions,
+        description: getTransitionDescription(currentState, targetState),
       }), {
         status: 409,
         headers: { 'Content-Type': 'application/json' },
       })
     }
 
-    if (window.processingStatus.workflowId !== workflowId) {
+    // Verify workflow ID matches (only when in dispatched state)
+    if (window.processingStatus.state === 'dispatched' && window.processingStatus.workflowId !== workflowId) {
       return new Response(JSON.stringify({
         error: 'Workflow ID mismatch',
         expected: window.processingStatus.workflowId,
@@ -1497,12 +1854,13 @@ export class CompactionStateDO {
     }
 
     if (success) {
-      // Workflow completed successfully - delete the window
+      // Workflow completed successfully - delete the window (terminal state)
       this.windows.delete(windowKey)
       logger.info('Window completed and deleted', {
         namespace: this.namespace,
         windowKey,
         workflowId,
+        transition: getTransitionDescription(currentState, targetState),
       })
     } else {
       // Workflow failed - reset to pending for retry
@@ -1511,6 +1869,7 @@ export class CompactionStateDO {
         namespace: this.namespace,
         windowKey,
         workflowId,
+        transition: getTransitionDescription(currentState, targetState),
       })
     }
 
@@ -1522,22 +1881,75 @@ export class CompactionStateDO {
   }
 
   /**
-   * Clean up windows stuck in "processing" state due to crashes or timeouts
+   * Get windows stuck in "processing" state that need recovery
+   * Returns windows with their provisional workflow IDs so the queue consumer
+   * can check workflow status and decide whether to confirm or rollback
+   *
+   * This is part of the two-phase commit crash recovery:
+   * 1. If workflow.create() succeeded but confirm-dispatch failed, the workflow exists
+   * 2. Queue consumer checks workflow status using provisionalWorkflowId
+   * 3. If workflow is running/complete, call /confirm-dispatch
+   * 4. If workflow doesn't exist or errored, call /rollback-processing
    */
-  private cleanupStuckProcessingWindows(now: number): void {
+  private handleGetStuckWindows(): Response {
+    const now = Date.now()
+    const stuckWindows: Array<{
+      windowKey: string
+      provisionalWorkflowId: string
+      startedAt: number
+      stuckDurationMs: number
+    }> = []
+
     for (const [windowKey, window] of this.windows) {
       if (
         window.processingStatus.state === 'processing' &&
         now - window.processingStatus.startedAt > PROCESSING_TIMEOUT_MS
       ) {
-        logger.warn('Resetting stuck processing window', {
-          namespace: this.namespace,
+        stuckWindows.push({
           windowKey,
-          stuckSince: new Date(window.processingStatus.startedAt).toISOString(),
+          provisionalWorkflowId: window.processingStatus.provisionalWorkflowId,
+          startedAt: window.processingStatus.startedAt,
+          stuckDurationMs: now - window.processingStatus.startedAt,
         })
-        window.processingStatus = { state: 'pending' }
       }
     }
+
+    return new Response(JSON.stringify({
+      namespace: this.namespace,
+      stuckWindows,
+    }), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  /**
+   * Clean up windows stuck in "processing" state due to crashes or timeouts
+   *
+   * NOTE: This method does NOT check workflow status before resetting.
+   * For proper crash recovery with duplicate prevention, use /get-stuck-windows
+   * and check workflow status externally before calling /confirm-dispatch or
+   * /rollback-processing.
+   *
+   * This method is kept for backwards compatibility and as a fallback safety net
+   * if the queue consumer doesn't implement proper recovery. Windows will be
+   * reset to pending and potentially cause duplicate processing.
+   *
+   * @deprecated Use /get-stuck-windows + workflow status check instead
+   */
+  private cleanupStuckProcessingWindows(_now: number): void {
+    // IMPORTANT: This is now a no-op to prevent race conditions.
+    // Stuck window recovery is handled by the queue consumer via
+    // /get-stuck-windows endpoint which includes the provisional workflow ID
+    // for status checking before deciding to confirm or rollback.
+    //
+    // The queue consumer should:
+    // 1. Call /get-stuck-windows to get stuck windows with provisionalWorkflowId
+    // 2. Check workflow status via env.COMPACTION_WORKFLOW.get(id).status()
+    // 3. If workflow is running/complete: call /confirm-dispatch
+    // 4. If workflow doesn't exist or errored: call /rollback-processing
+    //
+    // This prevents duplicate compaction workflows when a crash occurs between
+    // workflow.create() succeeding and confirm-dispatch being called.
   }
 
   private handleStatus(): Response {
@@ -1646,4 +2058,4 @@ export class CompactionStateDO {
   }
 }
 
-export default { handleCompactionQueue, CompactionStateDO }
+export default { handleCompactionQueue, CompactionStateDO, recoverStuckWindows }

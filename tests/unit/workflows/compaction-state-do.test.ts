@@ -999,7 +999,15 @@ describe('CompactionStateDO - Two-Phase Commit', () => {
   })
 
   describe('stuck window cleanup', () => {
-    it('should reset stuck processing windows on next update', async () => {
+    it('should NOT automatically reset stuck processing windows (deprecated behavior)', async () => {
+      // NOTE: Automatic stuck window cleanup was deprecated to prevent race conditions.
+      // The cleanupStuckProcessingWindows method is now a no-op.
+      // Proper crash recovery is via /get-stuck-windows endpoint which includes
+      // the provisional workflow ID for status checking before deciding to confirm or rollback.
+      //
+      // This test verifies that stuck windows are NOT automatically reset,
+      // preserving them for proper recovery via the /get-stuck-windows endpoint.
+
       // Pre-populate storage with a stuck processing window
       const oldWindowStart = Date.now() - (2 * 3600000) // 2 hours ago
       const windowKey = String(oldWindowStart)
@@ -1027,7 +1035,7 @@ describe('CompactionStateDO - Two-Phase Commit', () => {
       // Create new DO (simulates restart)
       const newDO = new TestableCompactionStateDO(state)
 
-      // Send any update to trigger cleanup
+      // Send any update
       await newDO.fetch(new Request('http://internal/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1036,8 +1044,9 @@ describe('CompactionStateDO - Two-Phase Commit', () => {
         })),
       }))
 
-      // Stuck window should now be pending
-      expect(newDO.getWindowProcessingStatus(windowKey)?.state).toBe('pending')
+      // Stuck window should STILL be in processing state (no automatic cleanup)
+      // Recovery must happen via /get-stuck-windows endpoint and workflow status check
+      expect(newDO.getWindowProcessingStatus(windowKey)?.state).toBe('processing')
     })
   })
 
