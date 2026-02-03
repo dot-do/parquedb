@@ -12,11 +12,12 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FsBackend } from '../../src/storage/FsBackend'
 import { ParqueDB } from '../../src/ParqueDB'
+import { cleanupTempDir } from '../setup'
 import type {
   Entity,
   EntityId,
@@ -247,8 +248,8 @@ describe('Relationship Reading', () => {
   })
 
   afterEach(async () => {
-    // Clean up temp directory
-    await rm(tempDir, { recursive: true, force: true })
+    // Clean up temp directory with retry logic
+    await cleanupTempDir(tempDir)
   })
 
   // ===========================================================================

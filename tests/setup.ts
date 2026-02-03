@@ -204,6 +204,43 @@ export async function cleanupAfterTest(cleanup: () => Promise<void>): Promise<vo
 }
 
 /**
+ * Robust temp directory cleanup with retries
+ * Handles ENOTEMPTY errors that occur when files are still being written
+ */
+export async function cleanupTempDir(tempDir: string, maxRetries = 3): Promise<void> {
+  const { rm } = await import('node:fs/promises')
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await rm(tempDir, { recursive: true, force: true, maxRetries: 3 })
+      return
+    } catch (error: unknown) {
+      const isEnotempty = error instanceof Error &&
+        (error.message.includes('ENOTEMPTY') || (error as NodeJS.ErrnoException).code === 'ENOTEMPTY')
+      const isEnoent = error instanceof Error &&
+        (error.message.includes('ENOENT') || (error as NodeJS.ErrnoException).code === 'ENOENT')
+
+      if (isEnoent) {
+        // Directory already removed
+        return
+      }
+
+      if (isEnotempty && attempt < maxRetries - 1) {
+        // Wait a bit and retry
+        await new Promise(resolve => setTimeout(resolve, 50 * (attempt + 1)))
+        continue
+      }
+
+      // On final attempt, just ignore the error - temp dirs will be cleaned up eventually
+      if (attempt === maxRetries - 1) {
+        return
+      }
+      throw error
+    }
+  }
+}
+
+/**
  * Create a test context with automatic cleanup
  */
 export function useTestContext<T>(
