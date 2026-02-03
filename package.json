@@ -18,6 +18,10 @@
     "./sql": {
       "import": "./dist/integrations/sql/index.js",
       "types": "./dist/integrations/sql/index.d.ts"
+    },
+    "./studio": {
+      "import": "./dist/studio/index.js",
+      "types": "./dist/studio/index.d.ts"
     }
   },
   "peerDependencies": {

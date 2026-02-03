@@ -1,32 +1,38 @@
 /**
- * Payload CMS Configuration using ParqueDB
+ * Payload CMS Configuration with ParqueDB
  *
- * This example shows how to configure Payload CMS with ParqueDB
- * as the database backend. ParqueDB stores data in Parquet files,
- * which can be stored locally or in cloud object storage like R2.
+ * This configuration demonstrates using ParqueDB as the database
+ * backend for Payload CMS. Works in both local development and
+ * Cloudflare Workers deployment via OpenNext.
  */
 
-import { buildConfig } from 'payload'
-import { parquedbAdapter } from 'parquedb/payload'
-import { FsBackend } from 'parquedb'
 import path from 'path'
+import { fileURLToPath } from 'url'
+import { buildConfig } from 'payload'
+import { lexicalEditor } from '@payloadcms/richtext-lexical'
+import { parquedbAdapter } from 'parquedb/payload'
+import { FileSystemBackend } from 'parquedb'
 
-// Import collections
-import { Posts, Categories, Media, Users } from './collections'
+// Collections
+import { Users, Posts, Categories, Media } from './collections'
 
-// Import globals
+// Globals
 import { SiteSettings } from './globals'
+
+const filename = fileURLToPath(import.meta.url)
+const dirname = path.dirname(filename)
 
 /**
  * Get the storage backend based on environment
  *
- * For local development: Use FsBackend with local filesystem
- * For Workers: Use R2Backend with Cloudflare R2
+ * For local development: Use FileSystemBackend with local filesystem
+ * For Workers: Use R2Backend with Cloudflare R2 (injected via env)
  */
 function getStorageBackend() {
-  // In Node.js, use filesystem storage
+  // Check if we have an R2 bucket binding (Workers environment)
+  // The R2Backend will be configured in the worker entry point
   const dataDir = process.env.DATA_DIR || path.join(process.cwd(), 'data')
-  return new FsBackend(dataDir)
+  return new FileSystemBackend(dataDir)
 }
 
 export default buildConfig({
@@ -36,10 +42,16 @@ export default buildConfig({
   // Admin panel configuration
   admin: {
     user: Users.slug,
+    importMap: {
+      baseDir: path.resolve(dirname),
+    },
     meta: {
       titleSuffix: '- ParqueDB Example',
     },
   },
+
+  // Rich text editor
+  editor: lexicalEditor(),
 
   // Database adapter - ParqueDB!
   db: parquedbAdapter({
@@ -48,21 +60,14 @@ export default buildConfig({
   }),
 
   // Collections (data models)
-  collections: [
-    Users,
-    Posts,
-    Categories,
-    Media,
-  ],
+  collections: [Users, Posts, Categories, Media],
 
   // Globals (singleton data)
-  globals: [
-    SiteSettings,
-  ],
+  globals: [SiteSettings],
 
   // TypeScript output for generated types
   typescript: {
-    outputFile: path.resolve(process.cwd(), 'src/payload-types.ts'),
+    outputFile: path.resolve(dirname, 'payload-types.ts'),
   },
 
   // Secret for signing tokens

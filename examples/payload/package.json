@@ -1,25 +1,33 @@
 {
   "name": "payload-parquedb-example",
   "version": "1.0.0",
-  "description": "Example Payload CMS app using ParqueDB as the database",
+  "description": "Example Payload CMS app using ParqueDB as the database with OpenNext for Workers",
   "type": "module",
   "scripts": {
-    "dev": "tsx --watch src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "dev:workers": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "build:workers": "opennextjs-cloudflare build",
+    "preview": "opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare deploy",
+    "payload": "payload"
   },
   "dependencies": {
-    "express": "^4.21.0",
+    "@payloadcms/next": "^3.0.0",
+    "@payloadcms/richtext-lexical": "^3.0.0",
+    "@payloadcms/storage-r2": "^3.0.0",
+    "next": "^15.0.0",
     "parquedb": "file:../..",
-    "payload": "^3.0.0"
+    "payload": "^3.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241230.0",
-    "@types/express": "^5.0.0",
+    "@opennextjs/cloudflare": "^0.6.0",
     "@types/node": "^25.0.0",
-    "tsx": "^4.7.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "typescript": "^5.7.0",
     "wrangler": "^3.99.0"
   }

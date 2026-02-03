@@ -1,11 +1,30 @@
+# Wrangler configuration for OpenNext + Payload CMS
+# This file is used by @opennextjs/cloudflare for Workers deployment
+
 name = "payload-parquedb"
-main = "src/worker.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-09-02"
+compatibility_flags = ["nodejs_compat"]
 
 # R2 bucket for Parquet data storage
 [[r2_buckets]]
 binding = "DATA"
 bucket_name = "payload-data"
 
+# R2 bucket for media uploads (optional)
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "payload-media"
+
+# Environment variables
 [vars]
-PAYLOAD_SECRET = "your-secret-here"
+PAYLOAD_SECRET = "your-secret-here-change-in-production"
+NODE_ENV = "production"
+
+# Workers Assets for static files
+[assets]
+directory = ".open-next/assets"
+
+# KV namespace for caching (optional)
+# [[kv_namespaces]]
+# binding = "CACHE"
+# id = "your-kv-namespace-id"

@@ -25,6 +25,7 @@ import { queryCommand } from './commands/query'
 import { importCommand } from './commands/import'
 import { exportCommand } from './commands/export'
 import { statsCommand } from './commands/stats'
+import { studioCommand } from './commands/studio'
 
 // =============================================================================
 // Register Built-in Commands
@@ -70,6 +71,14 @@ registry.register({
   execute: statsCommand,
 })
 
+registry.register({
+  name: 'studio',
+  description: 'Launch ParqueDB Studio (Payload CMS admin interface)',
+  usage: 'parquedb studio [directory]',
+  category: 'Admin',
+  execute: studioCommand,
+})
+
 // =============================================================================
 // Constants
 // =============================================================================
@@ -90,6 +99,7 @@ COMMANDS:
   import <namespace> <file>     Import data from JSON/NDJSON/CSV file
   export <namespace> <file>     Export data to JSON/NDJSON/CSV file
   stats [namespace]             Show database statistics
+  studio [directory]            Launch ParqueDB Studio (admin UI)
 
 OPTIONS:
   -h, --help                    Show this help message
@@ -123,6 +133,12 @@ EXAMPLES:
 
   # Show stats for specific namespace
   parquedb stats posts
+
+  # Launch admin studio
+  parquedb studio
+
+  # Studio with specific data directory
+  parquedb studio ./my-data --port 8080
 `
 
 // =============================================================================
