@@ -10,30 +10,22 @@ import type { StudioConfig, CollectionStudioConfig } from './loader'
 /**
  * Extract studio configuration for a collection from its schema
  *
- * Parses $rows, $tabs, $sidebar, $layout, and $studio from the schema definition.
+ * Parses $layout, $sidebar, and $studio from the schema definition.
  */
 export function extractCollectionStudio(
-  collectionName: string,
+  _collectionName: string,
   schema: CollectionSchemaWithLayout
 ): CollectionStudioConfig {
   const config: CollectionStudioConfig = {}
 
-  // Extract layout shortcuts
-  if (schema.$rows) {
-    config.rows = schema.$rows
-  }
-  if (schema.$tabs) {
-    config.tabs = schema.$tabs
-  }
-  if (schema.$sidebar) {
-    config.sidebar = schema.$sidebar
+  // Extract layout (array = rows, object = tabs)
+  if (schema.$layout) {
+    config.layout = schema.$layout
   }
 
-  // Extract combined $layout
-  if (schema.$layout) {
-    if (schema.$layout.rows) config.rows = schema.$layout.rows
-    if (schema.$layout.tabs) config.tabs = schema.$layout.tabs
-    if (schema.$layout.sidebar) config.sidebar = schema.$layout.sidebar
+  // Extract sidebar
+  if (schema.$sidebar) {
+    config.sidebar = schema.$sidebar
   }
 
   // Extract $studio config
@@ -168,4 +160,22 @@ export function normalizeOptions(
     label: value.charAt(0).toUpperCase() + value.slice(1).replace(/_/g, ' '),
     value,
   }))
+}
+
+/**
+ * Check if layout has tabs (object) vs just rows (array)
+ */
+export function layoutHasTabs(
+  layout: (string | string[])[] | Record<string, (string | string[])[]>
+): layout is Record<string, (string | string[])[]> {
+  return !Array.isArray(layout)
+}
+
+/**
+ * Normalize a row entry to array format
+ * 'field' -> ['field']
+ * ['a', 'b'] -> ['a', 'b']
+ */
+export function normalizeRow(row: string | string[]): string[] {
+  return Array.isArray(row) ? row : [row]
 }

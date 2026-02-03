@@ -52,6 +52,8 @@ export {
   getSchemaFields,
   isFieldDefinition,
   normalizeOptions,
+  layoutHasTabs,
+  normalizeRow,
 } from './studio'
 
 // Auto-configured instances

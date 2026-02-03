@@ -79,13 +79,23 @@ export interface InlineStudioConfig {
 }
 
 /**
- * Layout configuration inline in schema
+ * Layout configuration - array for no tabs, object for tabs
+ *
+ * @example
+ * ```typescript
+ * // No tabs - just rows
+ * $layout: [['title', 'slug'], 'content', ['status', 'author']]
+ *
+ * // With tabs (object keys = tab names)
+ * $layout: {
+ *   Content: [['title', 'slug'], 'content'],
+ *   Settings: ['status', 'publishedAt'],
+ * }
+ * ```
  */
-export interface InlineLayoutConfig {
-  rows?: (string | string[])[]
-  tabs?: Record<string, string[]>
-  sidebar?: string[]
-}
+export type LayoutConfig =
+  | (string | string[])[]  // No tabs: array of rows
+  | Record<string, (string | string[])[]>  // Tabs: object with tab names
 
 /**
  * Schema definition for a single collection
@@ -99,9 +109,12 @@ export interface InlineLayoutConfig {
  *   content: 'text',
  *   status: 'string',
  *
- *   // Layout shortcuts
- *   $rows: [['title', 'slug'], ['content']],
- *   $tabs: { Main: ['title', 'content'], Meta: ['status'] },
+ *   // Layout - array = no tabs, object = tabs
+ *   $layout: [['title', 'slug'], 'content'],
+ *   // or with tabs:
+ *   $layout: { Main: [['title', 'slug'], 'content'], Meta: ['status'] },
+ *
+ *   // Sidebar fields
  *   $sidebar: ['$id', 'status', 'createdAt'],
  *
  *   // UI config
@@ -113,18 +126,14 @@ export interface InlineLayoutConfig {
  * ```
  */
 export interface CollectionSchemaWithLayout {
-  /** Horizontal field grouping: [['title', 'slug'], ['content']] */
-  $rows?: (string | string[])[]
-  /** Tab organization: { Main: ['title', 'content'], Meta: ['status'] } */
-  $tabs?: Record<string, string[]>
+  /** Layout: array = rows, object = tabs with rows */
+  $layout?: LayoutConfig
   /** Sidebar fields */
   $sidebar?: string[]
-  /** Combined layout config */
-  $layout?: InlineLayoutConfig
   /** UI/studio configuration */
   $studio?: InlineStudioConfig
   /** Field definitions (type strings like 'string!', 'int', '-> User') */
-  [field: string]: string | (string | string[])[] | Record<string, string[]> | string[] | InlineStudioConfig | InlineLayoutConfig | undefined
+  [field: string]: string | LayoutConfig | string[] | InlineStudioConfig | undefined
 }
 
 /**

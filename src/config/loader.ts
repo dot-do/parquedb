@@ -11,17 +11,14 @@ import { detectRuntime } from './runtime'
 import { detectStoragePaths } from './env'
 
 /**
- * Layout configuration for a collection
- * Simple arrays of field names for common Payload patterns
+ * Layout configuration - array for no tabs, object for tabs
+ *
+ * Array = rows without tabs: [['title', 'slug'], 'content']
+ * Object = tabs: { Content: [['title'], 'content'], Settings: ['status'] }
  */
-export interface LayoutConfig {
-  /** Group fields horizontally: [['title', 'slug'], ['content']] */
-  rows?: (string | string[])[]
-  /** Organize into tabs: { Main: ['title', 'content'], Meta: ['status'] } */
-  tabs?: Record<string, string[]>
-  /** Fields to put in sidebar */
-  sidebar?: string[]
-}
+export type LayoutConfig =
+  | (string | string[])[]  // No tabs
+  | Record<string, (string | string[])[]>  // With tabs
 
 /**
  * Field-level studio/UI configuration
@@ -49,7 +46,11 @@ export interface FieldStudioConfig {
 /**
  * Collection-level studio configuration
  */
-export interface CollectionStudioConfig extends LayoutConfig {
+export interface CollectionStudioConfig {
+  /** Layout: array = rows, object = tabs */
+  layout?: LayoutConfig
+  /** Sidebar fields */
+  sidebar?: string[]
   /** Collection display label */
   label?: string
   /** Singular label */
