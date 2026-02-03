@@ -10,6 +10,7 @@ import type { Event } from '../types/entity'
 import type { EventBatch, EventWriterConfig } from './types'
 import { DEFAULT_WRITER_CONFIG } from './types'
 import { logger } from '../utils/logger'
+import { getGlobalTelemetry } from '../observability/telemetry'
 
 // =============================================================================
 // Types
@@ -302,6 +303,17 @@ export class EventWriter {
     // Call all flush handlers in parallel
     if (this.flushHandlers.length > 0) {
       await Promise.all(this.flushHandlers.map(handler => handler(batch)))
+    }
+
+    // Record event log telemetry
+    const telemetry = getGlobalTelemetry()
+    const opCounts: Record<string, number> = {}
+    for (const event of this.buffer) {
+      const op = event.op || 'UNKNOWN'
+      opCounts[op] = (opCounts[op] || 0) + 1
+    }
+    for (const [op, count] of Object.entries(opCounts)) {
+      telemetry.recordEventLogWrite(count, Math.round(this.bufferBytes * (count / this.buffer.length)), op)
     }
 
     // Update stats

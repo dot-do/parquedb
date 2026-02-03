@@ -187,6 +187,34 @@ export {
   type ResolvedRateLimitMetricsConfig,
 } from './ai'
 
+// Re-export comprehensive telemetry module
+export {
+  // Telemetry Collector
+  TelemetryCollector,
+  createTelemetryCollector,
+  getGlobalTelemetry,
+  resetGlobalTelemetry,
+
+  // Telemetry types
+  type TelemetryConfig,
+  DEFAULT_TELEMETRY_CONFIG,
+  type MetricType,
+  type MetricPoint,
+  type HistogramSummary,
+  type WriteThroughputMetrics,
+  type CacheMetrics as TelemetryCacheMetrics,
+  type EventLogMetrics,
+  type ConsistencyLagMetrics,
+  type TraceContext,
+  type StructuredLogEntry,
+  type TelemetrySnapshot,
+
+  // Utility functions
+  computeHistogramSummary,
+  generateTraceId,
+  generateSpanId,
+} from './telemetry'
+
 // Re-export export/dashboard module for observability data export
 export {
   // Types

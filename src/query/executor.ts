@@ -28,6 +28,7 @@ import {
   globalHookRegistry,
   createQueryContext,
 } from '../observability'
+import { getGlobalTelemetry } from '../observability/telemetry'
 import { DEFAULT_CONCURRENCY } from '../constants'
 
 // =============================================================================
@@ -239,6 +240,12 @@ export class QueryExecutor {
   ): Promise<QueryResult<T>> {
     const startTime = Date.now()
     const hookContext = createQueryContext('find', ns, filter, options as FindOptions<unknown>)
+    const telemetry = getGlobalTelemetry()
+    const span = telemetry.startSpan('query.execute', {
+      'db.namespace': ns,
+      'db.operation': 'find',
+      'db.filter_fields': Object.keys(filter).join(','),
+    })
 
     // Dispatch query start hook
     await globalHookRegistry.dispatchQueryStart(hookContext)
@@ -297,8 +304,46 @@ export class QueryExecutor {
         cached: false,
       })
 
+      // End telemetry span
+      telemetry.endSpan(span.spanId, 'ok', {
+        'db.rows_matched': result.rows.length,
+        'db.rows_scanned': result.stats.rowsScanned,
+        'db.row_groups_scanned': result.stats.scannedRowGroups,
+        'db.row_groups_skipped': result.stats.skippedRowGroups,
+        'db.execution_time_ms': result.stats.executionTimeMs,
+      })
+
+      // Structured log for query completion
+      telemetry.emitLog('info', 'query_completed', 'query', {
+        rowsMatched: result.rows.length,
+        rowsScanned: result.stats.rowsScanned,
+        rowGroupsScanned: result.stats.scannedRowGroups,
+        rowGroupsSkipped: result.stats.skippedRowGroups,
+        indexUsed: result.stats.indexUsed,
+      }, {
+        namespace: ns,
+        operation: 'find',
+        traceId: span.traceId,
+        spanId: span.spanId,
+        durationMs: result.stats.executionTimeMs,
+      })
+
       return result
     } catch (error) {
+      // End telemetry span with error
+      telemetry.endSpan(span.spanId, 'error', {
+        'error.type': error instanceof Error ? error.name : 'Unknown',
+        'error.message': error instanceof Error ? error.message : String(error),
+      })
+
+      telemetry.emitLog('error', 'query_failed', 'query', {}, {
+        namespace: ns,
+        operation: 'find',
+        traceId: span.traceId,
+        spanId: span.spanId,
+        error: error instanceof Error ? error : new Error(String(error)),
+      })
+
       // Dispatch query error hook
       await globalHookRegistry.dispatchQueryError(
         hookContext,

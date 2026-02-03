@@ -24,6 +24,7 @@ import {
   type StorageResult,
   type StorageContext,
 } from '../observability'
+import { getGlobalTelemetry } from '../observability/telemetry'
 
 /**
  * Wraps a storage backend with observability hooks
@@ -137,12 +138,17 @@ export class ObservedBackend implements StorageBackend {
     try {
       const writeResult = await this.backend.write(path, data, options)
 
+      const durationMs = Date.now() - startTime
       const result: StorageResult = {
         bytesTransferred: data.length,
-        durationMs: Date.now() - startTime,
+        durationMs,
         etag: writeResult.etag,
       }
       await globalHookRegistry.dispatchStorageWrite(context, result)
+
+      // Record write throughput telemetry
+      const ns = extractNamespaceFromPath(path)
+      getGlobalTelemetry().recordWrite(ns, data.length, durationMs)
 
       return writeResult
     } catch (error) {
@@ -161,12 +167,17 @@ export class ObservedBackend implements StorageBackend {
     try {
       const writeResult = await this.backend.writeAtomic(path, data, options)
 
+      const durationMs = Date.now() - startTime
       const result: StorageResult = {
         bytesTransferred: data.length,
-        durationMs: Date.now() - startTime,
+        durationMs,
         etag: writeResult.etag,
       }
       await globalHookRegistry.dispatchStorageWrite(context, result)
+
+      // Record write throughput telemetry
+      const ns = extractNamespaceFromPath(path)
+      getGlobalTelemetry().recordWrite(ns, data.length, durationMs)
 
       return writeResult
     } catch (error) {
@@ -185,11 +196,16 @@ export class ObservedBackend implements StorageBackend {
     try {
       await this.backend.append(path, data)
 
+      const durationMs = Date.now() - startTime
       const result: StorageResult = {
         bytesTransferred: data.length,
-        durationMs: Date.now() - startTime,
+        durationMs,
       }
       await globalHookRegistry.dispatchStorageWrite(context, result)
+
+      // Record write throughput telemetry
+      const ns = extractNamespaceFromPath(path)
+      getGlobalTelemetry().recordWrite(ns, data.length, durationMs)
     } catch (error) {
       await globalHookRegistry.dispatchStorageError(
         context,
@@ -498,4 +514,29 @@ export function withObservability(backend: StorageBackend): ObservedBackend {
     return backend
   }
   return new ObservedBackend(backend)
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/**
+ * Extract namespace from storage path
+ * e.g., 'data/posts/data.parquet' -> 'posts'
+ *       'events/current.parquet' -> 'events'
+ *       'rels/forward/users.parquet' -> 'users'
+ */
+function extractNamespaceFromPath(path: string): string {
+  const parts = path.split('/')
+  if (parts.length >= 2) {
+    // For 'data/{ns}/...', extract ns
+    if (parts[0] === 'data') return parts[1]
+    // For 'rels/forward/{ns}.parquet', extract ns
+    if (parts[0] === 'rels' && parts.length >= 3) {
+      return parts[2].replace(/\.parquet$/, '')
+    }
+    // For 'events/...', use 'events'
+    if (parts[0] === 'events') return 'events'
+  }
+  return parts[0] || 'unknown'
 }
