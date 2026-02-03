@@ -112,6 +112,29 @@ export interface StreamProcessorConfig<T> {
   onError?: (error: Error, context: ErrorContext<T>) => void
 
   /**
+   * Callback specifically for write failures after all retries exhausted.
+   * This receives the full failed batch with all records for replay capability.
+   * Required when writeFailureBehavior is 'callback'.
+   */
+  onWriteError?: (failedBatch: FailedBatch<T>) => void | Promise<void>
+
+  /**
+   * Behavior when a write fails after all retries.
+   * - 'silent': Drop records silently (legacy, not recommended)
+   * - 'queue': Add to dead-letter queue (access via getDeadLetterQueue())
+   * - 'throw': Throw WriteFailureError (stops processing)
+   * - 'callback': Call onWriteError (required when using this option)
+   * @default 'queue'
+   */
+  writeFailureBehavior?: WriteFailureBehavior
+
+  /**
+   * Maximum size of the dead-letter queue before applying backpressure
+   * @default 1000
+   */
+  maxDeadLetterQueueSize?: number
+
+  /**
    * Retry configuration for failed writes
    */
   retry?: RetryConfig
@@ -133,6 +156,38 @@ export interface RetryConfig {
   /** Multiplier for exponential backoff */
   backoffMultiplier?: number
 }
+
+/**
+ * A failed batch that couldn't be written after all retries
+ */
+export interface FailedBatch<T> {
+  /** Records that failed to write */
+  records: T[]
+
+  /** Batch number */
+  batchNumber: number
+
+  /** File path that was attempted */
+  filePath: string
+
+  /** The error that caused the failure */
+  error: Error
+
+  /** Timestamp when failure occurred */
+  failedAt: number
+
+  /** Number of retry attempts made */
+  attempts: number
+}
+
+/**
+ * Behavior when a write fails after all retries
+ */
+export type WriteFailureBehavior =
+  | 'silent' // Legacy behavior: silently drop (not recommended)
+  | 'queue' // Add to dead-letter queue for later replay
+  | 'throw' // Throw exception (stops processing)
+  | 'callback' // Require onWriteError callback to handle
 
 /**
  * Result of a batch write operation
@@ -169,6 +224,24 @@ export interface ErrorContext<T> {
 
   /** File path (if applicable) */
   filePath?: string
+
+  /** Number of retry attempts made (for write phase) */
+  attempts?: number
+}
+
+/**
+ * Error thrown when write fails and writeFailureBehavior is 'throw'
+ */
+export class WriteFailureError<T> extends Error {
+  readonly failedBatch: FailedBatch<T>
+
+  constructor(failedBatch: FailedBatch<T>) {
+    super(
+      `Failed to write batch ${failedBatch.batchNumber} after ${failedBatch.attempts} attempts: ${failedBatch.error.message}`
+    )
+    this.name = 'WriteFailureError'
+    this.failedBatch = failedBatch
+  }
 }
 
 /**
@@ -228,6 +301,8 @@ const DEFAULT_CONFIG = {
   maxBufferSize: 10000,
   rowGroupSize: 5000,
   compression: 'lz4' as const,
+  writeFailureBehavior: 'queue' as WriteFailureBehavior,
+  maxDeadLetterQueueSize: 1000,
   retry: {
     maxAttempts: 3,
     initialDelayMs: 100,
@@ -247,10 +322,13 @@ const DEFAULT_CONFIG = {
  * in Node.js environments.
  */
 export class StreamProcessor<T extends Record<string, unknown> = Record<string, unknown>> {
-  private config: Required<Omit<StreamProcessorConfig<T>, 'transform' | 'onBatchWritten' | 'onError'>> & {
+  private config: Required<
+    Omit<StreamProcessorConfig<T>, 'transform' | 'onBatchWritten' | 'onError' | 'onWriteError'>
+  > & {
     transform?: StreamProcessorConfig<T>['transform']
     onBatchWritten?: StreamProcessorConfig<T>['onBatchWritten']
     onError?: StreamProcessorConfig<T>['onError']
+    onWriteError?: StreamProcessorConfig<T>['onWriteError']
   }
 
   private state: ProcessorState = 'idle'
@@ -264,11 +342,19 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
   private backpressurePromise: Promise<void> | null = null
   private backpressureResolve: (() => void) | null = null
 
+  // Dead-letter queue for failed batches
+  private deadLetterQueue: FailedBatch<T>[] = []
+
   // Statistics
   private stats: StreamProcessorStats = this.createEmptyStats()
   private batchDurations: number[] = []
 
   constructor(config: StreamProcessorConfig<T>) {
+    // Validate configuration
+    if (config.writeFailureBehavior === 'callback' && !config.onWriteError) {
+      throw new Error("onWriteError callback is required when writeFailureBehavior is 'callback'")
+    }
+
     this.config = {
       ...DEFAULT_CONFIG,
       ...config,
@@ -325,7 +411,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
 
     // Wait for pending writes to complete
     while (this.pendingWrites > 0) {
-      await new Promise(resolve => setTimeout(resolve, 50))
+      await new Promise((resolve) => setTimeout(resolve, 50))
     }
 
     this.state = 'stopped'
@@ -419,6 +505,75 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
    */
   getName(): string {
     return this.config.name
+  }
+
+  /**
+   * Get the dead-letter queue containing failed batches
+   *
+   * Failed batches are added to this queue when writeFailureBehavior is 'queue'.
+   * Each entry contains all records from the failed batch along with metadata
+   * for replay purposes.
+   */
+  getDeadLetterQueue(): ReadonlyArray<FailedBatch<T>> {
+    return this.deadLetterQueue
+  }
+
+  /**
+   * Get the number of failed batches in the dead-letter queue
+   */
+  getDeadLetterQueueSize(): number {
+    return this.deadLetterQueue.length
+  }
+
+  /**
+   * Clear the dead-letter queue
+   *
+   * Use this after you've processed/replayed the failed batches.
+   * Returns the cleared batches for final processing.
+   */
+  clearDeadLetterQueue(): FailedBatch<T>[] {
+    const batches = this.deadLetterQueue
+    this.deadLetterQueue = []
+    return batches
+  }
+
+  /**
+   * Retry all batches in the dead-letter queue
+   *
+   * Attempts to write each failed batch again. Successfully written batches
+   * are removed from the queue. Returns the number of batches successfully retried.
+   */
+  async retryDeadLetterQueue(): Promise<number> {
+    if (this.deadLetterQueue.length === 0) {
+      return 0
+    }
+
+    const batchesToRetry = [...this.deadLetterQueue]
+    this.deadLetterQueue = []
+    let successCount = 0
+
+    for (const failedBatch of batchesToRetry) {
+      try {
+        await this.writeWithRetry(
+          failedBatch.filePath,
+          failedBatch.records as Record<string, unknown>[],
+          failedBatch.batchNumber
+        )
+        successCount++
+        this.stats.recordsWritten += failedBatch.records.length
+        this.stats.batchesWritten++
+      } catch (err) {
+        // Still failed, add back to DLQ
+        this.deadLetterQueue.push({
+          ...failedBatch,
+          error: err instanceof Error ? err : new Error(String(err)),
+          failedAt: Date.now(),
+          attempts: failedBatch.attempts + this.config.retry.maxAttempts,
+        })
+      }
+    }
+
+    return successCount
   }
 
   // ===========================================================================
@@ -552,12 +707,40 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
         })
       }
     } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err))
       this.stats.failedBatches++
-      this.emitError(err instanceof Error ? err : new Error(String(err)), {
+
+      // Create failed batch info for logging and DLQ
+      const failedBatch: FailedBatch<T> = {
+        records,
+        batchNumber,
+        filePath,
+        error,
+        failedAt: Date.now(),
+        attempts: this.config.retry.maxAttempts,
+      }
+
+      // Log detailed info for replay capability
+      console.error(`[StreamProcessor:${this.config.name}] Write failure after ${failedBatch.attempts} attempts:`, {
+        batchNumber,
+        filePath,
+        recordCount: records.length,
+        error: error.message,
+        firstRecordId:
+          (records[0] as Record<string, unknown>)?.id ?? (records[0] as Record<string, unknown>)?.$id,
+        failedAt: new Date(failedBatch.failedAt).toISOString(),
+      })
+
+      // Handle failure based on configured behavior
+      await this.handleWriteFailure(failedBatch)
+
+      // Always emit error for backwards compatibility
+      this.emitError(error, {
         phase: 'write',
         records,
         batchNumber,
         filePath,
+        attempts: this.config.retry.maxAttempts,
       })
     } finally {
       this.pendingWrites--
@@ -565,6 +748,53 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
 
       // Release backpressure if applicable
       this.releaseBackpressure()
+    }
+  }
+
+  /**
+   * Handle a write failure based on configured behavior
+   */
+  private async handleWriteFailure(failedBatch: FailedBatch<T>): Promise<void> {
+    switch (this.config.writeFailureBehavior) {
+      case 'silent':
+        // Legacy behavior: silently drop records (not recommended)
+        // Records are already removed from buffer and will be lost
+        break
+
+      case 'queue':
+        // Add to dead-letter queue for later replay
+        this.deadLetterQueue.push(failedBatch)
+
+        // Apply backpressure if DLQ is getting full
+        if (this.deadLetterQueue.length >= this.config.maxDeadLetterQueueSize) {
+          console.warn(
+            `[StreamProcessor:${this.config.name}] Dead-letter queue is full (${this.deadLetterQueue.length} batches). ` +
+              `Consider processing failed batches with retryDeadLetterQueue() or clearDeadLetterQueue().`
+          )
+        }
+        break
+
+      case 'throw':
+        // Throw exception to stop processing
+        throw new WriteFailureError(failedBatch)
+
+      case 'callback':
+        // Call the onWriteError callback (required for this behavior)
+        if (this.config.onWriteError) {
+          try {
+            await this.config.onWriteError(failedBatch)
+          } catch (callbackErr) {
+            // Log but don't fail on callback errors
+            console.error(`[StreamProcessor:${this.config.name}] onWriteError callback threw:`, callbackErr)
+          }
+        }
+        break
+
+      default: {
+        // Exhaustiveness check
+        const _exhaustive: never = this.config.writeFailureBehavior
+        throw new Error(`Unknown writeFailureBehavior: ${_exhaustive}`)
+      }
     }
   }
 
@@ -594,7 +824,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
         lastError = err instanceof Error ? err : new Error(String(err))
 
         if (attempt < maxAttempts - 1) {
-          await new Promise(resolve => setTimeout(resolve, delay))
+          await new Promise((resolve) => setTimeout(resolve, delay))
           delay = Math.min(delay * backoffMultiplier, maxDelayMs)
         }
       }
@@ -617,8 +847,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
    */
   private checkBackpressure(): void {
     const shouldApplyBackpressure =
-      this.buffer.length >= this.config.maxBufferSize ||
-      this.pendingWrites >= this.config.maxPendingWrites
+      this.buffer.length >= this.config.maxBufferSize || this.pendingWrites >= this.config.maxPendingWrites
 
     if (shouldApplyBackpressure && !this.backpressurePromise) {
       this.stats.backpressureEvents++
@@ -642,8 +871,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
    */
   private releaseBackpressure(): void {
     const shouldRelease =
-      this.buffer.length < this.config.maxBufferSize * 0.8 &&
-      this.pendingWrites < this.config.maxPendingWrites
+      this.buffer.length < this.config.maxBufferSize * 0.8 && this.pendingWrites < this.config.maxPendingWrites
 
     if (shouldRelease && this.backpressureResolve) {
       this.backpressureResolve()
