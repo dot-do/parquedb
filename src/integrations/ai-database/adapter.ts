@@ -1130,7 +1130,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
    * Get an artifact by URL and type
    */
   async getArtifact(url: string, type: string): Promise<DBArtifact | null> {
-    const artifactsNamespace = '_artifacts'
+    const artifactsNamespace = 'sysartifacts'
 
     const result = await this.db.find(artifactsNamespace, { url, type }, { limit: 1 })
 
@@ -1155,7 +1155,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
     type: string,
     data: { content: unknown; sourceHash: string; metadata?: Record<string, unknown> }
   ): Promise<void> {
-    const artifactsNamespace = '_artifacts'
+    const artifactsNamespace = 'sysartifacts'
 
     // Check if artifact already exists
     const existing = await this.getArtifact(url, type)
@@ -1191,7 +1191,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
    * Delete an artifact
    */
   async deleteArtifact(url: string, type?: string): Promise<void> {
-    const artifactsNamespace = '_artifacts'
+    const artifactsNamespace = 'sysartifacts'
 
     const filter: Filter = { url }
     if (type) {
@@ -1209,7 +1209,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
    * List artifacts for a URL
    */
   async listArtifacts(url: string): Promise<DBArtifact[]> {
-    const artifactsNamespace = '_artifacts'
+    const artifactsNamespace = 'sysartifacts'
 
     const result = await this.db.find(artifactsNamespace, { url })
 

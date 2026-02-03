@@ -374,6 +374,8 @@ export class StorageLockManager implements LockManager {
   async forceRelease(resource: LockResource): Promise<boolean> {
     const path = this.getLockPath(resource)
     try {
+      const exists = await this.storage.exists(path)
+      if (!exists) return false
       await this.storage.delete(path)
       return true
     } catch {

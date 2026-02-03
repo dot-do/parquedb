@@ -338,11 +338,26 @@ describe('checkout state reconstruction', () => {
     })
 
     it('should preserve event log position in checkout', async () => {
+      // Create proper relationship manifest structure
+      const forwardData = createSampleData('forward-rels')
+      const reverseData = createSampleData('reverse-rels')
+      const forwardFileHash = await objectStore.save(forwardData)
+      const reverseFileHash = await objectStore.save(reverseData)
+
+      const forwardManifest: Record<string, string> = { 'rels/forward/default.parquet': forwardFileHash }
+      const reverseManifest: Record<string, string> = { 'rels/reverse/default.parquet': reverseFileHash }
+      const forwardManifestHash = await objectStore.save(
+        createSampleData(JSON.stringify(forwardManifest, Object.keys(forwardManifest).sort()))
+      )
+      const reverseManifestHash = await objectStore.save(
+        createSampleData(JSON.stringify(reverseManifest, Object.keys(reverseManifest).sort()))
+      )
+
       const state1: DatabaseState = {
         collections: {},
         relationships: {
-          forwardHash: await objectStore.save(createSampleData('forward')),
-          reverseHash: await objectStore.save(createSampleData('reverse')),
+          forwardHash: forwardManifestHash,
+          reverseHash: reverseManifestHash,
         },
         eventLogPosition: {
           segmentId: 'segment-1',
@@ -354,8 +369,8 @@ describe('checkout state reconstruction', () => {
       const state2: DatabaseState = {
         collections: {},
         relationships: {
-          forwardHash: await objectStore.save(createSampleData('forward')),
-          reverseHash: await objectStore.save(createSampleData('reverse')),
+          forwardHash: forwardManifestHash,
+          reverseHash: reverseManifestHash,
         },
         eventLogPosition: {
           segmentId: 'segment-2',
@@ -369,8 +384,8 @@ describe('checkout state reconstruction', () => {
       await refManager.updateRef('main', commit1)
       await refManager.updateRef('feature', commit2)
 
-      // Checkout feature and verify event log position is available
-      await branchManager.checkout('feature')
+      // Checkout feature (force to bypass uncommitted changes check)
+      await branchManager.checkout('feature', { force: true })
 
       // The restored state should be accessible via the branch manager
       const currentState = await branchManager.getCurrentState()

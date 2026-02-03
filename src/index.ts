@@ -580,6 +580,21 @@ export {
 } from './backends'
 
 // =============================================================================
+// Relationships (Batch Loading)
+// =============================================================================
+
+export {
+  // Batch Loader for N+1 elimination
+  RelationshipBatchLoader,
+  createBatchLoader,
+  // Types
+  type BatchLoadRequest,
+  type BatchLoadResult,
+  type BatchLoaderOptions,
+  type BatchLoaderDB,
+} from './relationships'
+
+// =============================================================================
 // Integrations (Iceberg, etc.)
 // =============================================================================
 
