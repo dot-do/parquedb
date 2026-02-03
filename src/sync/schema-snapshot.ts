@@ -177,6 +177,22 @@ function parseFieldDefinition(name: string, def: string): SchemaFieldSnapshot {
 }
 
 /**
+ * Extract base type from a type definition string
+ * Removes modifiers like !, ?, #, @, []
+ *
+ * Examples:
+ * - 'string!' → 'string'
+ * - 'string!#' → 'string'
+ * - 'int?' → 'int'
+ * - 'string[]' → 'string[]' (array is part of the type)
+ */
+function extractBaseType(typeDef: string): string {
+  // Remove required (!), optional (?), indexed (#), unique (@) modifiers
+  // Keep array notation ([]) as it's part of the structural type
+  return typeDef.replace(/[!?#@]/g, '')
+}
+
+/**
  * Load schema snapshot from a commit
  *
  * @param storage StorageBackend to read from
@@ -358,16 +374,18 @@ function diffCollectionFields(
     const beforeField = beforeFields.get(name)
     if (!beforeField) continue
 
-    // Type change
-    if (beforeField.type !== afterField.type) {
+    // Type change - compare base types without modifiers (!, ?, #, @, [])
+    const beforeBaseType = extractBaseType(beforeField.type)
+    const afterBaseType = extractBaseType(afterField.type)
+    if (beforeBaseType !== afterBaseType) {
       changes.push({
         type: 'CHANGE_TYPE',
         collection: collectionName,
         field: name,
-        before: beforeField.type,
-        after: afterField.type,
+        before: beforeBaseType,
+        after: afterBaseType,
         breaking: true,
-        description: `Changed type: ${collectionName}.${name} from ${beforeField.type} to ${afterField.type}`
+        description: `Changed type: ${collectionName}.${name} from ${beforeBaseType} to ${afterBaseType}`
       })
     }
 

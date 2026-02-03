@@ -49,12 +49,15 @@ function createSnapshot(
 
 /**
  * Create a test collection schema
+ * Uses a content-based hash to ensure field changes are detected
  */
 function createCollection(
   name: string,
   fields: SchemaFieldSnapshot[]
 ): CollectionSchemaSnapshot {
-  const hash = `coll-${name}-${fields.length}-${Date.now()}`
+  // Generate a deterministic hash based on actual content
+  // This mimics the real hashObject behavior in production
+  const hash = JSON.stringify({ name, fields })
   return {
     name,
     hash,

@@ -216,6 +216,20 @@ export const DEFAULT_FLUSH_INTERVAL_MS = 5000
 export const DEFAULT_R2_THRESHOLD_BYTES = 512 * 1024
 
 // =============================================================================
+// Transaction Constants
+// =============================================================================
+
+/**
+ * Default transaction timeout in milliseconds (30 seconds)
+ */
+export const DEFAULT_TIMEOUT_MS = 30000
+
+/**
+ * Default transaction retry delay in milliseconds
+ */
+export const DEFAULT_TRANSACTION_RETRY_DELAY = 100
+
+// =============================================================================
 // Retry Constants
 // =============================================================================
 

@@ -34,7 +34,7 @@
  */
 
 import type { Filter } from '../types/filter'
-import { deepEqual, compareValues, getNestedValue, getValueType, createSafeRegex } from '../utils'
+import { deepEqual, compareValues, getNestedValue, getValueType, createSafeRegex, UnsafeRegexError } from '../utils'
 
 // =============================================================================
 // Configuration
@@ -447,8 +447,10 @@ function evaluateOperators(value: unknown, operators: Record<string, unknown>, c
         try {
           const pattern = createSafeRegex(opValue, flags)
           if (!pattern.test(value)) return false
-        } catch {
-          // Invalid regex pattern (unsafe or malformed) - treat as no match
+        } catch (err) {
+          // Re-throw UnsafeRegexError (security concern - must not silently accept)
+          if (err instanceof UnsafeRegexError) throw err
+          // Other errors (e.g., SyntaxError) - treat as no match
           return false
         }
         break

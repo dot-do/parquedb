@@ -1079,7 +1079,11 @@ describe('handleRelationshipTraversal', () => {
       context, 'onet-graph', 'occupations', '11-1011', 'abilities'
     )
 
-    expect(worker.getRelationships).toHaveBeenCalledWith('onet-graph', '11-1011', 'abilities')
+    expect(worker.getRelationships).toHaveBeenCalledWith('onet-graph', '11-1011', 'abilities', {
+      matchMode: undefined,
+      minSimilarity: undefined,
+      maxSimilarity: undefined,
+    })
   })
 
   it('should include correct links in response', async () => {
