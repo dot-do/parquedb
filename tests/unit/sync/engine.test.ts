@@ -974,5 +974,131 @@ describe('SyncEngine', () => {
       expect(result.uploaded).not.toContain('.DS_Store')
       expect(result.uploaded).not.toContain('node_modules/package/index.js')
     })
+
+    it('should skip lock files in _meta/locks', async () => {
+      const { engine, local } = createTestEngine()
+
+      // First create some data and do a push
+      await populateBackend(local, {
+        'data/posts/data.parquet': 'actual data',
+      })
+
+      const result = await engine.push()
+
+      expect(result.success).toBe(true)
+      expect(result.uploaded).toContain('data/posts/data.parquet')
+
+      // Verify lock files are created in _meta/locks but not uploaded
+      // The lock files should exist locally but not be in the uploaded list
+      expect(result.uploaded.filter(f => f.startsWith('_meta/locks/'))).toHaveLength(0)
+    })
+  })
+
+  describe('timeout and lock handling', () => {
+    it('should acquire lock before push operation', async () => {
+      const { engine, local } = createTestEngine()
+
+      await populateBackend(local, {
+        'data/posts/data.parquet': 'content',
+      })
+
+      // First push should succeed
+      const result = await engine.push()
+      expect(result.success).toBe(true)
+
+      // Lock should be released after operation completes
+      // (subsequent push should also succeed)
+      const result2 = await engine.push()
+      expect(result2.success).toBe(true)
+    })
+
+    it('should throw TimeoutError when operation times out', async () => {
+      const local = new MemoryBackend()
+      const remote = new MemoryBackend()
+
+      // Create a slow remote backend
+      const originalWrite = remote.write.bind(remote)
+      vi.spyOn(remote, 'write').mockImplementation(async (path, data, options) => {
+        // Simulate slow write (100ms)
+        await new Promise(resolve => setTimeout(resolve, 100))
+        return originalWrite(path, data, options)
+      })
+
+      const engine = createSyncEngine({
+        local,
+        remote,
+        databaseId: 'test-db',
+        name: 'test',
+        timeout: 50, // Very short timeout
+      })
+
+      await populateBackend(local, {
+        'data/posts/data.parquet': 'content',
+      })
+
+      // Should timeout before the slow write completes
+      await expect(engine.push()).rejects.toThrow(/timed out/)
+
+      vi.restoreAllMocks()
+    })
+
+    it('should use custom timeout from options', async () => {
+      const local = new MemoryBackend()
+      const remote = new MemoryBackend()
+
+      const engine = createSyncEngine({
+        local,
+        remote,
+        databaseId: 'test-db',
+        name: 'test',
+        timeout: 60000, // 60 second timeout
+      })
+
+      await populateBackend(local, {
+        'data/posts/data.parquet': 'content',
+      })
+
+      // Should complete successfully with generous timeout
+      const result = await engine.push()
+      expect(result.success).toBe(true)
+    })
+
+    it('should release lock even when operation fails', async () => {
+      const local = new MemoryBackend()
+      const remote = new MemoryBackend()
+
+      const engine = createSyncEngine({
+        local,
+        remote,
+        databaseId: 'test-db',
+        name: 'test',
+      })
+
+      await populateBackend(local, {
+        'data/posts/data.parquet': 'content',
+      })
+
+      // Make remote write fail for data files only (not lock files or manifest)
+      const originalWrite = remote.write.bind(remote)
+      const writeSpy = vi.spyOn(remote, 'write').mockImplementation(async (path, data, options) => {
+        if (path.startsWith('data/')) {
+          throw new Error('Write failed')
+        }
+        return originalWrite(path, data, options)
+      })
+
+      // First push will have errors but should release lock
+      const result = await engine.push()
+      expect(result.errors.length).toBeGreaterThan(0)
+      expect(result.errors.some(e => e.operation === 'upload')).toBe(true)
+
+      // Restore mock before second push
+      writeSpy.mockRestore()
+
+      // Second push should be able to acquire lock (proves first released it)
+      // This should succeed since the mock is restored
+      const result2 = await engine.push()
+      expect(result2.success).toBe(true)
+    })
   })
 })

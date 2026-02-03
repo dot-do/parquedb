@@ -11,7 +11,32 @@
  */
 
 import type { StorageBackend, EntityId } from '../../types'
-import type { EvaliteMVIntegration } from './mv-integration'
+
+// Forward declare types used in interface to avoid circular import
+// These are defined later in this file
+type EvalRunForInterface = { id: number; runType: 'full' | 'partial'; createdAt: string }
+type EvalSuiteForInterface = { id: number; runId: number; name: string; status: 'running' | 'success' | 'fail'; duration: number; createdAt: string }
+type EvalResultForInterface = { id: number; suiteId: number; duration: number; input: unknown; output: unknown; expected?: unknown; status: 'running' | 'success' | 'fail'; colOrder: number; renderedColumns?: unknown; createdAt: string; averageScore?: number }
+type EvalScoreForInterface = { id: number; evalId: number; name: string; score: number; description?: string; metadata?: unknown; createdAt: string }
+type EvalTraceForInterface = { id: number; evalId: number; input: unknown; output: unknown; startTime: number; endTime: number; inputTokens?: number; outputTokens?: number; totalTokens?: number; colOrder: number; createdAt: string }
+
+/**
+ * Materialized views integration interface for Evalite adapter.
+ * Defines the minimal interface needed to avoid circular dependencies
+ * between types.ts and mv-integration.ts.
+ */
+export interface IEvaliteMVIntegration {
+  /** Process a run event */
+  processRun(run: EvalRunForInterface, op?: 'create' | 'update'): Promise<void>
+  /** Process a suite event */
+  processSuite(suite: EvalSuiteForInterface, op?: 'create' | 'update'): Promise<void>
+  /** Process an eval event */
+  processEval(evalResult: EvalResultForInterface, op?: 'create' | 'update'): Promise<void>
+  /** Process a score event */
+  processScore(score: EvalScoreForInterface, op?: 'create' | 'update'): Promise<void>
+  /** Process a trace event */
+  processTrace(trace: EvalTraceForInterface, op?: 'create' | 'update'): Promise<void>
+}
 
 // =============================================================================
 // Run Types
@@ -370,7 +395,7 @@ export interface EvaliteAdapterConfig {
   /**
    * Materialized views integration for analytics
    */
-  mvIntegration?: EvaliteMVIntegration
+  mvIntegration?: IEvaliteMVIntegration
 }
 
 /**
@@ -381,7 +406,7 @@ export interface ResolvedEvaliteConfig {
   collectionPrefix: string
   defaultActor: EntityId
   debug: boolean
-  mvIntegration?: EvaliteMVIntegration
+  mvIntegration?: IEvaliteMVIntegration
 }
 
 // =============================================================================

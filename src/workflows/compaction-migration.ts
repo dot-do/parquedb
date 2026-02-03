@@ -41,6 +41,7 @@ import {
 import { R2Backend } from '../storage/R2Backend'
 import type { BackendType } from '../backends'
 import { logger } from '../utils/logger'
+import { toInternalR2Bucket } from './utils'
 
 // =============================================================================
 // Types
@@ -159,7 +160,7 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
 
     // Step 1: Analyze files and group by writer
     const analysis = await step.do('analyze-files', async () => {
-      const storage = new R2Backend(this.env.BUCKET as unknown as import('../storage/types/r2').R2Bucket)
+      const storage = new R2Backend(toInternalR2Bucket(this.env.BUCKET))
 
       const writerWindows = new Map<string, WriterWindow>()
 
@@ -224,7 +225,7 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
 
     // Step 3: Check for any new files from late writers
     const finalFiles = await step.do('check-late-writers', async () => {
-      const storage = new R2Backend(this.env.BUCKET as unknown as import('../storage/types/r2').R2Bucket)
+      const storage = new R2Backend(toInternalR2Bucket(this.env.BUCKET))
 
       // List files in the namespace to find any we missed
       const prefix = `data/${namespace}/`
@@ -272,7 +273,7 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
       batchNum++
 
       state = await step.do(`process-batch-${batchNum}`, async () => {
-        const storage = new R2Backend(this.env.BUCKET as unknown as import('../storage/types/r2').R2Bucket)
+        const storage = new R2Backend(toInternalR2Bucket(this.env.BUCKET))
 
         const batch = state.remainingFiles.slice(0, maxFilesPerStep)
         const remaining = state.remainingFiles.slice(maxFilesPerStep)

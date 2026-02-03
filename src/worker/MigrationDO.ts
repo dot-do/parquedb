@@ -36,6 +36,7 @@ import {
   type BackendType,
 } from '../backends'
 import { logger } from '../utils/logger'
+import { extractBearerToken, verifyJWT } from './jwt-utils'
 
 // =============================================================================
 // Types
@@ -71,6 +72,8 @@ interface MigrationRequest {
 
 interface Env {
   BUCKET: R2Bucket
+  /** JWKS URI for JWT token verification */
+  JWKS_URI?: string
 }
 
 // =============================================================================
@@ -117,11 +120,55 @@ export class MigrationDO extends DurableObject<Env> {
   }
 
   /**
-   * Handle HTTP requests
+   * Verify that the request has valid authentication for migration endpoints.
+   * Returns an error Response if authentication fails, null if authenticated.
+   *
+   * SECURITY: All migration endpoints require authentication to prevent:
+   * - Unauthorized migrations that consume resources
+   * - Cancellation of legitimate migrations
+   * - Exposure of internal database structure
    */
-  async fetch(request: Request): Promise<Response> {
+  private async requireMigrationAuth(request: Request): Promise<Response | null> {
+    const token = extractBearerToken(request)
+
+    if (!token) {
+      return new Response(JSON.stringify({
+        error: 'Authentication required. Provide a valid Bearer token.',
+      }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    // Use the Env interface which includes JWKS_URI
+    const verifyResult = await verifyJWT(token, this.env as Parameters<typeof verifyJWT>[1])
+    if (!verifyResult.valid) {
+      return new Response(JSON.stringify({
+        error: verifyResult.error ?? 'Invalid token',
+      }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    return null // Authentication successful
+  }
+
+  /**
+   * Handle HTTP requests
+   *
+   * SECURITY: All migration endpoints require authentication via Bearer token.
+   * These endpoints can trigger expensive operations and expose internal state.
+   */
+  override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
     const path = url.pathname
+
+    // Require authentication for all migration endpoints
+    const authError = await this.requireMigrationAuth(request)
+    if (authError) {
+      return authError
+    }
 
     try {
       switch (path) {

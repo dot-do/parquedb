@@ -1016,7 +1016,7 @@ export default {
       }
 
       if (path === '/debug/entity') {
-        const response = await handleDebugEntity(context)
+        const response = await handleDebugEntity(context, env)
         return withRateLimitHeaders(response)
       }
 
@@ -1026,12 +1026,12 @@ export default {
       }
 
       if (path === '/debug/query') {
-        const response = await handleDebugQuery(context)
+        const response = await handleDebugQuery(context, env)
         return withRateLimitHeaders(response)
       }
 
       if (path === '/debug/cache') {
-        const response = await handleDebugCache(context)
+        const response = await handleDebugCache(context, env)
         return withRateLimitHeaders(response)
       }
 

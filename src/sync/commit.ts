@@ -1,73 +1,29 @@
 import type { StorageBackend } from '../types/storage'
-import type { SchemaSnapshot } from './schema-snapshot'
 import { hashObject } from './hash'
 
-/**
- * Collection state in a commit
- */
-export interface CollectionState {
-  readonly dataHash: string            // SHA256 of data.parquet
-  readonly schemaHash: string          // SHA256 of schema
-  readonly rowCount: number
-}
+// Re-export types from shared types file for backward compatibility
+export type {
+  SchemaSnapshot,
+  CollectionState,
+  RelationshipState,
+  EventLogPosition,
+  CommitState,
+  DatabaseCommit,
+  CommitOptions,
+  DatabaseState,
+} from './types'
 
-/**
- * Relationship state in a commit
- */
-export interface RelationshipState {
-  readonly forwardHash: string
-  readonly reverseHash: string
-}
-
-/**
- * Event log position in a commit
- */
-export interface EventLogPosition {
-  readonly segmentId: string
-  readonly offset: number
-}
-
-/**
- * Database state in a commit
- */
-export interface CommitState {
-  readonly collections: Readonly<Record<string, CollectionState>>
-  readonly relationships: RelationshipState
-  readonly eventLogPosition: EventLogPosition
-  readonly schema?: SchemaSnapshot   // Schema snapshot at this commit
-}
-
-/**
- * Represents a database commit with state snapshot
- */
-export interface DatabaseCommit {
-  readonly hash: string                    // SHA256 of commit contents (excluding hash field)
-  readonly parents: readonly string[]      // Parent commit hashes (empty for initial, 2 for merge)
-  readonly timestamp: number
-  readonly author: string
-  readonly message: string
-  readonly state: CommitState
-}
-
-/**
- * Options for creating a commit
- */
-export interface CommitOptions {
-  readonly message: string
-  readonly author?: string
-  readonly parents?: readonly string[]
-}
-
-/**
- * Database state snapshot for commit creation
- * Note: Mutable because it's built incrementally during snapshot
- */
-export interface DatabaseState {
-  collections: Record<string, CollectionState>
-  relationships: RelationshipState
-  eventLogPosition: EventLogPosition
-  schema?: SchemaSnapshot   // Optional schema snapshot
-}
+// Import types for use in this module
+import type {
+  SchemaSnapshot,
+  CollectionState,
+  RelationshipState,
+  EventLogPosition,
+  CommitState,
+  DatabaseCommit,
+  CommitOptions,
+  DatabaseState,
+} from './types'
 
 /**
  * Create a new commit from database state

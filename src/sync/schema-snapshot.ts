@@ -9,59 +9,24 @@ import type { ParqueDBConfig } from '../config/loader'
 import type { CollectionSchemaWithLayout } from '../db'
 import type { StorageBackend } from '../types/storage'
 import { sha256, hashObject } from './hash'
-import { loadCommit } from './commit'
 
-/**
- * Relationship metadata for a field
- */
-export interface SchemaFieldRelationship {
-  readonly target: string          // Target collection name
-  readonly reverse?: string        // Reverse relationship name
-  readonly direction: 'outbound' | 'inbound'  // -> or <-
-}
+// Re-export types from shared types file for backward compatibility
+export type {
+  SchemaFieldRelationship,
+  SchemaFieldSnapshot,
+  CollectionSchemaOptions,
+  CollectionSchemaSnapshot,
+  SchemaSnapshot,
+} from './types'
 
-/**
- * Field definition snapshot
- */
-export interface SchemaFieldSnapshot {
-  readonly name: string
-  readonly type: string              // 'string', 'int', 'boolean', 'string!', 'int?', '-> User', etc.
-  readonly required: boolean         // true if field has '!' modifier
-  readonly indexed: boolean          // true if field has '#' modifier
-  readonly unique: boolean           // true if field has '@' modifier
-  readonly array: boolean            // true if field has '[]'
-  readonly default?: unknown
-  readonly relationship?: SchemaFieldRelationship
-}
-
-/**
- * Collection schema options
- */
-export interface CollectionSchemaOptions {
-  readonly includeDataVariant?: boolean
-}
-
-/**
- * Collection schema snapshot
- */
-export interface CollectionSchemaSnapshot {
-  readonly name: string
-  readonly hash: string              // SHA256 of collection schema
-  readonly fields: readonly SchemaFieldSnapshot[]
-  readonly version: number           // Incrementing version for this collection
-  readonly options?: CollectionSchemaOptions
-}
-
-/**
- * Complete schema snapshot at a point in time
- */
-export interface SchemaSnapshot {
-  readonly hash: string              // SHA256 of full schema
-  readonly configHash: string        // SHA256 of parquedb.config.ts content (if available)
-  readonly collections: Readonly<Record<string, CollectionSchemaSnapshot>>
-  readonly capturedAt: number        // Timestamp
-  commitHash?: string                // Associated commit hash (mutable for backward compatibility)
-}
+// Import types for use in this module
+import type {
+  SchemaFieldRelationship,
+  SchemaFieldSnapshot,
+  CollectionSchemaSnapshot,
+  SchemaSnapshot,
+  DatabaseCommit,
+} from './types'
 
 /**
  * Capture current schema from config
@@ -204,20 +169,31 @@ export async function loadSchemaAtCommit(
   storage: StorageBackend,
   commitHash: string
 ): Promise<SchemaSnapshot> {
-  // Load the commit
-  const commit = await loadCommit(storage, commitHash)
+  // Load the commit directly to avoid circular dependency with commit.ts
+  const commitPath = `_meta/commits/${commitHash}.json`
+  const commitExists = await storage.exists(commitPath)
 
-  // Check if commit has schema in state
-  // The state may have an optional schema field in newer commits
-  interface CommitStateWithSchema {
-    schema?: SchemaSnapshot
-  }
-  const state = commit.state as typeof commit.state & CommitStateWithSchema
-  if (state.schema) {
-    return state.schema
+  if (commitExists) {
+    const commitData = await storage.read(commitPath)
+    let commit: DatabaseCommit
+    try {
+      commit = JSON.parse(new TextDecoder().decode(commitData))
+    } catch {
+      throw new Error(`Invalid commit JSON: ${commitHash}`)
+    }
+
+    // Check if commit has schema in state
+    // The state may have an optional schema field in newer commits
+    interface CommitStateWithSchema {
+      schema?: SchemaSnapshot
+    }
+    const state = commit.state as typeof commit.state & CommitStateWithSchema
+    if (state.schema) {
+      return state.schema
+    }
   }
 
-  // Legacy commit without schema - try to load from separate snapshot file
+  // Legacy commit without schema or commit not found - try to load from separate snapshot file
   const snapshotPath = `_meta/schemas/${commitHash}.json`
   const exists = await storage.exists(snapshotPath)
 

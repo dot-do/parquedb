@@ -40,6 +40,7 @@ import {
   type BackendType,
 } from '../backends'
 import { logger } from '../utils/logger'
+import { toInternalR2Bucket } from './utils'
 
 // =============================================================================
 // Types
@@ -109,7 +110,7 @@ export class MigrationWorkflow extends WorkflowEntrypoint<Env, MigrationWorkflow
 
     // Step 1: Initialize and discover namespaces
     const state = await step.do('initialize', async () => {
-      const storage = new R2Backend(this.env.BUCKET as unknown as import('../storage/types/r2').R2Bucket)
+      const storage = new R2Backend(toInternalR2Bucket(this.env.BUCKET))
 
       let namespaces = params.namespaces ?? []
 
@@ -143,7 +144,7 @@ export class MigrationWorkflow extends WorkflowEntrypoint<Env, MigrationWorkflow
 
       // Step N: Migrate one namespace
       currentState = await step.do(`migrate-${namespace}`, async () => {
-        const storage = new R2Backend(this.env.BUCKET as unknown as import('../storage/types/r2').R2Bucket)
+        const storage = new R2Backend(toInternalR2Bucket(this.env.BUCKET))
 
         logger.info(`Starting migration for ${namespace}`, {
           index: currentState.currentIndex,
