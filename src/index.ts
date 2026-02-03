@@ -15,6 +15,7 @@ export {
   type DBSchema,
   type DBConfig,
   type DBInput,
+  type DBInstance,
 } from './db'
 
 // =============================================================================

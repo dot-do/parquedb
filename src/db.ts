@@ -39,6 +39,8 @@ import type { ParqueDBConfig } from './ParqueDB/types'
 import type { StorageBackend } from './types'
 import { fromIceType } from './types/integrations'
 import { MemoryBackend } from './storage'
+import { createSQL } from './integrations/sql'
+import type { SQLExecutor } from './integrations/sql'
 
 // =============================================================================
 // Types
@@ -78,6 +80,14 @@ export interface DBConfig {
  * Input to DB() - either a schema object or flexible mode config
  */
 export type DBInput = DBSchema | FlexibleModeConfig
+
+/**
+ * ParqueDB instance with SQL executor attached
+ */
+export type DBInstance = ParqueDB & {
+  /** SQL template tag for queries */
+  sql: SQLExecutor
+}
 
 // =============================================================================
 // Type Guards
@@ -152,9 +162,16 @@ function getFlexibleCollections(schema: DBSchema): string[] {
  * // Access collections
  * await db.User.create({ email: 'alice@example.com', name: 'Alice' })
  * await db.Post.find({ author: 'user/123' })
+ *
+ * // SQL queries
+ * const users = await db.sql`SELECT * FROM users WHERE age > ${21}`
+ *
+ * // Destructured
+ * const { sql } = DB()
+ * const posts = await sql`SELECT * FROM posts LIMIT ${10}`
  * ```
  */
-export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {}): ParqueDB {
+export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {}): DBInstance {
   const storage = config.storage ?? new MemoryBackend()
 
   const parqueDBConfig: ParqueDBConfig = {
@@ -164,9 +181,11 @@ export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {
 
   const db = new ParqueDB(parqueDBConfig)
 
-  // If flexible mode, just return the db as-is
+  // If flexible mode, attach SQL and return
   if (isFlexibleMode(input)) {
-    return db
+    const dbWithSql = db as DBInstance
+    dbWithSql.sql = createSQL(db)
+    return dbWithSql
   }
 
   // Parse typed schemas using GraphDL
@@ -193,7 +212,11 @@ export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {
     // For now they work the same as typed collections
   }
 
-  return db
+  // Attach SQL executor
+  const dbWithSql = db as DBInstance
+  dbWithSql.sql = createSQL(db)
+
+  return dbWithSql
 }
 
 // =============================================================================
@@ -209,6 +232,9 @@ export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {
  *
  * await db.Posts.create({ title: 'Hello', content: 'World' })
  * await db.Posts.find({ title: 'Hello' })
+ *
+ * // SQL queries
+ * const posts = await db.sql`SELECT * FROM posts`
  * ```
  */
-export const db = DB()
+export const db: DBInstance = DB()
