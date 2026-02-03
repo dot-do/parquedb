@@ -1,0 +1,17 @@
+# ParqueDB Nova Search Worker (v10) - Predicate Pushdown + Vector + Hybrid
+name = "parquedb-search-nova"
+main = "search-nova.ts"
+compatibility_date = "2024-09-02"
+compatibility_flags = ["nodejs_compat"]
+account_id = "b6641681fe423910342b9ffa1364c76d"
+
+[[routes]]
+pattern = "cdn.workers.do/search-v10/*"
+zone_id = "7cdc309f5238b228485fc7e4ff29772b"
+
+[[r2_buckets]]
+binding = "DATA"
+bucket_name = "parquedb-search-data"
+
+[observability]
+enabled = true
