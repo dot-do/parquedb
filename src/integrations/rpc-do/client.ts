@@ -98,6 +98,9 @@ export interface BatchedResponse {
 /**
  * Options for creating a ParqueDB RPC client
  */
+/** Default timeout in milliseconds (30 seconds) */
+const DEFAULT_TIMEOUT_MS = 30000
+
 export interface ParqueDBRPCClientOptions {
   /** RPC endpoint URL */
   url: string
@@ -105,7 +108,7 @@ export interface ParqueDBRPCClientOptions {
   /** Authentication token or provider function */
   auth?: string | (() => string | null | Promise<string | null>)
 
-  /** Request timeout in milliseconds */
+  /** Request timeout in milliseconds (default: 30000) */
   timeout?: number
 
   /** Batching options for automatic request batching */
@@ -350,14 +353,16 @@ function withBatching(
  * Create an HTTP transport for the ParqueDB RPC endpoint
  */
 function createHttpTransport(options: ParqueDBRPCClientOptions): Transport {
-  const { url, auth, timeout, headers = {} } = options
+  const { url, auth, headers = {} } = options
+  // Use provided timeout or default to 30 seconds
+  const timeout = options.timeout ?? DEFAULT_TIMEOUT_MS
 
   return {
     async call(method: string, args: unknown[]): Promise<unknown> {
       const controller = new AbortController()
       let timeoutId: ReturnType<typeof setTimeout> | undefined
 
-      if (timeout !== undefined && timeout > 0) {
+      if (timeout > 0) {
         timeoutId = setTimeout(() => controller.abort(), timeout)
       }
 

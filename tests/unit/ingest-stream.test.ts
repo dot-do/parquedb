@@ -31,11 +31,11 @@ async function* arrayToAsyncIterable<T>(items: T[]): AsyncIterable<T> {
 }
 
 /**
- * Create an async generator that delays each item (uses fake timers when enabled)
+ * Create an async generator that delays each item
  */
 async function* delayedAsyncIterable<T>(items: T[], delayMs: number): AsyncIterable<T> {
   for (const item of items) {
-    await vi.advanceTimersByTimeAsync(delayMs)
+    await new Promise(resolve => setTimeout(resolve, delayMs))
     yield item
   }
 }

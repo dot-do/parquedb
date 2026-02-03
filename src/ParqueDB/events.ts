@@ -11,6 +11,7 @@
 import type { Entity, EntityId, Event, EventOp, StorageBackend } from '../types'
 import { entityTarget, parseEntityTarget, isRelationshipTarget, asEntityId } from '../types'
 import { generateId } from '../utils'
+import { toFullId } from './validation'
 import type {
   EventLog,
   EventLogConfig,
@@ -273,7 +274,168 @@ export function archiveEvents(
 }
 
 /**
+ * EventLog implementation class
+ *
+ * Provides methods for querying and managing the event log.
+ * This class encapsulates all event log operations.
+ */
+export class EventLogImpl implements EventLog {
+  private readonly events: Event[]
+  private readonly archivedEvents: Event[]
+  private readonly eventLogConfig: Required<EventLogConfig>
+  private readonly archiveEventsFn: (options?: { olderThan?: Date; maxEvents?: number }) => ArchiveEventsResult
+
+  constructor(
+    events: Event[],
+    archivedEvents: Event[],
+    eventLogConfig: Required<EventLogConfig>,
+    archiveEventsFn: (options?: { olderThan?: Date; maxEvents?: number }) => ArchiveEventsResult
+  ) {
+    this.events = events
+    this.archivedEvents = archivedEvents
+    this.eventLogConfig = eventLogConfig
+    this.archiveEventsFn = archiveEventsFn
+  }
+
+  /**
+   * Sort events by timestamp and ID
+   */
+  private sortEvents(eventsToSort: Event[]): Event[] {
+    return eventsToSort.sort((a, b) => {
+      const timeDiff = a.ts - b.ts
+      if (timeDiff !== 0) return timeDiff
+      return a.id.localeCompare(b.id)
+    })
+  }
+
+  /**
+   * Get events for a specific entity
+   */
+  async getEvents(entityId: EntityId): Promise<Event[]> {
+    const fullId = entityId as string
+    const [ns, ...idParts] = fullId.split('/')
+    const id = idParts.join('/')
+
+    const filtered = this.events.filter(e => {
+      if (isRelationshipTarget(e.target)) return false
+      const info = parseEntityTarget(e.target)
+      return info.ns === ns && info.id === id
+    })
+
+    return this.sortEvents(filtered)
+  }
+
+  /**
+   * Get events by namespace
+   */
+  async getEventsByNamespace(ns: string): Promise<Event[]> {
+    const filtered = this.events.filter(e => {
+      if (isRelationshipTarget(e.target)) return false
+      return parseEntityTarget(e.target).ns === ns
+    })
+
+    return this.sortEvents(filtered)
+  }
+
+  /**
+   * Get events by time range
+   */
+  async getEventsByTimeRange(from: Date, to: Date): Promise<Event[]> {
+    const fromTime = from.getTime()
+    const toTime = to.getTime()
+
+    // Sort all events first to get consistent ordering by timestamp and ID
+    const sortedEvents = this.sortEvents([...this.events])
+
+    // For time range queries with millisecond precision, we use a counting approach:
+    // Find all events that were recorded AT OR BEFORE the 'to' time,
+    // but only include those that were created AFTER 'from' was captured.
+    // Since event IDs are monotonically increasing, we can use ID comparison
+    // for tie-breaking at the same millisecond.
+    const result: Event[] = []
+    for (const e of sortedEvents) {
+      const eventTime = e.ts
+      // Use inclusive range: fromTime <= eventTime <= toTime
+      // This handles the case where midTime was captured in the same millisecond
+      // as the first event
+      if (eventTime >= fromTime && eventTime <= toTime) {
+        result.push(e)
+      }
+    }
+
+    // If we got multiple events at the boundary timestamp, filter to only include
+    // events that occurred strictly before the second boundary event
+    if (result.length > 1) {
+      const boundaryTime = toTime
+      const eventsAtBoundary = result.filter(e => e.ts === boundaryTime)
+      if (eventsAtBoundary.length > 1) {
+        // Remove the last event at the boundary (it was created after 'to' was captured)
+        const lastEvent = eventsAtBoundary[eventsAtBoundary.length - 1]!
+        const idx = result.indexOf(lastEvent)
+        if (idx !== -1) {
+          result.splice(idx, 1)
+        }
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * Get events by operation type
+   */
+  async getEventsByOp(op: EventOp): Promise<Event[]> {
+    const filtered = this.events.filter(e => e.op === op)
+    return this.sortEvents(filtered)
+  }
+
+  /**
+   * Get raw event data (for compression check)
+   */
+  async getRawEvent(id: string): Promise<{ compressed: boolean; data: Event }> {
+    const event = this.events.find(e => e.id === id)
+    if (!event) {
+      throw new EventError('Get event', 'Event not found', { eventId: id })
+    }
+    // Check if payload is large enough to warrant compression (>10KB)
+    const eventJson = JSON.stringify(event)
+    const compressed = eventJson.length > 10000
+    return { compressed, data: event }
+  }
+
+  /**
+   * Get total event count
+   */
+  async getEventCount(): Promise<number> {
+    return this.events.length
+  }
+
+  /**
+   * Get current event log configuration
+   */
+  getConfig(): EventLogConfig {
+    return { ...this.eventLogConfig }
+  }
+
+  /**
+   * Archive old events based on configuration or manual threshold
+   */
+  async archiveEvents(options?: { olderThan?: Date; maxEvents?: number }): Promise<ArchiveEventsResult> {
+    return this.archiveEventsFn(options)
+  }
+
+  /**
+   * Get archived events (if archiveOnRotation is enabled)
+   */
+  async getArchivedEvents(): Promise<Event[]> {
+    return [...this.archivedEvents]
+  }
+}
+
+/**
  * Create an EventLog interface for querying events
+ *
+ * @deprecated Use EventLogImpl class directly instead
  */
 export function createEventLog(
   events: Event[],
@@ -281,120 +443,7 @@ export function createEventLog(
   eventLogConfig: Required<EventLogConfig>,
   archiveEventsFn: (options?: { olderThan?: Date; maxEvents?: number }) => ArchiveEventsResult
 ): EventLog {
-  return {
-    async getEvents(entityId: EntityId): Promise<Event[]> {
-      const fullId = entityId as string
-      const [ns, ...idParts] = fullId.split('/')
-      const id = idParts.join('/')
-
-      return events
-        .filter(e => {
-          if (isRelationshipTarget(e.target)) return false
-          const info = parseEntityTarget(e.target)
-          return info.ns === ns && info.id === id
-        })
-        .sort((a, b) => {
-          const timeDiff = a.ts - b.ts
-          if (timeDiff !== 0) return timeDiff
-          return a.id.localeCompare(b.id)
-        })
-    },
-
-    async getEventsByNamespace(ns: string): Promise<Event[]> {
-      return events
-        .filter(e => {
-          if (isRelationshipTarget(e.target)) return false
-          return parseEntityTarget(e.target).ns === ns
-        })
-        .sort((a, b) => {
-          const timeDiff = a.ts - b.ts
-          if (timeDiff !== 0) return timeDiff
-          return a.id.localeCompare(b.id)
-        })
-    },
-
-    async getEventsByTimeRange(from: Date, to: Date): Promise<Event[]> {
-      const fromTime = from.getTime()
-      const toTime = to.getTime()
-
-      // Sort all events first to get consistent ordering by timestamp and ID
-      const sortedEvents = [...events].sort((a, b) => {
-        const timeDiff = a.ts - b.ts
-        if (timeDiff !== 0) return timeDiff
-        return a.id.localeCompare(b.id)
-      })
-
-      // For time range queries with millisecond precision, we use a counting approach:
-      // Find all events that were recorded AT OR BEFORE the 'to' time,
-      // but only include those that were created AFTER 'from' was captured.
-      // Since event IDs are monotonically increasing, we can use ID comparison
-      // for tie-breaking at the same millisecond.
-      const result: Event[] = []
-      for (const e of sortedEvents) {
-        const eventTime = e.ts
-        // Use inclusive range: fromTime <= eventTime <= toTime
-        // This handles the case where midTime was captured in the same millisecond
-        // as the first event
-        if (eventTime >= fromTime && eventTime <= toTime) {
-          result.push(e)
-        }
-      }
-
-      // If we got multiple events at the boundary timestamp, filter to only include
-      // events that occurred strictly before the second boundary event
-      if (result.length > 1) {
-        const boundaryTime = toTime
-        const eventsAtBoundary = result.filter(e => e.ts === boundaryTime)
-        if (eventsAtBoundary.length > 1) {
-          // Remove the last event at the boundary (it was created after 'to' was captured)
-          const lastEvent = eventsAtBoundary[eventsAtBoundary.length - 1]!
-          const idx = result.indexOf(lastEvent)
-          if (idx !== -1) {
-            result.splice(idx, 1)
-          }
-        }
-      }
-
-      return result
-    },
-
-    async getEventsByOp(op: EventOp): Promise<Event[]> {
-      return events
-        .filter(e => e.op === op)
-        .sort((a, b) => {
-          const timeDiff = a.ts - b.ts
-          if (timeDiff !== 0) return timeDiff
-          return a.id.localeCompare(b.id)
-        })
-    },
-
-    async getRawEvent(id: string): Promise<{ compressed: boolean; data: Event }> {
-      const event = events.find(e => e.id === id)
-      if (!event) {
-        throw new EventError('Get event', 'Event not found', { eventId: id })
-      }
-      // Check if payload is large enough to warrant compression (>10KB)
-      const eventJson = JSON.stringify(event)
-      const compressed = eventJson.length > 10000
-      return { compressed, data: event }
-    },
-
-    async getEventCount(): Promise<number> {
-      return events.length
-    },
-
-    getConfig(): EventLogConfig {
-      return { ...eventLogConfig }
-    },
-
-    async archiveEvents(options?: { olderThan?: Date; maxEvents?: number }): Promise<ArchiveEventsResult> {
-      return archiveEventsFn(options)
-    },
-
-    async getArchivedEvents(): Promise<Event[]> {
-      return [...archivedEvents]
-    },
-  }
+  return new EventLogImpl(events, archivedEvents, eventLogConfig, archiveEventsFn)
 }
 
 /**
@@ -593,7 +642,7 @@ export async function getAtVersion<T = Record<string, unknown>>(
   version: number,
   events: Event[]
 ): Promise<Entity<T> | null> {
-  const fullId = id.includes('/') ? id : `${namespace}/${id}`
+  const fullId = toFullId(namespace, id)
   const [ns, ...idParts] = fullId.split('/')
   const entityId = idParts.join('/')
 

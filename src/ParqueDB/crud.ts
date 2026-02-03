@@ -38,6 +38,7 @@ import {
 } from './store'
 
 import type { ReverseRelIndex } from './relationships'
+import { toFullId } from './validation'
 import { applyRelationshipOperators as applyRelOps, indexRelationshipsForEntity, unindexRelationshipsForEntity } from './relationships'
 
 /**
@@ -390,7 +391,7 @@ export async function updateEntity<T = Record<string, unknown>>(
   ctx: CRUDContext
 ): Promise<Entity<T> | null> {
   // Normalize ID
-  const fullId = id.includes('/') ? id : `${namespace}/${id}`
+  const fullId = toFullId(namespace, id)
 
   let entity = ctx.entities.get(fullId)
 
@@ -541,7 +542,7 @@ export async function deleteEntity(
   ctx: CRUDContext
 ): Promise<DeleteResult> {
   // Normalize ID
-  const fullId = id.includes('/') ? id : `${namespace}/${id}`
+  const fullId = toFullId(namespace, id)
 
   const entity = ctx.entities.get(fullId)
   if (!entity) {
@@ -634,7 +635,7 @@ export async function restoreEntity<T = Record<string, unknown>>(
   options: { actor?: EntityId } | undefined,
   ctx: CRUDContext
 ): Promise<Entity<T> | null> {
-  const fullId = id.includes('/') ? id : `${namespace}/${id}`
+  const fullId = toFullId(namespace, id)
 
   const entity = ctx.entities.get(fullId)
   if (!entity) {

@@ -17,11 +17,13 @@ ParqueDB provides a flexible MongoDB-style query API with support for filters, s
 
 **Filter Operators:**
 - Comparison: `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`
-- String: `$regex`, `$startsWith`, `$endsWith`, `$contains`
+- String: `$regex`, `$startsWith`*, `$endsWith`*, `$contains`*
 - Array: `$all`, `$elemMatch`, `$size`
 - Existence: `$exists`, `$type`
 - Logical: `$and`, `$or`, `$not`, `$nor`
 - Special: `$text`, `$vector`
+
+*ParqueDB Extension - not available in MongoDB
 
 **Query Options:**
 - `sort` - Sort results
@@ -296,33 +298,57 @@ await db.Posts.find({
 - `s` - Dot matches newlines
 - `x` - Extended (ignore whitespace)
 
-#### $startsWith - String prefix match
+#### $startsWith - String prefix match (ParqueDB Extension)
 
 Match documents where a string field starts with a specific prefix.
 
+NOTE: This operator is a ParqueDB extension and is not available in MongoDB. For MongoDB compatibility, use `$regex` with `^` anchor.
+
 ```typescript
+// ParqueDB syntax
 await db.Users.find({
   email: { $startsWith: 'admin' }
 })
-```
 
-#### $endsWith - String suffix match
-
-Match documents where a string field ends with a specific suffix.
-
-```typescript
+// MongoDB-compatible equivalent
 await db.Users.find({
-  email: { $endsWith: '@example.com' }
+  email: { $regex: '^admin' }
 })
 ```
 
-#### $contains - Substring match
+#### $endsWith - String suffix match (ParqueDB Extension)
+
+Match documents where a string field ends with a specific suffix.
+
+NOTE: This operator is a ParqueDB extension and is not available in MongoDB. For MongoDB compatibility, use `$regex` with `$` anchor.
+
+```typescript
+// ParqueDB syntax
+await db.Users.find({
+  email: { $endsWith: '@example.com' }
+})
+
+// MongoDB-compatible equivalent
+await db.Users.find({
+  email: { $regex: '@example\\.com$' }
+})
+```
+
+#### $contains - Substring match (ParqueDB Extension)
 
 Match documents where a string field contains a substring.
 
+NOTE: This operator is a ParqueDB extension and is not available in MongoDB. For MongoDB compatibility, use `$regex`.
+
 ```typescript
+// ParqueDB syntax
 await db.Posts.find({
   title: { $contains: 'database' }
+})
+
+// MongoDB-compatible equivalent
+await db.Posts.find({
+  title: { $regex: 'database' }
 })
 ```
 

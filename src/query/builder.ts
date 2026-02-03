@@ -94,12 +94,31 @@ interface Condition {
   negated?: boolean  // true for notWhere conditions
 }
 
+/** Array operator types */
+type ArrayOpType = 'all' | 'elemMatch' | 'size'
+
+/** A condition for array operators (handled separately from regular operators) */
+interface ArrayCondition {
+  field: string
+  arrayOp: ArrayOpType
+  value: unknown
+}
+
+/** A condition for modulo operator */
+interface ModCondition {
+  field: string
+  divisor: number
+  remainder: number
+}
+
 /** Condition group type - reserved for future query building enhancements */
 export type _ConditionGroup = 'and' | 'or'
 
 /** Internal state for building queries */
 interface BuilderState {
   conditions: Condition[]
+  arrayConditions: ArrayCondition[]
+  modConditions: ModCondition[]
   orGroups: Condition[][]
   sort: SortSpec
   limit?: number
@@ -125,6 +144,8 @@ export class QueryBuilder<T = Record<string, unknown>> {
     this.collection = collection
     this.state = {
       conditions: [],
+      arrayConditions: [],
+      modConditions: [],
       orGroups: [],
       sort: {},
       limit: undefined,
@@ -203,6 +224,116 @@ export class QueryBuilder<T = Record<string, unknown>> {
     }
 
     this.state.conditions.push({ field, op, value, negated: true })
+    return this
+  }
+
+  // =============================================================================
+  // Array Operators
+  // =============================================================================
+
+  /**
+   * Add a $all array condition to the query
+   *
+   * Matches arrays that contain all of the specified elements.
+   *
+   * @param field - The field name containing the array
+   * @param values - Array of values that must all be present
+   * @returns this for method chaining
+   *
+   * @example
+   * // Match posts tagged with both 'tech' and 'database'
+   * builder.whereAll('tags', ['tech', 'database'])
+   */
+  whereAll(field: string, values: unknown[]): this {
+    this.state.arrayConditions.push({ field, arrayOp: 'all', value: values })
+    return this
+  }
+
+  /**
+   * Add a $elemMatch array condition to the query
+   *
+   * Matches arrays where at least one element satisfies the filter.
+   * Used for querying arrays of objects.
+   *
+   * @param field - The field name containing the array
+   * @param filter - Filter that at least one array element must match
+   * @returns this for method chaining
+   *
+   * @example
+   * // Match posts with a comment scored above 10
+   * builder.whereElemMatch('comments', { score: { $gt: 10 } })
+   *
+   * @example
+   * // Match orders with items meeting multiple criteria
+   * builder.whereElemMatch('items', { quantity: { $gte: 5 }, price: { $lt: 100 } })
+   */
+  whereElemMatch(field: string, filter: Filter): this {
+    this.state.arrayConditions.push({ field, arrayOp: 'elemMatch', value: filter })
+    return this
+  }
+
+  /**
+   * Add a $size array condition to the query
+   *
+   * Matches arrays with exactly the specified number of elements.
+   *
+   * @param field - The field name containing the array
+   * @param size - The exact array length to match
+   * @returns this for method chaining
+   * @throws Error if size is negative
+   *
+   * @example
+   * // Match posts with exactly 3 tags
+   * builder.whereSize('tags', 3)
+   */
+  whereSize(field: string, size: number): this {
+    if (size < 0) {
+      throw new Error('Size cannot be negative')
+    }
+    this.state.arrayConditions.push({ field, arrayOp: 'size', value: size })
+    return this
+  }
+
+  // =============================================================================
+  // Modulo Operator
+  // =============================================================================
+
+  /**
+   * Add a $mod (modulo) condition to the query
+   *
+   * Matches values where value % divisor equals remainder.
+   * Useful for filtering by multiples or distributing work across workers.
+   *
+   * @param field - The field name containing the numeric value
+   * @param divisor - The divisor for the modulo operation
+   * @param remainder - The expected remainder
+   * @returns this for method chaining
+   * @throws Error if divisor is zero or negative
+   *
+   * @example
+   * // Match every 3rd item (id % 3 === 0)
+   * builder.whereMod('id', 3, 0)
+   *
+   * @example
+   * // Match even numbers
+   * builder.whereMod('count', 2, 0)
+   *
+   * @example
+   * // Match odd numbers
+   * builder.whereMod('count', 2, 1)
+   *
+   * @example
+   * // Distribute work across 4 workers (worker 2)
+   * builder.whereMod('id', 4, 2)
+   */
+  whereMod(field: string, divisor: number, remainder: number): this {
+    if (divisor <= 0) {
+      throw new Error('Divisor must be a positive number')
+    }
+    if (remainder < 0) {
+      throw new Error('Remainder cannot be negative')
+    }
+    this.state.modConditions.push({ field, divisor, remainder })
     return this
   }
 
@@ -344,13 +475,26 @@ export class QueryBuilder<T = Record<string, unknown>> {
     for (const cond of this.state.conditions) {
       fieldCounts.set(cond.field, (fieldCounts.get(cond.field) || 0) + 1)
     }
+    // Also count array conditions
+    for (const cond of this.state.arrayConditions) {
+      fieldCounts.set(cond.field, (fieldCounts.get(cond.field) || 0) + 1)
+    }
+    // Also count mod conditions
+    for (const cond of this.state.modConditions) {
+      fieldCounts.set(cond.field, (fieldCounts.get(cond.field) || 0) + 1)
+    }
 
     const hasDuplicateFields = Array.from(fieldCounts.values()).some(count => count > 1)
 
     if (hasDuplicateFields) {
       // Use $and when same field appears multiple times
+      const allConditions: Filter[] = [
+        ...this.state.conditions.map(cond => this.conditionToFilter(cond)),
+        ...this.state.arrayConditions.map(cond => this.arrayConditionToFilter(cond)),
+        ...this.state.modConditions.map(cond => this.modConditionToFilter(cond))
+      ]
       return {
-        $and: this.state.conditions.map(cond => this.conditionToFilter(cond))
+        $and: allConditions
       }
     }
 
@@ -375,7 +519,40 @@ export class QueryBuilder<T = Record<string, unknown>> {
       }
     }
 
+    // Also add array conditions
+    for (const arrayCond of this.state.arrayConditions) {
+      const arrayFilter = this.arrayConditionToFilter(arrayCond)
+      Object.assign(filter, arrayFilter)
+    }
+
+    // Also add mod conditions
+    for (const modCond of this.state.modConditions) {
+      const modFilter = this.modConditionToFilter(modCond)
+      Object.assign(filter, modFilter)
+    }
+
     return filter
+  }
+
+  /**
+   * Convert a mod condition to a filter object
+   */
+  private modConditionToFilter(cond: ModCondition): Filter {
+    return { [cond.field]: { $mod: [cond.divisor, cond.remainder] } as FieldFilter }
+  }
+
+  /**
+   * Convert an array condition to a filter object
+   */
+  private arrayConditionToFilter(cond: ArrayCondition): Filter {
+    switch (cond.arrayOp) {
+      case 'all':
+        return { [cond.field]: { $all: cond.value as unknown[] } as FieldFilter }
+      case 'elemMatch':
+        return { [cond.field]: { $elemMatch: cond.value as Filter } as FieldFilter }
+      case 'size':
+        return { [cond.field]: { $size: cond.value as number } as FieldFilter }
+    }
   }
 
   /**
@@ -485,6 +662,8 @@ export class QueryBuilder<T = Record<string, unknown>> {
     const cloned = new QueryBuilder<T>(this.collection)
     cloned.state = {
       conditions: [...this.state.conditions],
+      arrayConditions: [...this.state.arrayConditions],
+      modConditions: [...this.state.modConditions],
       orGroups: this.state.orGroups.map(group => [...group]),
       sort: { ...this.state.sort },
       limit: this.state.limit,

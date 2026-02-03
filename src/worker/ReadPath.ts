@@ -119,6 +119,9 @@ export class ReadPath {
     fetchedBytes: 0,
   }
 
+  /** Execution context for background revalidation */
+  private executionContext?: ExecutionContext
+
   constructor(
     private bucket: R2Bucket,
     private cache: Cache,
@@ -127,6 +130,19 @@ export class ReadPath {
     if (!bucket) {
       throw new MissingBucketError('BUCKET', 'Required for ReadPath operations.')
     }
+  }
+
+  /**
+   * Set the execution context for background revalidation
+   *
+   * When set, background revalidation tasks will use ctx.waitUntil() to ensure
+   * they complete even after the response is sent. This prevents early termination
+   * when the Worker instance is recycled.
+   *
+   * @param ctx - The execution context from the Worker's fetch handler
+   */
+  setExecutionContext(ctx: ExecutionContext): void {
+    this.executionContext = ctx
   }
 
   // ===========================================================================
@@ -515,22 +531,21 @@ export class ReadPath {
   /**
    * Revalidate cache entry in background
    *
+   * Uses ctx.waitUntil() when an ExecutionContext is available to ensure the
+   * background revalidation completes even after the response is sent. Without
+   * waitUntil, the Worker instance may be recycled before revalidation finishes.
+   *
    * NOTE: This is intentionally fire-and-forget for stale-while-revalidate pattern.
    * The caller returns cached data immediately while we refresh in the background.
    * Errors during revalidation are logged but don't affect the user request.
-   *
-   * TODO(parquedb-y9aw): Accept ExecutionContext to use ctx.waitUntil() for proper
-   * background task lifecycle management in Workers. Without waitUntil, background
-   * revalidation may be terminated early if the Worker instance is recycled.
    */
   private revalidateInBackground(
     path: string,
     cacheKey: Request,
     ttl: number
   ): void {
-    // Fire-and-forget by design - stale-while-revalidate pattern
-    // Errors are logged but don't fail the request since we already returned cached data
-    this.bucket.get(path).then(async (obj) => {
+    // Create the revalidation promise
+    const revalidationPromise = this.bucket.get(path).then(async (obj) => {
       if (obj) {
         const data = await obj.arrayBuffer()
         await this.cacheResponse(cacheKey, data, obj.etag, ttl)
@@ -539,6 +554,11 @@ export class ReadPath {
       // Log revalidation errors - these indicate potential cache coherence issues
       console.warn(`[ReadPath] Background revalidation failed for ${path}:`, err)
     })
+
+    // Use waitUntil if ExecutionContext is available, otherwise fire-and-forget
+    if (this.executionContext) {
+      this.executionContext.waitUntil(revalidationPromise)
+    }
   }
 
   /**

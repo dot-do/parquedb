@@ -975,5 +975,77 @@ describe('ReadPath', () => {
       const [, response] = cacheSpy.mock.calls[0]
       expect(response.headers.get('Cache-Control')).not.toContain('stale-while-revalidate')
     })
+
+    it('should use waitUntil for background revalidation when ExecutionContext is set', async () => {
+      const testData = createTestData('test data')
+      bucket._files.set('test.parquet', testData)
+
+      // Create mock ExecutionContext
+      const waitUntilSpy = vi.fn()
+      const mockCtx = {
+        waitUntil: waitUntilSpy,
+        passThroughOnException: vi.fn(),
+      } as unknown as ExecutionContext
+
+      // Set execution context
+      readPath.setExecutionContext(mockCtx)
+
+      // Pre-populate cache with stale response
+      const staleDate = new Date(Date.now() - 100000) // 100 seconds ago
+      await cache.put(
+        new Request('https://parquedb/test.parquet'),
+        new Response(testData, {
+          headers: {
+            'Cache-Control': 'max-age=60, stale-while-revalidate=60',
+            Date: staleDate.toUTCString(),
+            ETag: 'old-etag',
+          },
+        })
+      )
+
+      // Read should return cached data and trigger background revalidation
+      await readPath.readParquet('test.parquet')
+
+      // waitUntil should have been called with the revalidation promise
+      expect(waitUntilSpy).toHaveBeenCalledTimes(1)
+      expect(waitUntilSpy).toHaveBeenCalledWith(expect.any(Promise))
+    })
+
+    it('should not call waitUntil when ExecutionContext is not set', async () => {
+      // Create a new ReadPath without execution context
+      const readPathNoCtx = new ReadPath(
+        bucket as unknown as R2Bucket,
+        cache as unknown as Cache,
+        DEFAULT_CACHE_CONFIG
+      )
+
+      const testData = createTestData('test data')
+      bucket._files.set('test2.parquet', testData)
+
+      // Pre-populate cache with stale response
+      const staleDate = new Date(Date.now() - 100000) // 100 seconds ago
+      await cache.put(
+        new Request('https://parquedb/test2.parquet'),
+        new Response(testData, {
+          headers: {
+            'Cache-Control': 'max-age=60, stale-while-revalidate=60',
+            Date: staleDate.toUTCString(),
+            ETag: 'old-etag',
+          },
+        })
+      )
+
+      const bucketGetSpy = vi.spyOn(bucket, 'get')
+
+      // Read should return cached data
+      const result = await readPathNoCtx.readParquet('test2.parquet')
+
+      expect(result).toEqual(testData)
+
+      // Background revalidation should still happen (fire-and-forget)
+      await vi.waitFor(() => {
+        expect(bucketGetSpy).toHaveBeenCalled()
+      })
+    })
   })
 })

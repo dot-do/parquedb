@@ -1,0 +1,86 @@
+# ParqueDB Unified Search Worker
+#
+# Deploys to cdn.workers.do/search/* for benchmarking and measuring
+# real CPU time via tail worker.
+#
+# Deploy: wrangler deploy --config snippets/worker/wrangler.toml
+# Dev:    wrangler dev --config snippets/worker/wrangler.toml
+
+name = "parquedb-search"
+main = "search.ts"
+compatibility_date = "2024-09-02"
+compatibility_flags = ["nodejs_compat"]
+
+# Account ID for .do account
+account_id = "b6641681fe423910342b9ffa1364c76d"
+
+# ==============================================================================
+# Route Configuration
+# ==============================================================================
+# Routes to cdn.workers.do/search/*
+# Also available at parquedb-search.{account}.workers.dev
+
+[[routes]]
+pattern = "cdn.workers.do/search/*"
+zone_id = "7cdc309f5238b228485fc7e4ff29772b"
+
+# ==============================================================================
+# Tail Consumer Configuration
+# ==============================================================================
+# Enable tail worker to receive execution traces with cpuTime
+# This allows measuring REAL CPU time, not wall-clock time
+
+# The tail worker that will receive events from this worker
+# Uncomment and configure once tail worker is deployed:
+#
+# [[tail_consumers]]
+# service = "parquedb-tail"
+
+# ==============================================================================
+# Observability
+# ==============================================================================
+# Log settings for debugging
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+# ==============================================================================
+# R2 Bucket Binding
+# ==============================================================================
+# Direct R2 access for data files (avoids routing issues with subrequests)
+
+[[r2_buckets]]
+binding = "DATA"
+bucket_name = "parquedb-search-data"
+
+# ==============================================================================
+# Environment Variables
+# ==============================================================================
+
+[vars]
+# CDN base URL for data files (fallback)
+CDN_BASE = "https://cdn.workers.do/parquedb-benchmarks/snippets"
+
+# ==============================================================================
+# Build Configuration
+# ==============================================================================
+
+[build]
+command = ""
+
+# ==============================================================================
+# Additional Environment Configuration (Optional)
+# ==============================================================================
+# Use --env=production or --env=development to deploy to specific environments
+#
+# [env.production]
+# [env.production.vars]
+# ENVIRONMENT = "production"
+#
+# [env.development]
+# [env.development.vars]
+# ENVIRONMENT = "development"

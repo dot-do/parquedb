@@ -3,6 +3,7 @@ import {
   validateEntityId,
   validateLocalId,
   normalizeEntityId,
+  toFullId,
 } from '../../../src/ParqueDB/validation'
 import type { EntityId } from '../../../src/types/entity'
 
@@ -204,6 +205,53 @@ describe('normalizeEntityId', () => {
     it('should handle namespace normalization', () => {
       // Namespaces should be lowercase
       expect(normalizeEntityId('Users', 'user-123')).toBe('users/user-123')
+    })
+  })
+})
+
+describe('toFullId', () => {
+  describe('ID without namespace (local ID)', () => {
+    it('should prefix local ID with namespace', () => {
+      expect(toFullId('users', 'user-123')).toBe('users/user-123')
+    })
+
+    it('should handle ULID local ID', () => {
+      expect(toFullId('posts', '01HZXYZ123ABC456DEF789')).toBe('posts/01HZXYZ123ABC456DEF789')
+    })
+
+    it('should handle numeric local ID', () => {
+      expect(toFullId('orders', '12345')).toBe('orders/12345')
+    })
+  })
+
+  describe('ID with namespace (full ID)', () => {
+    it('should return full ID unchanged', () => {
+      expect(toFullId('posts', 'users/user-123')).toBe('users/user-123')
+    })
+
+    it('should preserve the original namespace in full ID', () => {
+      expect(toFullId('posts', 'system/parquedb')).toBe('system/parquedb')
+    })
+
+    it('should preserve IDs with multiple slashes', () => {
+      expect(toFullId('files', 'files/path/to/doc.txt')).toBe('files/path/to/doc.txt')
+    })
+  })
+
+  describe('difference from normalizeEntityId', () => {
+    it('should NOT validate namespace (unlike normalizeEntityId)', () => {
+      // toFullId does not validate, so empty namespace is allowed
+      expect(toFullId('', 'id-123')).toBe('/id-123')
+    })
+
+    it('should NOT normalize namespace to lowercase (unlike normalizeEntityId)', () => {
+      // toFullId preserves the original case
+      expect(toFullId('Users', 'user-123')).toBe('Users/user-123')
+    })
+
+    it('should NOT validate local ID (unlike normalizeEntityId)', () => {
+      // toFullId does not validate, so empty local ID is allowed
+      expect(toFullId('users', '')).toBe('users/')
     })
   })
 })

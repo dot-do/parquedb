@@ -12,6 +12,7 @@ import {
   generateDeterministicEtag,
   normalizePath,
   normalizeFilePath,
+  normalizeStoragePath,
   toError,
   applyPrefix,
   stripPrefix,
@@ -270,6 +271,47 @@ describe('Storage Utilities', () => {
 
     it('should handle multiple leading slashes (removes first only)', () => {
       expect(normalizePath('//foo/bar')).toBe('/foo/bar')
+    })
+  })
+
+  // ===========================================================================
+  // normalizeStoragePath
+  // ===========================================================================
+
+  describe('normalizeStoragePath', () => {
+    it('should remove leading slash', () => {
+      expect(normalizeStoragePath('/foo/bar')).toBe('foo/bar')
+    })
+
+    it('should remove ALL leading slashes', () => {
+      expect(normalizeStoragePath('//foo/bar')).toBe('foo/bar')
+      expect(normalizeStoragePath('///foo/bar')).toBe('foo/bar')
+    })
+
+    it('should remove duplicate slashes', () => {
+      expect(normalizeStoragePath('foo//bar')).toBe('foo/bar')
+      expect(normalizeStoragePath('foo///bar//baz')).toBe('foo/bar/baz')
+    })
+
+    it('should remove trailing slash', () => {
+      expect(normalizeStoragePath('foo/bar/')).toBe('foo/bar')
+      expect(normalizeStoragePath('/foo/bar/')).toBe('foo/bar')
+    })
+
+    it('should handle root path', () => {
+      expect(normalizeStoragePath('/')).toBe('')
+    })
+
+    it('should handle empty string', () => {
+      expect(normalizeStoragePath('')).toBe('')
+    })
+
+    it('should handle multiple edge cases combined', () => {
+      expect(normalizeStoragePath('//foo//bar//')).toBe('foo/bar')
+    })
+
+    it('should not modify already clean path', () => {
+      expect(normalizeStoragePath('foo/bar')).toBe('foo/bar')
     })
   })
 

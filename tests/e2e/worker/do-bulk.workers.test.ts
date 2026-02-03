@@ -16,39 +16,11 @@
 
 import { env } from 'cloudflare:test'
 import { describe, it, expect, beforeEach } from 'vitest'
-
-// Type for the env bindings from wrangler.jsonc
-interface TestEnv {
-  BUCKET: R2Bucket
-  PARQUEDB: DurableObjectNamespace
-  ENVIRONMENT: string
-}
+import type { TestEnv, ParqueDBDOTestStub } from '../types'
+import { asDOTestStub } from '../types'
 
 // Cast env to our typed environment
 const testEnv = env as TestEnv
-
-// DO stub interface with bulk methods
-interface ParqueDBDOStub {
-  // Entity operations
-  create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-  createMany(ns: string, items: unknown[], options?: unknown): Promise<unknown[]>
-  get(ns: string, id: string): Promise<unknown>
-
-  // Pending row group methods
-  getPendingRowGroups(ns: string): Promise<Array<{
-    id: string
-    path: string
-    rowCount: number
-    firstSeq: number
-    lastSeq: number
-    createdAt: string
-  }>>
-  deletePendingRowGroups(ns: string, upToSeq: number): Promise<void>
-  flushPendingToCommitted(ns: string): Promise<number>
-
-  // Counter methods
-  getSequenceCounter(ns: string): number
-}
 
 // Bulk threshold constant (must match ParqueDBDO.ts)
 const BULK_THRESHOLD = 5
@@ -57,7 +29,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
   describe('Bulk Create Threshold Detection', () => {
     it('uses standard event buffering for < 5 entities', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-small-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create 4 entities (below threshold)
       const items = Array.from({ length: 4 }, (_, i) => ({
@@ -78,7 +50,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
 
     it('writes directly to R2 for >= 5 entities', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-large-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create exactly 5 entities (at threshold)
       const items = Array.from({ length: BULK_THRESHOLD }, (_, i) => ({
@@ -100,7 +72,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
 
     it('creates multiple pending row groups for separate bulk creates', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-multi-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // First bulk create
       const items1 = Array.from({ length: 10 }, (_, i) => ({
@@ -131,7 +103,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
   describe('Pending Row Group Metadata', () => {
     it('records correct metadata for bulk write', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-meta-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       const items = Array.from({ length: 20 }, (_, i) => ({
         $type: 'Post',
@@ -154,7 +126,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
 
     it('tracks sequence numbers correctly across bulk creates', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-seq-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // First bulk create: 10 items starting at seq 1
       const items1 = Array.from({ length: 10 }, (_, i) => ({
@@ -186,7 +158,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
   describe('Entity Retrieval', () => {
     it('can retrieve bulk-created entities by ID', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-get-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       const items = Array.from({ length: 5 }, (_, i) => ({
         $type: 'Post',
@@ -210,7 +182,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
 
     it('assigns unique IDs to bulk-created entities', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-unique-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       const items = Array.from({ length: 50 }, (_, i) => ({
         $type: 'Post',
@@ -236,7 +208,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
   describe('Pending File Cleanup', () => {
     it('can delete pending row groups by sequence', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-delete-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create two batches
       const items1 = Array.from({ length: 10 }, (_, i) => ({
@@ -266,7 +238,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
 
     it('flushPendingToCommitted promotes pending files', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-flush-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create bulk entities
       const items = Array.from({ length: 25 }, (_, i) => ({
@@ -292,7 +264,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
   describe('R2 File Verification', () => {
     it('writes pending Parquet file to R2', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-r2-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       const items = Array.from({ length: 5 }, (_, i) => ({
         $type: 'Post',
@@ -320,7 +292,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
 
     it('pending file contains correct data', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-data-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       const items = Array.from({ length: 5 }, (_, i) => ({
         $type: 'Article',
@@ -356,7 +328,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
   describe('Mixed Operations', () => {
     it('handles mix of small and bulk creates', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-mixed-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Small create (uses event buffering)
       const smallItems = Array.from({ length: 3 }, (_, i) => ({
@@ -397,7 +369,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
 
     it('maintains ID uniqueness across small and bulk creates', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-unique-mixed-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       const allIds: string[] = []
 
@@ -431,7 +403,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
     // See: https://developers.cloudflare.com/workers/testing/vitest-integration/known-issues/#isolated-storage
     it.skip('validates $type for bulk creates', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-validate-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Missing $type
       const items = Array.from({ length: 5 }, (_, i) => ({
@@ -450,7 +422,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
 
     it.skip('validates name for bulk creates', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-validate-name-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Missing name
       const items = Array.from({ length: 5 }, (_, i) => ({
@@ -469,7 +441,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
 
     it('handles empty array gracefully', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-empty-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       const entities = await stub.createMany('posts', [], {})
       expect(entities).toHaveLength(0)
@@ -483,7 +455,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
   describe('Cost Optimization Verification', () => {
     it('bulk create uses 1 SQLite row instead of N rows', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-cost-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create 100 entities in bulk
       const items = Array.from({ length: 100 }, (_, i) => ({

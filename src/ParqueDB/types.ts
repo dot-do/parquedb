@@ -105,6 +105,72 @@ export interface UpsertManyResult {
   errors: UpsertManyError[]
 }
 
+// =============================================================================
+// IngestStream Types
+// =============================================================================
+
+/**
+ * Options for ingestStream operation
+ */
+export interface IngestStreamOptions<T = Record<string, unknown>> {
+  /** Batch size for bulk inserts (default: 100) */
+  batchSize?: number
+  /** Stop on first error if true (default: true) */
+  ordered?: boolean
+  /** Actor performing the operation */
+  actor?: EntityId
+  /** Skip validation */
+  skipValidation?: boolean
+  /** Override entity type for all documents */
+  entityType?: string
+  /** Transform function to apply to each document before insertion */
+  transform?: (doc: T) => T | null
+  /** Progress callback called after each document is processed */
+  onProgress?: (count: number) => void
+  /** Callback called after each batch is completed */
+  onBatchComplete?: (stats: IngestBatchStats) => void
+}
+
+/**
+ * Statistics for a completed batch
+ */
+export interface IngestBatchStats {
+  /** Batch number (1-indexed) */
+  batchNumber: number
+  /** Number of documents in this batch */
+  batchSize: number
+  /** Total documents processed so far */
+  totalProcessed: number
+}
+
+/**
+ * Error entry in ingestStream result
+ */
+export interface IngestStreamError {
+  /** Index of the failed document */
+  index: number
+  /** Error message */
+  message: string
+  /** Original error */
+  error?: Error
+}
+
+/**
+ * Result of ingestStream operation
+ */
+export interface IngestStreamResult {
+  /** Number of documents successfully inserted */
+  insertedCount: number
+  /** Number of documents that failed */
+  failedCount: number
+  /** Number of documents skipped (transform returned null) */
+  skippedCount: number
+  /** IDs of inserted documents */
+  insertedIds: EntityId[]
+  /** Errors that occurred */
+  errors: IngestStreamError[]
+}
+
 /**
  * Event log configuration options
  */
@@ -309,6 +375,37 @@ export interface Collection<T = Record<string, unknown>> {
     query: string | number[],
     options?: HybridSearchOptionsCollection
   ): Promise<SemanticSearchResult<T>[]>
+
+  /**
+   * Ingest a stream of documents into the collection
+   *
+   * Efficiently bulk-inserts documents from an async iterable or array,
+   * with support for batching, transform functions, and progress callbacks.
+   *
+   * @param source - Async iterable or array of documents to ingest
+   * @param options - Ingest options (batchSize, transform, callbacks, etc.)
+   * @returns Result with counts of inserted, failed, and skipped documents
+   *
+   * @example
+   * ```typescript
+   * // Ingest from an array
+   * const result = await collection.ingestStream([
+   *   { name: 'Item 1', value: 10 },
+   *   { name: 'Item 2', value: 20 },
+   * ])
+   *
+   * // Ingest from async generator with transform
+   * const result = await collection.ingestStream(asyncGenerator, {
+   *   batchSize: 100,
+   *   transform: (doc) => ({ ...doc, imported: true }),
+   *   onProgress: (count) => console.log(`Processed ${count} documents`),
+   * })
+   * ```
+   */
+  ingestStream(
+    source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>,
+    options?: IngestStreamOptions<Partial<T>>
+  ): Promise<IngestStreamResult>
 }
 
 // =============================================================================

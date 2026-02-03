@@ -10,6 +10,8 @@ export {
   getNestedValue,
   deepClone,
   getValueType,
+  isNullish,
+  isDefined,
 } from './comparison'
 
 export {

@@ -1061,13 +1061,33 @@ interface IndexCatalogEntry {
 
 /**
  * Type guard for IndexCatalog
+ *
+ * Validates structure to ensure:
+ * - version is a number
+ * - indexes is a record where each value is an array
+ * - each array element has definition and metadata objects
  */
 function isIndexCatalog(value: unknown): value is IndexCatalog {
   if (!isRecord(value)) return false
-  return (
-    typeof value.version === 'number' &&
-    isRecord(value.indexes)
-  )
+  if (typeof value.version !== 'number') return false
+  if (!isRecord(value.indexes)) return false
+
+  // Validate each namespace entry
+  for (const nsEntries of Object.values(value.indexes)) {
+    if (!Array.isArray(nsEntries)) return false
+    for (const entry of nsEntries) {
+      if (!isRecord(entry)) return false
+      // Check required properties exist and are objects
+      if (!isRecord(entry.definition)) return false
+      if (!isRecord(entry.metadata)) return false
+      // Validate definition has required fields
+      if (typeof entry.definition.name !== 'string') return false
+      if (typeof entry.definition.type !== 'string') return false
+      if (!Array.isArray(entry.definition.fields)) return false
+    }
+  }
+
+  return true
 }
 
 /**

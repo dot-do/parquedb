@@ -428,4 +428,95 @@ describe('FsxBackend', () => {
       // TODO: Implement when fsx is available
     })
   })
+
+  // ===========================================================================
+  // Test: Cursor-based Pagination (with mock fsx)
+  // ===========================================================================
+
+  describe('list() cursor-based pagination', () => {
+    it('should use cursor to skip already-returned files', async () => {
+      // Create a mock fsx that returns a predictable list of files
+      const allFiles = [
+        'data/file1.parquet',
+        'data/file2.parquet',
+        'data/file3.parquet',
+        'data/file4.parquet',
+        'data/file5.parquet',
+      ]
+
+      const mockFsx = {
+        glob: async () => allFiles,
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+
+      // First page: get first 2 files
+      const page1 = await backend.list('data/', { limit: 2 })
+      expect(page1.files).toEqual(['data/file1.parquet', 'data/file2.parquet'])
+      expect(page1.hasMore).toBe(true)
+      expect(page1.cursor).toBeDefined()
+
+      // Second page: use cursor to get next 2 files
+      const page2 = await backend.list('data/', { limit: 2, cursor: page1.cursor })
+      expect(page2.files).toEqual(['data/file3.parquet', 'data/file4.parquet'])
+      expect(page2.hasMore).toBe(true)
+      expect(page2.cursor).toBeDefined()
+
+      // Third page: use cursor to get remaining files
+      const page3 = await backend.list('data/', { limit: 2, cursor: page2.cursor })
+      expect(page3.files).toEqual(['data/file5.parquet'])
+      expect(page3.hasMore).toBe(false)
+      expect(page3.cursor).toBeUndefined()
+    })
+
+    it('should handle cursor with no more results', async () => {
+      const allFiles = ['data/file1.parquet', 'data/file2.parquet']
+
+      const mockFsx = {
+        glob: async () => allFiles,
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+
+      // Get all files in first request
+      const page1 = await backend.list('data/', { limit: 2 })
+      expect(page1.files).toEqual(['data/file1.parquet', 'data/file2.parquet'])
+      expect(page1.hasMore).toBe(false)
+      expect(page1.cursor).toBeUndefined()
+    })
+
+    it('should handle invalid cursor gracefully', async () => {
+      const allFiles = ['data/file1.parquet', 'data/file2.parquet']
+
+      const mockFsx = {
+        glob: async () => allFiles,
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+
+      // Use an invalid cursor (not valid base64 or JSON)
+      const result = await backend.list('data/', { limit: 10, cursor: 'invalid-cursor' })
+
+      // Should start from the beginning when cursor is invalid
+      expect(result.files).toEqual(['data/file1.parquet', 'data/file2.parquet'])
+    })
+
+    it('should handle cursor pointing beyond available files', async () => {
+      const allFiles = ['data/file1.parquet']
+
+      const mockFsx = {
+        glob: async () => allFiles,
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+
+      // Create a cursor that points beyond available files
+      const cursor = btoa(JSON.stringify({ offset: 100 }))
+      const result = await backend.list('data/', { limit: 10, cursor })
+
+      // Should return empty list when cursor is past end
+      expect(result.files).toEqual([])
+      expect(result.hasMore).toBe(false)
+    })
+  })
 })

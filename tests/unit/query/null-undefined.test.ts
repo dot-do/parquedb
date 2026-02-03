@@ -680,4 +680,107 @@ describe('real-world scenarios: null vs undefined', () => {
       expect(sorted.map(i => i.name)).toEqual(['B', 'D', 'C', 'E', 'A'])
     })
   })
+
+  describe('logical operators with null/undefined', () => {
+    const docs = [
+      { id: 1, a: null, b: 'value' },
+      { id: 2, a: 'value', b: null },
+      { id: 3 }, // both missing
+      { id: 4, a: 'value', b: 'value' },
+    ]
+
+    it('$and with null field checks', () => {
+      const filter: Filter = { $and: [{ a: null }, { b: 'value' }] }
+      const results = docs.filter(d => matchesFilter(d, filter))
+      expect(results.map(d => d.id)).toEqual([1])
+    })
+
+    it('$or with null field checks', () => {
+      const filter: Filter = { $or: [{ a: null }, { b: null }] }
+      const results = docs.filter(d => matchesFilter(d, filter))
+      expect(results.map(d => d.id)).toEqual([1, 2, 3])
+    })
+
+    it('$not with null condition', () => {
+      // Find docs where a is NOT null (meaning a has a value)
+      const filter: Filter = { $not: { a: null } }
+      const results = docs.filter(d => matchesFilter(d, filter))
+      expect(results.map(d => d.id)).toEqual([2, 4])
+    })
+
+    it('$nor with null conditions', () => {
+      // Find docs where neither a nor b is null
+      const filter: Filter = { $nor: [{ a: null }, { b: null }] }
+      const results = docs.filter(d => matchesFilter(d, filter))
+      expect(results.map(d => d.id)).toEqual([4])
+    })
+  })
+
+  describe('nested objects with null/undefined', () => {
+    const docs = [
+      { id: 1, nested: { value: 'test' } },
+      { id: 2, nested: { value: null } },
+      { id: 3, nested: null },
+      { id: 4 }, // nested is missing
+      { id: 5, nested: { value: undefined } },
+      { id: 6, nested: {} }, // value is missing in nested
+    ]
+
+    it('matches nested null value', () => {
+      const filter: Filter = { 'nested.value': null }
+      const results = docs.filter(d => matchesFilter(d, filter))
+      // Doc 2 (value: null), 3 (nested is null -> nested.value is undefined),
+      // 4 (nested missing), 5 (value: undefined), 6 (value missing in nested)
+      expect(results.map(d => d.id)).toEqual([2, 3, 4, 5, 6])
+    })
+
+    it('matches nested non-null value', () => {
+      const filter: Filter = { 'nested.value': 'test' }
+      const results = docs.filter(d => matchesFilter(d, filter))
+      expect(results.map(d => d.id)).toEqual([1])
+    })
+
+    it('$exists on nested field distinguishes null from missing', () => {
+      // nested.value exists (true): where nested.value is present, even if null
+      const existsFilter: Filter = { 'nested.value': { $exists: true } }
+      const existsResults = docs.filter(d => matchesFilter(d, existsFilter))
+      expect(existsResults.map(d => d.id)).toEqual([1, 2])
+
+      // nested.value doesn't exist: where nested.value is undefined
+      const notExistsFilter: Filter = { 'nested.value': { $exists: false } }
+      const notExistsResults = docs.filter(d => matchesFilter(d, notExistsFilter))
+      expect(notExistsResults.map(d => d.id)).toEqual([3, 4, 5, 6])
+    })
+  })
+
+  describe('array elements with null/undefined', () => {
+    const docs = [
+      { id: 1, tags: ['a', 'b'] },
+      { id: 2, tags: [null, 'a'] },
+      { id: 3, tags: ['a', undefined] },
+      { id: 4, tags: null },
+      { id: 5 }, // tags missing
+      { id: 6, tags: [] },
+    ]
+
+    it('$all with null element', () => {
+      const filter: Filter = { tags: { $all: [null] } }
+      const results = docs.filter(d => matchesFilter(d, filter))
+      // Doc 2 and 3: arrays contain null/undefined
+      expect(results.map(d => d.id)).toEqual([2, 3])
+    })
+
+    it('$size works with arrays containing null', () => {
+      const filter: Filter = { tags: { $size: 2 } }
+      const results = docs.filter(d => matchesFilter(d, filter))
+      expect(results.map(d => d.id)).toEqual([1, 2, 3])
+    })
+
+    it('$size fails on null/missing array', () => {
+      // null and missing are not arrays, so $size doesn't match
+      const filter: Filter = { tags: { $size: 0 } }
+      const results = docs.filter(d => matchesFilter(d, filter))
+      expect(results.map(d => d.id)).toEqual([6])
+    })
+  })
 })

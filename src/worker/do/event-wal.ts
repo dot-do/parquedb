@@ -8,13 +8,10 @@
 import type { Event } from '../../types'
 import type { EventBuffer } from './types'
 import Sqids from 'sqids'
-import {
-  EVENT_BATCH_COUNT_THRESHOLD,
-  EVENT_BATCH_SIZE_THRESHOLD,
-} from '../../constants'
 
-// Re-export for backwards compatibility
-export { EVENT_BATCH_COUNT_THRESHOLD, EVENT_BATCH_SIZE_THRESHOLD }
+/** WAL batch thresholds */
+export const EVENT_BATCH_COUNT_THRESHOLD = 100
+export const EVENT_BATCH_SIZE_THRESHOLD = 64 * 1024 // 64KB
 
 // Initialize Sqids for short ID generation
 const sqids = new Sqids()
@@ -25,12 +22,6 @@ const sqids = new Sqids()
  * Manages event buffering and WAL operations for entity events.
  */
 export class EventWalManager {
-  /** Legacy event buffer for WAL batching */
-  private eventBuffer: Event[] = []
-
-  /** Approximate size of buffered events in bytes */
-  private eventBufferSize = 0
-
   /** Event buffers per namespace for WAL batching with sequence tracking */
   private nsEventBuffers: Map<string, EventBuffer> = new Map()
 
@@ -258,148 +249,38 @@ export class EventWalManager {
     this.nsEventBuffers = buffers
   }
 
-  // ===========================================================================
-  // Legacy Event Batching
-  // ===========================================================================
-
   /**
-   * Append an event to the legacy buffer
-   */
-  async appendEvent(event: Event): Promise<void> {
-    this.eventBuffer.push(event)
-
-    // Estimate size
-    const eventJson = JSON.stringify(event)
-    this.eventBufferSize += eventJson.length
-
-    // Check if we should flush
-    if (
-      this.eventBuffer.length >= EVENT_BATCH_COUNT_THRESHOLD ||
-      this.eventBufferSize >= EVENT_BATCH_SIZE_THRESHOLD
-    ) {
-      await this.flushEventBatch()
-    }
-  }
-
-  /**
-   * Flush legacy buffered events as a single batch row
-   */
-  async flushEventBatch(): Promise<void> {
-    if (this.eventBuffer.length === 0) return
-
-    const events = this.eventBuffer
-    const minTs = Math.min(...events.map(e => e.ts))
-    const maxTs = Math.max(...events.map(e => e.ts))
-
-    // Serialize events to blob
-    const json = JSON.stringify(events)
-    const data = new TextEncoder().encode(json)
-
-    this.sql.exec(
-      `INSERT INTO event_batches (batch, min_ts, max_ts, event_count, flushed)
-       VALUES (?, ?, ?, ?, 0)`,
-      data,
-      minTs,
-      maxTs,
-      events.length
-    )
-
-    // Clear buffer
-    this.eventBuffer = []
-    this.eventBufferSize = 0
-  }
-
-  /**
-   * Get unflushed event count (from batches + buffer)
+   * Get unflushed event count (from events_wal + buffers)
    */
   async getUnflushedEventCount(): Promise<number> {
-    // Count events in unflushed batches
-    const rows = [...this.sql.exec<{ total: number }>(
-      'SELECT SUM(event_count) as total FROM event_batches WHERE flushed = 0'
-    )]
-
-    const batchCount = rows[0]?.total ?? 0
-
-    // Add buffered events not yet written
-    return batchCount + this.eventBuffer.length
+    return this.getTotalUnflushedWalEventCount()
   }
 
   /**
-   * Get unflushed batch count
-   */
-  async getUnflushedBatchCount(): Promise<number> {
-    const rows = [...this.sql.exec<{ count: number }>(
-      'SELECT COUNT(*) as count FROM event_batches WHERE flushed = 0'
-    )]
-
-    return rows[0]?.count ?? 0
-  }
-
-  /**
-   * Read all unflushed events (from batches + buffer)
+   * Read all unflushed events (from events_wal + buffers)
    */
   async readUnflushedEvents(): Promise<Event[]> {
     const allEvents: Event[] = []
 
-    interface EventBatchRow extends Record<string, SqlStorageValue> {
-      id: number
-      batch: ArrayBuffer
-      min_ts: number
-      max_ts: number
-      event_count: number
+    interface WalRow extends Record<string, SqlStorageValue> {
+      events: ArrayBuffer
     }
 
-    const rows = [...this.sql.exec<EventBatchRow>(
-      `SELECT id, batch, min_ts, max_ts, event_count
-       FROM event_batches
-       WHERE flushed = 0
-       ORDER BY min_ts ASC`
+    const rows = [...this.sql.exec<WalRow>(
+      `SELECT events FROM events_wal ORDER BY id ASC`
     )]
 
     for (const row of rows) {
-      const batchEvents = deserializeEventBatch(row.batch)
+      const batchEvents = deserializeEventBatch(row.events)
       allEvents.push(...batchEvents)
     }
 
-    // Add buffer events
-    allEvents.push(...this.eventBuffer)
+    // Add events from all namespace buffers
+    for (const buffer of this.nsEventBuffers.values()) {
+      allEvents.push(...buffer.events)
+    }
 
     return allEvents
-  }
-
-  /**
-   * Mark event batches as flushed
-   */
-  async markEventBatchesFlushed(batchIds: number[]): Promise<void> {
-    if (batchIds.length === 0) return
-
-    const placeholders = batchIds.map(() => '?').join(',')
-    this.sql.exec(
-      `UPDATE event_batches SET flushed = 1 WHERE id IN (${placeholders})`,
-      ...batchIds
-    )
-  }
-
-  /**
-   * Get the legacy event buffer (for transaction snapshots)
-   */
-  getEventBuffer(): Event[] {
-    return this.eventBuffer
-  }
-
-  /**
-   * Get the legacy event buffer size
-   */
-  getEventBufferSize(): number {
-    return this.eventBufferSize
-  }
-
-  /**
-   * Set the legacy event buffer (for transaction rollback)
-   */
-  setEventBuffer(events: Event[], size: number): void {
-    this.eventBuffer = events
-    this.eventBufferSize = size
   }
 }
 

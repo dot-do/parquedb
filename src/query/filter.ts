@@ -80,7 +80,7 @@ export function getFilterConfig(): FilterConfig {
  */
 const KNOWN_OPERATORS = new Set([
   // Comparison operators
-  '$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin',
+  '$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin', '$mod',
   // String operators
   '$regex', '$options', '$startsWith', '$endsWith', '$contains',
   // Array operators
@@ -90,7 +90,7 @@ const KNOWN_OPERATORS = new Set([
   // Logical operators (top-level and field-level)
   '$and', '$or', '$not', '$nor',
   // Special operators (handled elsewhere)
-  '$text', '$vector', '$geo',
+  '$text', '$vector', '$geo', '$expr', '$comment',
 ])
 
 /**
@@ -142,39 +142,17 @@ export function matchesFilter(row: unknown, filter: Filter, config?: FilterConfi
         // Non-operator field - primitives don't have fields, so no match
         return false
       }
-      switch (op) {
-        case '$eq':
-          if (!deepEqual(row, opValue)) return false
-          break
-        case '$ne':
-          if (deepEqual(row, opValue)) return false
-          break
-        case '$gt':
-          if (compareValues(row, opValue) <= 0) return false
-          break
-        case '$gte':
-          if (compareValues(row, opValue) < 0) return false
-          break
-        case '$lt':
-          if (compareValues(row, opValue) >= 0) return false
-          break
-        case '$lte':
-          if (compareValues(row, opValue) > 0) return false
-          break
-        case '$in':
-          if (!Array.isArray(opValue)) return false
-          if (!opValue.some(v => deepEqual(row, v))) return false
-          break
-        case '$nin':
-          if (!Array.isArray(opValue)) return false
-          if (opValue.some(v => deepEqual(row, v))) return false
-          break
-        default:
-          // Unknown operator for primitives
-          if (!KNOWN_OPERATORS.has(op)) {
-            handleUnknownOperator(op, config)
-          }
-          break
+
+      // Use shared comparison operator evaluation
+      const result = evaluateComparisonOperator(row, op, opValue)
+      if (result !== undefined) {
+        if (!result) return false
+        continue
+      }
+
+      // Unknown operator for primitives
+      if (!KNOWN_OPERATORS.has(op)) {
+        handleUnknownOperator(op, config)
       }
     }
     return true
@@ -210,6 +188,19 @@ export function matchesFilter(row: unknown, filter: Filter, config?: FilterConfi
       return false
     }
   }
+
+  // Handle $expr - expression evaluation comparing fields within document
+  if (filter.$expr) {
+    if (typeof filter.$expr !== 'object' || filter.$expr === null) {
+      return false // Invalid $expr format
+    }
+    if (!evaluateExpr(obj, filter.$expr as Record<string, unknown>)) {
+      return false
+    }
+  }
+
+  // Handle $comment - no effect on matching, purely for logging/debugging
+  // (no code needed - it's simply ignored)
 
   // Handle special operators - skip for now (these need specialized handling)
   // $text, $vector, $geo are handled by specialized index queries
@@ -290,10 +281,154 @@ function isOperatorObject(value: unknown): boolean {
 }
 
 /**
+ * Evaluate a single comparison operator against a value
+ *
+ * This is the core evaluation logic shared between:
+ * - Primitive value matching in matchesFilter
+ * - Object field matching in evaluateOperators
+ *
+ * @param value - The value to test
+ * @param op - The operator (e.g., '$eq', '$gt')
+ * @param opValue - The operand value
+ * @returns true if matches, false if doesn't match, undefined if unknown operator
+ */
+function evaluateComparisonOperator(value: unknown, op: string, opValue: unknown): boolean | undefined {
+  switch (op) {
+    case '$eq':
+      return deepEqual(value, opValue)
+
+    case '$ne':
+      return !deepEqual(value, opValue)
+
+    case '$gt': {
+      if (value === null || value === undefined) return false
+      const cmp = compareValues(value, opValue)
+      return !Number.isNaN(cmp) && cmp > 0
+    }
+
+    case '$gte': {
+      if (value === null || value === undefined) return false
+      const cmp = compareValues(value, opValue)
+      return !Number.isNaN(cmp) && cmp >= 0
+    }
+
+    case '$lt': {
+      if (value === null || value === undefined) return false
+      const cmp = compareValues(value, opValue)
+      return !Number.isNaN(cmp) && cmp < 0
+    }
+
+    case '$lte': {
+      if (value === null || value === undefined) return false
+      const cmp = compareValues(value, opValue)
+      return !Number.isNaN(cmp) && cmp <= 0
+    }
+
+    case '$in':
+      if (!Array.isArray(opValue)) return false
+      return opValue.some(v => deepEqual(value, v))
+
+    case '$nin':
+      if (!Array.isArray(opValue)) return false
+      return !opValue.some(v => deepEqual(value, v))
+
+    case '$mod': {
+      // $mod: [divisor, remainder] - matches when value % divisor === remainder
+      if (typeof value !== 'number' || value === null || value === undefined) return false
+      if (!Array.isArray(opValue) || opValue.length !== 2) return false
+      const [divisor, remainder] = opValue as [number, number]
+      if (typeof divisor !== 'number' || typeof remainder !== 'number') return false
+      if (divisor === 0) return false // Avoid division by zero
+      return value % divisor === remainder
+    }
+
+    default:
+      return undefined // Unknown operator - caller should handle
+  }
+}
+
+/**
+ * Evaluate $expr expression - compares fields within the same document
+ *
+ * @param obj - The document object
+ * @param expr - The expression object containing comparison operators
+ * @returns true if expression evaluates to true
+ */
+function evaluateExpr(obj: Record<string, unknown>, expr: Record<string, unknown>): boolean {
+  // Resolve a value - if it starts with $, it's a field reference
+  const resolveValue = (val: unknown): unknown => {
+    if (typeof val === 'string' && val.startsWith('$')) {
+      const fieldPath = val.slice(1) // Remove leading $
+      return getNestedValue(obj, fieldPath)
+    }
+    return val
+  }
+
+  // Check each comparison operator in the expression
+  for (const [op, args] of Object.entries(expr)) {
+    if (!Array.isArray(args) || args.length !== 2) {
+      return false // Invalid expression format
+    }
+
+    const [left, right] = args
+    const leftVal = resolveValue(left)
+    const rightVal = resolveValue(right)
+
+    switch (op) {
+      case '$eq':
+        if (!deepEqual(leftVal, rightVal)) return false
+        break
+
+      case '$ne':
+        if (deepEqual(leftVal, rightVal)) return false
+        break
+
+      case '$gt': {
+        const cmp = compareValues(leftVal, rightVal)
+        if (Number.isNaN(cmp) || cmp <= 0) return false
+        break
+      }
+
+      case '$gte': {
+        const cmp = compareValues(leftVal, rightVal)
+        if (Number.isNaN(cmp) || cmp < 0) return false
+        break
+      }
+
+      case '$lt': {
+        const cmp = compareValues(leftVal, rightVal)
+        if (Number.isNaN(cmp) || cmp >= 0) return false
+        break
+      }
+
+      case '$lte': {
+        const cmp = compareValues(leftVal, rightVal)
+        if (Number.isNaN(cmp) || cmp > 0) return false
+        break
+      }
+
+      default:
+        // Unknown expression operator - return false
+        return false
+    }
+  }
+
+  return true
+}
+
+/**
  * Evaluate operator conditions
  */
 function evaluateOperators(value: unknown, operators: Record<string, unknown>, config?: FilterConfig): boolean {
   for (const [op, opValue] of Object.entries(operators)) {
+    // First, try the shared comparison operator evaluation
+    const comparisonResult = evaluateComparisonOperator(value, op, opValue)
+    if (comparisonResult !== undefined) {
+      if (!comparisonResult) return false
+      continue
+    }
+
+    // Handle non-comparison operators
     switch (op) {
       case '$not': {
         // Field-level $not: negate the result of evaluating the inner operators
@@ -303,58 +438,19 @@ function evaluateOperators(value: unknown, operators: Record<string, unknown>, c
         break
       }
 
-      case '$eq':
-        if (!deepEqual(value, opValue)) return false
-        break
-
-      case '$ne':
-        if (deepEqual(value, opValue)) return false
-        break
-
-      case '$gt': {
-        if (value === null || value === undefined) return false
-        const cmp = compareValues(value, opValue)
-        if (Number.isNaN(cmp) || cmp <= 0) return false
-        break
-      }
-
-      case '$gte': {
-        if (value === null || value === undefined) return false
-        const cmp = compareValues(value, opValue)
-        if (Number.isNaN(cmp) || cmp < 0) return false
-        break
-      }
-
-      case '$lt': {
-        if (value === null || value === undefined) return false
-        const cmp = compareValues(value, opValue)
-        if (Number.isNaN(cmp) || cmp >= 0) return false
-        break
-      }
-
-      case '$lte': {
-        if (value === null || value === undefined) return false
-        const cmp = compareValues(value, opValue)
-        if (Number.isNaN(cmp) || cmp > 0) return false
-        break
-      }
-
-      case '$in':
-        if (!Array.isArray(opValue)) return false
-        if (!opValue.some(v => deepEqual(value, v))) return false
-        break
-
-      case '$nin':
-        if (!Array.isArray(opValue)) return false
-        if (opValue.some(v => deepEqual(value, v))) return false
-        break
-
       case '$regex': {
         if (typeof value !== 'string') return false
+        // Validate opValue type
+        if (typeof opValue !== 'string' && !(opValue instanceof RegExp)) return false
         // Only pass flags if $options is explicitly provided, otherwise let RegExp keep its own flags
-        const flags = operators.$options !== undefined ? (operators.$options as string) : undefined
-        const pattern = createSafeRegex(opValue as string | RegExp, flags)
-        if (!pattern.test(value)) return false
+        const flags = operators.$options !== undefined ? String(operators.$options) : undefined
+        try {
+          const pattern = createSafeRegex(opValue, flags)
+          if (!pattern.test(value)) return false
+        } catch {
+          // Invalid regex pattern (unsafe or malformed) - treat as no match
+          return false
+        }
         break
       }
 
@@ -363,17 +459,20 @@ function evaluateOperators(value: unknown, operators: Record<string, unknown>, c
 
       case '$startsWith':
         if (typeof value !== 'string') return false
-        if (!value.startsWith(opValue as string)) return false
+        if (typeof opValue !== 'string') return false
+        if (!value.startsWith(opValue)) return false
         break
 
       case '$endsWith':
         if (typeof value !== 'string') return false
-        if (!value.endsWith(opValue as string)) return false
+        if (typeof opValue !== 'string') return false
+        if (!value.endsWith(opValue)) return false
         break
 
       case '$contains':
         if (typeof value !== 'string') return false
-        if (!value.includes(opValue as string)) return false
+        if (typeof opValue !== 'string') return false
+        if (!value.includes(opValue)) return false
         break
 
       case '$all': {

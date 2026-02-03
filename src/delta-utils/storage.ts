@@ -10,6 +10,8 @@
  * - Cross-platform (Node.js, Cloudflare Workers, browsers)
  */
 
+import { normalizeStoragePath } from '../storage/utils.js'
+
 // =============================================================================
 // VERSION MISMATCH ERROR
 // =============================================================================
@@ -206,19 +208,12 @@ export interface R2BucketLike {
  * Normalize a storage path
  * - Removes leading slashes
  * - Removes duplicate slashes
- * - Handles . and .. (basic)
+ * - Removes trailing slashes (except for empty string)
+ *
+ * Re-exported from shared storage utilities for backward compatibility.
+ * @see normalizeStoragePath in src/storage/utils.ts
  */
-export function normalizePath(path: string): string {
-  // Remove leading slashes
-  let normalized = path.replace(/^\/+/, '')
-  // Remove duplicate slashes
-  normalized = normalized.replace(/\/+/g, '/')
-  // Remove trailing slash (except for empty string)
-  if (normalized.length > 0 && normalized.endsWith('/')) {
-    normalized = normalized.slice(0, -1)
-  }
-  return normalized
-}
+export const normalizePath = normalizeStoragePath
 
 /**
  * Join path segments

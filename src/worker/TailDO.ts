@@ -1,16 +1,11 @@
 /**
  * TailDO - Hibernatable WebSocket Durable Object for Tail Events
  *
- * Receives tail events from tail workers via WebSocket. Supports two modes:
+ * Receives tail events from tail workers via WebSocket and writes them to R2
+ * as NDJSON files, which trigger R2 event notifications. A separate
+ * Compaction Consumer worker processes these into Parquet files.
  *
- * 1. **Direct Mode** (default): Processes events through WorkerLogsMV and
- *    flushes directly to Parquet files in R2.
- *
- * 2. **Event-Driven Mode** (RAW_EVENTS_ENABLED=true): Writes raw events to R2
- *    as NDJSON files, which trigger R2 event notifications. A separate
- *    Compaction Consumer worker processes these into Parquet files.
- *
- * Event-Driven Architecture (Option D):
+ * Event-Driven Architecture:
  * ```
  * TailDO -> writes raw events to R2
  *              ↓ object-create notification
@@ -21,7 +16,7 @@
  *        Queue -> MV refresh / downstream
  * ```
  *
- * Benefits of Event-Driven Mode:
+ * Benefits:
  * - Fully observable (compaction worker is tailable)
  * - Decoupled processing for reliability
  * - Horizontal scaling via queue consumers
@@ -29,8 +24,7 @@
  *
  * Features:
  * - Hibernatable WebSocket API for cost savings
- * - Batched processing through WorkerLogsMV (direct mode)
- * - Raw event writing to R2 (event-driven mode)
+ * - Raw event writing to R2
  * - Automatic flushing on connection close or threshold
  * - Per-connection metadata tracking
  *
@@ -39,8 +33,6 @@
  */
 
 import { DurableObject } from 'cloudflare:workers'
-import { WorkerLogsMV, createWorkerLogsMV } from '../streaming/worker-logs'
-import type { TailItem, TailEvent } from '../streaming/worker-logs'
 import { R2Backend } from '../storage/R2Backend'
 import type { StorageBackend } from '../types/storage'
 import type { R2Bucket as InternalR2Bucket } from '../storage/types/r2'
@@ -55,38 +47,20 @@ import type { ValidatedTraceItem } from './tail-validation'
  * Environment bindings for TailDO
  */
 export interface TailDOEnv {
-  /** R2 bucket for storing log Parquet files */
+  /** R2 bucket for storing raw event files */
   LOGS_BUCKET: R2Bucket
-
-  /** Optional: Prefix for log files in R2 */
-  LOGS_PREFIX?: string
-
-  /** Optional: Flush threshold (default: 1000) */
-  FLUSH_THRESHOLD?: string
 
   /** Optional: Flush interval in ms (default: 30000) */
   FLUSH_INTERVAL_MS?: string
 
   /**
-   * Enable event-driven mode (Option D)
-   *
-   * When enabled, TailDO writes raw events to R2 as NDJSON files instead of
-   * processing them directly. This triggers R2 event notifications which are
-   * processed by the Compaction Consumer worker.
-   *
-   * Set to "true" to enable.
-   * @default false
-   */
-  RAW_EVENTS_ENABLED?: string
-
-  /**
-   * Prefix for raw event files in R2 (event-driven mode only)
+   * Prefix for raw event files in R2
    * @default "raw-events"
    */
   RAW_EVENTS_PREFIX?: string
 
   /**
-   * Batch size before writing raw events file (event-driven mode only)
+   * Batch size before writing raw events file
    * @default 100
    */
   RAW_EVENTS_BATCH_SIZE?: string
@@ -167,17 +141,10 @@ interface ConnectionMeta {
  * Durable Object for receiving and processing tail events
  *
  * Uses hibernatable WebSockets to minimize costs when idle.
- *
- * In **direct mode**: State is stored in the WorkerLogsMV buffer and
- * periodically flushed to R2 as Parquet files.
- *
- * In **event-driven mode**: Raw events are buffered and written to R2
- * as NDJSON files, triggering R2 event notifications for downstream processing.
+ * Raw events are buffered and written to R2 as NDJSON files,
+ * triggering R2 event notifications for downstream processing.
  */
 export class TailDO extends DurableObject<TailDOEnv> {
-  /** WorkerLogsMV instance for buffering and flushing logs (direct mode) */
-  private mv: WorkerLogsMV | null = null
-
   /** Storage backend for R2 */
   private storage: StorageBackend | null = null
 
@@ -187,10 +154,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
   /** Total events processed since DO instantiation */
   private totalEventsProcessed = 0
 
-  /** Whether event-driven mode is enabled */
-  private rawEventsEnabled = false
-
-  /** Buffer for raw events (event-driven mode) */
+  /** Buffer for raw events */
   private rawEventsBuffer: ValidatedTraceItem[] = []
 
   /** Batch sequence number for ordering raw event files */
@@ -198,6 +162,12 @@ export class TailDO extends DurableObject<TailDOEnv> {
 
   /** Unique ID for this DO instance */
   private doId: string
+
+  /** Whether a flush alarm is currently scheduled */
+  private alarmScheduled = false
+
+  /** Maximum buffer size before forced flush (prevents unbounded memory growth) */
+  private static readonly MAX_BUFFER_SIZE = 1000
 
   constructor(ctx: DurableObjectState, env: TailDOEnv) {
     super(ctx, env)
@@ -209,48 +179,20 @@ export class TailDO extends DurableObject<TailDOEnv> {
   // ===========================================================================
 
   /**
-   * Initialize the MV and storage backend lazily
+   * Initialize the storage backend lazily
    */
   private ensureInitialized(): void {
     if (this.storage) return
 
-    // Check if event-driven mode is enabled
-    this.rawEventsEnabled = this.env.RAW_EVENTS_ENABLED === 'true'
-
-    // Create R2 storage backend
-    const prefix = this.env.LOGS_PREFIX || 'logs/workers'
     // Bridge between @cloudflare/workers-types R2Bucket and our internal type
     const bucket = toR2Bucket<InternalR2Bucket>(this.env.LOGS_BUCKET)
     this.storage = new R2Backend(bucket)
 
-    // In event-driven mode, we don't need WorkerLogsMV
-    if (this.rawEventsEnabled) {
-      console.log('[TailDO] Event-driven mode enabled, raw events will be written to R2')
-      return
-    }
-
-    // Direct mode: Create WorkerLogsMV instance
-    const flushThreshold = this.env.FLUSH_THRESHOLD
-      ? parseInt(this.env.FLUSH_THRESHOLD, 10)
-      : 1000
-    const flushIntervalMs = this.env.FLUSH_INTERVAL_MS
-      ? parseInt(this.env.FLUSH_INTERVAL_MS, 10)
-      : 30000
-
-    this.mv = createWorkerLogsMV({
-      storage: this.storage,
-      datasetPath: prefix,
-      flushThreshold,
-      flushIntervalMs,
-      compression: 'lz4',
-    })
-
-    // Start the MV (enables periodic flushing via timer)
-    this.mv.start()
+    console.log('[TailDO] Initialized, raw events will be written to R2')
   }
 
   /**
-   * Get the batch size for raw events (event-driven mode)
+   * Get the batch size for raw events
    */
   private getRawEventsBatchSize(): number {
     return this.env.RAW_EVENTS_BATCH_SIZE
@@ -259,14 +201,14 @@ export class TailDO extends DurableObject<TailDOEnv> {
   }
 
   /**
-   * Get the prefix for raw event files (event-driven mode)
+   * Get the prefix for raw event files
    */
   private getRawEventsPrefix(): string {
     return this.env.RAW_EVENTS_PREFIX || 'raw-events'
   }
 
   /**
-   * Write raw events to R2 as NDJSON file (event-driven mode)
+   * Write raw events to R2 as NDJSON file
    *
    * File format:
    * - First line: metadata (doId, createdAt, batchSeq)
@@ -307,7 +249,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
   }
 
   /**
-   * Flush raw events buffer to R2 (event-driven mode)
+   * Flush raw events buffer to R2
    */
   private async flushRawEvents(): Promise<void> {
     if (this.rawEventsBuffer.length === 0) return
@@ -319,12 +261,25 @@ export class TailDO extends DurableObject<TailDOEnv> {
   }
 
   /**
-   * Maybe flush raw events if batch size is reached (event-driven mode)
+   * Maybe flush raw events if batch size or max size is reached.
+   * Also schedules a time-based flush alarm to prevent unbounded memory growth.
    */
   private async maybeFlushRawEvents(): Promise<void> {
     const batchSize = this.getRawEventsBatchSize()
-    if (this.rawEventsBuffer.length >= batchSize) {
+
+    // Flush immediately if we hit batch size or max buffer size
+    if (this.rawEventsBuffer.length >= batchSize || this.rawEventsBuffer.length >= TailDO.MAX_BUFFER_SIZE) {
       await this.flushRawEvents()
+      return
+    }
+
+    // Schedule alarm for time-based flush if not already scheduled
+    if (!this.alarmScheduled && this.rawEventsBuffer.length > 0) {
+      const flushIntervalMs = this.env.FLUSH_INTERVAL_MS
+        ? parseInt(this.env.FLUSH_INTERVAL_MS, 10)
+        : 30000
+      await this.ctx.storage.setAlarm(Date.now() + flushIntervalMs)
+      this.alarmScheduled = true
     }
   }
 
@@ -376,7 +331,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
   /**
    * Called when a WebSocket message is received
    *
-   * Parses the message, validates it, and passes events to WorkerLogsMV.
+   * Parses the message, validates it, and buffers events for R2.
    */
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     this.ensureInitialized()
@@ -404,48 +359,13 @@ export class TailDO extends DurableObject<TailDOEnv> {
         meta.eventsReceived += parsed.events.length
       }
 
-      // Process events
+      // Process events: buffer and write to R2
       if (parsed.events && parsed.events.length > 0) {
-        if (this.rawEventsEnabled) {
-          // Event-driven mode: buffer events and write to R2
-          this.rawEventsBuffer.push(...parsed.events)
-          this.totalEventsProcessed += parsed.events.length
+        this.rawEventsBuffer.push(...parsed.events)
+        this.totalEventsProcessed += parsed.events.length
 
-          // Maybe flush if batch size reached
-          await this.maybeFlushRawEvents()
-        } else {
-          // Direct mode: process through WorkerLogsMV
-          // Convert validated items to TailItem format expected by WorkerLogsMV
-          // ValidatedTraceItem has scriptName: string | null, TailItem expects string
-          const traces: TailItem[] = parsed.events.map(event => ({
-            scriptName: event.scriptName ?? 'unknown',
-            outcome: event.outcome as TailItem['outcome'],
-            eventTimestamp: event.eventTimestamp ?? Date.now(),
-            event: event.event ? {
-              request: event.event.request ? {
-                method: event.event.request.method,
-                url: event.event.request.url,
-                headers: event.event.request.headers,
-                cf: event.event.request.cf,
-              } : undefined!,
-              response: event.event.response,
-            } : null,
-            logs: event.logs.map(log => ({
-              timestamp: log.timestamp,
-              level: log.level as TailItem['logs'][number]['level'],
-              message: [log.message], // WorkerLogsMV expects message as array
-            })),
-            exceptions: event.exceptions,
-          }))
-
-          const tailEvent: TailEvent = {
-            type: 'tail',
-            traces,
-          }
-
-          await this.mv!.ingestTailEvent(tailEvent)
-          this.totalEventsProcessed += parsed.events.length
-        }
+        // Maybe flush if batch size reached
+        await this.maybeFlushRawEvents()
 
         // Send acknowledgment
         this.sendAck(ws, parsed.events.length)
@@ -465,7 +385,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
   override async webSocketClose(
     ws: WebSocket,
     code: number,
-    reason: string,
+    _reason: string,
     wasClean: boolean
   ): Promise<void> {
     const meta = this.connections.get(ws)
@@ -479,15 +399,9 @@ export class TailDO extends DurableObject<TailDOEnv> {
     // Remove connection metadata
     this.connections.delete(ws)
 
-    // If no more connections, flush pending events
+    // If no more connections, flush pending events to R2
     if (this.connections.size === 0) {
-      if (this.rawEventsEnabled) {
-        // Event-driven mode: flush raw events to R2
-        await this.flushRawEvents()
-      } else if (this.mv) {
-        // Direct mode: flush WorkerLogsMV
-        await this.mv.flush()
-      }
+      await this.flushRawEvents()
     }
   }
 
@@ -547,33 +461,24 @@ export class TailDO extends DurableObject<TailDOEnv> {
   /**
    * Alarm handler for periodic flush
    *
-   * In direct mode: WorkerLogsMV uses setInterval internally, but we also
-   * set an alarm as a backup in case the DO is hibernated.
-   *
-   * In event-driven mode: Flushes raw events buffer to R2.
+   * Flushes raw events buffer to R2 and reschedules if needed.
    */
   override async alarm(): Promise<void> {
-    if (this.rawEventsEnabled) {
-      // Event-driven mode: flush raw events
-      if (this.rawEventsBuffer.length > 0) {
-        console.log(`[TailDO] Alarm flush: ${this.rawEventsBuffer.length} raw events`)
-        await this.flushRawEvents()
-      }
-    } else if (this.mv) {
-      // Direct mode: flush WorkerLogsMV
-      const stats = this.mv.getStats()
-      if (stats.bufferSize > 0) {
-        console.log(`[TailDO] Alarm flush: ${stats.bufferSize} records`)
-        await this.mv.flush()
-      }
+    // Reset alarm flag since this alarm has fired
+    this.alarmScheduled = false
+
+    if (this.rawEventsBuffer.length > 0) {
+      console.log(`[TailDO] Alarm flush: ${this.rawEventsBuffer.length} raw events`)
+      await this.flushRawEvents()
     }
 
-    // Schedule next alarm if we have active connections
-    if (this.connections.size > 0) {
+    // Schedule next alarm if we have active connections or pending events
+    if (this.connections.size > 0 || this.rawEventsBuffer.length > 0) {
       const flushIntervalMs = this.env.FLUSH_INTERVAL_MS
         ? parseInt(this.env.FLUSH_INTERVAL_MS, 10)
         : 30000
       await this.ctx.storage.setAlarm(Date.now() + flushIntervalMs)
+      this.alarmScheduled = true
     }
   }
 
@@ -587,16 +492,12 @@ export class TailDO extends DurableObject<TailDOEnv> {
   getStats(): {
     connections: number
     totalEventsProcessed: number
-    mode: 'direct' | 'event-driven'
-    mvStats: ReturnType<WorkerLogsMV['getStats']> | null
     rawEventsBufferSize: number
     batchSeq: number
   } {
     return {
       connections: this.connections.size,
       totalEventsProcessed: this.totalEventsProcessed,
-      mode: this.rawEventsEnabled ? 'event-driven' : 'direct',
-      mvStats: this.mv?.getStats() ?? null,
       rawEventsBufferSize: this.rawEventsBuffer.length,
       batchSeq: this.batchSeq,
     }

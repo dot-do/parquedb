@@ -52,6 +52,12 @@ export type {
 
   // Event log types
   EventLog,
+
+  // IngestStream types
+  IngestStreamOptions,
+  IngestStreamResult,
+  IngestStreamError,
+  IngestBatchStats,
 } from './ParqueDB/types'
 
 // Export values (not types)
@@ -103,6 +109,8 @@ import type {
   GetRelatedResult,
   DiffResult,
   RevertOptions,
+  IngestStreamOptions,
+  IngestStreamResult,
 } from './ParqueDB/types'
 
 import { normalizeNamespace } from './ParqueDB/validation'
@@ -175,6 +183,12 @@ export interface IParqueDB {
     id: string,
     options?: { actor?: EntityId }
   ): Promise<Entity<T> | null>
+
+  ingestStream<T = Record<string, unknown>>(
+    namespace: string,
+    source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>,
+    options?: IngestStreamOptions<Partial<T>>
+  ): Promise<IngestStreamResult>
 
   // History & Time-Travel
   history(entityId: EntityId, options?: HistoryOptions): Promise<HistoryResult>
@@ -270,57 +284,59 @@ export class ParqueDB {
   constructor(config: ParqueDBConfig) {
     const impl = new ParqueDBImpl(config)
 
+    // Build method map once at construction time (not on every property access)
+    const methodMap: Record<string, unknown> = {
+      // Schema Management
+      registerSchema: impl.registerSchema.bind(impl),
+      // Collection Access
+      collection: impl.collection.bind(impl),
+      // CRUD Operations
+      find: impl.find.bind(impl),
+      get: impl.get.bind(impl),
+      create: impl.create.bind(impl),
+      update: impl.update.bind(impl),
+      delete: impl.delete.bind(impl),
+      // Bulk Operations
+      upsert: impl.upsert.bind(impl),
+      upsertMany: impl.upsertMany.bind(impl),
+      deleteMany: impl.deleteMany.bind(impl),
+      restore: impl.restore.bind(impl),
+      ingestStream: impl.ingestStream.bind(impl),
+      // History & Time-Travel
+      history: impl.history.bind(impl),
+      getHistory: impl.getHistory.bind(impl),
+      getAtVersion: impl.getAtVersion.bind(impl),
+      diff: impl.diff.bind(impl),
+      revert: impl.revert.bind(impl),
+      // Relationships
+      getRelated: impl.getRelated.bind(impl),
+      // Transactions & Snapshots
+      beginTransaction: impl.beginTransaction.bind(impl),
+      getSnapshotManager: impl.getSnapshotManager.bind(impl),
+      getEventLog: impl.getEventLog.bind(impl),
+      // Index Management
+      createIndex: impl.createIndex.bind(impl),
+      dropIndex: impl.dropIndex.bind(impl),
+      listIndexes: impl.listIndexes.bind(impl),
+      getIndex: impl.getIndex.bind(impl),
+      rebuildIndex: impl.rebuildIndex.bind(impl),
+      getIndexStats: impl.getIndexStats.bind(impl),
+      getIndexManager: impl.getIndexManager.bind(impl),
+      // Storage Router
+      getStorageMode: impl.getStorageMode.bind(impl),
+      getDataPath: impl.getDataPath.bind(impl),
+      hasTypedSchema: impl.hasTypedSchema.bind(impl),
+      getCollectionOptions: impl.getCollectionOptions.bind(impl),
+      getStorageRouter: impl.getStorageRouter.bind(impl),
+      // Resource Management
+      dispose: impl.dispose.bind(impl),
+    }
+
     // Return a Proxy for dynamic collection access
-    // All method calls are delegated to impl
+    // All method calls are delegated to impl via the pre-built methodMap
     return new Proxy(this, {
       get(_target, prop, _receiver) {
-        // Handle known methods that delegate to impl
-        const methodMap: Record<string, unknown> = {
-          // Schema Management
-          registerSchema: impl.registerSchema.bind(impl),
-          // Collection Access
-          collection: impl.collection.bind(impl),
-          // CRUD Operations
-          find: impl.find.bind(impl),
-          get: impl.get.bind(impl),
-          create: impl.create.bind(impl),
-          update: impl.update.bind(impl),
-          delete: impl.delete.bind(impl),
-          // Bulk Operations
-          upsert: impl.upsert.bind(impl),
-          upsertMany: impl.upsertMany.bind(impl),
-          deleteMany: impl.deleteMany.bind(impl),
-          restore: impl.restore.bind(impl),
-          // History & Time-Travel
-          history: impl.history.bind(impl),
-          getHistory: impl.getHistory.bind(impl),
-          getAtVersion: impl.getAtVersion.bind(impl),
-          diff: impl.diff.bind(impl),
-          revert: impl.revert.bind(impl),
-          // Relationships
-          getRelated: impl.getRelated.bind(impl),
-          // Transactions & Snapshots
-          beginTransaction: impl.beginTransaction.bind(impl),
-          getSnapshotManager: impl.getSnapshotManager.bind(impl),
-          getEventLog: impl.getEventLog.bind(impl),
-          // Index Management
-          createIndex: impl.createIndex.bind(impl),
-          dropIndex: impl.dropIndex.bind(impl),
-          listIndexes: impl.listIndexes.bind(impl),
-          getIndex: impl.getIndex.bind(impl),
-          rebuildIndex: impl.rebuildIndex.bind(impl),
-          getIndexStats: impl.getIndexStats.bind(impl),
-          getIndexManager: impl.getIndexManager.bind(impl),
-          // Storage Router
-          getStorageMode: impl.getStorageMode.bind(impl),
-          getDataPath: impl.getDataPath.bind(impl),
-          hasTypedSchema: impl.hasTypedSchema.bind(impl),
-          getCollectionOptions: impl.getCollectionOptions.bind(impl),
-          getStorageRouter: impl.getStorageRouter.bind(impl),
-          // Resource Management
-          dispose: impl.dispose.bind(impl),
-        }
-
+        // Handle known methods from pre-built map
         if (typeof prop === 'string' && prop in methodMap) {
           return methodMap[prop]
         }

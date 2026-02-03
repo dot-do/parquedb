@@ -1,0 +1,148 @@
+# ParqueDB Streaming Tail Worker Configuration
+#
+# This configuration sets up a tail worker that streams logs from your
+# producer workers to Parquet files in R2 via the TailDO Durable Object.
+#
+# Two modes are supported:
+#
+# 1. DIRECT MODE (default):
+#    Producer Workers -> Tail Worker -> WebSocket -> TailDO -> WorkerLogsMV -> R2 Parquet
+#
+# 2. EVENT-DRIVEN MODE (RAW_EVENTS_ENABLED=true):
+#    Producer Workers -> Tail Worker -> WebSocket -> TailDO -> R2 (raw events)
+#                                                                   ↓ R2 notification
+#                                                           Queue -> Compaction Worker -> R2 Parquet
+#
+# Event-driven mode provides better observability (compaction is tailable) and
+# reliability (decoupled processing). See docs/guides/r2-event-notifications.md
+#
+# Setup (Direct Mode):
+# 1. Create the R2 bucket: wrangler r2 bucket create parquedb-logs
+# 2. Deploy: wrangler deploy
+# 3. The tail worker will automatically receive events from other workers
+#
+# Setup (Event-Driven Mode):
+# 1. Create the R2 bucket: wrangler r2 bucket create parquedb-logs
+# 2. Create the queue: wrangler queues create parquedb-raw-events
+# 3. Enable R2 event notifications (see docs/guides/r2-event-notifications.md)
+# 4. Set RAW_EVENTS_ENABLED = "true" below
+# 5. Deploy: wrangler deploy
+# 6. Deploy compaction worker: wrangler deploy -c wrangler-compaction.toml
+
+name = "parquedb-tail"
+main = "src/worker/tail-streaming.ts"
+compatibility_date = "2024-09-02"
+compatibility_flags = ["nodejs_compat"]
+
+# ==============================================================================
+# Tail Consumers
+# ==============================================================================
+# List all workers you want to tail. Each worker's execution traces will be
+# sent to this tail worker for processing.
+#
+# Example - tail all workers in your account:
+# [[tail_consumers]]
+# service = "parquedb-tail"
+#
+# Example - tail specific workers:
+# [[tail_consumers]]
+# service = "parquedb-tail"
+# environment = "production"
+
+[[tail_consumers]]
+service = "parquedb-tail"
+
+# ==============================================================================
+# Durable Objects
+# ==============================================================================
+# TailDO is a hibernatable WebSocket Durable Object that receives events
+# from the tail worker, buffers them using WorkerLogsMV, and flushes to
+# Parquet files in R2.
+
+[[durable_objects.bindings]]
+name = "TAIL_DO"
+class_name = "TailDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["TailDO"]
+
+# ==============================================================================
+# R2 Storage
+# ==============================================================================
+# R2 bucket for storing the Parquet log files.
+# Files are stored in time-partitioned directories:
+# logs/workers/year=YYYY/month=MM/day=DD/hour=HH/logs-{timestamp}.parquet
+
+[[r2_buckets]]
+binding = "LOGS_BUCKET"
+bucket_name = "parquedb-logs"
+
+# ==============================================================================
+# Configuration Variables
+# ==============================================================================
+
+[vars]
+# Prefix for log files in R2 (default: "logs/workers")
+LOGS_PREFIX = "logs/workers"
+
+# Number of events to buffer before flushing to Parquet (default: 1000)
+FLUSH_THRESHOLD = "1000"
+
+# Maximum time in ms to buffer events before flushing (default: 30000)
+FLUSH_INTERVAL_MS = "30000"
+
+# Batch size for tail worker before sending to TailDO (default: 50)
+BATCH_SIZE = "100"
+
+# Max wait time in ms before sending batch to TailDO (default: 1000)
+BATCH_WAIT_MS = "2000"
+
+# ==============================================================================
+# Event-Driven Mode Configuration (Option D)
+# ==============================================================================
+# Enable event-driven mode to write raw events to R2 instead of processing
+# directly. This triggers R2 event notifications which are processed by the
+# Compaction Consumer worker.
+#
+# Benefits:
+# - Compaction worker is fully observable via tail workers
+# - Decoupled processing for better reliability
+# - Horizontal scaling via queue consumers
+# - Raw events preserved for debugging/replay
+#
+# Set to "true" to enable event-driven mode
+RAW_EVENTS_ENABLED = "false"
+
+# Prefix for raw event files in R2 (event-driven mode only)
+RAW_EVENTS_PREFIX = "raw-events"
+
+# Batch size before writing raw events file (event-driven mode only)
+RAW_EVENTS_BATCH_SIZE = "100"
+
+# ==============================================================================
+# Production Environment
+# ==============================================================================
+
+[env.production]
+# Higher thresholds for production to reduce R2 writes
+[env.production.vars]
+FLUSH_THRESHOLD = "5000"
+FLUSH_INTERVAL_MS = "60000"
+BATCH_SIZE = "200"
+BATCH_WAIT_MS = "5000"
+# Enable event-driven mode in production for better observability
+RAW_EVENTS_ENABLED = "true"
+RAW_EVENTS_BATCH_SIZE = "200"
+
+# ==============================================================================
+# Development Environment
+# ==============================================================================
+
+[env.development]
+# Lower thresholds for faster feedback during development
+[env.development.vars]
+FLUSH_THRESHOLD = "100"
+FLUSH_INTERVAL_MS = "10000"
+BATCH_SIZE = "10"
+BATCH_WAIT_MS = "500"

@@ -17,6 +17,7 @@ export {
   validateEntityId,
   validateLocalId,
   normalizeEntityId,
+  toFullId,
 } from './validation'
 
 // Re-export store utilities (for testing)
@@ -24,6 +25,12 @@ export { getEntityStore, getEventStore, getArchivedEventStore, getSnapshotStore,
 
 // Re-export collection
 export { CollectionImpl } from './collection'
+
+// Re-export snapshot manager
+export { SnapshotManagerImpl } from './snapshots'
+
+// Re-export event log
+export { EventLogImpl } from './events'
 
 // Re-export core
 export { ParqueDBImpl } from './core'

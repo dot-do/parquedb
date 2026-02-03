@@ -2,10 +2,12 @@
  * ParqueDB Streaming Tail Worker
  *
  * A simplified tail worker that streams events to TailDO via WebSocket
- * for efficient batching and Parquet storage.
+ * for efficient batching and storage.
  *
  * Architecture:
- * Tail events -> Tail Worker -> WebSocket -> TailDO -> WorkerLogsMV -> Parquet in R2
+ * Tail events -> Tail Worker -> WebSocket -> TailDO -> R2 (NDJSON)
+ *                                                          ↓ event notification
+ *                                                     Queue -> Compaction Worker -> Parquet in R2
  *
  * Features:
  * - Minimal processing in tail worker (just metadata addition)
@@ -14,7 +16,7 @@
  * - Instance ID tracking for debugging
  *
  * @see TailDO for the Durable Object that receives these events
- * @see WorkerLogsMV for the materialized view that buffers and flushes to Parquet
+ * @see CompactionConsumer for the worker that processes raw events into Parquet
  */
 
 import {

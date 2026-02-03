@@ -23,6 +23,8 @@ import type {
   UpsertManyItem,
   UpsertManyOptions,
   UpsertManyResult,
+  IngestStreamOptions,
+  IngestStreamResult,
 } from './types'
 
 /**
@@ -38,6 +40,7 @@ interface ParqueDBMethods {
   deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
   upsert<T>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: { returnDocument?: 'before' | 'after' }): Promise<Entity<T> | null>
   upsertMany<T>(namespace: string, items: UpsertManyItem<T>[], options?: UpsertManyOptions): Promise<UpsertManyResult>
+  ingestStream<T>(namespace: string, source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>, options?: IngestStreamOptions<Partial<T>>): Promise<IngestStreamResult>
 }
 
 // =============================================================================
@@ -88,5 +91,12 @@ export class CollectionImpl<T = Record<string, unknown>> implements Collection<T
 
   async upsertMany(items: UpsertManyItem<T>[], options?: UpsertManyOptions): Promise<UpsertManyResult> {
     return this.db.upsertMany<T>(this.namespace, items, options)
+  }
+
+  async ingestStream(
+    source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>,
+    options?: IngestStreamOptions<Partial<T>>
+  ): Promise<IngestStreamResult> {
+    return this.db.ingestStream<T>(this.namespace, source, options)
   }
 }

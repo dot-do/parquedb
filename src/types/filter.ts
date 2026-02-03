@@ -174,6 +174,35 @@ export interface NinOperator<T = unknown> {
 }
 
 /**
+ * Modulo operation operator
+ *
+ * Matches values where value % divisor equals remainder.
+ * Useful for filtering by multiples or distributing work across workers.
+ *
+ * @example
+ * ```typescript
+ * // Match every 3rd item (id % 3 === 0)
+ * { id: { $mod: [3, 0] } }
+ *
+ * // Match even numbers
+ * { count: { $mod: [2, 0] } }
+ *
+ * // Match odd numbers
+ * { count: { $mod: [2, 1] } }
+ *
+ * // Distribute work across 4 workers (worker 2 handles id % 4 === 2)
+ * { id: { $mod: [4, 2] } }
+ * ```
+ */
+export interface ModOperator {
+  /**
+   * Array of [divisor, remainder]
+   * Matches when value % divisor === remainder
+   */
+  $mod: [number, number]
+}
+
+/**
  * Union of all comparison operators
  *
  * @typeParam T - Type of the value being compared
@@ -187,6 +216,7 @@ export type ComparisonOperator<T = unknown> =
   | LteOperator<T>
   | InOperator<T>
   | NinOperator<T>
+  | ModOperator
 
 // =============================================================================
 // String Operators
@@ -592,12 +622,82 @@ export interface GeoOperator {
 }
 
 /**
+ * Expression evaluation operator
+ *
+ * Allows comparing fields within the same document using aggregation operators.
+ * Field references use the `$fieldName` syntax.
+ *
+ * @example
+ * ```typescript
+ * // Compare two fields for equality
+ * { $expr: { $eq: ['$quantity', '$sold'] } }
+ *
+ * // Check if budget exceeds spending
+ * { $expr: { $gt: ['$budget', '$spent'] } }
+ *
+ * // Compare field to literal
+ * { $expr: { $gte: ['$score', 100] } }
+ *
+ * // Access nested fields
+ * { $expr: { $lt: ['$user.balance', '$user.creditLimit'] } }
+ * ```
+ */
+export interface ExprOperator {
+  $expr: {
+    /** Field equality comparison */
+    $eq?: [unknown, unknown]
+    /** Not equal comparison */
+    $ne?: [unknown, unknown]
+    /** Greater than comparison */
+    $gt?: [unknown, unknown]
+    /** Greater than or equal comparison */
+    $gte?: [unknown, unknown]
+    /** Less than comparison */
+    $lt?: [unknown, unknown]
+    /** Less than or equal comparison */
+    $lte?: [unknown, unknown]
+  }
+}
+
+/**
+ * Query comment operator
+ *
+ * Adds a comment to the query for logging and debugging purposes.
+ * Has no effect on query matching - purely for documentation.
+ *
+ * @example
+ * ```typescript
+ * // Document a complex query
+ * {
+ *   $comment: 'TICKET-123: Find active premium users for migration',
+ *   status: 'active',
+ *   tier: 'premium'
+ * }
+ *
+ * // Add context for debugging
+ * {
+ *   $comment: 'Batch job run at 2024-06-15 - process every 5th record',
+ *   id: { $mod: [5, 0] }
+ * }
+ * ```
+ */
+export interface CommentOperator {
+  /**
+   * Comment string for logging/debugging
+   * This has no effect on query matching
+   */
+  $comment: string
+}
+
+/**
  * Union of special search operators (text, vector, geo)
  */
 export type SpecialOperator =
   | TextOperator
   | VectorOperator
   | GeoOperator
+  | ExprOperator
+  | CommentOperator
 
 // =============================================================================
 // Logical Operators
@@ -779,6 +879,12 @@ export interface Filter {
 
   /** Geospatial */
   $geo?: GeoOperator['$geo']
+
+  /** Expression evaluation (compare fields within document) */
+  $expr?: ExprOperator['$expr']
+
+  /** Query comment for logging/debugging (no effect on matching) */
+  $comment?: string
 }
 
 // =============================================================================
@@ -794,7 +900,7 @@ export interface Filter {
 export function isComparisonOperator(value: unknown): value is ComparisonOperator {
   if (typeof value !== 'object' || value === null) return false
   const keys = Object.keys(value)
-  return keys.length === 1 && keys[0] !== undefined && ['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin'].includes(keys[0])
+  return keys.length === 1 && keys[0] !== undefined && ['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin', '$mod'].includes(keys[0])
 }
 
 /**
@@ -879,4 +985,280 @@ export function hasLogicalOperators(filter: Filter): boolean {
  */
 export function hasSpecialOperators(filter: Filter): boolean {
   return '$text' in filter || '$vector' in filter || '$geo' in filter
+}
+
+// =============================================================================
+// Individual Operator Type Guards
+// =============================================================================
+
+// Helper function to check basic object structure
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Date)
+}
+
+// -----------------------------------------------------------------------------
+// Comparison Operator Type Guards
+// -----------------------------------------------------------------------------
+
+/**
+ * Type guard for $eq operator
+ * @typeParam T - Type of the value being compared
+ */
+export function is$Eq<T = unknown>(value: unknown): value is EqOperator<T> {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$eq' in value
+}
+
+/**
+ * Type guard for $ne operator
+ * @typeParam T - Type of the value being compared
+ */
+export function is$Ne<T = unknown>(value: unknown): value is NeOperator<T> {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$ne' in value
+}
+
+/**
+ * Type guard for $gt operator
+ * @typeParam T - Type of the value being compared
+ */
+export function is$Gt<T = unknown>(value: unknown): value is GtOperator<T> {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$gt' in value
+}
+
+/**
+ * Type guard for $gte operator
+ * @typeParam T - Type of the value being compared
+ */
+export function is$Gte<T = unknown>(value: unknown): value is GteOperator<T> {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$gte' in value
+}
+
+/**
+ * Type guard for $lt operator
+ * @typeParam T - Type of the value being compared
+ */
+export function is$Lt<T = unknown>(value: unknown): value is LtOperator<T> {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$lt' in value
+}
+
+/**
+ * Type guard for $lte operator
+ * @typeParam T - Type of the value being compared
+ */
+export function is$Lte<T = unknown>(value: unknown): value is LteOperator<T> {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$lte' in value
+}
+
+/**
+ * Type guard for $in operator
+ * @typeParam T - Type of the values in the array
+ */
+export function is$In<T = unknown>(value: unknown): value is InOperator<T> {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$in' in value && Array.isArray((value as Record<string, unknown>).$in)
+}
+
+/**
+ * Type guard for $nin operator
+ * @typeParam T - Type of the values in the array
+ */
+export function is$Nin<T = unknown>(value: unknown): value is NinOperator<T> {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$nin' in value && Array.isArray((value as Record<string, unknown>).$nin)
+}
+
+// -----------------------------------------------------------------------------
+// String Operator Type Guards
+// -----------------------------------------------------------------------------
+
+/**
+ * Type guard for $regex operator
+ */
+export function is$Regex(value: unknown): value is RegexOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  if (!('$regex' in value)) return false
+  // Allow $regex alone or with $options
+  const allowedKeys = keys.filter(k => k !== '$regex' && k !== '$options')
+  return allowedKeys.length === 0
+}
+
+/**
+ * Type guard for $startsWith operator
+ */
+export function is$StartsWith(value: unknown): value is StartsWithOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$startsWith' in value
+}
+
+/**
+ * Type guard for $endsWith operator
+ */
+export function is$EndsWith(value: unknown): value is EndsWithOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$endsWith' in value
+}
+
+/**
+ * Type guard for $contains operator
+ */
+export function is$Contains(value: unknown): value is ContainsOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$contains' in value
+}
+
+// -----------------------------------------------------------------------------
+// Array Operator Type Guards
+// -----------------------------------------------------------------------------
+
+/**
+ * Type guard for $all operator
+ * @typeParam T - Type of array elements
+ */
+export function is$All<T = unknown>(value: unknown): value is AllOperator<T> {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$all' in value && Array.isArray((value as Record<string, unknown>).$all)
+}
+
+/**
+ * Type guard for $elemMatch operator
+ */
+export function is$ElemMatch(value: unknown): value is ElemMatchOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  if (keys.length !== 1 || !('$elemMatch' in value)) return false
+  const inner = (value as Record<string, unknown>).$elemMatch
+  return typeof inner === 'object' && inner !== null
+}
+
+/**
+ * Type guard for $size operator
+ */
+export function is$Size(value: unknown): value is SizeOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$size' in value && typeof (value as Record<string, unknown>).$size === 'number'
+}
+
+// -----------------------------------------------------------------------------
+// Existence Operator Type Guards
+// -----------------------------------------------------------------------------
+
+/**
+ * Type guard for $exists operator
+ */
+export function is$Exists(value: unknown): value is ExistsOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$exists' in value && typeof (value as Record<string, unknown>).$exists === 'boolean'
+}
+
+/**
+ * Type guard for $type operator
+ */
+const VALID_TYPES = ['null', 'boolean', 'number', 'string', 'array', 'object', 'date'] as const
+export function is$Type(value: unknown): value is TypeOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  if (keys.length !== 1 || !('$type' in value)) return false
+  const typeValue = (value as Record<string, unknown>).$type
+  return typeof typeValue === 'string' && VALID_TYPES.includes(typeValue as typeof VALID_TYPES[number])
+}
+
+// -----------------------------------------------------------------------------
+// Logical Operator Type Guards
+// -----------------------------------------------------------------------------
+
+/**
+ * Type guard for $and operator
+ */
+export function is$And(value: unknown): value is AndOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$and' in value && Array.isArray((value as Record<string, unknown>).$and)
+}
+
+/**
+ * Type guard for $or operator
+ */
+export function is$Or(value: unknown): value is OrOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$or' in value && Array.isArray((value as Record<string, unknown>).$or)
+}
+
+/**
+ * Type guard for $not operator (top-level)
+ */
+export function is$Not(value: unknown): value is NotOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  if (keys.length !== 1 || !('$not' in value)) return false
+  const inner = (value as Record<string, unknown>).$not
+  return typeof inner === 'object' && inner !== null
+}
+
+/**
+ * Type guard for $nor operator
+ */
+export function is$Nor(value: unknown): value is NorOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 1 && '$nor' in value && Array.isArray((value as Record<string, unknown>).$nor)
+}
+
+// -----------------------------------------------------------------------------
+// Special Operator Type Guards
+// -----------------------------------------------------------------------------
+
+/**
+ * Type guard for $text operator
+ */
+export function is$Text(value: unknown): value is TextOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  if (keys.length !== 1 || !('$text' in value)) return false
+  const text = (value as Record<string, unknown>).$text
+  if (typeof text !== 'object' || text === null) return false
+  return '$search' in text
+}
+
+/**
+ * Type guard for $vector operator
+ */
+export function is$Vector(value: unknown): value is VectorOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  if (keys.length !== 1 || !('$vector' in value)) return false
+  const vector = (value as Record<string, unknown>).$vector
+  return typeof vector === 'object' && vector !== null
+}
+
+/**
+ * Type guard for $geo operator
+ */
+export function is$Geo(value: unknown): value is GeoOperator {
+  if (!isObject(value)) return false
+  const keys = Object.keys(value)
+  if (keys.length !== 1 || !('$geo' in value)) return false
+  const geo = (value as Record<string, unknown>).$geo
+  if (typeof geo !== 'object' || geo === null) return false
+  return '$near' in geo
 }

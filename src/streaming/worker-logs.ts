@@ -31,6 +31,7 @@
 
 import type { StorageBackend } from '../types/storage'
 import type { ParquetSchema } from '../parquet/types'
+import { countFetchSubrequestsFromUnknown } from '../worker/subrequest-tracking'
 
 // =============================================================================
 // Tail Worker Types (from Cloudflare Workers Runtime)
@@ -126,6 +127,11 @@ export interface TailItem {
   exceptions: TailException[]
   /** Outcome of the Worker execution */
   outcome: WorkerOutcome
+  /**
+   * Diagnostics channel events (fetch subrequests, binding calls, etc.)
+   * @see https://developers.cloudflare.com/workers/observability/logs/tail-workers/
+   */
+  diagnosticsChannelEvents?: unknown[]
 }
 
 /**
@@ -178,6 +184,12 @@ export interface WorkerLogRecord {
   country: string | null
   /** Request ID correlation */
   requestId: string | null
+  /**
+   * Number of fetch subrequests made during this Worker execution
+   * Extracted from diagnosticsChannelEvents with channel 'fetch'
+   * Important for Snippets compliance (limit: 5 subrequests)
+   */
+  fetchCount: number
 }
 
 /**
@@ -199,6 +211,7 @@ export const WORKER_LOGS_SCHEMA: ParquetSchema = {
   colo: { type: 'BYTE_ARRAY', optional: true },
   country: { type: 'BYTE_ARRAY', optional: true },
   requestId: { type: 'BYTE_ARRAY', optional: true },
+  fetchCount: { type: 'INT32', optional: false },
 }
 
 // =============================================================================
@@ -516,6 +529,9 @@ export class WorkerLogsMV {
     const country = item.event?.request?.cf?.country as string ?? null
     const requestId = item.event?.request?.headers?.['cf-ray'] ?? null
 
+    // Extract fetch subrequest count from diagnosticsChannelEvents
+    const fetchCount = countFetchSubrequestsFromUnknown(item.diagnosticsChannelEvents)
+
     // Convert console logs
     for (const log of item.logs) {
       records.push({
@@ -534,6 +550,7 @@ export class WorkerLogsMV {
         colo,
         country,
         requestId,
+        fetchCount,
       })
     }
 
@@ -555,6 +572,7 @@ export class WorkerLogsMV {
         colo,
         country,
         requestId,
+        fetchCount,
       })
     }
 
@@ -576,6 +594,7 @@ export class WorkerLogsMV {
         colo,
         country,
         requestId,
+        fetchCount,
       })
     }
 
@@ -707,6 +726,7 @@ export class WorkerLogsMV {
       columns['colo']!.push(record.colo)
       columns['country']!.push(record.country)
       columns['requestId']!.push(record.requestId)
+      columns['fetchCount']!.push(record.fetchCount)
     }
 
     return columns
@@ -834,6 +854,7 @@ export function createWorkerLogsMVHandler(
               colo: data.colo ?? null,
               country: data.country ?? null,
               requestId: data.requestId ?? null,
+              fetchCount: data.fetchCount ?? 0,
             })
           }
         }

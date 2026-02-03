@@ -17,7 +17,7 @@ export type {
   StorageBackend,
   StreamableBackend,
   MultipartBackend,
-  TransactionalBackend,
+  TransactionalBackend as ITransactionalBackend,
   FileStat,
   ListOptions,
   ListResult,
@@ -85,6 +85,9 @@ export {
 // MemoryBackend - In-memory storage for testing
 export { MemoryBackend } from './MemoryBackend'
 
+// StreamableMemoryBackend - In-memory storage with streaming support
+export { StreamableMemoryBackend } from './StreamableMemoryBackend'
+
 // Shared validation utilities
 export { validateRange, validatePartNumber, InvalidRangeError } from './validation'
 
@@ -96,10 +99,17 @@ export {
   generateDeterministicEtag,
   normalizePath,
   normalizeFilePath,
+  normalizeStoragePath,
 } from './utils'
 
 // FsBackend - Node.js filesystem
 export { FsBackend } from './FsBackend'
+
+// StreamableFsBackend - Node.js filesystem with streaming support
+export { StreamableFsBackend } from './StreamableFsBackend'
+
+// withStreaming - Factory to add streaming support to any backend
+export { withStreaming } from './withStreaming'
 
 // FsxBackend - Cloudflare fsx
 export { FsxBackend } from './FsxBackend'
@@ -141,6 +151,15 @@ export {
 
 // ObservedBackend - Storage wrapper with observability hooks
 export { ObservedBackend, withObservability } from './ObservedBackend'
+
+// TransactionalBackend - Storage wrapper with transaction support
+export {
+  TransactionalBackend,
+  TransactionError,
+  TransactionCommitError,
+  withTransactions,
+  runInTransaction,
+} from './TransactionalBackend'
 
 // StorageRouter - Routes storage operations based on collection mode
 export {

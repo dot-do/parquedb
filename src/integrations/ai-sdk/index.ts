@@ -72,3 +72,24 @@ export type {
   LanguageModelStreamResult,
   LanguageModel,
 } from './types'
+
+// AI Observability MV Integration
+export {
+  AIObservabilityMVIntegration,
+  createAIObservabilityMVs,
+  queryBuiltinView,
+} from './observability-mv'
+
+export type {
+  AIObservabilityConfig,
+  AIObservabilityState,
+  AIAnalyticsView,
+  ModelUsageData,
+  HourlyRequestData,
+  ErrorRateData,
+  LatencyPercentileData,
+  CacheHitRateData,
+  TokenUsageData,
+  BuiltinViewName,
+  BuiltinViewDataMap,
+} from './observability-mv'

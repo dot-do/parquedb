@@ -182,6 +182,30 @@ export function validateLocalId(id: string): void {
 }
 
 /**
+ * Convert namespace and id to a full entity ID string.
+ *
+ * This is a simple utility that handles both "ns/id" and just "id" formats.
+ * If the ID already contains a '/', it's returned as-is.
+ * Otherwise, it's prefixed with the provided namespace.
+ *
+ * Unlike `normalizeEntityId`, this function does NOT perform validation.
+ * Use this when validation has already been done separately.
+ *
+ * @param namespace - The namespace to use if ID doesn't have one
+ * @param id - The entity ID (can be full "ns/id" or just "id")
+ * @returns The full ID in "namespace/id" format
+ *
+ * @example
+ * ```typescript
+ * toFullId('users', 'user-123')        // 'users/user-123'
+ * toFullId('posts', 'users/user-123')  // 'users/user-123' (unchanged)
+ * ```
+ */
+export function toFullId(namespace: string, id: string): string {
+  return id.includes('/') ? id : `${namespace}/${id}`
+}
+
+/**
  * Normalize an entity ID with namespace context
  *
  * If the ID already contains a '/', it's treated as a full EntityId and validated.

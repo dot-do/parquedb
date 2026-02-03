@@ -201,7 +201,8 @@ function couldMatchOperator(op: Record<string, unknown>, stats: ColumnStats): bo
 
   // $in: at least one value must be in range
   if ('$in' in op) {
-    const values = op.$in as unknown[]
+    const values = op.$in
+    if (!Array.isArray(values)) return true // Invalid format, can't prune - assume could match
     return values.some(v => {
       if (v === null) return nullCount > 0
       return isValueInRange(v, min, max)

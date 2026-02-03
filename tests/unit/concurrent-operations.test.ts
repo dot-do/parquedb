@@ -206,8 +206,8 @@ function createMockProvider(dimensions = 384): EmbeddingProvider & { callCount: 
       concurrentCalls++
       maxConcurrentCalls = Math.max(maxConcurrentCalls, concurrentCalls)
       try {
-        // Simulate API latency using fake timers
-        await vi.advanceTimersByTimeAsync(5)
+        // Simulate minimal async operation
+        await Promise.resolve()
         return Array(dimensions).fill(text.length / 100)
       } finally {
         concurrentCalls--
@@ -219,8 +219,8 @@ function createMockProvider(dimensions = 384): EmbeddingProvider & { callCount: 
       concurrentCalls++
       maxConcurrentCalls = Math.max(maxConcurrentCalls, concurrentCalls)
       try {
-        // Simulate API latency using fake timers
-        await vi.advanceTimersByTimeAsync(10)
+        // Simulate minimal async operation
+        await Promise.resolve()
         return texts.map(text => Array(dimensions).fill(text.length / 100))
       } finally {
         concurrentCalls--
@@ -284,7 +284,6 @@ describe('AI-Database Adapter Concurrent Operations', () => {
   let adapter: DBProviderExtended
 
   beforeEach(async () => {
-    vi.useFakeTimers()
     db = DB({
       Users: {
         email: 'string!',
@@ -306,11 +305,11 @@ describe('AI-Database Adapter Concurrent Operations', () => {
       },
     })
 
-    adapter = new ParqueDBAdapter(db as any)
+    // Disable batch loader to avoid timer issues in concurrent tests
+    adapter = new ParqueDBAdapter(db as any, { enableBatchLoader: false })
   })
 
   afterEach(() => {
-    vi.useRealTimers()
     db = null as any
     adapter = null as any
   })
@@ -679,6 +678,7 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
   let loader: RelationshipBatchLoader
 
   beforeEach(() => {
+    vi.useFakeTimers()
     db = createMockBatchLoaderDB()
     loader = new RelationshipBatchLoader(db, {
       windowMs: 10,
@@ -700,6 +700,7 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
 
   afterEach(() => {
     loader.clear()
+    vi.useRealTimers()
   })
 
   describe('Batching Behavior', () => {
@@ -825,14 +826,23 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
 
   describe('Error Handling Under Concurrency', () => {
     it('should handle errors for individual items without affecting others', async () => {
-      // Set up a failing relationship
+      // Set up a failing relationship with a separate mock that doesn't use timers
+      const relationships = new Map<string, unknown[]>()
+      for (let i = 0; i < 20; i++) {
+        relationships.set(`posts:post-${i}:author`, [
+          { $id: `users/user-${i % 5}`, $type: 'User', name: `User ${i % 5}` },
+        ])
+      }
+
       const failingDb: BatchLoaderDB = {
-        ...db,
         async getRelated(namespace, id, relationField) {
           if (id === 'post-5') {
             throw new Error('Database error')
           }
-          return db.getRelated(namespace, id, relationField)
+          // Simulate minimal delay without using fake timers
+          await Promise.resolve()
+          const key = `${namespace}:${id}:${relationField}`
+          return { items: (relationships.get(key) || []) as any[], total: 0 }
         },
       }
 
@@ -845,6 +855,9 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
         failingLoader.load('Post', `post-${i}`, 'author')
       )
 
+      // Advance timers to trigger the batch flush
+      await vi.advanceTimersByTimeAsync(15)
+
       const results = await Promise.allSettled(loadPromises)
 
       // Most should succeed
@@ -853,6 +866,8 @@ describe('RelationshipBatchLoader Concurrent Operations', () => {
 
       expect(successful.length).toBe(9)
       expect(failed.length).toBe(1)
+
+      failingLoader.clear()
     })
   })
 
@@ -1069,14 +1084,14 @@ describe('EmbeddingQueue Concurrent Operations', () => {
     })
 
     it('should handle concurrent clearFailed and processQueue', async () => {
-      // Simulate some failed items
+      // Simulate some failed items by adding them with exhausted retries
       const key1 = 'embed_queue:posts:failing-1'
       const key2 = 'embed_queue:posts:failing-2'
       await storage.put(key1, {
         entityType: 'posts',
         entityId: 'failing-1',
         createdAt: Date.now(),
-        attempts: 3, // Max retries exceeded
+        attempts: 3, // Max retries exceeded (>= retryAttempts)
       })
       await storage.put(key2, {
         entityType: 'posts',
@@ -1085,6 +1100,12 @@ describe('EmbeddingQueue Concurrent Operations', () => {
         attempts: 3,
       })
 
+      // Get initial stats to verify setup
+      const initialStats = await queue.getStats()
+      // Should have 20 pending (from beforeEach) + 2 "retrying" (actually failed with attempts >= 3)
+      // Note: getStats counts items with attempts > 0 as "retrying" even if exhausted
+      expect(initialStats.total).toBe(22)
+
       const operations = [
         queue.clearFailed(),
         queue.processQueue(),
@@ -1092,9 +1113,20 @@ describe('EmbeddingQueue Concurrent Operations', () => {
 
       await Promise.all(operations)
 
-      // clearFailed should have removed failed items
+      // After concurrent operations:
+      // - clearFailed should have removed items with attempts >= retryAttempts (the 2 failed items)
+      // - processQueue should have processed some pending items (up to batchSize=10)
       const stats = await queue.getStats()
-      expect(stats.retrying).toBe(0)
+
+      // Failed items should be cleared
+      // Verify that the specifically added failed items are gone
+      const failedItem1 = await storage.get<{ attempts: number }>(key1)
+      const failedItem2 = await storage.get<{ attempts: number }>(key2)
+      expect(failedItem1).toBeUndefined()
+      expect(failedItem2).toBeUndefined()
+
+      // Total remaining should be less than initial (some processed and/or failed cleared)
+      expect(stats.total).toBeLessThan(22)
     })
   })
 

@@ -138,6 +138,7 @@ export { DATASETS, getDataset, getDatasetIds, type DatasetConfig } from './datas
 // Export Durable Objects for Cloudflare Workers runtime
 // These are required for the DOs to be available as bindings
 export { ParqueDBDO, type CacheInvalidationSignal } from './ParqueDBDO'
+export { MigrationDO } from './MigrationDO'
 
 // Re-export cache invalidation utilities
 export {
@@ -177,6 +178,21 @@ export {
   type TailErrorMessage,
   type RawEventsFile,
 } from './TailDO'
+
+// Re-export subrequest tracking utilities for Snippets compliance monitoring
+export {
+  countFetchSubrequests,
+  countFetchSubrequestsFromUnknown,
+  extractFetchSubrequests,
+  getSubrequestSummary,
+  isSnippetsCompliant,
+  SNIPPETS_SUBREQUEST_LIMIT,
+  WORKERS_FREE_SUBREQUEST_LIMIT,
+  WORKERS_PAID_SUBREQUEST_LIMIT,
+  type DiagnosticsChannelEvent,
+  type FetchSubrequest,
+  type SubrequestSummary,
+} from './subrequest-tracking'
 
 // Re-export Compaction Consumer for event-driven mode
 export {
@@ -236,6 +252,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
   private async initializeCache(): Promise<void> {
     this.#cache = await caches.open('parquedb')
     this.readPath = new ReadPath(this.env.BUCKET, this.#cache, DEFAULT_CACHE_CONFIG)
+    // Set execution context for proper background revalidation lifecycle
+    this.readPath.setExecutionContext(this.ctx)
     // Pass R2Buckets and r2.dev URL to QueryExecutor for edge caching
     this.queryExecutor = new QueryExecutor(
       this.readPath,
@@ -534,8 +552,9 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     await this.ensureInitialized()
 
     // Delegate to DO via RPC
+    // DO expects entity IDs in "ns/id" format
     const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, fromNs)
-    await stub.link(fromNs, fromId, predicate, toNs, toId)
+    await stub.link(`${fromNs}/${fromId}`, predicate, `${toNs}/${toId}`)
 
     // Invalidate relationship caches
     await this.readPath.invalidate([
@@ -563,8 +582,9 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     await this.ensureInitialized()
 
     // Delegate to DO via RPC
+    // DO expects entity IDs in "ns/id" format
     const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, fromNs)
-    await stub.unlink(fromNs, fromId, predicate, toNs, toId)
+    await stub.unlink(`${fromNs}/${fromId}`, predicate, `${toNs}/${toId}`)
 
     // Invalidate relationship caches
     await this.readPath.invalidate([
@@ -830,6 +850,47 @@ export default {
           throw new MissingBucketError('BUCKET', 'Required for dataset backend benchmarks.')
         }
         return handleDatasetBackendsBenchmarkRequest(request, env.BUCKET)
+      }
+
+      // =======================================================================
+      // Backend Migration - Durable Object-based batch migration
+      // Handles migrations in batches to work within subrequest limits (1000/request)
+      // Uses DO alarm() to continue processing across invocations
+      //
+      // Endpoints:
+      // - POST /migrate - Start migration { to: 'iceberg'|'delta', namespaces?: string[] }
+      // - GET /migrate/status - Get current migration status
+      // - POST /migrate/cancel - Cancel running migration
+      // - GET /migrate/jobs - List migration history
+      // =======================================================================
+      if (path.startsWith('/migrate')) {
+        if (!env.MIGRATION) {
+          return buildErrorResponse(500, 'MIGRATION_DO_NOT_CONFIGURED', 'Migration DO not available')
+        }
+
+        const id = env.MIGRATION.idFromName('default')
+        const stub = env.MIGRATION.get(id)
+
+        // Forward to Migration DO
+        // Map: /migrate -> /migrate (POST starts migration)
+        //      /migrate/status -> /status
+        //      /migrate/cancel -> /cancel
+        //      /migrate/jobs -> /jobs
+        let migrationPath = path.replace('/migrate', '')
+        if (migrationPath === '' && request.method === 'GET') {
+          migrationPath = '/status'
+        } else if (migrationPath === '') {
+          migrationPath = '/migrate'
+        }
+
+        const migrationUrl = new URL(request.url)
+        migrationUrl.pathname = migrationPath
+
+        return stub.fetch(new Request(migrationUrl.toString(), {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        }))
       }
 
       // =======================================================================

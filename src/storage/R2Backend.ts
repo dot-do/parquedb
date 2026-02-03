@@ -242,7 +242,9 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         size: obj.size,
         mtime: obj.uploaded,
         isDirectory: false,
-        etag: obj.httpEtag,
+        // Use etag (without quotes) for conditional operations
+        // httpEtag has quotes per HTTP spec, but R2 conditional writes expect no quotes
+        etag: obj.etag,
         contentType: obj.httpMetadata?.contentType,
         metadata: obj.customMetadata,
       }
@@ -305,7 +307,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
           size: obj.size,
           mtime: obj.uploaded,
           isDirectory: false,
-          etag: obj.httpEtag,
+          etag: obj.etag, // Use etag without quotes for conditional operations
           contentType: obj.httpMetadata?.contentType,
           metadata: obj.customMetadata,
         }))
@@ -438,14 +440,14 @@ export class R2Backend implements StorageBackend, MultipartBackend {
           // Conditional write failed - either ETag mismatch (existing file modified)
           // or file was created by another process (new file case)
           // In both cases, retry to pick up the current state
-          if (attempt < MAX_RETRIES - 1) {
+          if (attempt < R2_APPEND_MAX_RETRIES - 1) {
             // Exponential backoff with jitter to reduce collision probability
-            const delay = BASE_DELAY_MS * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5)
+            const delay = R2_APPEND_BASE_DELAY_MS * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5)
             await new Promise(resolve => setTimeout(resolve, delay))
             continue
           }
           throw new R2OperationError(
-            `Failed to append to ${path}: concurrent modification after ${MAX_RETRIES} retries`,
+            `Failed to append to ${path}: concurrent modification after ${R2_APPEND_MAX_RETRIES} retries`,
             'append',
             path
           )
@@ -613,15 +615,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     const destKey = this.withPrefix(dest)
 
     try {
-      // Read source object with metadata
+      // Get source object - this returns a ReadableStream body that we can pass directly to put
       const sourceObj = await this.bucket.get(sourceKey, undefined)
       if (!sourceObj) {
         throw new R2NotFoundError(source)
       }
 
-      const data = new Uint8Array(await sourceObj.arrayBuffer())
-
-      // Write to destination with same metadata
+      // Build put options with same metadata
       const putOptions: R2PutOptions = {}
       if (sourceObj.httpMetadata || sourceObj.customMetadata) {
         if (sourceObj.httpMetadata) {
@@ -632,7 +632,8 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         }
       }
 
-      await this.bucket.put(destKey, data, Object.keys(putOptions).length > 0 ? putOptions : undefined)
+      // Stream the body directly to destination without buffering entire file in memory
+      await this.bucket.put(destKey, sourceObj.body, Object.keys(putOptions).length > 0 ? putOptions : undefined)
     } catch (error: unknown) {
       if (error instanceof R2NotFoundError) {
         throw error

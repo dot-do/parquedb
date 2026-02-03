@@ -27,6 +27,10 @@
       {
         "name": "PARQUEDB",
         "class_name": "ParqueDBDO"
+      },
+      {
+        "name": "MIGRATION",
+        "class_name": "MigrationDO"
       }
     ]
   },
@@ -36,6 +40,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["ParqueDBDO"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["MigrationDO"]
     }
   ],
 

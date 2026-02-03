@@ -197,6 +197,49 @@ export function deepClone<T>(obj: T): T {
 }
 
 // =============================================================================
+// Null/Undefined Helpers
+// =============================================================================
+
+/**
+ * Check if a value is null or undefined (nullish)
+ *
+ * This is the canonical nullish check used throughout ParqueDB for
+ * consistent null/undefined handling.
+ *
+ * @param value - Value to check
+ * @returns true if value is null or undefined
+ *
+ * @example
+ * isNullish(null) // true
+ * isNullish(undefined) // true
+ * isNullish(0) // false
+ * isNullish('') // false
+ * isNullish(false) // false
+ */
+export function isNullish(value: unknown): value is null | undefined {
+  return value === null || value === undefined
+}
+
+/**
+ * Check if a value is defined (not null and not undefined)
+ *
+ * This is the inverse of isNullish and is useful for type narrowing.
+ *
+ * @param value - Value to check
+ * @returns true if value is not null and not undefined
+ *
+ * @example
+ * isDefined(0) // true
+ * isDefined('') // true
+ * isDefined(false) // true
+ * isDefined(null) // false
+ * isDefined(undefined) // false
+ */
+export function isDefined<T>(value: T | null | undefined): value is T {
+  return value !== null && value !== undefined
+}
+
+// =============================================================================
 // Type Helpers
 // =============================================================================
 

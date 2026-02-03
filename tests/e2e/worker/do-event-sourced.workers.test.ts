@@ -15,38 +15,17 @@
 
 import { env } from 'cloudflare:test'
 import { describe, it, expect } from 'vitest'
-
-// Type for the env bindings from wrangler.jsonc
-interface TestEnv {
-  BUCKET: R2Bucket
-  PARQUEDB: DurableObjectNamespace
-  ENVIRONMENT: string
-}
+import type { TestEnv, ParqueDBDOTestStub } from '../types'
+import { asDOTestStub } from '../types'
 
 // Cast env to our typed environment
 const testEnv = env as TestEnv
-
-// DO stub interface with Phase 3 methods
-interface ParqueDBDOStub {
-  // Entity operations
-  create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-  get(ns: string, id: string, includeDeleted?: boolean): Promise<unknown>
-  update(ns: string, id: string, update: unknown, options?: unknown): Promise<unknown>
-  delete(ns: string, id: string, options?: unknown): Promise<boolean>
-
-  // Event-sourced methods
-  getEntityFromEvents(ns: string, id: string): Promise<unknown>
-
-  // WAL methods
-  flushEventBatch(): Promise<void>
-  getUnflushedEventCount(): Promise<number>
-}
 
 describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
   describe('Entity State from Events', () => {
     it('reconstructs entity from CREATE event', async () => {
       const id = testEnv.PARQUEDB.idFromName(`event-create-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create an entity
       const created = await stub.create('posts', {
@@ -73,7 +52,7 @@ describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
 
     it('reconstructs entity after UPDATE events', async () => {
       const id = testEnv.PARQUEDB.idFromName(`event-update-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create an entity
       const created = await stub.create('posts', {
@@ -110,7 +89,7 @@ describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
 
     it('returns null for deleted entities', async () => {
       const id = testEnv.PARQUEDB.idFromName(`event-delete-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create an entity
       const created = await stub.create('posts', {
@@ -137,7 +116,7 @@ describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
 
     it('handles create-update-delete sequence', async () => {
       const id = testEnv.PARQUEDB.idFromName(`event-sequence-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create first entity
       const created1 = await stub.create('posts', {
@@ -177,7 +156,7 @@ describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
   describe('Read Operations Without Entities Table', () => {
     it('get() returns correct entity from events', async () => {
       const id = testEnv.PARQUEDB.idFromName(`get-events-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create an entity
       const created = await stub.create('posts', {
@@ -201,7 +180,7 @@ describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
 
     it('update() finds entity from events', async () => {
       const id = testEnv.PARQUEDB.idFromName(`update-events-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create an entity
       const created = await stub.create('posts', {
@@ -225,7 +204,7 @@ describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
 
     it('delete() finds entity from events', async () => {
       const id = testEnv.PARQUEDB.idFromName(`delete-events-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create an entity
       const created = await stub.create('posts', {
@@ -248,7 +227,7 @@ describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
   describe('Cost Optimization Verification', () => {
     it('create() only writes to events, not entities table', async () => {
       const id = testEnv.PARQUEDB.idFromName(`cost-create-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create multiple entities
       const entities = []
@@ -267,13 +246,13 @@ describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
         expect(retrieved).not.toBeNull()
       }
 
-      // Cost: Only event_batches rows written, no entities table rows
-      // This is the key optimization of Phase 3
+      // Cost: Only events_wal rows written, no entities table rows
+      // This is the key optimization of the WAL-based system
     })
 
     it('events are buffered efficiently', async () => {
       const id = testEnv.PARQUEDB.idFromName(`cost-buffer-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create some entities
       for (let i = 0; i < 3; i++) {
@@ -284,7 +263,7 @@ describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
       }
 
       // Flush to persist
-      await stub.flushEventBatch()
+      await stub.flushAllNsEventBatches()
 
       // Count should reflect events
       const count = await stub.getUnflushedEventCount()

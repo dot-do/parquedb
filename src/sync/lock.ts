@@ -447,6 +447,12 @@ export class StorageLockManager implements LockManager {
         const path = manager.getLockPath(currentState.resource)
 
         try {
+          // Get current etag for conditional write
+          const stat = await storage.stat(path)
+          if (!stat || !stat.etag) {
+            return false
+          }
+
           // Read current state
           const data = await storage.read(path)
           const stored = JSON.parse(new TextDecoder().decode(data)) as LockState
@@ -463,13 +469,14 @@ export class StorageLockManager implements LockManager {
             expiresAt: newExpiresAt.toISOString(),
           }
 
-          // Write updated state
+          // Write updated state with conditional write to prevent TOCTOU race
           const newData = new TextEncoder().encode(JSON.stringify(newState, null, 2))
-          await storage.write(path, newData)
+          await storage.writeConditional(path, newData, stat.etag)
 
           currentState = newState
           return true
         } catch {
+          // Conditional write failed (etag mismatch) or other error
           return false
         }
       },

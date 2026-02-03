@@ -1201,19 +1201,9 @@ export class ParqueDBDO extends DurableObject<Env> {
   // Event WAL API
   // ===========================================================================
 
-  async appendEvent(event: Event): Promise<void> {
-    await this.ensureInitialized()
-    await this.eventWal.appendEvent(event)
-  }
-
   async appendEventWithSeq(ns: string, event: Omit<Event, 'id'>): Promise<string> {
     await this.ensureInitialized()
     return this.eventWal.appendEventWithSeq(ns, event)
-  }
-
-  async flushEventBatch(): Promise<void> {
-    await this.ensureInitialized()
-    await this.eventWal.flushEventBatch()
   }
 
   async flushNsEventBatch(ns: string): Promise<void> {
@@ -1246,11 +1236,6 @@ export class ParqueDBDO extends DurableObject<Env> {
     return this.eventWal.getUnflushedWalBatchCount()
   }
 
-  async getUnflushedBatchCount(): Promise<number> {
-    await this.ensureInitialized()
-    return this.eventWal.getUnflushedBatchCount()
-  }
-
   async readUnflushedEvents(): Promise<Event[]> {
     await this.ensureInitialized()
     return this.eventWal.readUnflushedEvents()
@@ -1259,11 +1244,6 @@ export class ParqueDBDO extends DurableObject<Env> {
   async readUnflushedWalEvents(ns: string): Promise<Event[]> {
     await this.ensureInitialized()
     return this.eventWal.readUnflushedWalEvents(ns)
-  }
-
-  async markEventBatchesFlushed(batchIds: number[]): Promise<void> {
-    await this.ensureInitialized()
-    await this.eventWal.markEventBatchesFlushed(batchIds)
   }
 
   async deleteWalBatches(ns: string, upToSeq: number): Promise<void> {
@@ -1342,7 +1322,7 @@ export class ParqueDBDO extends DurableObject<Env> {
 
   async flushToParquet(): Promise<void> {
     await this.ensureInitialized()
-    await this.eventWal.flushEventBatch()
+    await this.eventWal.flushAllNsEventBatches()
     await this.flushManager.flushToParquet()
   }
 
@@ -1398,11 +1378,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   override async alarm(): Promise<void> {
     this.flushManager.resetAlarmFlag()
 
-    // Flush event batches
-    await this.eventWal.flushEventBatch()
-    await this.relWal.flushAllRelEventBatches()
-
-    // Flush to Parquet
-    await this.flushManager.flushToParquet()
+    // Flush all buffered events to Parquet
+    await this.flushToParquet()
   }
 }

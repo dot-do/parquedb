@@ -48,6 +48,9 @@ export interface Env {
   /** Durable Object namespace for rate limiting */
   RATE_LIMITER?: DurableObjectNamespace
 
+  /** Durable Object namespace for backend migrations (batch processing) */
+  MIGRATION?: DurableObjectNamespace
+
   // Note: Caching uses the free Cloudflare Cache API (caches.default), not KV.
   // Cache API provides 500MB on free accounts, 5GB+ on enterprise.
   // No binding needed - caches.default is globally available in Workers.
@@ -75,21 +78,29 @@ export interface Env {
  *
  * Used instead of `as unknown as { ... }` casts when calling DO methods.
  * This provides a single source of truth for the DO RPC contract.
+ *
+ * @remarks The DO's link/unlink methods expect entity IDs in "ns/id" format.
  */
 export interface ParqueDBDOStub {
-  get(ns: string, id: string): Promise<unknown>
-  find(ns: string, filter?: unknown, options?: unknown): Promise<unknown>
+  // Entity operations
+  get(ns: string, id: string, includeDeleted?: boolean): Promise<unknown>
   create(ns: string, data: unknown, options?: unknown): Promise<unknown>
+  createMany(ns: string, items: unknown[], options?: unknown): Promise<unknown[]>
   update(ns: string, id: string, update: unknown, options?: unknown): Promise<unknown>
-  updateMany(ns: string, filter: unknown, update: unknown, options?: unknown): Promise<unknown>
   delete(ns: string, id: string, options?: unknown): Promise<unknown>
-  deleteMany(ns: string, filter: unknown, options?: unknown): Promise<unknown>
-  link(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
-  unlink(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
-  related(ns: string, id: string, options?: unknown): Promise<unknown>
+  deleteMany(ns: string, ids: string[], options?: unknown): Promise<unknown>
+
+  // Relationship operations (entity IDs in "ns/id" format)
+  link(fromId: string, predicate: string, toId: string, options?: unknown): Promise<void>
+  unlink(fromId: string, predicate: string, toId: string, options?: unknown): Promise<void>
+  getRelationships(ns: string, id: string, predicate?: string, direction?: 'outbound' | 'inbound'): Promise<unknown[]>
+
   // Cache invalidation methods
-  getInvalidationVersion(ns: string): Promise<number>
-  shouldInvalidate(ns: string, workerVersion: number): Promise<boolean>
+  getInvalidationVersion(ns: string): number
+  shouldInvalidate(ns: string, workerVersion: number): boolean
+
+  // Event-sourced entity state
+  getEntityFromEvents(ns: string, id: string): Promise<unknown>
 }
 
 export type ParqueDBService = Fetcher
@@ -218,6 +229,8 @@ export const DEFAULT_FLUSH_CONFIG: FlushConfig = {
 
 /**
  * Schema definitions for DO SQLite tables
+ * These are the single source of truth for all DO SQLite schemas.
+ * Used by ParqueDBDO.ensureInitialized() and tests.
  */
 export const DO_SQLITE_SCHEMA = {
   /** Entity metadata table */
@@ -239,7 +252,7 @@ export const DO_SQLITE_SCHEMA = {
     )
   `,
 
-  /** Relationships table */
+  /** Relationships table with shredded fields for efficient querying */
   relationships: `
     CREATE TABLE IF NOT EXISTS relationships (
       from_ns TEXT NOT NULL,
@@ -253,25 +266,36 @@ export const DO_SQLITE_SCHEMA = {
       created_by TEXT NOT NULL,
       deleted_at TEXT,
       deleted_by TEXT,
+      -- Shredded fields (top-level columns for efficient querying)
+      match_mode TEXT,           -- 'exact' or 'fuzzy'
+      similarity REAL,           -- 0.0 to 1.0 for fuzzy matches
+      -- Remaining metadata in Variant
       data TEXT,
       PRIMARY KEY (from_ns, from_id, predicate, to_ns, to_id)
     )
   `,
 
-  /** Event log table (before flush to Parquet) */
-  events: `
-    CREATE TABLE IF NOT EXISTS events (
-      id TEXT PRIMARY KEY,
-      ts TEXT NOT NULL,
-      target TEXT NOT NULL,
-      op TEXT NOT NULL,
+  /** WAL table for event batching with namespace-based counters */
+  events_wal: `
+    CREATE TABLE IF NOT EXISTS events_wal (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
       ns TEXT NOT NULL,
-      entity_id TEXT NOT NULL,
-      before TEXT,
-      after TEXT,
-      actor TEXT NOT NULL,
-      metadata TEXT,
-      flushed INTEGER NOT NULL DEFAULT 0
+      first_seq INTEGER NOT NULL,
+      last_seq INTEGER NOT NULL,
+      events BLOB NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `,
+
+  /** WAL table for relationship event batching */
+  rels_wal: `
+    CREATE TABLE IF NOT EXISTS rels_wal (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ns TEXT NOT NULL,
+      first_seq INTEGER NOT NULL,
+      last_seq INTEGER NOT NULL,
+      events BLOB NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `,
 
@@ -287,13 +311,52 @@ export const DO_SQLITE_SCHEMA = {
     )
   `,
 
+  /** Pending row groups table - tracks bulk writes to R2 pending files */
+  pending_row_groups: `
+    CREATE TABLE IF NOT EXISTS pending_row_groups (
+      id TEXT PRIMARY KEY,
+      ns TEXT NOT NULL,
+      path TEXT NOT NULL,
+      row_count INTEGER NOT NULL,
+      first_seq INTEGER NOT NULL,
+      last_seq INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `,
+
   /** Indexes for common queries */
   indexes: [
+    // Entity indexes
     'CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(ns, type)',
     'CREATE INDEX IF NOT EXISTS idx_entities_updated ON entities(ns, updated_at)',
+    // Relationship indexes
     'CREATE INDEX IF NOT EXISTS idx_rels_from ON relationships(from_ns, from_id, predicate)',
     'CREATE INDEX IF NOT EXISTS idx_rels_to ON relationships(to_ns, to_id, reverse)',
-    'CREATE INDEX IF NOT EXISTS idx_events_unflushed ON events(flushed, ts)',
-    'CREATE INDEX IF NOT EXISTS idx_events_ns ON events(ns, entity_id)',
+    'CREATE INDEX IF NOT EXISTS idx_relationships_match_mode ON relationships(match_mode) WHERE match_mode IS NOT NULL',
+    'CREATE INDEX IF NOT EXISTS idx_relationships_similarity ON relationships(similarity) WHERE similarity IS NOT NULL',
+    // WAL indexes
+    'CREATE INDEX IF NOT EXISTS idx_events_wal_ns ON events_wal(ns, last_seq)',
+    'CREATE INDEX IF NOT EXISTS idx_rels_wal_ns ON rels_wal(ns, last_seq)',
+    // Pending row groups index
+    'CREATE INDEX IF NOT EXISTS idx_pending_row_groups_ns ON pending_row_groups(ns, created_at)',
   ],
 } as const
+
+/**
+ * Helper function to initialize all DO SQLite tables and indexes
+ * @param sql - SqlStorage instance from Durable Object context
+ */
+export function initDOSqliteSchema(sql: { exec: (query: string) => unknown }): void {
+  // Create all tables
+  sql.exec(DO_SQLITE_SCHEMA.entities)
+  sql.exec(DO_SQLITE_SCHEMA.relationships)
+  sql.exec(DO_SQLITE_SCHEMA.events_wal)
+  sql.exec(DO_SQLITE_SCHEMA.rels_wal)
+  sql.exec(DO_SQLITE_SCHEMA.checkpoints)
+  sql.exec(DO_SQLITE_SCHEMA.pending_row_groups)
+
+  // Create all indexes
+  for (const indexSql of DO_SQLITE_SCHEMA.indexes) {
+    sql.exec(indexSql)
+  }
+}

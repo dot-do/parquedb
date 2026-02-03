@@ -441,3 +441,50 @@ export const DEFAULT_POLLING_INTERVAL_MS = 1000
  * Default max buffer size for event writer sources
  */
 export const DEFAULT_EVENT_SOURCE_BUFFER_SIZE = 1000
+
+// =============================================================================
+// Query Constants
+// =============================================================================
+
+/**
+ * Default query result limit
+ */
+export const DEFAULT_QUERY_LIMIT = 100
+
+// =============================================================================
+// Content Retention Constants
+// =============================================================================
+
+/**
+ * Default content retention period in milliseconds (30 days)
+ * Used for generated content and other content tracking MVs
+ */
+export const DEFAULT_CONTENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Default AI usage max age in milliseconds (30 days)
+ * Used by AIUsageMV to filter logs to process
+ */
+export const AI_USAGE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Default eval scores max age in milliseconds (30 days)
+ * Used by EvalScoresMV to filter scores to process
+ */
+export const EVAL_SCORES_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Default AI requests max age in milliseconds (30 days)
+ * Used by AIRequestsMV to filter requests to process
+ */
+export const AI_REQUESTS_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+
+// =============================================================================
+// Hash Constants
+// =============================================================================
+
+/**
+ * DJB2 hash algorithm initial value
+ * A popular non-cryptographic hash function
+ */
+export const DJB2_INITIAL = 5381

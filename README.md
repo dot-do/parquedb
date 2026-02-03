@@ -224,9 +224,11 @@ This helps catch common mistakes like:
 | Operator | Description | Example |
 |----------|-------------|---------|
 | `$regex` | Regular expression | `{ title: { $regex: '^Hello' } }` |
-| `$startsWith` | Starts with prefix | `{ title: { $startsWith: 'Hello' } }` |
-| `$endsWith` | Ends with suffix | `{ title: { $endsWith: 'World' } }` |
-| `$contains` | Contains substring | `{ title: { $contains: 'ello' } }` |
+| `$startsWith`* | Starts with prefix | `{ title: { $startsWith: 'Hello' } }` |
+| `$endsWith`* | Ends with suffix | `{ title: { $endsWith: 'World' } }` |
+| `$contains`* | Contains substring | `{ title: { $contains: 'ello' } }` |
+
+*ParqueDB Extension - These operators are not available in MongoDB. Use `$regex` for MongoDB compatibility (e.g., `$regex: '^prefix'`, `$regex: 'suffix$'`, `$regex: 'substring'`).
 
 ### Array Operators
 

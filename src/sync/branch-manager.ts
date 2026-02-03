@@ -317,6 +317,9 @@ export class BranchManager {
       }
     }
 
+    // Save previous HEAD state before updating (for rollback on failure)
+    const previousHeadState = await this.refs.getHead()
+
     // Update HEAD to point to the branch
     await this.refs.setHead(name)
 
@@ -325,11 +328,15 @@ export class BranchManager {
       try {
         await reconstructState(this.opts.storage, targetCommit)
       } catch (error) {
-        // If state reconstruction fails, revert HEAD
-        // Try to restore the previous HEAD state
-        const currentBranch = await this.current()
-        if (currentBranch && currentBranch !== name) {
-          await this.refs.setHead(currentBranch)
+        // If state reconstruction fails, revert HEAD to previous state
+        try {
+          if (previousHeadState.type === 'branch') {
+            await this.refs.setHead(previousHeadState.ref)
+          } else {
+            await this.refs.detachHead(previousHeadState.ref)
+          }
+        } catch {
+          // Best effort rollback - if this fails, HEAD is in an inconsistent state
         }
 
         throw new Error(

@@ -14,52 +14,11 @@
 
 import { env } from 'cloudflare:test'
 import { describe, it, expect, beforeEach } from 'vitest'
-
-// Type for the env bindings from wrangler.jsonc
-interface TestEnv {
-  BUCKET: R2Bucket
-  PARQUEDB: DurableObjectNamespace
-  ENVIRONMENT: string
-}
+import type { TestEnv, ParqueDBDOTestStub } from './types'
+import { asDOTestStub } from './types'
 
 // Cast env to our typed environment
 const testEnv = env as TestEnv
-
-// DO stub interface with WAL methods
-interface ParqueDBDOStub {
-  // Entity operations
-  create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-  get(ns: string, id: string): Promise<unknown>
-
-  // WAL operations
-  appendEventWithSeq(ns: string, event: {
-    ts: number
-    op: string
-    target: string
-    before?: unknown
-    after?: unknown
-    actor: string
-  }): Promise<string>
-  flushNsEventBatch(ns: string): Promise<void>
-  flushAllNsEventBatches(): Promise<void>
-
-  // Counter/state methods (sync - requires prior async call to initialize)
-  getSequenceCounter(ns: string): number
-  getNsBufferState(ns: string): { eventCount: number; firstSeq: number; lastSeq: number; sizeBytes: number } | null
-
-  // Query methods
-  getUnflushedWalEventCount(ns: string): Promise<number>
-  getTotalUnflushedWalEventCount(): Promise<number>
-  getUnflushedWalBatchCount(): Promise<number>
-  readUnflushedWalEvents(ns: string): Promise<Array<{
-    id: string
-    ts: number
-    op: string
-    target: string
-    actor: string
-  }>>
-  deleteWalBatches(ns: string, upToSeq: number): Promise<void>
-}
 
 /**
  * Helper to ensure all promises are resolved before checking sync state
@@ -76,7 +35,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
   describe('Sqids Short ID Generation', () => {
     it('generates short IDs using Sqids from namespace counter', async () => {
       const id = testEnv.PARQUEDB.idFromName(`wal-sqids-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create an entity - should use Sqids for ID
       const entity = await stub.create('posts', {
@@ -98,7 +57,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
 
     it('increments counter for sequential creates', async () => {
       const id = testEnv.PARQUEDB.idFromName(`wal-counter-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create multiple entities
       const entities: Array<Record<string, unknown>> = []
@@ -126,7 +85,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
   describe('Event Batching with events_wal', () => {
     it('buffers events before flushing to events_wal', async () => {
       const id = testEnv.PARQUEDB.idFromName(`wal-buffer-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Append events to buffer
       const eventIds: string[] = []
@@ -151,7 +110,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
 
     it('writes batched events as single row on manual flush', async () => {
       const id = testEnv.PARQUEDB.idFromName(`wal-flush-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Append events
       for (let i = 0; i < 10; i++) {
@@ -178,7 +137,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
 
     it('stores sequence range in batch (first_seq, last_seq)', async () => {
       const id = testEnv.PARQUEDB.idFromName(`wal-seq-range-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Append 25 events
       for (let i = 0; i < 25; i++) {
@@ -208,7 +167,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
     it('maintains counter across multiple batches', async () => {
       const doName = `wal-persist-${Date.now()}`
       const id = testEnv.PARQUEDB.idFromName(doName)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // First batch: 10 events
       for (let i = 0; i < 10; i++) {
@@ -250,7 +209,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
     it('continues counter sequence after flush', async () => {
       const doName = `wal-continue-${Date.now()}`
       const id = testEnv.PARQUEDB.idFromName(doName)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create and flush first batch
       const firstBatchIds: string[] = []
@@ -293,7 +252,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
   describe('Multi-Namespace Support', () => {
     it('maintains separate counters per namespace', async () => {
       const id = testEnv.PARQUEDB.idFromName(`wal-multi-ns-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Events for posts namespace
       const postsEventIds: string[] = []
@@ -336,7 +295,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
 
     it('flushes all namespaces with flushAllNsEventBatches', async () => {
       const id = testEnv.PARQUEDB.idFromName(`wal-flush-all-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Buffer events for multiple namespaces
       await stub.appendEventWithSeq('posts', { ts: Date.now(), op: 'CREATE', target: 'posts:1', actor: 'test' })
@@ -360,7 +319,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
   describe('Event Batch Cleanup', () => {
     it('can delete WAL batches up to a sequence', async () => {
       const id = testEnv.PARQUEDB.idFromName(`wal-cleanup-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create 3 batches
       for (let batch = 0; batch < 3; batch++) {
@@ -395,7 +354,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
   describe('Cost Optimization', () => {
     it('stores 100 events in a single SQLite row', async () => {
       const id = testEnv.PARQUEDB.idFromName(`wal-cost-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create 100 events (default batch threshold)
       for (let i = 0; i < 100; i++) {
@@ -422,7 +381,7 @@ describe('DO WAL Phase 1 - Batched Event Storage', () => {
   describe('Entity Creation with Sqids', () => {
     it('creates entities with short Sqids-based IDs', async () => {
       const id = testEnv.PARQUEDB.idFromName(`wal-entity-${Date.now()}`)
-      const stub = testEnv.PARQUEDB.get(id) as unknown as ParqueDBDOStub
+      const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
 
       // Create first entity
       const entity1 = await stub.create('posts', {

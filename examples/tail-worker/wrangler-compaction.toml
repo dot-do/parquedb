@@ -1,0 +1,109 @@
+# ParqueDB Compaction Consumer Worker Configuration
+#
+# This worker receives R2 event notifications when raw event files are created
+# and processes them into Parquet files.
+#
+# Architecture (Option D - Event-Driven Compaction):
+# TailDO -> writes raw events to R2
+#              ↓ object-create notification
+#        Queue -> Compaction Worker (this worker, observable via tail)
+#              ↓ writes Parquet segments
+#        R2 -> parquet files for analytics
+#
+# Setup:
+# 1. Create the queue: wrangler queues create parquedb-raw-events
+# 2. Enable R2 event notifications on your bucket (see docs/guides/r2-event-notifications.md)
+# 3. Deploy: wrangler deploy -c wrangler-compaction.toml
+
+name = "parquedb-compaction"
+main = "src/worker/compaction-consumer.ts"
+compatibility_date = "2024-09-02"
+compatibility_flags = ["nodejs_compat"]
+
+# ==============================================================================
+# Queue Consumer
+# ==============================================================================
+# Receives R2 event notifications when raw event files are created.
+# The queue must be configured to receive R2 object-create events.
+
+[[queues.consumers]]
+queue = "parquedb-raw-events"
+# Maximum messages per batch (default: 10, max: 100)
+max_batch_size = 100
+# Maximum seconds to wait before delivering a partial batch (default: 5)
+max_batch_timeout = 30
+# Maximum retry attempts before dead-lettering (default: 3)
+max_retries = 3
+# Optional: Dead letter queue for failed messages
+dead_letter_queue = "parquedb-dlq"
+
+# ==============================================================================
+# R2 Storage
+# ==============================================================================
+# Same bucket used by TailDO. Contains both:
+# - raw-events/*.ndjson (input: raw events from TailDO)
+# - logs/workers/**/*.parquet (output: compacted Parquet files)
+
+[[r2_buckets]]
+binding = "LOGS_BUCKET"
+bucket_name = "parquedb-logs"
+
+# ==============================================================================
+# Downstream Queue (Optional)
+# ==============================================================================
+# Uncomment to send notifications when Parquet files are written.
+# Useful for triggering MV refresh or other downstream processing.
+
+# [[queues.producers]]
+# binding = "DOWNSTREAM_QUEUE"
+# queue = "parquedb-parquet-notifications"
+
+# ==============================================================================
+# Configuration Variables
+# ==============================================================================
+
+[vars]
+# Prefix for raw event files in R2 (must match TailDO RAW_EVENTS_PREFIX)
+RAW_EVENTS_PREFIX = "raw-events"
+
+# Prefix for output Parquet files in R2
+PARQUET_PREFIX = "logs/workers"
+
+# Number of records to buffer before writing Parquet file
+FLUSH_THRESHOLD = "1000"
+
+# Compression codec for Parquet output
+# Options: none, snappy, gzip, lz4, zstd
+COMPRESSION = "lz4"
+
+# ==============================================================================
+# Production Environment
+# ==============================================================================
+
+[env.production]
+[env.production.vars]
+# Higher threshold for production to write larger Parquet files
+FLUSH_THRESHOLD = "5000"
+# Use zstd for better compression in production
+COMPRESSION = "zstd"
+
+# ==============================================================================
+# Development Environment
+# ==============================================================================
+
+[env.development]
+[env.development.vars]
+# Lower threshold for faster feedback during development
+FLUSH_THRESHOLD = "100"
+# Faster compression for development
+COMPRESSION = "lz4"
+
+# ==============================================================================
+# Observability
+# ==============================================================================
+# This worker is fully observable via tail workers, unlike DO internals.
+# Use: wrangler tail parquedb-compaction
+#
+# You can also create a tail worker to process this worker's logs:
+# [[tail_consumers]]
+# service = "parquedb-compaction-tail"

@@ -41,6 +41,7 @@ import type {
 } from '../types'
 import { entityTarget, relTarget } from '../types'
 import type { Env, FlushConfig } from '../types/worker'
+import { initDOSqliteSchema } from '../types/worker'
 import { parseStoredData } from '../utils'
 import { generateULID } from './do/ulid'
 
@@ -202,16 +203,12 @@ export class ParqueDBDO extends DurableObject<Env> {
   /** Pending flush alarm */
   private flushAlarmSet = false
 
-  /** Event buffer for WAL batching (reduces SQLite row costs) */
-  private eventBuffer: Event[] = []
-
-  /** Approximate size of buffered events in bytes */
-  private eventBufferSize = 0
-
   /** Namespace sequence counters for short ID generation with Sqids */
   private counters: Map<string, number> = new Map()
 
-  /** Event buffers per namespace for WAL batching with sequence tracking */
+  /** Consolidated event buffers per namespace for WAL batching with sequence tracking
+   *  This is the SINGLE event buffering system - events are routed here by appendEvent()
+   *  and flushed to events_wal table */
   private nsEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }> = new Map()
 
   /** Relationship event buffers per namespace for WAL batching (Phase 4) */
@@ -250,153 +247,8 @@ export class ParqueDBDO extends DurableObject<Env> {
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return
 
-    // Create tables
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS entities (
-        ns TEXT NOT NULL,
-        id TEXT NOT NULL,
-        type TEXT NOT NULL,
-        name TEXT NOT NULL,
-        version INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL,
-        created_by TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        updated_by TEXT NOT NULL,
-        deleted_at TEXT,
-        deleted_by TEXT,
-        data TEXT NOT NULL,
-        PRIMARY KEY (ns, id)
-      )
-    `)
-
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS relationships (
-        from_ns TEXT NOT NULL,
-        from_id TEXT NOT NULL,
-        predicate TEXT NOT NULL,
-        to_ns TEXT NOT NULL,
-        to_id TEXT NOT NULL,
-        reverse TEXT NOT NULL,
-        version INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL,
-        created_by TEXT NOT NULL,
-        deleted_at TEXT,
-        deleted_by TEXT,
-        -- Shredded fields (top-level columns for efficient querying)
-        match_mode TEXT,           -- 'exact' or 'fuzzy'
-        similarity REAL,           -- 0.0 to 1.0 for fuzzy matches
-        -- Remaining metadata in Variant
-        data TEXT,
-        PRIMARY KEY (from_ns, from_id, predicate, to_ns, to_id)
-      )
-    `)
-
-    // Add indexes for shredded fields to enable efficient filtering
-    this.sql.exec(`
-      CREATE INDEX IF NOT EXISTS idx_relationships_match_mode
-      ON relationships(match_mode) WHERE match_mode IS NOT NULL
-    `)
-
-    this.sql.exec(`
-      CREATE INDEX IF NOT EXISTS idx_relationships_similarity
-      ON relationships(similarity) WHERE similarity IS NOT NULL
-    `)
-
-    // NEW: events_wal table for WAL batching with namespace-based counters
-    // Each row contains a batch of events with Sqids sequence range for short IDs
-    // first_seq/last_seq track the counter range for ID generation
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS events_wal (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ns TEXT NOT NULL,
-        first_seq INTEGER NOT NULL,
-        last_seq INTEGER NOT NULL,
-        events BLOB NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      )
-    `)
-
-    // NEW: rels_wal table for relationship event batching (Phase 4)
-    // Similar to events_wal but for relationship operations
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS rels_wal (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ns TEXT NOT NULL,
-        first_seq INTEGER NOT NULL,
-        last_seq INTEGER NOT NULL,
-        events BLOB NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      )
-    `)
-
-    // Legacy event_batches table - kept for backward compatibility
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS event_batches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        batch BLOB NOT NULL,
-        min_ts INTEGER NOT NULL,
-        max_ts INTEGER NOT NULL,
-        event_count INTEGER NOT NULL,
-        flushed INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now'))
-      )
-    `)
-
-    // Legacy events table - kept for backward compatibility during migration
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        id TEXT PRIMARY KEY,
-        ts TEXT NOT NULL,
-        target TEXT NOT NULL,
-        op TEXT NOT NULL,
-        ns TEXT,
-        entity_id TEXT,
-        before TEXT,
-        after TEXT,
-        actor TEXT NOT NULL,
-        metadata TEXT,
-        flushed INTEGER NOT NULL DEFAULT 0
-      )
-    `)
-
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS checkpoints (
-        id TEXT PRIMARY KEY,
-        created_at TEXT NOT NULL,
-        event_count INTEGER NOT NULL,
-        first_event_id TEXT NOT NULL,
-        last_event_id TEXT NOT NULL,
-        parquet_path TEXT NOT NULL
-      )
-    `)
-
-    // Pending row groups table - tracks bulk writes to R2 pending files
-    // Used by Phase 2 bulk bypass: 5+ entities stream directly to R2
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS pending_row_groups (
-        id TEXT PRIMARY KEY,
-        ns TEXT NOT NULL,
-        path TEXT NOT NULL,
-        row_count INTEGER NOT NULL,
-        first_seq INTEGER NOT NULL,
-        last_seq INTEGER NOT NULL,
-        created_at TEXT NOT NULL
-      )
-    `)
-
-    // Create indexes
-    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(ns, type)')
-    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_entities_updated ON entities(ns, updated_at)')
-    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_rels_from ON relationships(from_ns, from_id, predicate)')
-    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_rels_to ON relationships(to_ns, to_id, reverse)')
-    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_wal_ns ON events_wal(ns, last_seq)')
-    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_rels_wal_ns ON rels_wal(ns, last_seq)')
-    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_event_batches_flushed ON event_batches(flushed, min_ts)')
-    // Legacy index kept for backward compatibility
-    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_unflushed ON events(flushed, ts)')
-    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_ns ON events(ns, entity_id)')
-    // Index for pending row groups queries
-    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_pending_row_groups_ns ON pending_row_groups(ns, created_at)')
+    // Create all tables and indexes using centralized schema definitions
+    initDOSqliteSchema(this.sql)
 
     this.initialized = true
 
@@ -1357,38 +1209,20 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Reconstruct entity state from unflushed events
    */
+  /**
+   * Reconstruct entity state from unflushed events
+   *
+   * Uses the CONSOLIDATED event buffering system:
+   * 1. events_wal table (flushed batches)
+   * 2. nsEventBuffers (in-memory, not yet flushed)
+   */
   async getEntityFromEvents(ns: string, id: string): Promise<Entity | null> {
     await this.ensureInitialized()
 
     const target = `${ns}:${id}`
     let entity: Entity | null = null
 
-    // 1. Read from event_batches
-    interface EventBatchRow extends Record<string, SqlStorageValue> {
-      batch: ArrayBuffer
-    }
-
-    const batchRows = [...this.sql.exec<EventBatchRow>(
-      `SELECT batch FROM event_batches WHERE flushed = 0 ORDER BY min_ts ASC`
-    )]
-
-    for (const row of batchRows) {
-      const batchEvents = this.deserializeEventBatch(row.batch)
-      for (const event of batchEvents) {
-        if (event.target === target) {
-          entity = this.applyEventToEntity(entity, event, ns, id)
-        }
-      }
-    }
-
-    // 2. Read from in-memory event buffer
-    for (const event of this.eventBuffer) {
-      if (event.target === target) {
-        entity = this.applyEventToEntity(entity, event, ns, id)
-      }
-    }
-
-    // 3. Check events_wal
+    // 1. Read from events_wal (flushed batches)
     interface WalRow extends Record<string, SqlStorageValue> {
       events: ArrayBuffer
     }
@@ -1407,7 +1241,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       }
     }
 
-    // 4. Check namespace event buffers
+    // 2. Read from in-memory namespace event buffer (not yet flushed)
     const nsBuffer = this.nsEventBuffers.get(ns)
     if (nsBuffer) {
       for (const event of nsBuffer.events) {
@@ -1689,27 +1523,50 @@ export class ParqueDBDO extends DurableObject<Env> {
    * Events are buffered in memory and flushed as batches to reduce SQLite row costs.
    * Each batch is stored as a single row with events serialized as a blob.
    */
+  /**
+   * Append an event to the log
+   *
+   * Events are buffered in memory per-namespace and flushed as batches to events_wal
+   * to reduce SQLite row costs. The namespace is extracted from event.target.
+   *
+   * This is the CONSOLIDATED event buffering system - all entity events go through here.
+   */
   async appendEvent(event: Event): Promise<void> {
     await this.ensureInitialized()
 
-    // Buffer the event
-    this.eventBuffer.push(event)
+    // Extract namespace from event.target (format: "ns:id")
+    const ns = event.target.split(':')[0]!
 
-    // Estimate size (rough approximation)
+    // Get or create buffer for this namespace
+    let buffer = this.nsEventBuffers.get(ns)
+    if (!buffer) {
+      // Initialize with current counter
+      const seq = this.counters.get(ns) || 1
+      buffer = { events: [], firstSeq: seq, lastSeq: seq, sizeBytes: 0 }
+      this.nsEventBuffers.set(ns, buffer)
+    }
+
+    // Add event to buffer
+    buffer.events.push(event)
+    buffer.lastSeq++
+    this.counters.set(ns, buffer.lastSeq)
+
+    // Estimate size
     const eventJson = JSON.stringify(event)
-    this.eventBufferSize += eventJson.length
+    buffer.sizeBytes += eventJson.length
 
-    // Check if we should flush the batch
-    if (this.eventBuffer.length >= EVENT_BATCH_COUNT_THRESHOLD ||
-        this.eventBufferSize >= EVENT_BATCH_SIZE_THRESHOLD) {
-      await this.flushEventBatch()
+    // Check if we should flush
+    if (buffer.events.length >= EVENT_BATCH_COUNT_THRESHOLD ||
+        buffer.sizeBytes >= EVENT_BATCH_SIZE_THRESHOLD) {
+      await this.flushNsEventBatch(ns)
     }
   }
 
   /**
-   * Append an event with namespace-based sequence tracking (new events_wal format)
+   * Append an event with namespace-based sequence tracking
    * Uses Sqids-based counter for short IDs instead of ULIDs
    *
+   * @deprecated Use appendEvent() directly - it now routes to the namespace-based system
    * @param ns - Namespace for the event
    * @param event - Event without ID (ID will be generated)
    * @returns Event ID generated with Sqids
@@ -1781,7 +1638,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   }
 
   /**
-   * Flush all namespace event buffers
+   * Flush all namespace event buffers to events_wal
    */
   async flushAllNsEventBatches(): Promise<void> {
     for (const ns of this.nsEventBuffers.keys()) {
@@ -1790,53 +1647,11 @@ export class ParqueDBDO extends DurableObject<Env> {
   }
 
   /**
-   * Flush buffered events as a single batch row
-   *
-   * This is called automatically when thresholds are reached,
-   * and should also be called on DO shutdown to persist partial batches.
-   */
-  async flushEventBatch(): Promise<void> {
-    if (this.eventBuffer.length === 0) return
-
-    await this.ensureInitialized()
-
-    const events = this.eventBuffer
-    const minTs = Math.min(...events.map(e => e.ts))
-    const maxTs = Math.max(...events.map(e => e.ts))
-
-    // Serialize events to blob
-    const json = JSON.stringify(events)
-    const data = new TextEncoder().encode(json)
-
-    this.sql.exec(
-      `INSERT INTO event_batches (batch, min_ts, max_ts, event_count, flushed)
-       VALUES (?, ?, ?, ?, 0)`,
-      data,
-      minTs,
-      maxTs,
-      events.length
-    )
-
-    // Clear buffer
-    this.eventBuffer = []
-    this.eventBufferSize = 0
-  }
-
-  /**
-   * Get unflushed event count (from batches + buffer)
+   * Get unflushed event count (from events_wal + buffers)
    */
   async getUnflushedEventCount(): Promise<number> {
-    await this.ensureInitialized()
-
-    // Count events in unflushed batches
-    const rows = [...this.sql.exec<{ total: number }>(
-      'SELECT SUM(event_count) as total FROM event_batches WHERE flushed = 0'
-    )]
-
-    const batchCount = rows[0]?.total || 0
-
-    // Add buffered events not yet written
-    return batchCount + this.eventBuffer.length
+    // Delegate to the consolidated WAL-based counter
+    return this.getTotalUnflushedWalEventCount()
   }
 
   /**
@@ -1894,18 +1709,6 @@ export class ParqueDBDO extends DurableObject<Env> {
     return rows[0]?.count || 0
   }
 
-  /**
-   * Get unflushed batch count
-   */
-  async getUnflushedBatchCount(): Promise<number> {
-    await this.ensureInitialized()
-
-    const rows = [...this.sql.exec<{ count: number }>(
-      'SELECT COUNT(*) as count FROM event_batches WHERE flushed = 0'
-    )]
-
-    return rows[0]?.count || 0
-  }
 
   /**
    * Read all unflushed WAL events for a namespace
@@ -1947,51 +1750,36 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Read all unflushed events (from batches + buffer)
    */
+  /**
+   * Read all unflushed events (from events_wal + buffers)
+   *
+   * Uses the CONSOLIDATED event buffering system.
+   */
   async readUnflushedEvents(): Promise<Event[]> {
     await this.ensureInitialized()
 
     const allEvents: Event[] = []
 
-    // Read from batches
-    interface EventBatchRow extends Record<string, SqlStorageValue> {
-      id: number
-      batch: ArrayBuffer
-      min_ts: number
-      max_ts: number
-      event_count: number
+    // Read from events_wal (all namespaces)
+    interface WalRow extends Record<string, SqlStorageValue> {
+      events: ArrayBuffer
     }
 
-    const rows = [...this.sql.exec<EventBatchRow>(
-      `SELECT id, batch, min_ts, max_ts, event_count
-       FROM event_batches
-       WHERE flushed = 0
-       ORDER BY min_ts ASC`
+    const rows = [...this.sql.exec<WalRow>(
+      `SELECT events FROM events_wal ORDER BY id ASC`
     )]
 
     for (const row of rows) {
-      const batchEvents = this.deserializeEventBatch(row.batch)
+      const batchEvents = this.deserializeEventBatch(row.events)
       allEvents.push(...batchEvents)
     }
 
-    // Add buffer events
-    allEvents.push(...this.eventBuffer)
+    // Add events from all namespace buffers
+    for (const buffer of this.nsEventBuffers.values()) {
+      allEvents.push(...buffer.events)
+    }
 
     return allEvents
-  }
-
-  /**
-   * Mark event batches as flushed (after writing to R2/Parquet)
-   */
-  async markEventBatchesFlushed(batchIds: number[]): Promise<void> {
-    if (batchIds.length === 0) return
-
-    await this.ensureInitialized()
-
-    const placeholders = batchIds.map(() => '?').join(',')
-    this.sql.exec(
-      `UPDATE event_batches SET flushed = 1 WHERE id IN (${placeholders})`,
-      ...batchIds
-    )
   }
 
   /**
@@ -2289,64 +2077,93 @@ export class ParqueDBDO extends DurableObject<Env> {
   }
 
   /**
-   * Flush events to Parquet and store in R2
+   * Flush namespace-specific events from events_wal to Parquet files in R2
+   *
+   * Writes namespace-specific event files to data/{ns}/events/ for
+   * efficient namespace-scoped queries.
    */
-  async flushToParquet(): Promise<void> {
+  async flushNsWalToParquet(): Promise<void> {
     await this.ensureInitialized()
 
-    // First flush any buffered events to a batch
-    await this.flushEventBatch()
+    // First flush any buffered namespace events to events_wal
+    await this.flushAllNsEventBatches()
 
-    // Get unflushed batches
-    interface FlushEventBatchRow extends Record<string, SqlStorageValue> {
-      id: number
-      batch: ArrayBuffer
-      min_ts: number
-      max_ts: number
-      event_count: number
+    // Get all namespaces with unflushed events
+    interface NsRow extends Record<string, SqlStorageValue> {
+      ns: string
     }
 
-    const batches = [...this.sql.exec<FlushEventBatchRow>(
-      `SELECT id, batch, min_ts, max_ts, event_count
-       FROM event_batches
-       WHERE flushed = 0
-       ORDER BY min_ts ASC`
+    const namespaces = [...this.sql.exec<NsRow>(
+      `SELECT DISTINCT ns FROM events_wal`
     )]
 
-    // Collect all events and count
-    let totalCount = 0
-    const allEvents: Event[] = []
-    const batchIds: number[] = []
+    for (const { ns } of namespaces) {
+      await this.flushNsWalToParquetForNamespace(ns)
+    }
+  }
 
-    for (const batch of batches) {
-      const events = this.deserializeEventBatch(batch.batch)
-      allEvents.push(...events)
-      totalCount += events.length
-      batchIds.push(batch.id)
-
-      if (totalCount >= this.flushConfig.maxEvents) break
+  /**
+   * Flush events_wal for a specific namespace to Parquet
+   */
+  private async flushNsWalToParquetForNamespace(ns: string): Promise<void> {
+    interface WalRow extends Record<string, SqlStorageValue> {
+      id: number
+      events: ArrayBuffer
+      first_seq: number
+      last_seq: number
     }
 
-    if (totalCount < this.flushConfig.minEvents) {
+    const walRows = [...this.sql.exec<WalRow>(
+      `SELECT id, events, first_seq, last_seq
+       FROM events_wal
+       WHERE ns = ?
+       ORDER BY first_seq ASC`,
+      ns
+    )]
+
+    if (walRows.length === 0) return
+
+    // Collect all events
+    const allEvents: Event[] = []
+    const walIds: number[] = []
+    let minSeq = Infinity
+    let maxSeq = -Infinity
+
+    for (const row of walRows) {
+      const events = this.deserializeEventBatch(row.events)
+      allEvents.push(...events)
+      walIds.push(row.id)
+      minSeq = Math.min(minSeq, row.first_seq)
+      maxSeq = Math.max(maxSeq, row.last_seq)
+
+      // Limit batch size
+      if (allEvents.length >= this.flushConfig.maxEvents) break
+    }
+
+    if (allEvents.length < this.flushConfig.minEvents) {
       // Not enough events to flush
       return
     }
 
-    const firstEvent = allEvents[0]!
-    const lastEvent = allEvents[allEvents.length - 1]!
     const checkpointId = generateULID()
 
-    // Generate parquet path
-    const date = new Date(firstEvent.ts)
-    const datePath = `${date.getUTCFullYear()}/${String(date.getUTCMonth() + 1).padStart(2, '0')}/${String(date.getUTCDate()).padStart(2, '0')}`
-    const parquetPath = `events/archive/${datePath}/${checkpointId}.parquet`
+    // Generate namespace-specific parquet path
+    // Format: data/{ns}/events/{checkpointId}.parquet
+    const parquetPath = `data/${ns}/events/${checkpointId}.parquet`
 
     // Convert events to columnar format for Parquet
+    // Include ns and entity_id as separate columns for efficient filtering
     const columnData = [
       { name: 'id', data: allEvents.map(e => e.id) },
       { name: 'ts', data: allEvents.map(e => e.ts) },
       { name: 'op', data: allEvents.map(e => e.op) },
       { name: 'target', data: allEvents.map(e => e.target) },
+      { name: 'ns', data: allEvents.map(() => ns) },
+      { name: 'entity_id', data: allEvents.map(e => {
+        // Extract entity_id from target (format: "ns:id" or "ns:id:predicate:to_ns:to_id")
+        const colonIdx = e.target.indexOf(':')
+        return colonIdx !== -1 ? e.target.slice(colonIdx + 1).split(':')[0] : null
+      }) },
       { name: 'before', data: allEvents.map(e => e.before ? JSON.stringify(e.before) : null) },
       { name: 'after', data: allEvents.map(e => e.after ? JSON.stringify(e.after) : null) },
       { name: 'actor', data: allEvents.map(e => e.actor ?? null) },
@@ -2359,25 +2176,167 @@ export class ParqueDBDO extends DurableObject<Env> {
       const parquetBuffer = parquetWriteBuffer({ columnData })
       await this.env.BUCKET.put(parquetPath, parquetBuffer)
     } catch (error: unknown) {
-      // If Parquet writing fails, log and re-throw to prevent marking batches as flushed
       const message = error instanceof Error ? error.message : 'Unknown error'
-      throw new Error(`Failed to write Parquet file to R2: ${message}`)
+      throw new Error(`Failed to write namespace events Parquet file to R2: ${message}`)
     }
 
-    // Mark batches as flushed
-    await this.markEventBatchesFlushed(batchIds)
+    // Delete flushed WAL entries
+    if (walIds.length > 0) {
+      const placeholders = walIds.map(() => '?').join(',')
+      this.sql.exec(
+        `DELETE FROM events_wal WHERE id IN (${placeholders})`,
+        ...walIds
+      )
+    }
 
-    // Record checkpoint
+    // Record checkpoint for namespace events
     this.sql.exec(
       `INSERT INTO checkpoints (id, created_at, event_count, first_event_id, last_event_id, parquet_path)
        VALUES (?, ?, ?, ?, ?, ?)`,
       checkpointId,
       new Date().toISOString(),
       allEvents.length,
-      firstEvent.id,
-      lastEvent.id,
+      allEvents[0]!.id,
+      allEvents[allEvents.length - 1]!.id,
       parquetPath
     )
+  }
+
+  /**
+   * Flush relationship events from rels_wal to Parquet files in R2
+   *
+   * Similar to flushNsWalToParquet but for relationship events.
+   * Writes to rels/{ns}/events/{checkpointId}.parquet
+   */
+  async flushRelWalToParquet(): Promise<void> {
+    await this.ensureInitialized()
+
+    // First flush any buffered relationship events to rels_wal
+    await this.flushAllRelEventBatches()
+
+    // Get all namespaces with unflushed relationship events
+    interface NsRow extends Record<string, SqlStorageValue> {
+      ns: string
+    }
+
+    const namespaces = [...this.sql.exec<NsRow>(
+      `SELECT DISTINCT ns FROM rels_wal`
+    )]
+
+    for (const { ns } of namespaces) {
+      await this.flushRelWalToParquetForNamespace(ns)
+    }
+  }
+
+  /**
+   * Flush rels_wal for a specific namespace to Parquet
+   */
+  private async flushRelWalToParquetForNamespace(ns: string): Promise<void> {
+    interface WalRow extends Record<string, SqlStorageValue> {
+      id: number
+      events: ArrayBuffer
+      first_seq: number
+      last_seq: number
+    }
+
+    const walRows = [...this.sql.exec<WalRow>(
+      `SELECT id, events, first_seq, last_seq
+       FROM rels_wal
+       WHERE ns = ?
+       ORDER BY first_seq ASC`,
+      ns
+    )]
+
+    if (walRows.length === 0) return
+
+    // Collect all events
+    const allEvents: Event[] = []
+    const walIds: number[] = []
+
+    for (const row of walRows) {
+      const events = this.deserializeEventBatch(row.events)
+      allEvents.push(...events)
+      walIds.push(row.id)
+
+      // Limit batch size
+      if (allEvents.length >= this.flushConfig.maxEvents) break
+    }
+
+    if (allEvents.length < this.flushConfig.minEvents) {
+      // Not enough events to flush
+      return
+    }
+
+    const checkpointId = generateULID()
+
+    // Generate relationship-specific parquet path
+    // Format: rels/{ns}/events/{checkpointId}.parquet
+    const parquetPath = `rels/${ns}/events/${checkpointId}.parquet`
+
+    // Convert events to columnar format for Parquet
+    const columnData = [
+      { name: 'id', data: allEvents.map(e => e.id) },
+      { name: 'ts', data: allEvents.map(e => e.ts) },
+      { name: 'op', data: allEvents.map(e => e.op) },
+      { name: 'target', data: allEvents.map(e => e.target) },
+      { name: 'ns', data: allEvents.map(() => ns) },
+      { name: 'before', data: allEvents.map(e => e.before ? JSON.stringify(e.before) : null) },
+      { name: 'after', data: allEvents.map(e => e.after ? JSON.stringify(e.after) : null) },
+      { name: 'actor', data: allEvents.map(e => e.actor ?? null) },
+      { name: 'metadata', data: allEvents.map(e => e.metadata ? JSON.stringify(e.metadata) : null) },
+    ]
+
+    // Write Parquet file to R2 using hyparquet-writer
+    try {
+      const { parquetWriteBuffer } = await import('hyparquet-writer')
+      const parquetBuffer = parquetWriteBuffer({ columnData })
+      await this.env.BUCKET.put(parquetPath, parquetBuffer)
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      throw new Error(`Failed to write relationship events Parquet file to R2: ${message}`)
+    }
+
+    // Delete flushed WAL entries
+    if (walIds.length > 0) {
+      const placeholders = walIds.map(() => '?').join(',')
+      this.sql.exec(
+        `DELETE FROM rels_wal WHERE id IN (${placeholders})`,
+        ...walIds
+      )
+    }
+
+    // Record checkpoint for relationship events
+    this.sql.exec(
+      `INSERT INTO checkpoints (id, created_at, event_count, first_event_id, last_event_id, parquet_path)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      checkpointId,
+      new Date().toISOString(),
+      allEvents.length,
+      allEvents[0]!.id,
+      allEvents[allEvents.length - 1]!.id,
+      parquetPath
+    )
+  }
+
+  /**
+   * Flush events to Parquet and store in R2
+   *
+   * This flushes:
+   * 1. Namespace events_wal to data/{ns}/events/ (namespace-specific)
+   * 2. Relationship rels_wal to rels/{ns}/events/ (relationship-specific)
+   */
+  async flushToParquet(): Promise<void> {
+    await this.ensureInitialized()
+
+    // First flush any buffered events to their respective tables
+    await this.flushAllNsEventBatches()
+    await this.flushAllRelEventBatches()
+
+    // Flush namespace-specific events from events_wal
+    await this.flushNsWalToParquet()
+
+    // Flush relationship events from rels_wal
+    await this.flushRelWalToParquet()
   }
 
   // ===========================================================================
@@ -2390,13 +2349,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   override async alarm(): Promise<void> {
     this.flushAlarmSet = false
 
-    // First flush any buffered events to a batch
-    await this.flushEventBatch()
-
-    // Phase 4: Also flush relationship event batches
-    await this.flushAllRelEventBatches()
-
-    // Then flush batches to Parquet/R2
+    // Flush all buffered events to Parquet/R2
     await this.flushToParquet()
   }
 
@@ -2499,7 +2452,7 @@ export class ParqueDBDO extends DurableObject<Env> {
    * This includes:
    * - Namespace sequence counters
    * - Entity cache
-   * - Event buffers (both legacy and namespace-based)
+   * - Namespace event buffers
    * - Relationship event buffers
    *
    * @returns Transaction ID (for tracking purposes)
@@ -2515,8 +2468,6 @@ export class ParqueDBDO extends DurableObject<Env> {
     this.transactionSnapshot = {
       counters: new Map(this.counters),
       entityCache: new Map(),
-      eventBuffer: [...this.eventBuffer],
-      eventBufferSize: this.eventBufferSize,
       nsEventBuffers: new Map(),
       relEventBuffers: new Map(),
       sqlRollbackOps: [],
@@ -2609,9 +2560,6 @@ export class ParqueDBDO extends DurableObject<Env> {
     for (const [k, v] of snapshot.entityCache) {
       this.entityCache.set(k, v)
     }
-
-    this.eventBuffer = [...snapshot.eventBuffer]
-    this.eventBufferSize = snapshot.eventBufferSize
 
     this.nsEventBuffers.clear()
     for (const [ns, buffer] of snapshot.nsEventBuffers) {
@@ -2724,9 +2672,9 @@ export class ParqueDBDO extends DurableObject<Env> {
 interface TransactionSnapshot {
   counters: Map<string, number>
   entityCache: Map<string, { entity: Entity; version: number }>
-  eventBuffer: Event[]
-  eventBufferSize: number
+  /** Consolidated namespace event buffers (single source of truth for entity events) */
   nsEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }>
+  /** Relationship event buffers (separate from entity events) */
   relEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }>
   sqlRollbackOps: Array<{
     type: 'entity_insert' | 'entity_update' | 'entity_delete' | 'rel_insert' | 'rel_update' | 'rel_delete' | 'pending_row_group'

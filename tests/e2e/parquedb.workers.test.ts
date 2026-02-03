@@ -13,13 +13,8 @@
 
 import { env, SELF, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-
-// Type for the env bindings from wrangler.jsonc
-interface TestEnv {
-  BUCKET: R2Bucket
-  PARQUEDB: DurableObjectNamespace
-  ENVIRONMENT: string
-}
+import type { TestEnv, ParqueDBDOTestStub } from './types'
+import { asDOTestStub } from './types'
 
 // Cast env to our typed environment
 const testEnv = env as TestEnv
@@ -132,19 +127,15 @@ describe('ParqueDB Workers E2E', () => {
   })
 
   describe('ParqueDB DO Entity Operations', () => {
-    let doStub: DurableObjectStub
+    let stub: ParqueDBDOTestStub
 
     beforeEach(() => {
       // Get a fresh DO stub for each test
       const id = testEnv.PARQUEDB.idFromName(`test-${Date.now()}`)
-      doStub = testEnv.PARQUEDB.get(id)
+      stub = asDOTestStub(testEnv.PARQUEDB.get(id))
     })
 
     it('can create an entity via DO RPC', async () => {
-      const stub = doStub as unknown as {
-        create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-      }
-
       const entity = await stub.create('posts', {
         $type: 'Post',
         name: 'Test Post',
@@ -161,11 +152,6 @@ describe('ParqueDB Workers E2E', () => {
     })
 
     it('can get an entity via DO RPC', async () => {
-      const stub = doStub as unknown as {
-        create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-        get(ns: string, id: string): Promise<unknown>
-      }
-
       // Create first
       const created = await stub.create('posts', {
         $type: 'Post',
@@ -186,11 +172,6 @@ describe('ParqueDB Workers E2E', () => {
     })
 
     it('can update an entity via DO RPC', async () => {
-      const stub = doStub as unknown as {
-        create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-        update(ns: string, id: string, update: unknown, options?: unknown): Promise<unknown>
-      }
-
       // Create first
       const created = await stub.create('posts', {
         $type: 'Post',
@@ -213,12 +194,6 @@ describe('ParqueDB Workers E2E', () => {
     })
 
     it('can delete an entity via DO RPC', async () => {
-      const stub = doStub as unknown as {
-        create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-        delete(ns: string, id: string, options?: unknown): Promise<boolean>
-        get(ns: string, id: string): Promise<unknown>
-      }
-
       // Create first
       const created = await stub.create('posts', {
         $type: 'Post',
@@ -240,11 +215,6 @@ describe('ParqueDB Workers E2E', () => {
     // When a DO throws an error, isolated storage cleanup can fail
     // See: https://developers.cloudflare.com/workers/testing/vitest-integration/known-issues/#isolated-storage
     it.skip('enforces optimistic concurrency', async () => {
-      const stub = doStub as unknown as {
-        create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-        update(ns: string, id: string, update: unknown, options?: unknown): Promise<unknown>
-      }
-
       // Create first
       const created = await stub.create('posts', {
         $type: 'Post',
@@ -274,20 +244,14 @@ describe('ParqueDB Workers E2E', () => {
   })
 
   describe('ParqueDB DO Relationship Operations', () => {
-    let doStub: DurableObjectStub
+    let stub: ParqueDBDOTestStub
 
     beforeEach(() => {
       const id = testEnv.PARQUEDB.idFromName(`test-rels-${Date.now()}`)
-      doStub = testEnv.PARQUEDB.get(id)
+      stub = asDOTestStub(testEnv.PARQUEDB.get(id))
     })
 
     it('can create relationships between entities', async () => {
-      const stub = doStub as unknown as {
-        create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-        link(fromId: string, predicate: string, toId: string, options?: unknown): Promise<void>
-        getRelationships(ns: string, id: string, predicate?: string, direction?: string): Promise<unknown[]>
-      }
-
       // Create author and post
       const author = await stub.create('users', {
         $type: 'User',
@@ -319,11 +283,6 @@ describe('ParqueDB Workers E2E', () => {
     })
 
     it('can create inline relationships during entity creation', async () => {
-      const stub = doStub as unknown as {
-        create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-        getRelationships(ns: string, id: string, predicate?: string, direction?: string): Promise<unknown[]>
-      }
-
       // Create author first
       const author = await stub.create('users', {
         $type: 'User',
@@ -347,13 +306,6 @@ describe('ParqueDB Workers E2E', () => {
     })
 
     it('can remove relationships', async () => {
-      const stub = doStub as unknown as {
-        create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-        link(fromId: string, predicate: string, toId: string, options?: unknown): Promise<void>
-        unlink(fromId: string, predicate: string, toId: string, options?: unknown): Promise<void>
-        getRelationships(ns: string, id: string, predicate?: string, direction?: string): Promise<unknown[]>
-      }
-
       // Create entities
       const user = await stub.create('users', {
         $type: 'User',

@@ -1,0 +1,23 @@
+{
+  "name": "parquedb-snippets",
+  "version": "0.1.0",
+  "description": "ParqueDB-powered Cloudflare Snippets examples",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsx build.ts",
+    "build:watch": "tsx build.ts --watch",
+    "deploy": "tsx deploy.ts",
+    "deploy:list": "tsx deploy.ts --list",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

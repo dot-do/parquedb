@@ -32,6 +32,7 @@ import type { GetRelatedOptions, GetRelatedResult, Snapshot, SnapshotQueryStats 
 import type { ReverseRelIndex } from './relationships'
 import { hydrateEntity, applyMaxInbound } from './relationships'
 import { getFromReverseRelIndex } from './store'
+import { toFullId } from './validation'
 
 export interface QueryContext {
   storage: StorageBackend
@@ -216,7 +217,7 @@ export async function getEntity<T = Record<string, unknown>>(
   options: GetOptions | undefined,
   ctx: QueryContext
 ): Promise<Entity<T> | null> {
-  const fullId = id.includes('/') ? id : `${namespace}/${id}`
+  const fullId = toFullId(namespace, id)
 
   // Try to read from storage to detect backend errors
   try {
@@ -322,7 +323,7 @@ export async function getRelatedEntities<T = Record<string, unknown>>(
   options: GetRelatedOptions | undefined,
   ctx: QueryContext
 ): Promise<GetRelatedResult<T>> {
-  const fullId = id.includes('/') ? id : `${namespace}/${id}`
+  const fullId = toFullId(namespace, id)
   const entity = ctx.entities.get(fullId)
   if (!entity) {
     return { items: [], total: 0, hasMore: false }

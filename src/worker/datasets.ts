@@ -60,7 +60,17 @@ export const DATASETS: Record<string, DatasetConfig> = {
     source: 'https://www.unspsc.org/',
     prefix: 'unspsc',
   },
-  // 'wikidata' removed: no data uploaded to R2 yet
+  wikidata: {
+    name: 'Wikidata',
+    description: 'Wikidata knowledge graph sample - items, properties, and claims',
+    collections: ['items', 'properties', 'claims'],
+    source: 'https://www.wikidata.org/',
+    prefix: 'wikidata',
+    predicates: {
+      items: ['instanceOf', 'subclassOf', 'country', 'locatedIn'],
+      claims: ['subject', 'property', 'object'],
+    },
+  },
 }
 
 /**

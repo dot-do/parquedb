@@ -87,7 +87,8 @@
     "load:unspsc": "tsx scripts/load-data.ts --dataset unspsc --output ./data/unspsc",
     "load:wikidata": "tsx scripts/load-data.ts --dataset wikidata --output ./data/wikidata",
     "load:commoncrawl": "tsx scripts/load-data.ts --dataset commoncrawl --output ./data/commoncrawl",
-    "load:all": "tsx scripts/load-all.ts"
+    "load:all": "tsx scripts/load-all.ts",
+    "generate:wikidata": "tsx scripts/generate-wikidata-sample.ts --output ./data/wikidata"
   },
   "dependencies": {
     "@dotdo/iceberg": "^0.2.0",

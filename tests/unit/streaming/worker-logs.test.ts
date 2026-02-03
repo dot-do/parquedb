@@ -812,4 +812,111 @@ describe('Edge Cases', () => {
 
     await mv.stop()
   })
+
+  // ==========================================================================
+  // Fetch Subrequest Tracking Tests
+  // ==========================================================================
+
+  describe('Fetch Subrequest Tracking', () => {
+    it('records fetchCount from diagnosticsChannelEvents', async () => {
+      const mv = createWorkerLogsMV({
+        storage,
+        datasetPath: 'logs/workers',
+        generateId: createIdGenerator(),
+      })
+      mv.start()
+
+      const item = createTailItem({
+        diagnosticsChannelEvents: [
+          { channel: 'fetch', timestamp: Date.now(), message: { url: 'https://api.example.com/a' } },
+          { channel: 'fetch', timestamp: Date.now(), message: { url: 'https://api.example.com/b' } },
+          { channel: 'fetch', timestamp: Date.now(), message: { url: 'https://api.example.com/c' } },
+        ],
+      })
+
+      await mv.ingestTailItem(item)
+
+      const buffer = mv.getBuffer()
+      expect(buffer.length).toBe(1)
+      expect(buffer[0].fetchCount).toBe(3)
+
+      await mv.stop()
+    })
+
+    it('records fetchCount as 0 when no diagnosticsChannelEvents', async () => {
+      const mv = createWorkerLogsMV({
+        storage,
+        datasetPath: 'logs/workers',
+        generateId: createIdGenerator(),
+      })
+      mv.start()
+
+      await mv.ingestTailItem(createTailItem())
+
+      const buffer = mv.getBuffer()
+      expect(buffer[0].fetchCount).toBe(0)
+
+      await mv.stop()
+    })
+
+    it('only counts fetch channel events', async () => {
+      const mv = createWorkerLogsMV({
+        storage,
+        datasetPath: 'logs/workers',
+        generateId: createIdGenerator(),
+      })
+      mv.start()
+
+      const item = createTailItem({
+        diagnosticsChannelEvents: [
+          { channel: 'fetch', timestamp: Date.now(), message: { url: 'https://api.example.com/a' } },
+          { channel: 'kv', timestamp: Date.now(), message: { key: 'some-key' } },
+          { channel: 'fetch', timestamp: Date.now(), message: { url: 'https://api.example.com/b' } },
+          { channel: 'cache', timestamp: Date.now(), message: { cacheKey: 'some-cache' } },
+        ],
+      })
+
+      await mv.ingestTailItem(item)
+
+      const buffer = mv.getBuffer()
+      expect(buffer[0].fetchCount).toBe(2)
+
+      await mv.stop()
+    })
+
+    it('fetchCount is same for all log records from same TailItem', async () => {
+      const mv = createWorkerLogsMV({
+        storage,
+        datasetPath: 'logs/workers',
+        generateId: createIdGenerator(),
+      })
+      mv.start()
+
+      const item = createTailItem({
+        logs: [
+          { timestamp: Date.now(), level: 'info', message: ['Log 1'] },
+          { timestamp: Date.now(), level: 'warn', message: ['Log 2'] },
+          { timestamp: Date.now(), level: 'error', message: ['Log 3'] },
+        ],
+        diagnosticsChannelEvents: [
+          { channel: 'fetch', timestamp: Date.now(), message: {} },
+          { channel: 'fetch', timestamp: Date.now(), message: {} },
+        ],
+      })
+
+      await mv.ingestTailItem(item)
+
+      const buffer = mv.getBuffer()
+      expect(buffer.length).toBe(3)
+      expect(buffer.every(r => r.fetchCount === 2)).toBe(true)
+
+      await mv.stop()
+    })
+
+    it('fetchCount is included in WORKER_LOGS_SCHEMA', () => {
+      expect(WORKER_LOGS_SCHEMA.fetchCount).toBeDefined()
+      expect(WORKER_LOGS_SCHEMA.fetchCount.type).toBe('INT32')
+      expect(WORKER_LOGS_SCHEMA.fetchCount.optional).toBe(false)
+    })
+  })
 })

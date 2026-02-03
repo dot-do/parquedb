@@ -786,4 +786,176 @@ describe('QueryBuilder', () => {
       expect(results.map(r => (r as any).title)).toEqual(['A', 'B', 'C'])
     })
   })
+
+  // =============================================================================
+  // Array Operators
+  // =============================================================================
+
+  describe('array operators', () => {
+    describe('whereAll()', () => {
+      it('builds $all filter for array contains all', () => {
+        const builder = new QueryBuilder()
+          .whereAll('tags', ['tech', 'database'])
+        const { filter } = builder.build()
+        expect(filter).toEqual({ tags: { $all: ['tech', 'database'] } })
+      })
+
+      it('handles single element array', () => {
+        const builder = new QueryBuilder()
+          .whereAll('tags', ['tech'])
+        const { filter } = builder.build()
+        expect(filter).toEqual({ tags: { $all: ['tech'] } })
+      })
+
+      it('handles empty array', () => {
+        const builder = new QueryBuilder()
+          .whereAll('tags', [])
+        const { filter } = builder.build()
+        expect(filter).toEqual({ tags: { $all: [] } })
+      })
+
+      it('chains with other conditions', () => {
+        const builder = new QueryBuilder()
+          .where('status', 'eq', 'published')
+          .whereAll('tags', ['tech', 'database'])
+        const { filter } = builder.build()
+        expect(filter).toEqual({
+          status: { $eq: 'published' },
+          tags: { $all: ['tech', 'database'] }
+        })
+      })
+
+      it('returns this for method chaining', () => {
+        const builder = new QueryBuilder()
+        expect(builder.whereAll('tags', ['tech'])).toBe(builder)
+      })
+    })
+
+    describe('whereElemMatch()', () => {
+      it('builds $elemMatch filter for array element matching', () => {
+        const builder = new QueryBuilder()
+          .whereElemMatch('comments', { score: { $gt: 10 } })
+        const { filter } = builder.build()
+        expect(filter).toEqual({ comments: { $elemMatch: { score: { $gt: 10 } } } })
+      })
+
+      it('handles complex nested filters', () => {
+        const builder = new QueryBuilder()
+          .whereElemMatch('items', {
+            quantity: { $gte: 5 },
+            price: { $lt: 100 }
+          })
+        const { filter } = builder.build()
+        expect(filter).toEqual({
+          items: {
+            $elemMatch: {
+              quantity: { $gte: 5 },
+              price: { $lt: 100 }
+            }
+          }
+        })
+      })
+
+      it('handles simple equality in elemMatch', () => {
+        const builder = new QueryBuilder()
+          .whereElemMatch('users', { role: 'admin' })
+        const { filter } = builder.build()
+        expect(filter).toEqual({ users: { $elemMatch: { role: 'admin' } } })
+      })
+
+      it('chains with other conditions', () => {
+        const builder = new QueryBuilder()
+          .where('status', 'eq', 'active')
+          .whereElemMatch('comments', { approved: true })
+        const { filter } = builder.build()
+        expect(filter).toEqual({
+          status: { $eq: 'active' },
+          comments: { $elemMatch: { approved: true } }
+        })
+      })
+
+      it('returns this for method chaining', () => {
+        const builder = new QueryBuilder()
+        expect(builder.whereElemMatch('items', { active: true })).toBe(builder)
+      })
+    })
+
+    describe('whereSize()', () => {
+      it('builds $size filter for array length', () => {
+        const builder = new QueryBuilder()
+          .whereSize('tags', 3)
+        const { filter } = builder.build()
+        expect(filter).toEqual({ tags: { $size: 3 } })
+      })
+
+      it('handles size of 0', () => {
+        const builder = new QueryBuilder()
+          .whereSize('items', 0)
+        const { filter } = builder.build()
+        expect(filter).toEqual({ items: { $size: 0 } })
+      })
+
+      it('handles size of 1', () => {
+        const builder = new QueryBuilder()
+          .whereSize('roles', 1)
+        const { filter } = builder.build()
+        expect(filter).toEqual({ roles: { $size: 1 } })
+      })
+
+      it('chains with other conditions', () => {
+        const builder = new QueryBuilder()
+          .where('status', 'eq', 'active')
+          .whereSize('tags', 5)
+        const { filter } = builder.build()
+        expect(filter).toEqual({
+          status: { $eq: 'active' },
+          tags: { $size: 5 }
+        })
+      })
+
+      it('throws for negative size', () => {
+        const builder = new QueryBuilder()
+        expect(() => builder.whereSize('tags', -1)).toThrow('Size cannot be negative')
+      })
+
+      it('returns this for method chaining', () => {
+        const builder = new QueryBuilder()
+        expect(builder.whereSize('tags', 3)).toBe(builder)
+      })
+    })
+
+    describe('combined array operators', () => {
+      it('combines multiple array operators on different fields', () => {
+        const builder = new QueryBuilder()
+          .whereAll('tags', ['tech'])
+          .whereSize('comments', 5)
+        const { filter } = builder.build()
+        expect(filter).toEqual({
+          tags: { $all: ['tech'] },
+          comments: { $size: 5 }
+        })
+      })
+
+      it('works in a complete query chain', () => {
+        const builder = new QueryBuilder()
+          .where('status', 'eq', 'published')
+          .whereAll('tags', ['tech', 'database'])
+          .whereSize('authors', 2)
+          .orderBy('createdAt', 'desc')
+          .limit(10)
+
+        const { filter, options } = builder.build()
+
+        expect(filter).toEqual({
+          status: { $eq: 'published' },
+          tags: { $all: ['tech', 'database'] },
+          authors: { $size: 2 }
+        })
+        expect(options).toEqual({
+          sort: { createdAt: 'desc' },
+          limit: 10
+        })
+      })
+    })
+  })
 })

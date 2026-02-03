@@ -23,22 +23,21 @@ import type {
   Event,
   EventOp,
   RelSet,
-  SortDirection,
   ValidationMode,
 } from '../types'
 
 import { entityTarget, parseEntityTarget, relTarget, isRelationshipTarget } from '../types'
-import { normalizeSortDirection } from '../types/options'
 import { parseFieldType, isRelationString, parseRelation } from '../types/schema'
 import { SchemaValidator } from '../schema/validator'
 import { FileNotFoundError } from '../storage/MemoryBackend'
 import { IndexManager } from '../indexes/manager'
 import type { IndexDefinition, IndexMetadata, IndexStats } from '../indexes/types'
-import { getNestedValue, compareValues, generateId, deepClone } from '../utils'
+import { generateId, deepClone } from '../utils'
 import { matchesFilter as canonicalMatchesFilter } from '../query/filter'
+import { sortEntities } from '../query/sort'
 import { applyOperators } from '../mutation/operators'
 import { DEFAULT_MAX_INBOUND } from '../constants'
-import { asRelEventPayload } from '../types/cast'
+import { asRelEventPayload, asMutableEntity, variantAsEntity, variantAsEntityOrNull } from '../types/cast'
 import pluralize from 'pluralize'
 
 /**
@@ -64,9 +63,6 @@ import type {
   Snapshot,
   SnapshotManager,
   SnapshotQueryStats,
-  SnapshotStorageStats,
-  PruneSnapshotsOptions,
-  RawSnapshot,
   EventLog,
   EventLogConfig,
   ArchiveEventsResult,
@@ -74,6 +70,8 @@ import type {
   UpsertManyOptions,
   UpsertManyResult,
   SnapshotConfig,
+  IngestStreamOptions,
+  IngestStreamResult,
 } from './types'
 
 import {
@@ -85,8 +83,9 @@ import {
   EventError,
 } from './types'
 
-import { validateNamespace, validateFilter, validateUpdateOperators, normalizeNamespace } from './validation'
+import { validateNamespace, validateFilter, validateUpdateOperators, normalizeNamespace, toFullId } from './validation'
 import { CollectionImpl } from './collection'
+import { EventLogImpl } from './events'
 import {
   getEntityStore,
   getEventStore,
@@ -105,6 +104,7 @@ import type { IStorageRouter, StorageMode } from '../storage/router'
 import type { CollectionOptions } from '../db'
 import type { EmbeddingProvider } from '../embeddings/provider'
 import { normalizeVectorFilter, isTextVectorQuery } from '../query/vector-query'
+import { SnapshotManagerImpl } from './snapshots'
 
 // =============================================================================
 // ParqueDB Implementation
@@ -133,11 +133,13 @@ export class ParqueDBImpl {
   private storageRouter: IStorageRouter | null = null // Routes storage by collection mode
   private collectionOptions: Map<string, CollectionOptions> = new Map() // Per-collection options
   private _embeddingProvider: EmbeddingProvider | null = null // Embedding provider for text-to-vector conversion
+  private _snapshotManager: SnapshotManagerImpl | null = null // Cached snapshot manager instance
 
   constructor(config: ParqueDBConfig) {
     if (!config.storage) {
       throw new Error('Storage backend is required')
     }
+
     this.storage = config.storage
     this.snapshotConfig = config.snapshotConfig || {}
     this.eventLogConfig = { ...DEFAULT_EVENT_LOG_CONFIG, ...config.eventLogConfig }
@@ -154,17 +156,22 @@ export class ParqueDBImpl {
     if (config.storageRouter) {
       this.storageRouter = config.storageRouter
     }
+
     if (config.collectionOptions) {
       this.collectionOptions = config.collectionOptions
     }
+
     if (config.schema) {
       this.registerSchema(config.schema)
     }
+
     // Initialize embedding provider for query-time text-to-vector conversion
     if (config.embeddingProvider) {
       this._embeddingProvider = config.embeddingProvider
     }
+
   }
+
 
   /**
    * Get the embedding provider
@@ -173,12 +180,53 @@ export class ParqueDBImpl {
     return this._embeddingProvider
   }
 
+
+  /**
+   * Detect corruption in a Parquet file by checking for invalid byte sequences
+   *
+   * Parquet files have a magic number "PAR1" at both start and end.
+   * This function checks for invalid byte sequences (e.g., 0xFF bytes)
+   * that indicate corruption in the file footer.
+   *
+   * @param data - The raw file data to check
+   * @param filePath - Path to the file (for error messages)
+   * @throws Error if corruption is detected
+   */
+  private detectParquetCorruption(data: Uint8Array, filePath: string): void {
+    if (!data || data.length === 0) {
+      return
+    }
+
+
+    if (data.length >= 4) {
+      // Check for invalid byte sequences that indicate corruption
+      // (e.g., 0xFF bytes in unexpected positions)
+      const lastBytes = data.slice(-12)
+      let invalidByteCount = 0
+      for (let i = 0; i < lastBytes.length; i++) {
+        if (lastBytes[i] === 0xFF) {
+          invalidByteCount++
+        }
+
+      }
+
+      // If we see multiple 0xFF bytes in the footer, it's likely corrupted
+      if (invalidByteCount >= 2) {
+        throw new Error(`Event log corruption detected: invalid checksum in parquet file`)
+      }
+
+    }
+
+  }
+
+
   /**
    * Set the embedding provider for query-time text-to-vector conversion
    */
   setEmbeddingProvider(provider: EmbeddingProvider): void {
     this._embeddingProvider = provider
   }
+
 
   /**
    * Register a schema for validation
@@ -193,12 +241,14 @@ export class ParqueDBImpl {
     })
   }
 
+
   /**
    * Get the schema validator for advanced validation scenarios
    */
   getSchemaValidator(): SchemaValidator | null {
     return this.schemaValidator
   }
+
 
   /**
    * Dispose of this ParqueDB instance and clean up associated global state.
@@ -228,6 +278,7 @@ export class ParqueDBImpl {
     this.reverseRelIndex.clear()
   }
 
+
   /**
    * Get a collection by namespace
    */
@@ -236,8 +287,10 @@ export class ParqueDBImpl {
     if (!this.collections.has(normalizedNs)) {
       this.collections.set(normalizedNs, new CollectionImpl(this, normalizedNs))
     }
+
     return this.collections.get(normalizedNs)! as Collection<T>
   }
+
 
   // ===========================================================================
   // Storage Router Methods
@@ -251,8 +304,10 @@ export class ParqueDBImpl {
     if (this.storageRouter) {
       return this.storageRouter.getStorageMode(namespace)
     }
+
     return 'flexible' // Default to flexible when no router
   }
+
 
   /**
    * Get the data path for a collection
@@ -261,10 +316,12 @@ export class ParqueDBImpl {
     if (this.storageRouter) {
       return this.storageRouter.getDataPath(namespace)
     }
+
     // Default flexible path format
     const normalizedNs = normalizeNamespace(namespace)
     return `data/${normalizedNs}/data.parquet`
   }
+
 
   /**
    * Check if a collection has a typed schema
@@ -273,8 +330,10 @@ export class ParqueDBImpl {
     if (this.storageRouter) {
       return this.storageRouter.hasTypedSchema(namespace)
     }
+
     return false
   }
+
 
   /**
    * Get the collection options for a namespace
@@ -284,12 +343,14 @@ export class ParqueDBImpl {
     return this.collectionOptions.get(normalizedNs)
   }
 
+
   /**
    * Get the storage router (for advanced use cases)
    */
   getStorageRouter(): IStorageRouter | null {
     return this.storageRouter
   }
+
 
   /**
    * Find entities in a namespace
@@ -304,12 +365,14 @@ export class ParqueDBImpl {
       validateFilter(filter)
     }
 
+
     // Normalize vector filter: convert text queries to embeddings if needed
     let normalizedFilter = filter
     if (filter && isTextVectorQuery(filter)) {
       const result = await normalizeVectorFilter(filter, this._embeddingProvider ?? undefined)
       normalizedFilter = result.filter
     }
+
 
     // If asOf is specified, we need to reconstruct entity states at that time
     const asOf = options?.asOf
@@ -324,6 +387,7 @@ export class ParqueDBImpl {
         if (id.startsWith(`${namespace}/`)) {
           entityIds.add(id)
         }
+
       })
 
       // Also check events for entities that may have existed at asOf time
@@ -334,7 +398,9 @@ export class ParqueDBImpl {
           const fullId = `${namespace}/${id}`
           entityIds.add(fullId)
         }
+
       }
+
 
       // Reconstruct each entity at asOf time
       for (const fullId of entityIds) {
@@ -343,8 +409,11 @@ export class ParqueDBImpl {
           if (!normalizedFilter || canonicalMatchesFilter(entity, normalizedFilter)) {
             items.push(entity as Entity<T>)
           }
+
         }
+
       }
+
     } else {
       // Try to use indexes if filter is present
       let candidateDocIds: Set<string> | null = null
@@ -364,6 +433,7 @@ export class ParqueDBImpl {
                 limit: options?.limit,
                 minScore: normalizedFilter.$text.$minScore,
               }
+
             )
             candidateDocIds = new Set(ftsResults.map(r => `${namespace}/${r.docId}`))
           } else if (selectedIndex.type === 'vector' && normalizedFilter.$vector) {
@@ -376,11 +446,15 @@ export class ParqueDBImpl {
               {
                 minScore: normalizedFilter.$vector.$minScore ?? normalizedFilter.$vector.minScore,
               }
+
             )
             candidateDocIds = new Set(vectorResults.docIds.map(id => `${namespace}/${id}`))
           }
+
         }
+
       }
+
 
       // Filter entities - either from index candidates or full scan
       this.entities.forEach((entity, id) => {
@@ -390,44 +464,30 @@ export class ParqueDBImpl {
             return
           }
 
+
           // Check if entity is deleted (unless includeDeleted is true)
           if (entity.deletedAt && !options?.includeDeleted) {
             return
           }
+
 
           // Apply remaining filter conditions
           // For indexed queries, we still need to apply non-indexed filter conditions
           if (!normalizedFilter || canonicalMatchesFilter(entity, normalizedFilter)) {
             items.push(entity as Entity<T>)
           }
+
         }
+
       })
     }
 
-    // Apply sort
+
+    // Apply sort using reusable utility
     if (options?.sort) {
-      const sortEntries = Object.entries(options.sort)
-      // Validate sort directions upfront
-      for (const [, direction] of sortEntries) {
-        normalizeSortDirection(direction as SortDirection)
-      }
-      items.sort((a, b) => {
-        for (const [field, direction] of sortEntries) {
-          const dir = normalizeSortDirection(direction as SortDirection)
-          const aValue = getNestedValue(a as Record<string, unknown>, field)
-          const bValue = getNestedValue(b as Record<string, unknown>, field)
-          // Handle nulls last: null/undefined sort after all non-null values
-          const aIsNull = aValue === null || aValue === undefined
-          const bIsNull = bValue === null || bValue === undefined
-          if (aIsNull && bIsNull) continue // Both null, move to next field
-          if (aIsNull) return 1  // a is null, sort after b
-          if (bIsNull) return -1 // b is null, sort after a
-          const cmp = dir * compareValues(aValue, bValue)
-          if (cmp !== 0) return cmp
-        }
-        return 0
-      })
+      sortEntities(items, options.sort)
     }
+
 
     // Calculate total count before pagination
     const totalCount = items.length
@@ -441,12 +501,15 @@ export class ParqueDBImpl {
         // Cursor not found - return empty
         items = []
       }
+
     }
+
 
     // Apply skip
     if (options?.skip && options.skip > 0) {
       items = items.slice(options.skip)
     }
+
 
     // Apply limit
     const limit = options?.limit
@@ -457,11 +520,14 @@ export class ParqueDBImpl {
       if (hasMore) {
         items = items.slice(0, limit)
       }
+
       // Set nextCursor to last item's $id if there are more results
       if (hasMore && items.length > 0) {
         nextCursor = items[items.length - 1]?.$id
       }
+
     }
+
 
     return {
       items,
@@ -469,7 +535,9 @@ export class ParqueDBImpl {
       nextCursor,
       total: totalCount,
     }
+
   }
+
 
   /**
    * Get a single entity
@@ -482,7 +550,7 @@ export class ParqueDBImpl {
     validateNamespace(namespace)
 
     // Normalize ID (handle both "ns/id" and just "id" formats)
-    const fullId = id.includes('/') ? id : `${namespace}/${id}`
+    const fullId = toFullId(namespace, id)
 
     // Try to read from storage to detect backend errors
     // FileNotFoundError is normal for empty databases, so we ignore it
@@ -496,7 +564,9 @@ export class ParqueDBImpl {
         // Propagate other storage errors
         throw error
       }
+
     }
+
 
     // Check event log integrity for corruption detection
     const eventLogPath = `${namespace}/events.parquet`
@@ -508,26 +578,13 @@ export class ParqueDBImpl {
       if (!(error instanceof FileNotFoundError)) {
         throw error
       }
+
     }
-    if (eventLogData && eventLogData.length > 0) {
-      // Parquet files have a magic number "PAR1" at both start and end
-      // Check for basic corruption by validating structure
-      if (eventLogData.length >= 4) {
-        // Check for invalid byte sequences that indicate corruption
-        // (e.g., 0xFF bytes in unexpected positions)
-        const lastBytes = eventLogData.slice(-12)
-        let invalidByteCount = 0
-        for (let i = 0; i < lastBytes.length; i++) {
-          if (lastBytes[i] === 0xFF) {
-            invalidByteCount++
-          }
-        }
-        // If we see multiple 0xFF bytes in the footer, it's likely corrupted
-        if (invalidByteCount >= 2) {
-          throw new Error('Event log corruption detected: invalid checksum in parquet file')
-        }
-      }
+
+    if (eventLogData) {
+      this.detectParquetCorruption(eventLogData, eventLogPath)
     }
+
 
     // If asOf is specified, reconstruct entity state at that time
     if (options?.asOf) {
@@ -535,22 +592,27 @@ export class ParqueDBImpl {
       if (!entity) {
         return null
       }
+
       // Check if entity was deleted at that time
       if (entity.deletedAt && !options?.includeDeleted) {
         return null
       }
+
       return entity as Entity<T>
     }
+
 
     const entity = this.entities.get(fullId)
     if (!entity) {
       return null
     }
 
+
     // Check if entity is deleted (unless includeDeleted is true)
     if (entity.deletedAt && !options?.includeDeleted) {
       return null
     }
+
 
     // Track snapshot usage stats for this entity
     // If snapshots exist for this entity, record that they were available
@@ -571,6 +633,7 @@ export class ParqueDBImpl {
       })
     }
 
+
     // Handle maxInbound for reverse relationship fields (even without hydration)
     // This limits the number of inbound references returned and adds $count/$next
     if (options?.maxInbound !== undefined) {
@@ -583,7 +646,8 @@ export class ParqueDBImpl {
         for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
           if (typeof fieldDef === 'string' && fieldDef.startsWith('<-')) {
             // This is a reverse relationship field
-            const currentField = (entity as Record<string, unknown>)[fieldName]
+            const mutableResult = asMutableEntity(resultEntity)
+            const currentField = asMutableEntity(entity)[fieldName]
             if (currentField && typeof currentField === 'object' && !Array.isArray(currentField)) {
               // Count entries (excluding $ meta fields)
               const entries = Object.entries(currentField).filter(([key]) => !key.startsWith('$'))
@@ -598,27 +662,35 @@ export class ParqueDBImpl {
                 relSet[displayName] = entityId as EntityId
               }
 
+
               // Add $next cursor if there are more
               if (totalCount > maxInbound) {
                 relSet.$next = String(maxInbound)
               }
 
-              ;(resultEntity as Record<string, unknown>)[fieldName] = relSet
+
+              mutableResult[fieldName] = relSet
             } else {
               // No current entries - set to empty RelSet with $count: 0
-              ;(resultEntity as Record<string, unknown>)[fieldName] = { $count: 0 }
+              mutableResult[fieldName] = { $count: 0 }
             }
+
           }
+
         }
+
       }
+
 
       // Continue with hydration if requested on the modified entity
       if (options?.hydrate && options.hydrate.length > 0) {
         return this.hydrateEntity(resultEntity, fullId, options.hydrate, maxInbound)
       }
 
+
       return resultEntity
     }
+
 
     // Handle hydration if requested (without maxInbound specified)
     if (options?.hydrate && options.hydrate.length > 0) {
@@ -626,8 +698,10 @@ export class ParqueDBImpl {
       return this.hydrateEntity(entity as Entity<T>, fullId, options.hydrate, maxInbound)
     }
 
+
     return entity as Entity<T>
   }
+
 
   /**
    * Get related entities with pagination support
@@ -641,11 +715,12 @@ export class ParqueDBImpl {
   ): Promise<GetRelatedResult<T>> {
     validateNamespace(namespace)
 
-    const fullId = id.includes('/') ? id : `${namespace}/${id}`
+    const fullId = toFullId(namespace, id)
     const entity = this.entities.get(fullId)
     if (!entity) {
       return { items: [], total: 0, hasMore: false }
     }
+
 
     // Look up the schema to find the relationship definition
     const typeDef = this.schema[entity.$type]
@@ -653,17 +728,19 @@ export class ParqueDBImpl {
       return { items: [], total: 0, hasMore: false }
     }
 
+
     const fieldDef = typeDef[relationField]
     if (typeof fieldDef !== 'string') {
       return { items: [], total: 0, hasMore: false }
     }
+
 
     let allRelatedEntities: Entity<T>[] = []
 
     // Check if this is a forward relationship (->)
     if (fieldDef.startsWith('->')) {
       // For forward relationships, read the entity's field directly
-      const relField = (entity as Record<string, unknown>)[relationField]
+      const relField = asMutableEntity(entity)[relationField]
       if (relField && typeof relField === 'object') {
         // relField is like { 'Alice': 'users/123', 'Bob': 'users/456' }
         for (const [, targetId] of Object.entries(relField)) {
@@ -673,14 +750,18 @@ export class ParqueDBImpl {
             if (targetEntity.deletedAt && !options?.includeDeleted) continue
             allRelatedEntities.push(targetEntity as Entity<T>)
           }
+
         }
+
       }
+
     } else if (fieldDef.startsWith('<-')) {
       // Parse reverse relationship using consolidated helper
       const parsed = this.parseReverseRelation(fieldDef)
       if (!parsed) {
         return { items: [], total: 0, hasMore: false }
       }
+
 
       // Get related entity IDs using consolidated helper
       const sourceIds = this.getReverseRelatedIds(fullId, parsed.relatedNs, parsed.relatedField, {
@@ -693,11 +774,14 @@ export class ParqueDBImpl {
         if (relatedEntity) {
           allRelatedEntities.push(relatedEntity as Entity<T>)
         }
+
       }
+
     } else {
       // Not a relationship field
       return { items: [], total: 0, hasMore: false }
     }
+
 
     // Apply filter if provided
     let filteredEntities = allRelatedEntities
@@ -705,34 +789,12 @@ export class ParqueDBImpl {
       filteredEntities = allRelatedEntities.filter(e => canonicalMatchesFilter(e as Entity, options.filter!))
     }
 
-    // Apply sorting if provided
+
+    // Apply sorting using reusable utility
     if (options?.sort) {
-      const sortFields = Object.entries(options.sort)
-      filteredEntities.sort((a, b) => {
-        for (const [field, direction] of sortFields) {
-          const aVal = (a as Record<string, unknown>)[field]
-          const bVal = (b as Record<string, unknown>)[field]
-          let cmp = 0
-          if (aVal === bVal) {
-            cmp = 0
-          } else if (aVal === undefined) {
-            cmp = 1
-          } else if (bVal === undefined) {
-            cmp = -1
-          } else if (aVal instanceof Date && bVal instanceof Date) {
-            cmp = aVal.getTime() - bVal.getTime()
-          } else if (typeof aVal === 'number' && typeof bVal === 'number') {
-            cmp = aVal - bVal
-          } else {
-            cmp = String(aVal).localeCompare(String(bVal))
-          }
-          if (cmp !== 0) {
-            return direction === -1 ? -cmp : cmp
-          }
-        }
-        return 0
-      })
+      sortEntities(filteredEntities, options.sort)
     }
+
 
     const total = filteredEntities.length
     const limit = options?.limit ?? total
@@ -748,14 +810,18 @@ export class ParqueDBImpl {
     if (options?.project) {
       resultItems = paginatedEntities.map(e => {
         const projected: Record<string, unknown> = { $id: e.$id }
+        const mutableE = asMutableEntity(e)
         for (const field of Object.keys(options.project!)) {
           if (options.project![field] === 1) {
-            projected[field] = (e as Record<string, unknown>)[field]
+            projected[field] = mutableE[field]
           }
+
         }
+
         return projected as Entity<T>
       })
     }
+
 
     return {
       items: resultItems,
@@ -763,7 +829,9 @@ export class ParqueDBImpl {
       hasMore,
       nextCursor,
     }
+
   }
+
 
   /**
    * Create a new entity
@@ -785,7 +853,8 @@ export class ParqueDBImpl {
     const derivedType = data.$type || deriveTypeFromNamespace(namespace)
 
     // Auto-derive name from common fields or use id
-    const derivedName = data.name || (data as Record<string, unknown>).title || (data as Record<string, unknown>).label || id
+    const dataRecord = data as Record<string, unknown>
+    const derivedName = data.name || dataRecord.title || dataRecord.label || id
 
     // Apply defaults from schema
     const dataWithDefaults = this.applySchemaDefaults(data)
@@ -797,6 +866,7 @@ export class ParqueDBImpl {
     if (shouldValidate) {
       this.validateAgainstSchema(namespace, { ...dataWithDefaults, $type: derivedType }, options?.validateOnWrite)
     }
+
 
     const entity: Entity<T> = {
       ...dataWithDefaults,
@@ -827,6 +897,7 @@ export class ParqueDBImpl {
     return entity
   }
 
+
   /**
    * Update an entity
    */
@@ -840,7 +911,7 @@ export class ParqueDBImpl {
     validateUpdateOperators(update)
 
     // Normalize ID
-    const fullId = id.includes('/') ? id : `${namespace}/${id}`
+    const fullId = toFullId(namespace, id)
 
     let entity = this.entities.get(fullId)
 
@@ -857,6 +928,7 @@ export class ParqueDBImpl {
           entityId: id,
         })
       }
+
 
       if (options?.upsert) {
         // Create new entity from update
@@ -875,17 +947,21 @@ export class ParqueDBImpl {
           version: 0, // Will be incremented to 1 at the end
         }
 
+
         // Apply $setOnInsert first (only on insert)
         if (update.$setOnInsert) {
           Object.assign(newEntity, update.$setOnInsert)
         }
+
 
         entity = newEntity as Entity
         this.entities.set(fullId, entity)
       } else {
         return null
       }
+
     }
+
 
     // Check version for optimistic concurrency (entity exists)
     if (options?.expectedVersion !== undefined && entity.version !== options.expectedVersion) {
@@ -894,6 +970,7 @@ export class ParqueDBImpl {
         entityId: id,
       })
     }
+
 
     // Clone the entity before mutating to avoid race conditions with concurrent readers
     entity = deepClone(entity)
@@ -938,6 +1015,7 @@ export class ParqueDBImpl {
       )
     }
 
+
     // Record UPDATE event
     const [eventNs, ...eventIdParts] = fullId.split('/')
     if (eventNs) {
@@ -960,8 +1038,11 @@ export class ParqueDBImpl {
               actor as EntityId | undefined
             )
           }
+
         }
+
       }
+
 
       // Record relationship events for $unlink operations
       if (update.$unlink) {
@@ -981,13 +1062,18 @@ export class ParqueDBImpl {
               actor as EntityId | undefined
             )
           }
+
         }
+
       }
+
     }
+
 
     // Return before or after based on option
     return (options?.returnDocument === 'before' ? beforeEntity : entity) as Entity<T>
   }
+
 
   /**
    * Delete an entity
@@ -1000,7 +1086,7 @@ export class ParqueDBImpl {
     validateNamespace(namespace)
 
     // Normalize ID
-    const fullId = id.includes('/') ? id : `${namespace}/${id}`
+    const fullId = toFullId(namespace, id)
 
     const entity = this.entities.get(fullId)
     if (!entity) {
@@ -1013,9 +1099,11 @@ export class ParqueDBImpl {
         })
       }
 
+
       // Entity not found - nothing to delete
       return { deletedCount: 0 }
     }
+
 
     // Check version for optimistic concurrency (entity exists)
     if (options?.expectedVersion !== undefined && entity.version !== options.expectedVersion) {
@@ -1024,6 +1112,7 @@ export class ParqueDBImpl {
         entityId: id,
       })
     }
+
 
     const now = new Date()
     const actor = options?.actor || entity.updatedBy
@@ -1047,11 +1136,13 @@ export class ParqueDBImpl {
           entity as Record<string, unknown>
         )
       }
+
     } else {
       // Check if entity is already soft-deleted
       if (entity.deletedAt) {
         return { deletedCount: 0 }
       }
+
       // Clone the entity before mutating to avoid race conditions with concurrent readers
       const cloned = deepClone(entity)
       // Soft delete - set deletedAt
@@ -1074,7 +1165,9 @@ export class ParqueDBImpl {
           0  // rowOffset placeholder
         )
       }
+
     }
+
 
     // Record DELETE event - always use null for after since entity is being deleted
     const [eventNs, ...eventIdParts] = fullId.split('/')
@@ -1089,6 +1182,7 @@ export class ParqueDBImpl {
     return { deletedCount: 1 }
   }
 
+
   /**
    * Delete multiple entities matching a filter
    */
@@ -1098,6 +1192,7 @@ export class ParqueDBImpl {
     options?: DeleteOptions
   ): Promise<DeleteResult> {
     validateNamespace(namespace)
+    validateFilter(filter)
 
     // Find all matching entities
     const result = await this.find(namespace, filter)
@@ -1108,8 +1203,10 @@ export class ParqueDBImpl {
       deletedCount += deleteResult.deletedCount
     }
 
+
     return { deletedCount }
   }
+
 
   /**
    * Restore a soft-deleted entity
@@ -1122,16 +1219,18 @@ export class ParqueDBImpl {
     validateNamespace(namespace)
 
     // Normalize ID
-    const fullId = id.includes('/') ? id : `${namespace}/${id}`
+    const fullId = toFullId(namespace, id)
 
     const entity = this.entities.get(fullId)
     if (!entity) {
       return null // Entity doesn't exist (hard deleted or never existed)
     }
 
+
     if (!entity.deletedAt) {
       return entity as Entity<T> // Entity is not deleted
     }
+
 
     const now = new Date()
     const actor = options?.actor || entity.updatedBy
@@ -1158,13 +1257,15 @@ export class ParqueDBImpl {
     return cloned as Entity<T>
   }
 
+
   /**
    * Get history for an entity (alias for history method for public API)
    */
   async getHistory(namespace: string, id: string, options?: HistoryOptions): Promise<HistoryResult> {
-    const fullId = id.includes('/') ? id : `${namespace}/${id}`
+    const fullId = toFullId(namespace, id)
     return this.history(fullId as EntityId, options)
   }
+
 
   /**
    * Validate data against schema with configurable mode
@@ -1191,16 +1292,19 @@ export class ParqueDBImpl {
       mode = validateOnWrite
     }
 
+
     // If no schema validator, use legacy validation
     if (!this.schemaValidator) {
       this.legacyValidateAgainstSchema(_namespace, data)
       return
     }
 
+
     // Check if type is defined in schema
     if (!this.schemaValidator.hasType(typeName)) {
       return // No schema for this type, skip validation
     }
+
 
     // Create a temporary validator with the specified mode
     const validator = new SchemaValidator(this.schema, {
@@ -1211,6 +1315,7 @@ export class ParqueDBImpl {
     // Validate - this will throw SchemaValidationError if mode is 'strict'
     validator.validate(typeName, data, true) // skipCoreFields=true for create input
   }
+
 
   /**
    * Legacy validation method for backward compatibility.
@@ -1236,7 +1341,7 @@ export class ParqueDBImpl {
 
       const isRequired = this.isFieldRequired(fieldDef)
       const hasDefault = this.hasDefault(fieldDef)
-      const fieldValue = (data as Record<string, unknown>)[fieldName]
+      const fieldValue = data[fieldName]
 
       if (isRequired && !hasDefault && fieldValue === undefined) {
         throw new ValidationError('create', typeName, `Missing required field: ${fieldName}`, {
@@ -1244,12 +1349,16 @@ export class ParqueDBImpl {
         })
       }
 
+
       // Validate field type
       if (fieldValue !== undefined) {
         this.validateFieldType(fieldName, fieldValue, fieldDef, data.$type || typeName)
       }
+
     }
+
   }
+
 
   /**
    * Check if a field is required based on its schema definition.
@@ -1266,13 +1375,16 @@ export class ParqueDBImpl {
     if (typeof fieldDef === 'string') {
       return fieldDef.includes('!')
     }
+
     if (typeof fieldDef === 'object' && fieldDef !== null) {
       const def = fieldDef as { type?: string; required?: boolean }
       if (def.required) return true
       if (def.type && def.type.includes('!')) return true
     }
+
     return false
   }
+
 
   /**
    * Check if a field has a default value defined in its schema.
@@ -1288,11 +1400,14 @@ export class ParqueDBImpl {
     if (typeof fieldDef === 'string') {
       return fieldDef.includes('=')
     }
+
     if (typeof fieldDef === 'object' && fieldDef !== null) {
       return 'default' in (fieldDef as object)
     }
+
     return false
   }
+
 
   /**
    * Validate a field value against its type definition from the schema.
@@ -1325,10 +1440,14 @@ export class ParqueDBImpl {
                 { fieldName }
               )
             }
+
           }
+
         }
+
         return
       }
+
       const parsed = parseFieldType(fieldDef)
       expectedType = parsed.type
     } else if (typeof fieldDef === 'object' && fieldDef !== null) {
@@ -1337,7 +1456,9 @@ export class ParqueDBImpl {
         const parsed = parseFieldType(def.type)
         expectedType = parsed.type
       }
+
     }
+
 
     if (!expectedType) return
 
@@ -1357,6 +1478,7 @@ export class ParqueDBImpl {
             actualType,
           })
         }
+
         break
       case 'number':
       case 'int':
@@ -1369,6 +1491,7 @@ export class ParqueDBImpl {
             actualType,
           })
         }
+
         break
       case 'boolean':
         if (actualType !== 'boolean') {
@@ -1378,6 +1501,7 @@ export class ParqueDBImpl {
             actualType,
           })
         }
+
         break
       case 'date':
       case 'datetime':
@@ -1389,9 +1513,12 @@ export class ParqueDBImpl {
             actualType,
           })
         }
+
         break
     }
+
   }
+
 
   /**
    * Index all relationships from an entity into the reverse relationship index.
@@ -1412,9 +1539,13 @@ export class ParqueDBImpl {
         if (typeof targetId === 'string' && targetId.includes('/')) {
           addToReverseRelIndex(this.reverseRelIndex, sourceId, fieldName, targetId)
         }
+
       }
+
     }
+
   }
+
 
   /**
    * Remove all relationship indexes for an entity.
@@ -1426,6 +1557,7 @@ export class ParqueDBImpl {
   private unindexRelationshipsForEntity(sourceId: string, entity: Entity): void {
     removeAllFromReverseRelIndex(this.reverseRelIndex, sourceId, entity)
   }
+
 
   /**
    * Apply default values from the schema to create input data.
@@ -1465,19 +1597,25 @@ export class ParqueDBImpl {
           } catch {
             // Intentionally ignored: value is not valid JSON, keep as raw string
           }
+
         }
+
       } else if (typeof fieldDef === 'object' && fieldDef !== null) {
         const def = fieldDef as { default?: unknown }
         defaultValue = def.default
       }
 
+
       if (defaultValue !== undefined) {
         result[fieldName] = defaultValue
       }
+
     }
+
 
     return result as CreateInput<T>
   }
+
 
   /**
    * Apply relationship operators ($link, $unlink) to an entity
@@ -1509,7 +1647,9 @@ export class ParqueDBImpl {
               { relationshipName: key }
             )
           }
+
         }
+
 
         // Check if this is a singular or plural relationship
         let isPlural = true
@@ -1519,7 +1659,9 @@ export class ParqueDBImpl {
             const parsed = parseRelation(fieldDef)
             isPlural = parsed?.isArray ?? true
           }
+
         }
+
 
         const values = Array.isArray(value) ? value : [value]
 
@@ -1534,6 +1676,7 @@ export class ParqueDBImpl {
               { entityId: entity.$id as string, relationshipName: key, targetId: targetId as string }
             )
           }
+
           if (targetEntity.deletedAt) {
             throw new RelationshipError(
               'Link',
@@ -1542,13 +1685,16 @@ export class ParqueDBImpl {
               { entityId: entity.$id as string, relationshipName: key, targetId: targetId as string }
             )
           }
+
         }
 
+
         // Initialize field as object if not already
-        const entityRec = entity as Record<string, unknown>
+        const entityRec = asMutableEntity(entity)
         if (typeof entityRec[key] !== 'object' || entityRec[key] === null || Array.isArray(entityRec[key])) {
           entityRec[key] = {}
         }
+
 
         // For singular relationships, clear existing links first and update reverse index
         if (!isPlural) {
@@ -1559,25 +1705,33 @@ export class ParqueDBImpl {
               if (typeof oldTargetId === 'string' && oldTargetId.includes('/')) {
                 removeFromReverseRelIndex(this.reverseRelIndex, fullId, key, oldTargetId)
               }
+
             }
+
           }
+
           entityRec[key] = {}
         }
 
+
         // Add new links using display name as key
+        const relLinks = entityRec[key] as Record<string, EntityId>
         for (const targetId of values) {
           const targetEntity = this.entities.get(targetId as string)
           if (targetEntity) {
             const displayName = (targetEntity.name as string) || targetId
             // Check if already linked (by id)
-            const existingValues = Object.values(entityRec[key] as Record<string, EntityId>)
+            const existingValues = Object.values(relLinks)
             if (!existingValues.includes(targetId as EntityId)) {
-              ;(entityRec[key] as Record<string, unknown>)[displayName] = targetId
+              relLinks[displayName] = targetId as EntityId
               // Add to reverse index for O(1) reverse lookups
               addToReverseRelIndex(this.reverseRelIndex, fullId, key, targetId as string)
             }
+
           }
+
         }
+
 
         // Update reverse relationships on target entities
         if (typeDef) {
@@ -1592,23 +1746,32 @@ export class ParqueDBImpl {
                   if (typeof targetEntity[parsed.reverse] !== 'object' || targetEntity[parsed.reverse] === null) {
                     targetEntity[parsed.reverse] = {}
                   }
+
                   const reverseRel = targetEntity[parsed.reverse] as Record<string, EntityId>
                   const entityDisplayName = (entity.name as string) || fullId
                   if (!Object.values(reverseRel).includes(fullId as EntityId)) {
                     reverseRel[entityDisplayName] = fullId as EntityId
                   }
+
                 }
+
               }
+
             }
+
           }
+
         }
+
       }
+
     }
+
 
     // $unlink - remove relationships
     if (update.$unlink) {
       for (const [key, value] of Object.entries(update.$unlink)) {
-        const entityRec = entity as Record<string, unknown>
+        const entityRec = asMutableEntity(entity)
         // Handle $all to remove all links
         if (value === '$all') {
           // Remove all from reverse index before clearing
@@ -1618,11 +1781,15 @@ export class ParqueDBImpl {
               if (typeof oldTargetId === 'string' && oldTargetId.includes('/')) {
                 removeFromReverseRelIndex(this.reverseRelIndex, fullId, key, oldTargetId)
               }
+
             }
+
           }
+
           entityRec[key] = {}
           continue
         }
+
 
         const currentRel = entityRec[key]
         if (currentRel && typeof currentRel === 'object' && !Array.isArray(currentRel)) {
@@ -1636,8 +1803,11 @@ export class ParqueDBImpl {
                 // Remove from reverse index
                 removeFromReverseRelIndex(this.reverseRelIndex, fullId, key, targetId as string)
               }
+
             }
+
           }
+
 
           // Update reverse relationships on target entities
           const typeName = entity.$type
@@ -1655,18 +1825,29 @@ export class ParqueDBImpl {
                       if (id === fullId) {
                         delete reverseRel[displayName]
                       }
+
                     }
+
                   }
+
                 }
+
               }
+
             }
+
           }
+
         }
+
       }
+
     }
+
 
     return entity
   }
+
 
   /**
    * Parse a reverse relationship definition string.
@@ -1691,6 +1872,7 @@ export class ParqueDBImpl {
 
     return { relatedNs, relatedField }
   }
+
 
   /**
    * Get source entity IDs from a reverse relationship.
@@ -1720,8 +1902,10 @@ export class ParqueDBImpl {
       result.push(sourceId)
     }
 
+
     return result
   }
+
 
   /**
    * Hydrate reverse relationship fields for an entity.
@@ -1779,24 +1963,29 @@ export class ParqueDBImpl {
                   id: relatedId as EntityId,
                 })
               }
+
             }
+
 
             // Build RelSet with $count and optional $next
             const totalCount = allRelatedEntities.length
             const limitedEntities = allRelatedEntities.slice(0, maxInbound)
 
             // If no related entities, return RelSet with $count: 0 for consistency
+            const mutableHydrated = asMutableEntity(hydratedEntity)
             if (totalCount === 0) {
-              ;(hydratedEntity as Record<string, unknown>)[fieldName] = { $count: 0 }
+              mutableHydrated[fieldName] = { $count: 0 }
             } else {
               const relSet: RelSet = {
                 $count: totalCount,
               }
 
+
               // Add entity links up to maxInbound
               for (const related of limitedEntities) {
                 relSet[related.name] = related.id
               }
+
 
               // Add $next cursor if there are more entities
               if (totalCount > maxInbound) {
@@ -1804,11 +1993,16 @@ export class ParqueDBImpl {
                 relSet.$next = String(maxInbound)
               }
 
-              ;(hydratedEntity as Record<string, unknown>)[fieldName] = relSet
+
+              mutableHydrated[fieldName] = relSet
             }
+
           }
+
         }
+
       }
+
 
       // Dynamic reverse relationship lookup (no schema definition)
       // Look for entities that reference this entity via any field
@@ -1829,7 +2023,9 @@ export class ParqueDBImpl {
           for (const sourceId of sourceSet) {
             allSourceIds.add(sourceId)
           }
+
         }
+
 
         // Batch load related entities
         for (const relatedId of allSourceIds) {
@@ -1840,14 +2036,19 @@ export class ParqueDBImpl {
           relatedEntities[relatedEntity.name || relatedId] = relatedId as EntityId
         }
 
+
         if (Object.keys(relatedEntities).length > 0) {
-          ;(hydratedEntity as Record<string, unknown>)[fieldName] = relatedEntities
+          asMutableEntity(hydratedEntity)[fieldName] = relatedEntities
         }
+
       }
+
     }
+
 
     return hydratedEntity
   }
+
 
   /**
    * Reconstruct entity state at a specific point in time using event sourcing.
@@ -1890,6 +2091,7 @@ export class ParqueDBImpl {
       return null
     }
 
+
     // Find the target event. We include all events at or before the target timestamp.
     // When multiple events share the same millisecond timestamp, all of them are
     // included because they semantically all occurred "at" that time. This may result
@@ -1904,11 +2106,14 @@ export class ParqueDBImpl {
       } else {
         break
       }
+
     }
+
 
     if (targetEventIndex === -1) {
       return null
     }
+
 
     // Check if we can use a snapshot for optimization
     const entitySnapshots = this.snapshots
@@ -1925,7 +2130,9 @@ export class ParqueDBImpl {
       } else {
         break
       }
+
     }
+
 
     // Track stats for this query
     const stats: SnapshotQueryStats = {
@@ -1933,6 +2140,7 @@ export class ParqueDBImpl {
       eventsReplayed: 0,
       snapshotUsedAt: undefined,
     }
+
 
     let entity: Entity | null = null
     let startIndex = 0
@@ -1950,6 +2158,7 @@ export class ParqueDBImpl {
       stats.eventsReplayed = targetEventIndex + 1
     }
 
+
     // Replay events from startIndex to targetEventIndex
     for (let i = startIndex; i <= targetEventIndex; i++) {
       const event = allEvents[i]!  // loop bounds ensure valid index
@@ -1958,13 +2167,16 @@ export class ParqueDBImpl {
       } else if (event.op === 'DELETE') {
         entity = null
       }
+
     }
+
 
     // Store stats for this entity
     this.queryStats.set(fullId, stats)
 
     return entity
   }
+
 
   /**
    * Flush pending events to storage in a transactional manner.
@@ -2011,10 +2223,12 @@ export class ParqueDBImpl {
           if (id.startsWith(`${ns}/`)) {
             nsEntities.push(entity)
           }
+
         })
         const entityData = JSON.stringify(nsEntities)
         await this.storage.write(`data/${ns}/data.json`, new TextEncoder().encode(entityData))
       }
+
 
       // Step 3: Write namespace event logs
       for (const ns of affectedNamespaces) {
@@ -2025,6 +2239,7 @@ export class ParqueDBImpl {
         const nsEventData = JSON.stringify(nsEvents)
         await this.storage.write(`${ns}/events.json`, new TextEncoder().encode(nsEventData))
       }
+
     } catch (error: unknown) {
       // On write failure, rollback the in-memory changes
       for (const event of eventsToFlush) {
@@ -2033,6 +2248,7 @@ export class ParqueDBImpl {
         if (idx !== -1) {
           this.events.splice(idx, 1)
         }
+
         // Rollback entity state
         const { ns, id } = isRelationshipTarget(event.target) ? { ns: '', id: '' } : parseEntityTarget(event.target)
         const fullId = `${ns}/${id}`
@@ -2041,15 +2257,19 @@ export class ParqueDBImpl {
           this.entities.delete(fullId)
         } else if (event.op === 'UPDATE' && event.before) {
           // Restore previous state
-          this.entities.set(fullId, event.before as Entity)
+          this.entities.set(fullId, variantAsEntity(event.before))
         } else if (event.op === 'DELETE' && event.before) {
           // Restore deleted entity
-          this.entities.set(fullId, event.before as Entity)
+          this.entities.set(fullId, variantAsEntity(event.before))
         }
+
       }
+
       throw error
     }
+
   }
+
 
   /**
    * Schedule a batched flush of pending events using microtask timing.
@@ -2079,6 +2299,7 @@ export class ParqueDBImpl {
     return this.flushPromise
   }
 
+
   /**
    * Record an event for an entity operation
    * Returns a promise that resolves when the event is flushed to storage
@@ -2104,6 +2325,7 @@ export class ParqueDBImpl {
       return JSON.parse(JSON.stringify(obj))
     }
 
+
     const event: Event = {
       id: generateId(),
       ts: Date.now(),
@@ -2114,6 +2336,7 @@ export class ParqueDBImpl {
       actor: actor as string | undefined,
       metadata: meta as import('../types').Variant | undefined,
     }
+
     this.events.push(event)
 
     // Add to pending events buffer
@@ -2147,10 +2370,13 @@ export class ParqueDBImpl {
           console.warn(`[ParqueDB] Auto-snapshot failed for ${fullEntityId}:`, err)
         })
       }
+
     }
+
 
     return flushPromise
   }
+
 
   /**
    * Check and perform event log rotation if configured limits are exceeded.
@@ -2184,7 +2410,9 @@ export class ParqueDBImpl {
       } else {
         eventsToKeep.push(event)
       }
+
     }
+
 
     // Then, if still over maxEvents, rotate oldest events
     if (eventsToKeep.length > maxEvents) {
@@ -2196,17 +2424,21 @@ export class ParqueDBImpl {
       eventsToKeep = eventsToKeep.slice(excessCount)
     }
 
+
     // If there are events to rotate, perform the rotation
     if (eventsToRotate.length > 0) {
       if (archiveOnRotation) {
         // Move to archived events
         this.archivedEvents.push(...eventsToRotate)
       }
+
       // Update the events array in place to maintain reference
       this.events.length = 0
       this.events.push(...eventsToKeep)
     }
+
   }
+
 
   /**
    * Archive events manually based on criteria
@@ -2233,10 +2465,13 @@ export class ParqueDBImpl {
         if (newestArchivedTs === undefined || event.ts > newestArchivedTs) {
           newestArchivedTs = event.ts
         }
+
       } else {
         eventsToKeep.push(event)
       }
+
     }
+
 
     // Further reduce if over maxEvents
     if (eventsToKeep.length > maxEventsToKeep) {
@@ -2248,9 +2483,12 @@ export class ParqueDBImpl {
         if (newestArchivedTs === undefined || event.ts > newestArchivedTs) {
           newestArchivedTs = event.ts
         }
+
       }
+
       eventsToKeep = eventsToKeep.slice(excessCount)
     }
+
 
     // Archive or drop the events
     if (archiveOnRotation) {
@@ -2259,6 +2497,7 @@ export class ParqueDBImpl {
     } else {
       droppedCount = eventsToArchive.length
     }
+
 
     // Update the events array
     this.events.length = 0
@@ -2274,7 +2513,9 @@ export class ParqueDBImpl {
       oldestEventTs,
       newestArchivedTs,
     }
+
   }
+
 
   /**
    * Get archived events
@@ -2283,125 +2524,17 @@ export class ParqueDBImpl {
     return [...this.archivedEvents]
   }
 
+
   /**
    * Get the event log interface
    */
   getEventLog(): EventLog {
-    const self = this
-    return {
-      async getEvents(entityId: EntityId): Promise<Event[]> {
-        const fullId = entityId as string
-        const [ns, ...idParts] = fullId.split('/')
-        const id = idParts.join('/')
-
-        return self.events
-          .filter(e => {
-            if (isRelationshipTarget(e.target)) return false
-            const info = parseEntityTarget(e.target)
-            return info.ns === ns && info.id === id
-          })
-          .sort((a, b) => {
-            const timeDiff = a.ts - b.ts
-            if (timeDiff !== 0) return timeDiff
-            return a.id.localeCompare(b.id)
-          })
-      },
-
-      async getEventsByNamespace(ns: string): Promise<Event[]> {
-        return self.events
-          .filter(e => {
-            if (isRelationshipTarget(e.target)) return false
-            return parseEntityTarget(e.target).ns === ns
-          })
-          .sort((a, b) => {
-            const timeDiff = a.ts - b.ts
-            if (timeDiff !== 0) return timeDiff
-            return a.id.localeCompare(b.id)
-          })
-      },
-
-      async getEventsByTimeRange(from: Date, to: Date): Promise<Event[]> {
-        const fromTime = from.getTime()
-        const toTime = to.getTime()
-
-        // Sort all events first to get consistent ordering by timestamp and ID
-        const sortedEvents = [...self.events].sort((a, b) => {
-          const timeDiff = a.ts - b.ts
-          if (timeDiff !== 0) return timeDiff
-          return a.id.localeCompare(b.id)
-        })
-
-        // For time range queries with millisecond precision, we use a counting approach:
-        // Find all events that were recorded AT OR BEFORE the 'to' time,
-        // but only include those that were created AFTER 'from' was captured.
-        // Since event IDs are monotonically increasing, we can use ID comparison
-        // for tie-breaking at the same millisecond.
-        const result: Event[] = []
-        for (const e of sortedEvents) {
-          const eventTime = e.ts
-          // Use inclusive range: fromTime <= eventTime <= toTime
-          // This handles the case where midTime was captured in the same millisecond
-          // as the first event
-          if (eventTime >= fromTime && eventTime <= toTime) {
-            result.push(e)
-          }
-        }
-
-        // If we got multiple events at the boundary timestamp, filter to only include
-        // events that occurred strictly before the second boundary event
-        if (result.length > 1) {
-          const boundaryTime = toTime
-          const eventsAtBoundary = result.filter(e => e.ts === boundaryTime)
-          if (eventsAtBoundary.length > 1) {
-            // Remove the last event at the boundary (it was created after 'to' was captured)
-            const lastEvent = eventsAtBoundary[eventsAtBoundary.length - 1]!  // length > 1 check ensures entry exists
-            const idx = result.indexOf(lastEvent)
-            if (idx !== -1) {
-              result.splice(idx, 1)
-            }
-          }
-        }
-
-        return result
-      },
-
-      async getEventsByOp(op: EventOp): Promise<Event[]> {
-        return self.events
-          .filter(e => e.op === op)
-          .sort((a, b) => {
-            const timeDiff = a.ts - b.ts
-            if (timeDiff !== 0) return timeDiff
-            return a.id.localeCompare(b.id)
-          })
-      },
-
-      async getRawEvent(id: string): Promise<{ compressed: boolean; data: Event }> {
-        const event = self.events.find(e => e.id === id)
-        if (!event) {
-          throw new EventError('Get event', 'Event not found', { eventId: id })
-        }
-        // Check if payload is large enough to warrant compression (>10KB)
-        const eventJson = JSON.stringify(event)
-        const compressed = eventJson.length > 10000
-        return { compressed, data: event }
-      },
-
-      async getEventCount(): Promise<number> {
-        return self.events.length
-      },
-
-      getConfig(): EventLogConfig {
-        return { ...self.eventLogConfig }
-      },
-
-      async archiveEvents(options?: { olderThan?: Date; maxEvents?: number }): Promise<ArchiveEventsResult> {
-        return self.archiveEvents(options)
-      },
-
-      async getArchivedEvents(): Promise<Event[]> {
-        return self.getArchivedEvents()
-      },
-    }
+    return new EventLogImpl(
+      this.events,
+      this.archivedEvents,
+      this.eventLogConfig,
+      (options) => this.archiveEvents(options)
+    )
   }
 
   /**
@@ -2423,20 +2556,24 @@ export class ParqueDBImpl {
       const fromTime = options.from.getTime()
       relevantEvents = relevantEvents.filter(e => e.ts > fromTime)
     }
+
     if (options?.to) {
       const toTime = options.to.getTime()
       relevantEvents = relevantEvents.filter(e => e.ts <= toTime)
     }
+
 
     // Filter by operation type
     if (options?.op) {
       relevantEvents = relevantEvents.filter(e => e.op === options.op)
     }
 
+
     // Filter by actor
     if (options?.actor) {
       relevantEvents = relevantEvents.filter(e => e.actor === options.actor)
     }
+
 
     // Sort by timestamp, then by ID for events at the same timestamp
     relevantEvents.sort((a, b) => {
@@ -2451,12 +2588,14 @@ export class ParqueDBImpl {
       if (cursorIndex !== -1) {
         relevantEvents = relevantEvents.slice(cursorIndex + 1)
       }
+
     }
+
 
     // Apply pagination
     const limit = options?.limit ?? 1000
     const hasMore = relevantEvents.length > limit
-    const items = relevantEvents.slice(0, limit).map(e => {
+    const items: HistoryItem[] = relevantEvents.slice(0, limit).map(e => {
       const targetInfo = parseEntityTarget(e.target)
       return {
         id: e.id,
@@ -2464,19 +2603,22 @@ export class ParqueDBImpl {
         op: e.op,
         entityId: targetInfo.id,
         ns: targetInfo.ns,
-        before: (e.before ?? null) as Entity | null,
-        after: (e.after ?? null) as Entity | null,
+        before: variantAsEntityOrNull(e.before),
+        after: variantAsEntityOrNull(e.after),
         actor: e.actor as EntityId | undefined,
         metadata: e.metadata,
       }
-    }) as HistoryItem[]
+
+    })
 
     return {
       items,
       hasMore,
       nextCursor: hasMore && items.length > 0 ? items[items.length - 1]!.id : undefined,
     }
+
   }
+
 
   /**
    * Get entity at a specific version
@@ -2488,7 +2630,7 @@ export class ParqueDBImpl {
   ): Promise<Entity<T> | null> {
     validateNamespace(namespace)
 
-    const fullId = id.includes('/') ? id : `${namespace}/${id}`
+    const fullId = toFullId(namespace, id)
     const [ns, ...idParts] = fullId.split('/')
     const entityId = idParts.join('/')
 
@@ -2517,19 +2659,25 @@ export class ParqueDBImpl {
           entity = { ...event.after } as Entity
           currentVersion = entity?.version ?? currentVersion + 1
         }
+
       }
+
 
       if (currentVersion >= version) {
         break
       }
+
     }
+
 
     if (!entity || entity.version !== version) {
       return null
     }
 
+
     return entity as Entity<T>
   }
+
 
   /**
    * Begin a transaction
@@ -2589,7 +2737,7 @@ export class ParqueDBImpl {
         // Capture state before update for rollback
         // The id parameter might be just the ID part or the full "ns/id"
         // Check if it already contains the namespace
-        const fullId = id.includes('/') ? id : `${namespace}/${id}`
+        const fullId = toFullId(namespace, id)
         const beforeState = self.entities.get(fullId)
         // Deep copy to prevent mutation
         const beforeStateCopy = beforeState ? JSON.parse(JSON.stringify(beforeState)) : undefined
@@ -2606,6 +2754,7 @@ export class ParqueDBImpl {
             beforeState: beforeStateCopy
           })
         }
+
         return entity
       },
 
@@ -2613,7 +2762,7 @@ export class ParqueDBImpl {
         // Capture state before delete for rollback
         // The id parameter might be just the ID part or the full "ns/id"
         // Check if it already contains the namespace
-        const fullId = id.includes('/') ? id : `${namespace}/${id}`
+        const fullId = toFullId(namespace, id)
         const beforeState = self.entities.get(fullId)
         // Deep copy to prevent mutation
         const beforeStateCopy = beforeState ? JSON.parse(JSON.stringify(beforeState)) : undefined
@@ -2628,6 +2777,7 @@ export class ParqueDBImpl {
             beforeState: beforeStateCopy
           })
         }
+
         return result
       },
 
@@ -2651,10 +2801,11 @@ export class ParqueDBImpl {
           if (op.entity?.$id) {
             fullId = op.entity.$id as string
           } else if (op.id) {
-            fullId = op.id.includes('/') ? op.id : `${op.namespace}/${op.id}`
+            fullId = toFullId(op.namespace, op.id)
           } else {
             continue // Skip if we can't determine the ID
           }
+
           const expectedTarget = fullId.replace('/', ':')
 
           if (op.type === 'create' && op.entity) {
@@ -2685,135 +2836,35 @@ export class ParqueDBImpl {
             )
             if (idx >= 0) self.events.splice(idx, 1)
           }
+
         }
+
         pendingOps.length = 0
       },
     }
+
   }
 
   /**
    * Get snapshot manager
+   *
+   * Returns a cached SnapshotManagerImpl instance for managing entity snapshots.
+   * The manager is lazily created on first access.
    */
   getSnapshotManager(): SnapshotManager {
-    const self = this
-    return {
-      async createSnapshot(entityId: EntityId): Promise<Snapshot> {
-        const fullId = entityId as string
-        const entity = self.entities.get(fullId)
-        if (!entity) {
-          const [ns, ...idParts] = fullId.split('/')
-          throw new EntityNotFoundError(ns, idParts.join('/'))
-        }
-        if (entity.deletedAt) {
-          throw new EventError('Create snapshot', 'Cannot create snapshot of deleted entity', {
-            entityId: fullId,
-          })
-        }
-        const [ns, ...idParts] = fullId.split('/')
-        const entityEvents = self.events.filter((e) => {
-          if (isRelationshipTarget(e.target)) return false
-          const info = parseEntityTarget(e.target)
-          return info.ns === ns && info.id === idParts.join('/')
-        })
-        const sequenceNumber = entityEvents.length
-        const stateJson = JSON.stringify(entity)
-        const stateSize = stateJson.length
-        const compressed = stateSize > 1000
-        const snapshot: Snapshot = { id: generateId(), entityId, ns: ns ?? '', sequenceNumber, createdAt: new Date(), state: { ...entity } as Record<string, unknown>, compressed, size: compressed ? Math.floor(stateSize * 0.3) : stateSize }
-        self.snapshots.push(snapshot)
-        const snapshotPath = `data/${ns}/snapshots/${snapshot.id}.parquet`
-        await self.storage.write(snapshotPath, new TextEncoder().encode(stateJson))
-        return snapshot
-      },
-      async createSnapshotAtEvent(entityId: EntityId, eventId: string): Promise<Snapshot> {
-        const fullId = entityId as string
-        const [ns, ...idParts] = fullId.split('/')
-        const entityIdPart = idParts.join('/')
-        const event = self.events.find((e) => e.id === eventId)
-        if (!event) {
-          throw new EventError('Create snapshot at event', 'Event not found', { eventId })
-        }
-        const state = event.after ? { ...event.after } : null
-        if (!state) {
-          throw new EventError('Create snapshot at event', 'Event has no after state', { eventId })
-        }
-        const entityEvents = self.events.filter((e) => {
-          if (isRelationshipTarget(e.target)) return false
-          const info = parseEntityTarget(e.target)
-          return info.ns === ns && info.id === entityIdPart
-        }).sort((a, b) => a.ts - b.ts)
-        const eventIndex = entityEvents.findIndex((e) => e.id === eventId)
-        const sequenceNumber = eventIndex + 1
-        const stateJson = JSON.stringify(state)
-        const stateSize = stateJson.length
-        const compressed = stateSize > 1000
-        const snapshot: Snapshot = { id: generateId(), entityId, ns: ns ?? '', sequenceNumber, eventId, createdAt: new Date(), state: state as Record<string, unknown>, compressed, size: compressed ? Math.floor(stateSize * 0.3) : stateSize }
-        self.snapshots.push(snapshot)
-        await self.storage.write(`data/${ns}/snapshots/${snapshot.id}.parquet`, new TextEncoder().encode(stateJson))
-        return snapshot
-      },
-      async listSnapshots(entityId: EntityId): Promise<Snapshot[]> {
-        return self.snapshots.filter((s) => s.entityId === (entityId as string)).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-      },
-      async deleteSnapshot(snapshotId: string): Promise<void> {
-        const index = self.snapshots.findIndex((s) => s.id === snapshotId)
-        if (index !== -1) {
-          const snapshot = self.snapshots[index]!  // index !== -1 ensures entry exists
-          self.snapshots.splice(index, 1)
-          await self.storage.delete(`data/${snapshot.ns}/snapshots/${snapshotId}.parquet`)
-        }
-      },
-      async pruneSnapshots(options: PruneSnapshotsOptions): Promise<void> {
-        const { olderThan, keepMinimum = 0 } = options
-        const snapshotsByEntity = new Map<string, Snapshot[]>()
-        for (const snapshot of self.snapshots) {
-          const eid = snapshot.entityId as string
-          if (!snapshotsByEntity.has(eid)) snapshotsByEntity.set(eid, [])
-          snapshotsByEntity.get(eid)!.push(snapshot)
-        }
-        for (const [, entitySnapshots] of snapshotsByEntity) {
-          // Sort newest first by sequence number (most accurate measure of "age")
-          entitySnapshots.sort((a, b) => b.sequenceNumber - a.sequenceNumber)
-          // Keep at least keepMinimum snapshots (the newest ones)
-          // When pruning by age (olderThan is set), the sort order determines age
-          const candidates = entitySnapshots.slice(keepMinimum)
-          for (const snapshot of candidates) {
-            // Prune if:
-            // 1. No olderThan specified (prune all candidates), or
-            // 2. Timestamp <= olderThan, or
-            // 3. Timestamp equals the newest snapshot's but this is not the newest
-            //    (handles same-millisecond snapshots by sequence number ordering)
-            const shouldPrune = !olderThan ||
-              snapshot.createdAt.getTime() <= olderThan.getTime() ||
-              (entitySnapshots.length > 1 && entitySnapshots[0] && snapshot.sequenceNumber < entitySnapshots[0].sequenceNumber)
-            if (shouldPrune) {
-              const idx = self.snapshots.findIndex((s) => s.id === snapshot.id)
-              if (idx !== -1) {
-                self.snapshots.splice(idx, 1)
-                await self.storage.delete(`data/${snapshot.ns}/snapshots/${snapshot.id}.parquet`)
-              }
-            }
-          }
-        }
-      },
-      async getRawSnapshot(snapshotId: string): Promise<RawSnapshot> {
-        const snapshot = self.snapshots.find((s) => s.id === snapshotId)
-        if (!snapshot) {
-          throw new EventError('Get snapshot', 'Snapshot not found', { snapshotId })
-        }
-        const data = new TextEncoder().encode(JSON.stringify(snapshot.state))
-        return { id: snapshotId, size: snapshot.size || data.length, data }
-      },
-      async getQueryStats(entityId: EntityId): Promise<SnapshotQueryStats> {
-        return self.queryStats.get(entityId as string) || { snapshotsUsed: 0, eventsReplayed: 0 }
-      },
-      async getStorageStats(): Promise<SnapshotStorageStats> {
-        const totalSize = self.snapshots.reduce((sum, s) => sum + (s.size || 0), 0)
-        const snapshotCount = self.snapshots.length
-        return { totalSize, snapshotCount, avgSnapshotSize: snapshotCount > 0 ? totalSize / snapshotCount : 0 }
-      },
+    if (!this._snapshotManager) {
+      this._snapshotManager = new SnapshotManagerImpl({
+        storage: this.storage,
+        entities: this.entities,
+        events: this.events,
+        snapshots: this.snapshots,
+        queryStats: this.queryStats,
+      })
     }
+
+    return this._snapshotManager
   }
+
 
   /**
    * Extract non-operator fields from a filter for use in document creation.
@@ -2837,9 +2888,12 @@ export class ParqueDBImpl {
       if (!key.startsWith('$')) {
         filterFields[key] = value
       }
+
     }
+
     return filterFields
   }
+
 
   /**
    * Build create data for upsert insert operations.
@@ -2872,13 +2926,16 @@ export class ParqueDBImpl {
       ...update.$setOnInsert,
     }
 
+
     // Apply other update operators to the create data
     // Handle $inc - start from 0
     if (update.$inc) {
       for (const [key, value] of Object.entries(update.$inc)) {
         createData[key] = ((createData[key] as number) || 0) + (value as number)
       }
+
     }
+
 
     // Handle $push - create array with single element
     if (update.$push) {
@@ -2889,15 +2946,20 @@ export class ParqueDBImpl {
         } else {
           createData[key] = [value]
         }
+
       }
+
     }
+
 
     // Handle $addToSet - create array with single element
     if (update.$addToSet) {
       for (const [key, value] of Object.entries(update.$addToSet)) {
         createData[key] = [value]
       }
+
     }
+
 
     // Handle $currentDate
     if (update.$currentDate) {
@@ -2905,10 +2967,13 @@ export class ParqueDBImpl {
       for (const key of Object.keys(update.$currentDate)) {
         createData[key] = now
       }
+
     }
+
 
     return createData
   }
+
 
   /**
    * Upsert an entity (filter-based: update if exists, create if not)
@@ -2920,6 +2985,8 @@ export class ParqueDBImpl {
     options?: { returnDocument?: 'before' | 'after' }
   ): Promise<Entity<T> | null> {
     validateNamespace(namespace)
+    validateFilter(filter)
+    validateUpdateOperators(update)
 
     // Find existing entity
     const result = await this.find<T>(namespace, filter)
@@ -2936,7 +3003,9 @@ export class ParqueDBImpl {
       const data: CreateInput<T> = this.buildUpsertCreateData(filterFields, update) as CreateInput<T>
       return this.create<T>(namespace, data)
     }
+
   }
+
 
   /**
    * Upsert multiple entities in a single operation
@@ -2958,10 +3027,12 @@ export class ParqueDBImpl {
       errors: [],
     }
 
+
     // Handle empty array
     if (items.length === 0) {
       return result
     }
+
 
     const ordered = options?.ordered ?? true
     const actor = options?.actor
@@ -2970,6 +3041,10 @@ export class ParqueDBImpl {
       const item = items[i]!  // loop bounds ensure valid index
 
       try {
+        // Validate item filter and update operators
+        validateFilter(item.filter)
+        validateUpdateOperators(item.update)
+
         // Find existing entity
         const existing = await this.find<T>(namespace, item.filter)
 
@@ -2982,12 +3057,15 @@ export class ParqueDBImpl {
           const updateOptions: UpdateOptions = {
             returnDocument: 'after',
           }
+
           if (actor) {
             updateOptions.actor = actor
           }
+
           if (item.options?.expectedVersion !== undefined) {
             updateOptions.expectedVersion = item.options.expectedVersion
           }
+
 
           // Remove $setOnInsert from update since we're updating
           const { $setOnInsert: _, ...updateWithoutSetOnInsert } = item.update as UpdateInput<T> & { $setOnInsert?: unknown }
@@ -3006,6 +3084,7 @@ export class ParqueDBImpl {
             createOptions.actor = actor
           }
 
+
           const created = await this.create<T>(namespace, createData as CreateInput<T>, createOptions)
 
           result.insertedCount++
@@ -3018,7 +3097,9 @@ export class ParqueDBImpl {
               $link: item.update.$link,
             } as UpdateInput<T>, { actor })
           }
+
         }
+
       } catch (error: unknown) {
         result.ok = false
         result.errors.push({
@@ -3031,11 +3112,158 @@ export class ParqueDBImpl {
         if (ordered) {
           break
         }
+
       }
+
+    }
+
+
+    return result
+  }
+
+
+  /**
+   * Ingest a stream of documents into a namespace
+   *
+   * Efficiently bulk-inserts documents from an async iterable or array,
+   * with support for batching, transform functions, and progress callbacks.
+   *
+   * @param namespace - The namespace to ingest into
+   * @param source - Async iterable or array of documents to ingest
+   * @param options - Ingest options (batchSize, transform, callbacks, etc.)
+   * @returns Result with counts of inserted, failed, and skipped documents
+   */
+  async ingestStream<T = Record<string, unknown>>(
+    namespace: string,
+    source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>,
+    options?: IngestStreamOptions<Partial<T>>
+  ): Promise<IngestStreamResult> {
+    validateNamespace(namespace)
+
+    const batchSize = options?.batchSize ?? 100
+    const ordered = options?.ordered ?? true
+    const actor = options?.actor
+    const skipValidation = options?.skipValidation
+    const entityType = options?.entityType
+    const transform = options?.transform
+    const onProgress = options?.onProgress
+    const onBatchComplete = options?.onBatchComplete
+
+    const result: IngestStreamResult = {
+      insertedCount: 0,
+      failedCount: 0,
+      skippedCount: 0,
+      insertedIds: [],
+      errors: [],
+    }
+
+    let batch: Array<Partial<T>> = []
+    let batchNumber = 0
+    let totalProcessed = 0
+    let index = 0
+
+    // Helper to process a batch
+    const processBatch = async () => {
+      if (batch.length === 0) return
+
+      batchNumber++
+      const batchItems = batch
+      batch = []
+
+      for (const doc of batchItems) {
+        try {
+          // Build create data with type overrides
+          const createData = {
+            ...doc,
+            ...(entityType ? { $type: entityType } : {}),
+          } as CreateInput<T>
+
+          const entity = await this.create<T>(namespace, createData, {
+            actor,
+            skipValidation,
+          })
+
+          result.insertedCount++
+          result.insertedIds.push(entity.$id)
+        } catch (error: unknown) {
+          result.failedCount++
+          result.errors.push({
+            index: totalProcessed,
+            message: error instanceof Error ? error.message : String(error),
+            error: error instanceof Error ? error : undefined,
+          })
+
+          if (ordered) {
+            // Stop processing on first error
+            totalProcessed++
+            onProgress?.(totalProcessed)
+            return false
+          }
+        }
+        totalProcessed++
+        onProgress?.(totalProcessed)
+      }
+
+      // Call batch complete callback
+      if (onBatchComplete) {
+        onBatchComplete({
+          batchNumber,
+          batchSize: batchItems.length,
+          totalProcessed,
+        })
+      }
+
+      return true
+    }
+
+    // Process the source
+    try {
+      // Handle both arrays and async iterables
+      const iterable = Symbol.asyncIterator in source
+        ? (source as AsyncIterable<Partial<T>>)
+        : (async function* () { yield* source as Iterable<Partial<T>> })()
+
+      for await (const rawDoc of iterable) {
+        // Apply transform if provided
+        let doc = rawDoc
+        if (transform) {
+          const transformed = transform(rawDoc)
+          if (transformed === null) {
+            // Skip this document
+            result.skippedCount++
+            index++
+            continue
+          }
+          doc = transformed
+        }
+
+        batch.push(doc)
+        index++
+
+        // Process batch when full
+        if (batch.length >= batchSize) {
+          const shouldContinue = await processBatch()
+          if (!shouldContinue) {
+            break
+          }
+        }
+      }
+
+      // Process remaining batch
+      await processBatch()
+    } catch (error: unknown) {
+      // Handle errors from the iterator itself
+      result.failedCount++
+      result.errors.push({
+        index,
+        message: error instanceof Error ? error.message : String(error),
+        error: error instanceof Error ? error : undefined,
+      })
     }
 
     return result
   }
+
 
   /**
    * Compute diff between entity states at two timestamps
@@ -3068,12 +3296,16 @@ export class ParqueDBImpl {
           for (const [nestedPath, nestedValue] of nestedPaths) {
             paths.set(nestedPath, nestedValue)
           }
+
         } else {
           paths.set(path, value)
         }
+
       }
+
       return paths
     }
+
 
     const paths1 = getAllPaths(state1 as Record<string, unknown> | null)
     const paths2 = getAllPaths(state2 as Record<string, unknown> | null)
@@ -3084,7 +3316,9 @@ export class ParqueDBImpl {
         added.push(path)
         values[path] = { before: undefined, after: value2 }
       }
+
     }
+
 
     // Find removed fields (in state1 but not in state2)
     for (const [path, value1] of paths1) {
@@ -3092,7 +3326,9 @@ export class ParqueDBImpl {
         removed.push(path)
         values[path] = { before: value1, after: undefined }
       }
+
     }
+
 
     // Find changed fields (in both but different values)
     for (const [path, value1] of paths1) {
@@ -3104,11 +3340,15 @@ export class ParqueDBImpl {
           changed.push(path)
           values[path] = { before: value1, after: value2 }
         }
+
       }
+
     }
+
 
     return { added, removed, changed, values }
   }
+
 
   /**
    * Revert entity to its state at a specific timestamp
@@ -3129,6 +3369,7 @@ export class ParqueDBImpl {
       })
     }
 
+
     // Get entity state at target time
     const stateAtTarget = this.reconstructEntityAtTime(fullId, targetTime)
     if (!stateAtTarget) {
@@ -3137,11 +3378,13 @@ export class ParqueDBImpl {
       })
     }
 
+
     // Get current entity
     const currentEntity = this.entities.get(fullId)
     if (!currentEntity) {
       throw new EntityNotFoundError(ns, id)
     }
+
 
     // Apply the revert as an update with metadata marking it as a revert
     const actor = options?.actor || currentEntity.updatedBy
@@ -3174,6 +3417,7 @@ export class ParqueDBImpl {
 
     return newState as Entity<T>
   }
+
 
   // ===========================================================================
   // Index Management API
@@ -3215,6 +3459,7 @@ export class ParqueDBImpl {
     return this.indexManager.createIndex(ns, definition)
   }
 
+
   /**
    * Drop an index
    *
@@ -3226,6 +3471,7 @@ export class ParqueDBImpl {
     return this.indexManager.dropIndex(ns, indexName)
   }
 
+
   /**
    * List all indexes for a namespace
    *
@@ -3236,6 +3482,7 @@ export class ParqueDBImpl {
     validateNamespace(ns)
     return this.indexManager.listIndexes(ns)
   }
+
 
   /**
    * Get metadata for a specific index
@@ -3249,6 +3496,7 @@ export class ParqueDBImpl {
     return this.indexManager.getIndexMetadata(ns, indexName)
   }
 
+
   /**
    * Rebuild an index
    *
@@ -3259,6 +3507,7 @@ export class ParqueDBImpl {
     validateNamespace(ns)
     return this.indexManager.rebuildIndex(ns, indexName)
   }
+
 
   /**
    * Get statistics for an index
@@ -3272,6 +3521,7 @@ export class ParqueDBImpl {
     return this.indexManager.getIndexStats(ns, indexName)
   }
 
+
   /**
    * Get the index manager instance
    * (For advanced use cases)
@@ -3279,4 +3529,5 @@ export class ParqueDBImpl {
   getIndexManager(): IndexManager {
     return this.indexManager
   }
+
 }

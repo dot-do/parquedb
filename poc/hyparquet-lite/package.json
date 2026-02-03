@@ -1,0 +1,11 @@
+{
+  "name": "hyparquet-lite-poc",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "hyparquet": "^1.24.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

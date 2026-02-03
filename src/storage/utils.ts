@@ -157,6 +157,40 @@ export function normalizeFilePath(path: string): string {
 }
 
 /**
+ * Normalize a storage path with comprehensive cleanup
+ *
+ * This performs more thorough normalization than normalizePath():
+ * - Removes ALL leading slashes
+ * - Removes duplicate slashes
+ * - Removes trailing slashes (except for empty string)
+ *
+ * Useful for storage systems that require clean paths.
+ *
+ * @param path - The path to normalize
+ * @returns The fully normalized path
+ *
+ * @example
+ * ```typescript
+ * normalizeStoragePath('/foo/bar')    // 'foo/bar'
+ * normalizeStoragePath('//foo//bar')  // 'foo/bar'
+ * normalizeStoragePath('/foo/bar/')   // 'foo/bar'
+ * normalizeStoragePath('/')           // ''
+ * normalizeStoragePath('')            // ''
+ * ```
+ */
+export function normalizeStoragePath(path: string): string {
+  // Remove leading slashes
+  let normalized = path.replace(/^\/+/, '')
+  // Remove duplicate slashes
+  normalized = normalized.replace(/\/+/g, '/')
+  // Remove trailing slash (except for empty string)
+  if (normalized.length > 0 && normalized.endsWith('/')) {
+    normalized = normalized.slice(0, -1)
+  }
+  return normalized
+}
+
+/**
  * Safely convert an unknown error to an Error instance
  *
  * This is a common pattern in storage backends when wrapping errors.

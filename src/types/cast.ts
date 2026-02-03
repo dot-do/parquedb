@@ -322,6 +322,53 @@ export function asRelEventPayload(data: { predicate: string; to: unknown }): Ent
 }
 
 // =============================================================================
+// Entity Mutation Casts
+// =============================================================================
+
+/**
+ * Mutable entity type for update operations.
+ * Use when performing field mutations on entities.
+ *
+ * This type represents an Entity that can be accessed and modified
+ * via string keys, which is necessary for update operators like $set, $unset, etc.
+ *
+ * @remarks Safe because Entity<T> extends Record<string, unknown> via index signature.
+ */
+export type MutableEntity = Entity & Record<string, unknown>
+
+/**
+ * Cast an entity to a mutable record for field access/mutation.
+ * Use in update operators and relationship handlers.
+ *
+ * @remarks Safe because Entity has an index signature allowing string access.
+ */
+export function asMutableEntity(entity: Entity): MutableEntity {
+  return entity as MutableEntity
+}
+
+/**
+ * Cast a Variant (event state) to Entity.
+ * Use when restoring entity state from events.
+ *
+ * @remarks Safe when the Variant was originally captured from an Entity.
+ * Events store entity state in before/after fields as Variant type.
+ */
+export function variantAsEntity(variant: import('./entity').Variant): Entity {
+  return variant as unknown as Entity
+}
+
+/**
+ * Cast a Variant to Entity or null with proper type narrowing.
+ * Use for event before/after fields that may be undefined.
+ *
+ * @remarks Safe when the Variant was originally captured from an Entity.
+ */
+export function variantAsEntityOrNull(variant: import('./entity').Variant | undefined): Entity | null {
+  if (variant === undefined) return null
+  return variant as unknown as Entity
+}
+
+// =============================================================================
 // Dynamic Module Casts
 // =============================================================================
 

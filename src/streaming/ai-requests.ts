@@ -61,6 +61,9 @@ export const DEFAULT_AI_FLUSH_INTERVAL_MS = 5000
 /** Default buffer size before flush */
 export const DEFAULT_AI_BUFFER_SIZE = 100
 
+/** Default max retry attempts for failed flushes */
+export const DEFAULT_AI_MAX_FLUSH_RETRIES = 3
+
 // =============================================================================
 // Cost Configuration
 // =============================================================================
@@ -1357,15 +1360,23 @@ export function createAIRequestsMV(
 // =============================================================================
 
 /**
+ * Request with retry tracking
+ */
+interface BufferedRequest extends RecordAIRequestInput {
+  _retryCount?: number
+}
+
+/**
  * Buffered AI request writer for high-throughput scenarios
  *
  * Buffers requests in memory and flushes to storage in batches
  * to reduce write overhead.
  */
 export class AIRequestBuffer {
-  private buffer: RecordAIRequestInput[] = []
+  private buffer: BufferedRequest[] = []
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private flushPromise: Promise<void> | null = null
+  private droppedCount = 0
 
   constructor(
     private db: ParqueDB,
@@ -1374,10 +1385,15 @@ export class AIRequestBuffer {
       maxBufferSize?: number
       flushIntervalMs?: number
       pricing?: Record<string, ModelPricing>
+      /** Maximum number of flush retries before dropping requests (default: 3) */
+      maxFlushRetries?: number
+      /** Callback when requests are dropped due to max retries */
+      onDrop?: (requests: RecordAIRequestInput[], error: Error) => void
     } = {}
   ) {
     this.options.maxBufferSize = options.maxBufferSize ?? DEFAULT_AI_BUFFER_SIZE
     this.options.flushIntervalMs = options.flushIntervalMs ?? DEFAULT_AI_FLUSH_INTERVAL_MS
+    this.options.maxFlushRetries = options.maxFlushRetries ?? DEFAULT_AI_MAX_FLUSH_RETRIES
   }
 
   /**
@@ -1430,15 +1446,44 @@ export class AIRequestBuffer {
     const toFlush = this.buffer
     this.buffer = []
 
+    const maxRetries = this.options.maxFlushRetries ?? DEFAULT_AI_MAX_FLUSH_RETRIES
+
     this.flushPromise = recordAIRequests(this.db, toFlush, {
       collection: this.options.collection,
       pricing: this.options.pricing,
     }).then(() => {
       this.flushPromise = null
     }).catch(err => {
-      // Put failed requests back in buffer
-      this.buffer.unshift(...toFlush)
       this.flushPromise = null
+
+      // Track retries and drop requests that exceed max retries
+      const toRetry: BufferedRequest[] = []
+      const toDrop: BufferedRequest[] = []
+
+      for (const request of toFlush) {
+        const retryCount = (request._retryCount ?? 0) + 1
+        if (retryCount < maxRetries) {
+          toRetry.push({ ...request, _retryCount: retryCount })
+        } else {
+          toDrop.push(request)
+        }
+      }
+
+      // Put retriable requests back in buffer
+      if (toRetry.length > 0) {
+        this.buffer.unshift(...toRetry)
+      }
+
+      // Handle dropped requests
+      if (toDrop.length > 0) {
+        this.droppedCount += toDrop.length
+        if (this.options.onDrop) {
+          this.options.onDrop(toDrop, err instanceof Error ? err : new Error(String(err)))
+        } else {
+          console.error(`[AIRequestBuffer] Dropped ${toDrop.length} requests after ${maxRetries} retries:`, err)
+        }
+      }
+
       throw err
     })
 
@@ -1459,6 +1504,13 @@ export class AIRequestBuffer {
   getBufferSize(): number {
     return this.buffer.length
   }
+
+  /**
+   * Get count of dropped requests (requests that exceeded max retries)
+   */
+  getDroppedCount(): number {
+    return this.droppedCount
+  }
 }
 
 /**
@@ -1472,6 +1524,10 @@ export function createAIRequestBuffer(
     flushIntervalMs?: number
     pricing?: Record<string, ModelPricing>
     autoStart?: boolean
+    /** Maximum number of flush retries before dropping requests (default: 3) */
+    maxFlushRetries?: number
+    /** Callback when requests are dropped due to max retries */
+    onDrop?: (requests: RecordAIRequestInput[], error: Error) => void
   }
 ): AIRequestBuffer {
   const buffer = new AIRequestBuffer(db, options)

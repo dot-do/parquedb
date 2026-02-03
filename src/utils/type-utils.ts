@@ -8,6 +8,156 @@
  */
 
 // =============================================================================
+// Nullish Checks
+// =============================================================================
+
+/**
+ * Check if a value is null or undefined (nullish)
+ *
+ * This is the canonical nullish check used throughout ParqueDB for
+ * consistent null/undefined handling.
+ *
+ * @param value - Value to check
+ * @returns true if value is null or undefined
+ *
+ * @example
+ * isNullish(null) // true
+ * isNullish(undefined) // true
+ * isNullish(0) // false
+ * isNullish('') // false
+ * isNullish(false) // false
+ */
+export function isNullish(value: unknown): value is null | undefined {
+  return value === null || value === undefined
+}
+
+/**
+ * Check if a value is not null and not undefined
+ *
+ * This is the inverse of isNullish and is useful for type narrowing
+ * in filter operations and conditional checks.
+ *
+ * @param value - Value to check
+ * @returns true if value is not null and not undefined
+ *
+ * @example
+ * isNotNullish(0) // true
+ * isNotNullish('') // true
+ * isNotNullish(false) // true
+ * isNotNullish(null) // false
+ * isNotNullish(undefined) // false
+ *
+ * // Great for array filtering:
+ * const filtered = [1, null, 2, undefined, 3].filter(isNotNullish)
+ * // filtered is [1, 2, 3] with type number[]
+ */
+export function isNotNullish<T>(value: T | null | undefined): value is T {
+  return value !== null && value !== undefined
+}
+
+/**
+ * Check if a value is a plain object (not null, not array, not primitive)
+ *
+ * @param value - Value to check
+ * @returns true if value is a plain object
+ *
+ * @example
+ * isObject({}) // true
+ * isObject({ a: 1 }) // true
+ * isObject(null) // false
+ * isObject([]) // false
+ * isObject('string') // false
+ */
+export function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * Check if a value is an array
+ *
+ * @param value - Value to check
+ * @returns true if value is an array
+ *
+ * @example
+ * isArray([]) // true
+ * isArray([1, 2, 3]) // true
+ * isArray(null) // false
+ * isArray({}) // false
+ */
+export function isArray(value: unknown): value is unknown[] {
+  return Array.isArray(value)
+}
+
+/**
+ * Get a nested value from an object using dot notation
+ *
+ * @param obj - Object to read from (can be null/undefined)
+ * @param path - Dot-notation path
+ * @returns Value at path, or undefined if not found
+ *
+ * @example
+ * getNestedValue({ a: { b: 1 } }, 'a.b') // 1
+ * getNestedValue(null, 'a.b') // undefined
+ */
+export function getNestedValue(obj: unknown, path: string): unknown {
+  if (obj === null || obj === undefined) return undefined
+
+  const parts = path.split('.')
+  let current: unknown = obj
+
+  for (const part of parts) {
+    if (current === null || current === undefined) return undefined
+    if (typeof current !== 'object') return undefined
+    current = (current as Record<string, unknown>)[part]
+  }
+
+  return current
+}
+
+/**
+ * Return the first non-nullish value from a list of values
+ *
+ * Similar to JavaScript's nullish coalescing operator (??) but works with
+ * multiple values.
+ *
+ * @param values - Values to check
+ * @returns First non-nullish value, or undefined if all are nullish
+ *
+ * @example
+ * coalesce(null, undefined, 'found') // 'found'
+ * coalesce(0, 1) // 0 (0 is not nullish)
+ * coalesce('', 'fallback') // '' (empty string is not nullish)
+ */
+export function coalesce<T>(...values: (T | null | undefined)[]): T | undefined {
+  for (const value of values) {
+    if (value !== null && value !== undefined) {
+      return value
+    }
+  }
+  return undefined
+}
+
+/**
+ * Return the first non-nullish value from a list, with a guaranteed default
+ *
+ * @param defaultValue - Default value to return if all others are nullish
+ * @param values - Values to check
+ * @returns First non-nullish value, or defaultValue
+ *
+ * @example
+ * coalesceDefault('default', null, undefined) // 'default'
+ * coalesceDefault(100, 0) // 0 (0 is not nullish)
+ */
+export function coalesceDefault<T>(defaultValue: T, ...values: (T | null | undefined)[]): T {
+  for (const value of values) {
+    if (value !== null && value !== undefined) {
+      return value
+    }
+  }
+  return defaultValue
+}
+
+// =============================================================================
 // Typed Proxy Helpers
 // =============================================================================
 
