@@ -5,7 +5,32 @@ description: Comprehensive guide to querying data in ParqueDB
 
 # Query API
 
-ParqueDB provides a flexible MongoDB-style query API with support for filters, sorting, pagination, projections, and advanced aggregations.
+ParqueDB provides a flexible MongoDB-style query API with support for filters, sorting, pagination, projections, and relationship traversal.
+
+## Quick Reference
+
+**Core Methods:**
+- `find(filter?, options?)` - Query multiple documents
+- `findOne(filter?, options?)` - Get first matching document
+- `get(id, options?)` - Get by ID (throws if not found)
+- `count(filter?)` - Count matching documents
+
+**Filter Operators:**
+- Comparison: `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`
+- String: `$regex`, `$startsWith`, `$endsWith`, `$contains`
+- Array: `$all`, `$elemMatch`, `$size`
+- Existence: `$exists`, `$type`
+- Logical: `$and`, `$or`, `$not`, `$nor`
+- Special: `$text`, `$vector`
+
+**Query Options:**
+- `sort` - Sort results
+- `limit` / `skip` - Pagination
+- `cursor` - Cursor-based pagination
+- `project` - Field selection
+- `populate` - Include related entities
+- `includeDeleted` - Include soft-deleted items
+- `asOf` - Time-travel queries
 
 ## Basic Queries
 
@@ -41,6 +66,9 @@ const allPosts = await db.Posts.find()
 - `populate` - Include related entities
 - `includeDeleted` - Include soft-deleted documents (default: false)
 - `asOf` - Time-travel query (see Time-Travel section)
+- `explain` - Explain query plan without executing (returns QueryPlan)
+- `hint` - Hint for index to use (string or index specification)
+- `maxTimeMs` - Maximum query execution time in milliseconds
 
 ### findOne() - Get single document
 
@@ -149,9 +177,17 @@ await db.Posts.find({ views: { $gt: 1000 } })
 // Greater than or equal
 await db.Posts.find({ score: { $gte: 80 } })
 
-// Combine multiple operators
-await db.Posts.find({
+// Combine multiple operators for range queries
+await db.Users.find({
   age: { $gte: 18, $lt: 65 }
+})
+
+// Date ranges
+await db.Posts.find({
+  createdAt: {
+    $gte: new Date('2024-01-01'),
+    $lt: new Date('2024-02-01')
+  }
 })
 ```
 
@@ -371,18 +407,22 @@ await db.Posts.find({
 Match documents where a field exists (or does not exist).
 
 ```typescript
-// Has publishedAt field
+// Has publishedAt field (includes null values)
 await db.Posts.find({
   publishedAt: { $exists: true }
 })
 
-// Does not have deletedAt field
+// Does not have deletedAt field (truly missing/undefined)
 await db.Posts.find({
   deletedAt: { $exists: false }
 })
 ```
 
-**Note:** `$exists: true` matches if field is present, even if the value is `null`.
+**Null/Undefined Behavior:**
+- `$exists: true` matches if field is present, even if the value is `null`
+- `$exists: false` only matches if field is truly missing (undefined), not if it's `null`
+- For equality operators (`$eq`, `$in`, etc.), `null` and `undefined` are treated as equivalent
+- Use `$exists` when you need to distinguish between missing fields and null values
 
 #### $type - Type checking
 
@@ -459,6 +499,24 @@ await db.Posts.find({
 ```
 
 **Note:** Vector search requires a vector index on the field. See [Secondary Indexes](./architecture/secondary-indexes.md) for setup.
+
+#### $geo - Geospatial search (Future Feature)
+
+Geospatial queries for location-based searches are planned for a future release.
+
+```typescript
+// Planned syntax
+await db.Places.find({
+  $geo: {
+    $near: {
+      lng: -122.4194,
+      lat: 37.7749
+    },
+    $maxDistance: 5000,  // 5km in meters
+    $minDistance: 100    // Optional minimum distance
+  }
+})
+```
 
 ## Query Options
 
@@ -568,7 +626,7 @@ await db.Posts.find({}, {
 })
 // => Returns all fields except content and metadata
 
-// Mix of include/exclude NOT supported (except for _id)
+// Mix of include/exclude NOT supported (except for core fields)
 ```
 
 **Rules:**
@@ -670,199 +728,93 @@ await db.Posts.find(filter, options)
 - String: `'regex'`, `'startsWith'`, `'endsWith'`, `'contains'`
 - Existence: `'exists'`
 
-### Aggregation Pipeline
+### Aggregation Pipeline (Future Feature)
 
-Use the aggregation pipeline for complex data transformations.
+Aggregation pipelines for complex data transformations are planned for a future release. Currently, you can achieve many aggregation tasks using the query API combined with in-memory processing.
+
+**Example workaround:**
 
 ```typescript
 import { db } from 'parquedb'
 
-// Count posts by status
-const statusCounts = await db.Posts.aggregate([
-  { $match: { publishedAt: { $exists: true } } },
-  { $group: {
-      _id: '$status',
-      count: { $sum: 1 }
-  } }
-])
-// => [{ _id: 'published', count: 150 }, { _id: 'featured', count: 25 }]
+// Count posts by status (manual grouping)
+const posts = await db.Posts.find({ status: { $exists: true } })
+const statusCounts = posts.reduce((acc, post) => {
+  const status = post.status as string
+  acc[status] = (acc[status] || 0) + 1
+  return acc
+}, {} as Record<string, number>)
 
 // Top authors by post count
-const topAuthors = await db.Posts.aggregate([
-  { $match: { status: 'published' } },
-  { $group: {
-      _id: '$authorId',
-      postCount: { $sum: 1 },
-      totalViews: { $sum: '$views' }
-  } },
-  { $sort: { postCount: -1 } },
-  { $limit: 10 }
-])
-
-// Average views by category
-const avgByCategory = await db.Posts.aggregate([
-  { $match: { status: 'published' } },
-  { $group: {
-      _id: '$category',
-      avgViews: { $avg: '$views' },
-      minViews: { $min: '$views' },
-      maxViews: { $max: '$views' }
-  } }
-])
-```
-
-#### Pipeline Stages
-
-**$match** - Filter documents
-
-```typescript
-{ $match: { status: 'published' } }
-```
-
-**$group** - Group by field with accumulators
-
-```typescript
-{
-  $group: {
-    _id: '$category',        // Group by field
-    count: { $sum: 1 },      // Count documents
-    total: { $sum: '$views' } // Sum field values
+const published = await db.Posts.find({ status: 'published' })
+const authorStats = published.reduce((acc, post) => {
+  const authorId = post.authorId as string
+  if (!acc[authorId]) {
+    acc[authorId] = { postCount: 0, totalViews: 0 }
   }
-}
+  acc[authorId].postCount++
+  acc[authorId].totalViews += (post.views as number) || 0
+  return acc
+}, {} as Record<string, { postCount: number; totalViews: number }>)
+
+const topAuthors = Object.entries(authorStats)
+  .map(([authorId, stats]) => ({ authorId, ...stats }))
+  .sort((a, b) => b.postCount - a.postCount)
+  .slice(0, 10)
 ```
 
-**Accumulators:**
-- `$sum` - Sum values or count documents
-- `$avg` - Average of values
-- `$min` - Minimum value
-- `$max` - Maximum value
-- `$first` - First value in group
-- `$last` - Last value in group
-- `$push` - Array of all values
-- `$addToSet` - Array of unique values
-
-**$project** - Reshape documents
-
-```typescript
-{ $project: { title: 1, status: 1, viewCount: '$views' } }
-```
-
-**$sort** - Sort results
-
-```typescript
-{ $sort: { createdAt: -1 } }
-```
-
-**$limit** - Limit results
-
-```typescript
-{ $limit: 10 }
-```
-
-**$skip** - Skip results
-
-```typescript
-{ $skip: 20 }
-```
-
-**$unwind** - Deconstruct array field
-
-```typescript
-// Simple unwind
-{ $unwind: '$tags' }
-
-// With options
-{
-  $unwind: {
-    path: '$tags',
-    preserveNullAndEmptyArrays: true
-  }
-}
-```
-
-**$count** - Count documents
-
-```typescript
-{ $count: 'totalPosts' }
-```
-
-**$addFields / $set** - Add computed fields
-
-```typescript
-{ $addFields: { fullName: { $concat: ['$firstName', ' ', '$lastName'] } } }
-```
-
-**$unset** - Remove fields
-
-```typescript
-{ $unset: ['internalField', 'tempData'] }
-```
-
-**$lookup** - Join with other collections
-
-```typescript
-{
-  $lookup: {
-    from: 'users',
-    localField: 'authorId',
-    foreignField: '$id',
-    as: 'author'
-  }
-}
-```
+**Planned Pipeline Stages:**
+- `$match` - Filter documents
+- `$group` - Group by field with accumulators ($sum, $avg, $min, $max, etc.)
+- `$project` - Reshape documents
+- `$sort` - Sort results
+- `$limit` / `$skip` - Pagination
+- `$unwind` - Deconstruct array fields
+- `$lookup` - Join with other collections
+- `$count` - Count documents
+- `$addFields` / `$set` - Add computed fields
+- `$unset` - Remove fields
 
 ### SQL Queries
 
-ParqueDB provides a SQL template tag for familiar SQL syntax.
+ParqueDB provides a SQL template tag for familiar SQL syntax through the `parquedb/sql` integration.
 
 ```typescript
+import { createSQL } from 'parquedb/sql'
 import { db } from 'parquedb'
 
+// Create SQL executor
+const sql = createSQL(db)
+
 // Simple SELECT
-const users = await db.sql`
+const users = await sql`
   SELECT * FROM users
   WHERE age > ${21}
 `
 
-// With JOIN
-const posts = await db.sql`
-  SELECT p.title, u.name as author
-  FROM posts p
-  LEFT JOIN users u ON p.authorId = u.$id
-  WHERE p.status = ${'published'}
-  ORDER BY p.createdAt DESC
+// With parameters
+const posts = await sql`
+  SELECT * FROM posts
+  WHERE status = ${'published'}
+  ORDER BY createdAt DESC
   LIMIT ${10}
 `
 
-// Aggregation
-const stats = await db.sql`
-  SELECT
-    category,
-    COUNT(*) as post_count,
-    AVG(views) as avg_views
-  FROM posts
-  WHERE status = ${'published'}
-  GROUP BY category
-  ORDER BY post_count DESC
-`
+// Using raw queries
+const result = await sql.raw(
+  'SELECT * FROM users WHERE age > $1',
+  [21]
+)
 ```
 
-**Supported SQL features:**
-- SELECT with field list or *
-- FROM with table names (collection namespaces)
-- WHERE with comparison operators
-- JOIN (LEFT JOIN, INNER JOIN)
-- GROUP BY with aggregate functions
+**Currently Supported:**
+- Basic SELECT queries with WHERE conditions
+- Template literal parameter binding (prevents injection)
 - ORDER BY with ASC/DESC
 - LIMIT and OFFSET
-- Template literal parameter binding (prevents injection)
+- Automatic translation to ParqueDB filter/options
 
-**Aggregate functions:**
-- `COUNT(*)` or `COUNT(field)`
-- `SUM(field)`
-- `AVG(field)`
-- `MIN(field)`
-- `MAX(field)`
+**Note:** Advanced SQL features like JOINs, GROUP BY, and aggregate functions are planned for future releases. For now, use the native query API or perform aggregations in-memory after fetching data.
 
 ## Performance Tips
 
@@ -879,9 +831,11 @@ await db.Users.find({ bio: { $contains: 'engineer' } })
 ```
 
 **Index types:**
-- **Hash indexes** - Fast equality lookups (`$eq`, `$in`)
-- **FTS indexes** - Full-text search (`$text`)
-- **Vector indexes** - Similarity search (`$vector`)
+- **Hash indexes** - Fast O(1) equality lookups (`$eq`, `$in`, `$ne`)
+- **B-tree indexes** - Range queries and sorting (`$gt`, `$gte`, `$lt`, `$lte`)
+- **FTS indexes** - Full-text search with stemming (`$text`)
+- **Vector indexes** - Approximate nearest neighbor search (`$vector`)
+- **Bloom filters** - Probabilistic set membership (automatic, no configuration needed)
 
 See [Secondary Indexes](./architecture/secondary-indexes.md) for index configuration.
 
@@ -899,7 +853,7 @@ ParqueDB automatically pushes filter predicates to the Parquet storage layer, sk
 - Logical: `$or`, `$nor`, `$not`
 
 ```typescript
-// Efficient: Uses predicate pushdown
+// Efficient: Uses predicate pushdown on native Parquet columns
 await db.Posts.find({
   createdAt: { $gte: new Date('2024-01-01') },
   status: { $in: ['published', 'featured'] }
@@ -940,7 +894,7 @@ await db.Posts.find({
 4. **Use projection** to reduce data transfer
 5. **Cursor pagination** over offset-based for large datasets
 6. **Filter before sort** when possible
-7. **Consider aggregation** for complex calculations
+7. **Consider in-memory processing** for complex calculations (aggregation pipeline coming soon)
 
 ```typescript
 // Good: Efficient query
