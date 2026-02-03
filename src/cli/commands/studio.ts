@@ -19,6 +19,12 @@ import {
   DEFAULT_STUDIO_CONFIG,
 } from '../../studio'
 import type { StudioConfig } from '../../studio/types'
+import {
+  loadConfig,
+  extractSchemaStudio,
+  mergeStudioConfig,
+  type ParqueDBConfig,
+} from '../../config'
 
 // =============================================================================
 // Command Implementation
@@ -29,19 +35,22 @@ import type { StudioConfig } from '../../studio/types'
  */
 export async function studioCommand(args: ParsedArgs): Promise<number> {
   try {
-    // Parse command-line arguments
-    const config = parseStudioArgs(args)
-
     // Show help if requested
     if (args.options.help) {
       printStudioHelp()
       return 0
     }
 
+    // Load parquedb.config.ts if available
+    const fileConfig = await loadConfig()
+
+    // Parse command-line arguments (CLI args override config file)
+    const config = parseStudioArgs(args, fileConfig)
+
     // Create storage backend
     const storage = new FsBackend(config.dataDir)
 
-    // Discover collections
+    // Discover collections from Parquet files
     print(`Scanning for Parquet files in ${config.dataDir}...`)
     const collections = await discoverCollections(storage, config.dataDir)
 
@@ -59,6 +68,22 @@ export async function studioCommand(args: ParsedArgs): Promise<number> {
 
     // Print discovery summary
     printDiscoverySummary(collections)
+
+    // Extract studio config from schema if available
+    if (fileConfig?.schema) {
+      const schemaStudio = extractSchemaStudio(fileConfig.schema)
+      const mergedStudio = mergeStudioConfig(fileConfig.studio, schemaStudio)
+
+      // Apply merged studio config
+      if (mergedStudio.port) config.port = mergedStudio.port
+      if (mergedStudio.theme) config.theme = mergedStudio.theme
+
+      print('')
+      print(`Loaded config from parquedb.config.ts`)
+      if (Object.keys(schemaStudio).length > 0) {
+        print(`  Schema studio config: ${Object.keys(schemaStudio).join(', ')}`)
+      }
+    }
 
     // Create and start server
     const server = await createStudioServer(config, storage)
@@ -87,13 +112,33 @@ export async function studioCommand(args: ParsedArgs): Promise<number> {
 // =============================================================================
 
 /**
- * Parse studio-specific arguments
+ * Parse studio-specific arguments, merging with config file
  */
-function parseStudioArgs(args: ParsedArgs): StudioConfig {
+function parseStudioArgs(args: ParsedArgs, fileConfig: ParqueDBConfig | null): StudioConfig {
+  // Start with defaults
   const config: StudioConfig = { ...DEFAULT_STUDIO_CONFIG }
 
-  // Data directory (first positional arg or current directory)
-  config.dataDir = args.args[0] ?? findDataDirectory()
+  // Apply config file settings
+  if (fileConfig?.studio) {
+    if (fileConfig.studio.port) config.port = fileConfig.studio.port
+    if (fileConfig.studio.theme) config.theme = fileConfig.studio.theme
+    if (fileConfig.studio.defaultSidebar) config.defaultSidebar = fileConfig.studio.defaultSidebar
+  }
+
+  // Determine data directory from config file storage
+  if (fileConfig?.storage) {
+    if (typeof fileConfig.storage === 'object' && 'path' in fileConfig.storage) {
+      config.dataDir = fileConfig.storage.path
+    }
+  }
+
+  // CLI arguments override config file
+  // Data directory (first positional arg)
+  if (args.args[0]) {
+    config.dataDir = args.args[0]
+  } else if (!config.dataDir || config.dataDir === DEFAULT_STUDIO_CONFIG.dataDir) {
+    config.dataDir = findDataDirectory()
+  }
 
   // Options from generic parser
   if (args.options.directory) {
@@ -101,8 +146,6 @@ function parseStudioArgs(args: ParsedArgs): StudioConfig {
   }
 
   // Parse additional flags from raw args
-  // Note: These would normally be handled by the argument parser,
-  // but we extend with studio-specific options
   const rawArgs = process.argv.slice(2)
 
   for (let i = 0; i < rawArgs.length; i++) {
@@ -199,6 +242,32 @@ OPTIONS:
   --debug                    Enable debug logging
   -h, --help                 Show this help message
 
+CONFIG FILE:
+  If parquedb.config.ts exists, studio settings and schema layout are loaded from it:
+
+  export default defineConfig({
+    storage: { type: 'fs', path: './data' },
+    schema: {
+      Post: {
+        title: 'string!',
+        content: 'text',
+        status: 'string',
+
+        // Layout (array = rows, object = tabs)
+        $layout: [['title'], 'content'],
+        $sidebar: ['$id', 'status', 'createdAt'],
+        $studio: {
+          label: 'Blog Posts',
+          status: { options: ['draft', 'published'] }
+        }
+      }
+    },
+    studio: {
+      theme: 'auto',
+      port: 3000,
+    }
+  })
+
 EXAMPLES:
   # Start studio with auto-discovery
   parquedb studio
@@ -211,18 +280,5 @@ EXAMPLES:
 
   # With local authentication
   parquedb studio --auth local --admin-email admin@example.com
-
-METADATA:
-  UI customization is stored in the .studio/ directory:
-  - .studio/metadata.json    Field labels, descriptions, UI configuration
-
-  This keeps data definitions separate from UI rendering concerns.
-
-AUTO-DISCOVERY:
-  The studio automatically discovers Parquet files and generates
-  admin collections from their schemas. It detects:
-  - .db/*.parquet files
-  - .db/{namespace}/data.parquet files (ParqueDB format)
-  - Custom directory structures
 `)
 }

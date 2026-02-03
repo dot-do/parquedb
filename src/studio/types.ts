@@ -184,6 +184,10 @@ export interface StudioConfig {
   readOnly: boolean
   /** Enable verbose logging */
   debug: boolean
+  /** Theme: 'light' | 'dark' | 'auto' */
+  theme?: 'light' | 'dark' | 'auto'
+  /** Default sidebar fields */
+  defaultSidebar?: string[]
 }
 
 /**
