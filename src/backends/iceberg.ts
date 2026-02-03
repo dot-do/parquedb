@@ -749,27 +749,52 @@ export class IcebergBackend implements EntityBackend {
   }
 
   /**
-   * Append entities to an Iceberg table
+   * Append entities to an Iceberg table with optimistic concurrency control.
+   *
+   * Uses two levels of concurrency protection:
+   * 1. In-memory mutex lock for same-instance concurrent writes
+   * 2. OCC via version-hint.text conditional write for cross-instance writes
+   *
+   * Orphaned files from failed commits are cleaned up by vacuum operations.
    */
   private async appendEntities<T>(ns: string, entities: Entity<T>[]): Promise<void> {
     if (entities.length === 0) return
 
-    // Acquire write lock for this namespace to prevent concurrent writes
+    // Acquire write lock for this namespace to prevent concurrent writes within same instance
     const releaseLock = await this.acquireWriteLock(ns)
 
     try {
-      // Invalidate cache to get fresh metadata
-      this.tableCache.delete(ns)
-
-      let metadata = await this.getTableMetadata(ns)
-      // Ensure table exists
-      if (!metadata) {
-        metadata = await this.createTable(ns)
-      }
-
       const location = this.getTableLocation(ns)
+      const versionHintPath = `${location}/metadata/version-hint.text`
 
-      // Step 1: Write entities to Parquet file
+      for (let attempt = 0; attempt < this.maxOccRetries; attempt++) {
+        // Invalidate cache to get fresh metadata
+        this.tableCache.delete(ns)
+
+        // Read current version-hint.text and its ETag for OCC
+        let expectedVersionHintEtag: string | null = null
+        try {
+          const stat = await this.storage.stat(versionHintPath)
+          expectedVersionHintEtag = stat?.etag ?? null
+        } catch {
+          // File doesn't exist yet (new table)
+          expectedVersionHintEtag = null
+        }
+
+        let metadata = await this.getTableMetadata(ns)
+        // Ensure table exists
+        if (!metadata) {
+          metadata = await this.createTable(ns)
+          // Re-read the version hint ETag after table creation
+          try {
+            const stat = await this.storage.stat(versionHintPath)
+            expectedVersionHintEtag = stat?.etag ?? null
+          } catch {
+            expectedVersionHintEtag = null
+          }
+        }
+
+        // Step 1: Write entities to Parquet file (safe - unique path)
       const dataFileId = generateUUID()
       const dataFilePath = `${location}/data/${dataFileId}.parquet`
 
@@ -903,20 +928,42 @@ export class IcebergBackend implements EntityBackend {
         ],
       }
 
-      // Step 8: Write new metadata file
-      const metadataVersion = sequenceNumber
-      const metadataUuid = generateUUID()
-      const metadataPath = `${location}/metadata/${metadataVersion}-${metadataUuid}.metadata.json`
+        // Step 8: Write new metadata file (safe - unique path)
+        const metadataVersion = sequenceNumber
+        const metadataUuid = generateUUID()
+        const metadataPath = `${location}/metadata/${metadataVersion}-${metadataUuid}.metadata.json`
 
-      const metadataJson = JSON.stringify(newMetadata, null, 2)
-      await this.storage.write(metadataPath, new TextEncoder().encode(metadataJson))
+        const metadataJson = JSON.stringify(newMetadata, null, 2)
+        await this.storage.write(metadataPath, new TextEncoder().encode(metadataJson))
 
-      // Step 9: Update version-hint.text (note: Iceberg spec uses .text, not .txt)
-      const versionHintPath = `${location}/metadata/version-hint.text`
-      await this.storage.write(versionHintPath, new TextEncoder().encode(metadataPath))
+        // Step 9: Atomically update version-hint.text using conditional write
+        // This is the critical atomic operation that prevents concurrent write corruption
+        try {
+          await this.storage.writeConditional(
+            versionHintPath,
+            new TextEncoder().encode(metadataPath),
+            expectedVersionHintEtag
+          )
+          // Success! Update cache and return
+          this.tableCache.set(ns, newMetadata)
+          return
+        } catch (error) {
+          // Check if this is an ETag mismatch (version conflict)
+          if (isETagMismatchError(error)) {
+            // Another process updated the table - retry with fresh metadata
+            // Note: Orphaned files (dataFilePath, manifestPath, etc.) will be
+            // cleaned up by vacuum operations, consistent with Iceberg's design
+            continue
+          }
+          // Re-throw other errors
+          throw error
+        }
+      }
 
-      // Invalidate cache
-      this.tableCache.delete(ns)
+      throw new Error(
+        `Commit failed after ${this.maxOccRetries} retries due to concurrent modifications. ` +
+        `Table: ${ns}. Consider using a different concurrency strategy or retry the operation.`
+      )
     } finally {
       releaseLock()
     }

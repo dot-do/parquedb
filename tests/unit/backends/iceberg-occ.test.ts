@@ -72,13 +72,24 @@ describe('IcebergBackend Optimistic Concurrency Control', () => {
 
       await Promise.all([write1, write2])
 
+      // Create a fresh backend to read the final state
+      // This ensures we're reading from storage, not from any instance's cache
+      const readerBackend = createIcebergBackend({
+        type: 'iceberg',
+        storage,
+        warehouse: 'warehouse',
+        database: 'testdb',
+      })
+      await readerBackend.initialize()
+
       // Both entities should be readable
-      const allItems = await backend.find('multi-instance', {})
+      const allItems = await readerBackend.find('multi-instance', {})
       expect(allItems.length).toBe(3) // Initial + 2 new items
 
       const names = allItems.map(i => i.name).sort()
       expect(names).toEqual(['From Backend 1', 'From Backend 2', 'Initial'])
 
+      await readerBackend.close()
       await backend2.close()
     })
 
