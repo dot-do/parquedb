@@ -71,5 +71,12 @@ export {
   type MigrationWorkflowParams,
 } from './migration-workflow'
 
-// Utilities
-export { toInternalR2Bucket } from './utils'
+// Utilities and Type Guards
+export {
+  toInternalR2Bucket,
+  isR2BucketLike,
+  isInternalR2BucketLike,
+  requireR2Bucket,
+  toR2BucketOrUndefined,
+  assertR2Bucket,
+} from './utils'

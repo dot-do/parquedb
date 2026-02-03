@@ -105,6 +105,350 @@ export interface Env {
  * Service binding type for RPC calls between workers
  * Use import type for better tree-shaking
  */
+
+// =============================================================================
+// DO Stub Types - Stricter generics for ParqueDBDOStub
+// =============================================================================
+
+/**
+ * Options for DO create operations
+ * Subset of CreateOptions with string actor for DO context
+ */
+export interface DOCreateOptions {
+  /** Actor performing the operation (string in DO context) */
+  actor?: string
+  /** Skip validation entirely */
+  skipValidation?: boolean
+  /** Validation mode */
+  validateOnWrite?: boolean | 'strict' | 'permissive' | 'warn'
+  /** Return the created entity (default: true) */
+  returnDocument?: boolean
+}
+
+/**
+ * Options for DO update operations
+ * Subset of UpdateOptions with string actor for DO context
+ */
+export interface DOUpdateOptions {
+  /** Actor performing the operation (string in DO context) */
+  actor?: string
+  /** Expected version for optimistic concurrency */
+  expectedVersion?: number
+  /** Create if not exists (upsert) */
+  upsert?: boolean
+  /** Skip validation entirely */
+  skipValidation?: boolean
+  /** Validation mode */
+  validateOnWrite?: boolean | 'strict' | 'permissive' | 'warn'
+}
+
+/**
+ * Options for DO delete operations
+ * Subset of DeleteOptions with string actor for DO context
+ */
+export interface DODeleteOptions {
+  /** Actor performing the operation (string in DO context) */
+  actor?: string
+  /** Hard delete (permanent, skip soft delete) */
+  hard?: boolean
+  /** Expected version for optimistic concurrency */
+  expectedVersion?: number
+}
+
+/**
+ * Options for DO link/unlink operations
+ */
+export interface DOLinkOptions {
+  /** Actor performing the operation */
+  actor?: string
+  /**
+   * How the relationship was matched (SHREDDED)
+   * - 'exact': Precise match (user explicitly linked)
+   * - 'fuzzy': Approximate match (entity resolution, text similarity)
+   */
+  matchMode?: 'exact' | 'fuzzy'
+  /**
+   * Similarity score for fuzzy matches (SHREDDED)
+   * Range: 0.0 to 1.0
+   * Only meaningful when matchMode is 'fuzzy'
+   */
+  similarity?: number
+  /** Edge data (remaining metadata in Variant) */
+  data?: Record<string, unknown>
+}
+
+/**
+ * Base constraint for entity data in DO operations.
+ *
+ * Ensures that custom entity types have the minimum required structure
+ * for ParqueDB entities while allowing additional user-defined fields.
+ *
+ * @example
+ * ```typescript
+ * // Valid custom data type
+ * interface PostData extends DOEntityData {
+ *   title: string
+ *   content: string
+ *   views: number
+ * }
+ * ```
+ */
+export type DOEntityData = Record<string, unknown>
+
+/**
+ * Reserved fields managed by ParqueDB that should not be in user data.
+ * These are the system fields present on all entities.
+ *
+ * @internal
+ */
+export type DOReservedFields =
+  | '$id'
+  | '$type'
+  | 'name'
+  | 'createdAt'
+  | 'createdBy'
+  | 'updatedAt'
+  | 'updatedBy'
+  | 'deletedAt'
+  | 'deletedBy'
+  | 'version'
+
+/**
+ * Create input data shape for DO operations
+ * Requires $type and name, allows additional fields
+ *
+ * @typeParam TData - Custom data fields to include (must not conflict with reserved fields)
+ */
+export interface DOCreateInput<TData extends DOEntityData = DOEntityData> {
+  /** Entity type name */
+  $type: string
+  /** Human-readable display name */
+  name: string
+  /** Additional data fields - typed if TData is provided */
+  [key: string]: TData[keyof TData] | string | unknown
+}
+
+/**
+ * Update operators for DO update operations
+ */
+export interface DOUpdateInput {
+  /** Set field values */
+  $set?: Record<string, unknown>
+  /** Remove fields */
+  $unset?: Record<string, '' | 1 | true>
+  /** Rename fields */
+  $rename?: Record<string, string>
+  /** Set on insert only (for upsert) */
+  $setOnInsert?: Record<string, unknown>
+  /** Increment numeric fields */
+  $inc?: Record<string, number>
+  /** Multiply numeric fields */
+  $mul?: Record<string, number>
+  /** Set to minimum */
+  $min?: Record<string, unknown>
+  /** Set to maximum */
+  $max?: Record<string, unknown>
+  /** Push to array */
+  $push?: Record<string, unknown>
+  /** Pull from array */
+  $pull?: Record<string, unknown>
+  /** Pull all from array */
+  $pullAll?: Record<string, unknown[]>
+  /** Add to set (unique push) */
+  $addToSet?: Record<string, unknown>
+  /** Pop from array */
+  $pop?: Record<string, -1 | 1>
+  /** Set to current date */
+  $currentDate?: Record<string, true | { $type: 'date' | 'timestamp' }>
+  /** Link relationships */
+  $link?: Record<string, string | string[]>
+  /** Unlink relationships */
+  $unlink?: Record<string, string | string[] | '$all'>
+  /** Bitwise operations */
+  $bit?: Record<string, { and?: number; or?: number; xor?: number }>
+  /** Generate embeddings */
+  $embed?: Record<string, string | { field: string; model?: string; overwrite?: boolean }>
+}
+
+/**
+ * Delete result from DO delete operations
+ */
+export interface DODeleteResult {
+  /** Number of documents that were deleted */
+  deletedCount: number
+}
+
+/**
+ * Entity shape returned from DO operations
+ * Includes $id, $type, name, audit fields, and user data
+ */
+export interface DOEntity {
+  /** Full entity identifier (ns/id format) */
+  $id: string
+  /** Entity type name */
+  $type: string
+  /** Human-readable display name */
+  name: string
+  /** Creation timestamp */
+  createdAt: Date
+  /** Creator identifier */
+  createdBy: string
+  /** Last update timestamp */
+  updatedAt: Date
+  /** Last updater identifier */
+  updatedBy: string
+  /** Soft delete timestamp (if deleted) */
+  deletedAt?: Date
+  /** Deleter identifier (if deleted) */
+  deletedBy?: string
+  /** Optimistic concurrency version */
+  version: number
+  /** Additional data fields */
+  [key: string]: unknown
+}
+
+/**
+ * Relationship shape returned from DO getRelationships
+ *
+ * This interface satisfies DORelationshipConstraint and includes all standard
+ * relationship fields plus an index signature for extensibility.
+ */
+export interface DORelationship {
+  /** Source namespace */
+  fromNs: string
+  /** Source entity ID */
+  fromId: string
+  /** Source entity type */
+  fromType: string
+  /** Source entity name */
+  fromName: string
+  /** Outbound relationship name */
+  predicate: string
+  /** Inbound relationship name */
+  reverse: string
+  /** Target namespace */
+  toNs: string
+  /** Target entity ID */
+  toId: string
+  /** Target entity type */
+  toType: string
+  /** Target entity name */
+  toName: string
+  /** Match mode (exact or fuzzy) */
+  matchMode?: 'exact' | 'fuzzy'
+  /** Similarity score for fuzzy matches */
+  similarity?: number
+  /** Creation timestamp */
+  createdAt: Date
+  /** Creator identifier */
+  createdBy: string
+  /** Soft delete timestamp (if deleted) */
+  deletedAt?: Date
+  /** Deleter identifier (if deleted) */
+  deletedBy?: string
+  /** Optimistic concurrency version */
+  version: number
+  /** Additional edge data */
+  data?: Record<string, unknown>
+  /** Allow additional properties for extensibility */
+  [key: string]: unknown
+}
+
+/**
+ * Base constraint for custom entity types in ParqueDBDOStub.
+ *
+ * Custom entity types must have at minimum:
+ * - $id: Full entity identifier (ns/id format)
+ * - $type: Entity type name
+ * - name: Human-readable display name
+ * - Audit fields (createdAt, createdBy, updatedAt, updatedBy, version)
+ *
+ * This constraint ensures type safety while allowing custom fields.
+ *
+ * @example
+ * ```typescript
+ * // Custom entity type
+ * interface Post extends DOEntityConstraint {
+ *   title: string
+ *   content: string
+ *   views: number
+ * }
+ *
+ * // Use with ParqueDBDOStub
+ * const stub: ParqueDBDOStub<Post> = asDOStub(env.PARQUEDB.get(id))
+ * const post = await stub.get('posts', 'p1') // Returns Post | null
+ * ```
+ */
+export interface DOEntityConstraint {
+  /** Full entity identifier (ns/id format) */
+  $id: string
+  /** Entity type name */
+  $type: string
+  /** Human-readable display name */
+  name: string
+  /** Creation timestamp */
+  createdAt: Date
+  /** Creator identifier */
+  createdBy: string
+  /** Last update timestamp */
+  updatedAt: Date
+  /** Last updater identifier */
+  updatedBy: string
+  /** Optimistic concurrency version */
+  version: number
+  /** Allow additional properties */
+  [key: string]: unknown
+}
+
+/**
+ * Base constraint for custom relationship types in ParqueDBDOStub.
+ *
+ * Custom relationship types must have at minimum:
+ * - Source entity info (fromNs, fromId, fromType, fromName)
+ * - Predicate names (predicate, reverse)
+ * - Target entity info (toNs, toId, toType, toName)
+ * - Audit fields (createdAt, createdBy, version)
+ *
+ * @example
+ * ```typescript
+ * // Custom relationship type with additional edge data
+ * interface WeightedRelationship extends DORelationshipConstraint {
+ *   weight: number
+ *   priority: 'high' | 'low'
+ * }
+ * ```
+ */
+export interface DORelationshipConstraint {
+  /** Source namespace */
+  fromNs: string
+  /** Source entity ID */
+  fromId: string
+  /** Source entity type */
+  fromType: string
+  /** Source entity name */
+  fromName: string
+  /** Outbound relationship name */
+  predicate: string
+  /** Inbound relationship name */
+  reverse: string
+  /** Target namespace */
+  toNs: string
+  /** Target entity ID */
+  toId: string
+  /** Target entity type */
+  toType: string
+  /** Target entity name */
+  toName: string
+  /** Creation timestamp */
+  createdAt: Date
+  /** Creator identifier */
+  createdBy: string
+  /** Optimistic concurrency version */
+  version: number
+  /** Allow additional properties */
+  [key: string]: unknown
+}
+
 /**
  * Typed stub interface for Durable Object RPC calls
  *
@@ -112,27 +456,159 @@ export interface Env {
  * This provides a single source of truth for the DO RPC contract.
  *
  * @remarks The DO's link/unlink methods expect entity IDs in "ns/id" format.
+ *
+ * @typeParam TEntity - Entity type returned from operations. Must satisfy DOEntityConstraint
+ *                      to ensure all required entity fields are present. Defaults to DOEntity.
+ * @typeParam TRelationship - Relationship type returned from getRelationships. Must satisfy
+ *                            DORelationshipConstraint for required relationship fields.
+ *                            Defaults to DORelationship.
+ * @typeParam TData - Custom data type for create/update inputs. Must extend DOEntityData.
+ *                    Defaults to DOEntityData (Record<string, unknown>).
+ *
+ * @example
+ * ```typescript
+ * // Basic usage with default types
+ * const stub: ParqueDBDOStub = asDOStub(env.PARQUEDB.get(id))
+ *
+ * // Custom entity type for stronger typing
+ * interface Post extends DOEntity {
+ *   title: string
+ *   content: string
+ *   views: number
+ * }
+ * const typedStub: ParqueDBDOStub<Post> = asDOStub(env.PARQUEDB.get(id))
+ * const post = await typedStub.get('posts', 'p1')
+ * if (post) {
+ *   console.log(post.title) // string - properly typed!
+ * }
+ *
+ * // With custom data constraint for inputs
+ * interface PostData { title: string; content: string }
+ * const stub: ParqueDBDOStub<Post, DORelationship, PostData> = ...
+ * await stub.create('posts', { $type: 'Post', name: 'My Post', title: '...', content: '...' })
+ * ```
  */
-export interface ParqueDBDOStub {
+export interface ParqueDBDOStub<
+  TEntity extends DOEntityConstraint = DOEntity,
+  TRelationship extends DORelationshipConstraint = DORelationship,
+  TData extends DOEntityData = DOEntityData
+> {
   // Entity operations
-  get(ns: string, id: string, includeDeleted?: boolean): Promise<unknown>
-  create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-  createMany(ns: string, items: unknown[], options?: unknown): Promise<unknown[]>
-  update(ns: string, id: string, update: unknown, options?: unknown): Promise<unknown>
-  delete(ns: string, id: string, options?: unknown): Promise<unknown>
-  deleteMany(ns: string, ids: string[], options?: unknown): Promise<unknown>
+  /**
+   * Get a single entity by namespace and ID
+   * @param ns - Namespace (collection name)
+   * @param id - Entity ID within namespace
+   * @param includeDeleted - Include soft-deleted entities (default: false)
+   * @returns Entity or null if not found
+   */
+  get(ns: string, id: string, includeDeleted?: boolean): Promise<TEntity | null>
+
+  /**
+   * Create a new entity
+   * @param ns - Namespace (collection name)
+   * @param data - Entity data with required $type and name. When TData is specified,
+   *               the data is typed accordingly for compile-time safety.
+   * @param options - Create options
+   * @returns Created entity with full type information
+   */
+  create(ns: string, data: DOCreateInput<TData>, options?: DOCreateOptions): Promise<TEntity>
+
+  /**
+   * Create multiple entities in a single operation
+   * @param ns - Namespace (collection name)
+   * @param items - Array of entity data. When TData is specified,
+   *                each item is typed accordingly for compile-time safety.
+   * @param options - Create options
+   * @returns Array of created entities with full type information
+   */
+  createMany(ns: string, items: DOCreateInput<TData>[], options?: DOCreateOptions): Promise<TEntity[]>
+
+  /**
+   * Update an existing entity
+   * @param ns - Namespace (collection name)
+   * @param id - Entity ID to update
+   * @param update - Update operators
+   * @param options - Update options
+   * @returns Updated entity
+   */
+  update(ns: string, id: string, update: DOUpdateInput, options?: DOUpdateOptions): Promise<TEntity>
+
+  /**
+   * Delete an entity (soft delete by default)
+   * @param ns - Namespace (collection name)
+   * @param id - Entity ID to delete
+   * @param options - Delete options
+   * @returns Delete result with count
+   */
+  delete(ns: string, id: string, options?: DODeleteOptions): Promise<DODeleteResult>
+
+  /**
+   * Delete multiple entities by ID
+   * @param ns - Namespace (collection name)
+   * @param ids - Array of entity IDs to delete
+   * @param options - Delete options
+   * @returns Delete result with total count
+   */
+  deleteMany(ns: string, ids: string[], options?: DODeleteOptions): Promise<DODeleteResult>
 
   // Relationship operations (entity IDs in "ns/id" format)
-  link(fromId: string, predicate: string, toId: string, options?: unknown): Promise<void>
-  unlink(fromId: string, predicate: string, toId: string, options?: unknown): Promise<void>
-  getRelationships(ns: string, id: string, predicate?: string, direction?: 'outbound' | 'inbound'): Promise<unknown[]>
+  /**
+   * Create a relationship between two entities
+   * @param fromId - Source entity ID in "ns/id" format
+   * @param predicate - Outbound relationship name
+   * @param toId - Target entity ID in "ns/id" format
+   * @param options - Link options
+   */
+  link(fromId: string, predicate: string, toId: string, options?: DOLinkOptions): Promise<void>
+
+  /**
+   * Remove a relationship between two entities
+   * @param fromId - Source entity ID in "ns/id" format
+   * @param predicate - Outbound relationship name
+   * @param toId - Target entity ID in "ns/id" format
+   * @param options - Unlink options
+   */
+  unlink(fromId: string, predicate: string, toId: string, options?: DOLinkOptions): Promise<void>
+
+  /**
+   * Get relationships for an entity
+   * @param ns - Namespace (collection name)
+   * @param id - Entity ID
+   * @param predicate - Filter by predicate name (optional)
+   * @param direction - Traversal direction (default: 'outbound')
+   * @returns Array of relationships
+   */
+  getRelationships(
+    ns: string,
+    id: string,
+    predicate?: string,
+    direction?: 'outbound' | 'inbound'
+  ): Promise<TRelationship[]>
 
   // Cache invalidation methods
+  /**
+   * Get the current cache invalidation version for a namespace
+   * @param ns - Namespace (collection name)
+   * @returns Current version number
+   */
   getInvalidationVersion(ns: string): number
+
+  /**
+   * Check if worker cache should be invalidated
+   * @param ns - Namespace (collection name)
+   * @param workerVersion - Worker's cached version
+   * @returns True if cache should be invalidated
+   */
   shouldInvalidate(ns: string, workerVersion: number): boolean
 
   // Event-sourced entity state
-  getEntityFromEvents(ns: string, id: string): Promise<unknown>
+  /**
+   * Get entity state reconstructed from events (event sourcing)
+   * @param ns - Namespace (collection name)
+   * @param id - Entity ID
+   * @returns Entity or null if not found
+   */
+  getEntityFromEvents(ns: string, id: string): Promise<TEntity | null>
 }
 
 export type ParqueDBService = Fetcher

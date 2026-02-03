@@ -40,8 +40,20 @@ import {
 } from 'cloudflare:workers'
 import { R2Backend } from '../storage/R2Backend'
 import type { BackendType } from '../backends'
+import { commitToIcebergTable } from '../backends/iceberg-commit'
 import { logger } from '../utils/logger'
 import { toInternalR2Bucket } from './utils'
+import { readParquet } from '../parquet/reader'
+import {
+  formatVersion,
+  serializeCommit,
+  createAddAction,
+  createProtocolAction,
+  createMetadataAction,
+  createCommitInfoAction,
+  generateUUID,
+  type LogAction,
+} from '../delta-utils'
 
 // =============================================================================
 // Types
@@ -372,23 +384,59 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
     storage: R2Backend,
     files: string[]
   ): Promise<{ rows: Record<string, unknown>[]; bytesRead: number }> {
-    // TODO: Implement actual Parquet reading with hyparquet
-    // For now, return placeholder
     logger.info(`Reading ${files.length} files for merge`)
 
+    const allRows: Record<string, unknown>[] = []
     let bytesRead = 0
+
     for (const file of files) {
+      // Get file size for bytesRead tracking
       const stat = await storage.stat(file)
-      bytesRead += stat?.size ?? 0
+      if (!stat) {
+        logger.warn(`File not found, skipping: ${file}`)
+        continue
+      }
+      bytesRead += stat.size
+
+      try {
+        // Read Parquet file using hyparquet via our reader
+        const rows = await readParquet<Record<string, unknown>>(storage, file)
+        allRows.push(...rows)
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error'
+        logger.error(`Failed to read Parquet file: ${file}`, { error: errorMsg })
+        // Continue processing other files rather than failing the entire batch
+      }
     }
 
-    // Placeholder - actual implementation would:
-    // 1. Read each Parquet file
-    // 2. Merge-sort by timestamp (efficient since pre-sorted)
-    // 3. Return combined rows
+    // Sort merged rows by createdAt timestamp for consistent ordering
+    // This maintains temporal ordering across all files from different writers
+    allRows.sort((a, b) => {
+      const aTime = a.createdAt
+      const bTime = b.createdAt
+
+      // Handle various timestamp formats
+      if (aTime instanceof Date && bTime instanceof Date) {
+        return aTime.getTime() - bTime.getTime()
+      }
+      if (typeof aTime === 'string' && typeof bTime === 'string') {
+        return new Date(aTime).getTime() - new Date(bTime).getTime()
+      }
+      if (typeof aTime === 'number' && typeof bTime === 'number') {
+        return aTime - bTime
+      }
+
+      // Fallback: keep original order if timestamps are missing or incompatible
+      return 0
+    })
+
+    logger.info(`Read and merged ${allRows.length} rows from ${files.length} files`, {
+      bytesRead,
+      rowCount: allRows.length,
+    })
 
     return {
-      rows: [],
+      rows: allRows,
       bytesRead,
     }
   }
@@ -404,6 +452,12 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
     windowTimestamp: number,
     batchNum: number
   ): Promise<{ outputFile: string; bytesWritten: number }> {
+    // Handle empty rows case
+    if (rows.length === 0) {
+      logger.info('No rows to write, skipping')
+      return { outputFile: '', bytesWritten: 0 }
+    }
+
     // Generate output path based on format
     const timestamp = windowTimestamp
     const date = new Date(timestamp)
@@ -416,17 +470,15 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
 
     switch (format) {
       case 'iceberg':
-        // Iceberg data file path
+        // Iceberg data file path - follows Iceberg spec with table location as namespace
         outputFile = `${namespace}/data/year=${year}/month=${month}/day=${day}/hour=${hour}/` +
           `compacted-${timestamp}-${batchNum}.parquet`
-        // TODO: Also update Iceberg metadata (manifest, snapshot)
         break
 
       case 'delta':
         // Delta data file path
         outputFile = `${namespace}/year=${year}/month=${month}/day=${day}/hour=${hour}/` +
           `part-${String(batchNum).padStart(5, '0')}-compacted-${timestamp}.parquet`
-        // TODO: Also write Delta log entry
         break
 
       case 'native':
@@ -437,15 +489,182 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
         break
     }
 
-    // TODO: Implement actual Parquet writing with hyparquet-writer
-    logger.info(`Writing to ${format} format: ${outputFile}`)
+    logger.info(`Writing to ${format} format: ${outputFile}`, { rowCount: rows.length })
 
-    // Placeholder - actual implementation would write Parquet file
-    const bytesWritten = 0
+    // Convert rows to columnar format for hyparquet-writer
+    // hyparquet-writer expects columnData as array of { name, data } objects
+    const columnNames = Object.keys(rows[0]!)
+    const columnData = columnNames.map(name => ({
+      name,
+      data: rows.map(row => row[name] ?? null),
+    }))
+
+    // Write Parquet using hyparquet-writer
+    const { parquetWriteBuffer } = await import('hyparquet-writer')
+    const buffer = parquetWriteBuffer({ columnData })
+
+    // Write to storage
+    await storage.write(outputFile, new Uint8Array(buffer))
+
+    const bytesWritten = buffer.byteLength
+
+    logger.info(`Successfully wrote ${rows.length} rows to ${outputFile}`, {
+      bytesWritten,
+    })
+
+    // For Delta format, commit the log entry
+    if (format === 'delta') {
+      const tableLocation = namespace
+
+      logger.info('Committing Delta log entry...', { tableLocation, outputFile })
+
+      const commitResult = await this.commitDeltaLogEntry({
+        storage,
+        tableLocation,
+        dataFile: {
+          // Path relative to table location
+          path: outputFile.slice(tableLocation.length + 1),
+          size: bytesWritten,
+        },
+      })
+
+      if (!commitResult.success) {
+        // Log warning but don't fail the workflow - data file is written
+        // The metadata can be repaired by a subsequent commit or vacuum operation
+        logger.warn('Failed to commit Delta log entry', {
+          error: commitResult.error,
+          outputFile,
+        })
+      } else {
+        logger.info('Successfully committed Delta log entry', {
+          version: commitResult.version,
+          logPath: commitResult.logPath,
+        })
+      }
+    }
+
+    // For Iceberg format, commit the metadata (manifest, snapshot)
+    if (format === 'iceberg') {
+      // The table location is the namespace (e.g., "users" -> the Iceberg table is at "users/")
+      const tableLocation = namespace
+
+      logger.info('Committing Iceberg metadata...', { tableLocation, outputFile })
+
+      const commitResult = await commitToIcebergTable({
+        storage,
+        tableLocation,
+        dataFiles: [{
+          path: outputFile,
+          sizeInBytes: bytesWritten,
+          recordCount: rows.length,
+        }],
+      })
+
+      if (!commitResult.success) {
+        // Log warning but don't fail the workflow - data file is written
+        // The metadata can be repaired by a subsequent commit or vacuum operation
+        logger.warn('Failed to commit Iceberg metadata', {
+          error: commitResult.error,
+          outputFile,
+        })
+      } else {
+        logger.info('Successfully committed Iceberg metadata', {
+          snapshotId: commitResult.snapshotId,
+          sequenceNumber: commitResult.sequenceNumber,
+          metadataPath: commitResult.metadataPath,
+        })
+      }
+    }
 
     return {
       outputFile,
       bytesWritten,
+    }
+  }
+
+  /**
+   * Commit a Delta log entry for a new data file
+   *
+   * Pattern:
+   * 1. Determine next log version by listing _delta_log/ directory
+   * 2. Create add action for the new file
+   * 3. Write {version}.json atomically
+   */
+  private async commitDeltaLogEntry(params: {
+    storage: R2Backend
+    tableLocation: string
+    dataFile: { path: string; size: number }
+  }): Promise<{
+    success: boolean
+    version?: number
+    logPath?: string
+    error?: string
+  }> {
+    const { storage, tableLocation, dataFile } = params
+    const logDir = `${tableLocation}/_delta_log`
+
+    try {
+      // Ensure _delta_log directory exists
+      await storage.mkdir(logDir).catch(() => {
+        // Directory might already exist
+      })
+
+      // Determine next log version by listing existing log files
+      let nextVersion = 0
+      try {
+        const logFiles = await storage.list(`${logDir}/`)
+        const commitFiles = logFiles.files
+          .filter(f => f.endsWith('.json') && !f.includes('checkpoint') && !f.includes('_last_checkpoint'))
+          .sort()
+
+        if (commitFiles.length > 0) {
+          const lastCommit = commitFiles[commitFiles.length - 1]!
+          const versionStr = lastCommit.split('/').pop()?.replace('.json', '')
+          const currentVersion = parseInt(versionStr ?? '-1', 10)
+          nextVersion = currentVersion + 1
+        }
+      } catch (error) {
+        // Log directory might not exist yet - start at version 0
+        nextVersion = 0
+      }
+
+      // Build log actions
+      const actions: LogAction[] = []
+
+      // For first commit (version 0), include protocol and metadata
+      if (nextVersion === 0) {
+        actions.push(createProtocolAction())
+        actions.push(createMetadataAction(generateUUID()))
+      }
+
+      // Add action for the new data file
+      actions.push(createAddAction(dataFile.path, dataFile.size, true))
+
+      // Commit info
+      actions.push(createCommitInfoAction(
+        'COMPACTION',
+        nextVersion > 0 ? nextVersion - 1 : undefined,
+        true,
+        { source: 'compaction-workflow' }
+      ))
+
+      // Serialize and write log file
+      const logContent = serializeCommit(actions)
+      const logPath = `${logDir}/${formatVersion(nextVersion)}.json`
+
+      await storage.write(logPath, new TextEncoder().encode(logContent))
+
+      return {
+        success: true,
+        version: nextVersion,
+        logPath,
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      return {
+        success: false,
+        error: errorMsg,
+      }
     }
   }
 }

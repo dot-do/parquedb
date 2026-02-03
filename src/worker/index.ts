@@ -985,18 +985,92 @@ export default {
       }
 
       // =======================================================================
-      // Compaction Status - Event-driven compaction tracking
+      // Compaction Status - Event-driven compaction tracking (namespace-sharded)
       // Rate limited via 'compaction' endpoint type (30 req/min)
+      //
+      // Query parameters:
+      // - namespace: Get status for a specific namespace (recommended)
+      // - namespaces: Comma-separated list of namespaces to aggregate
+      //
+      // Without parameters, returns usage instructions since the DO is now sharded
       // =======================================================================
       if (path === '/compaction/status') {
         if (!env.COMPACTION_STATE) {
           return withRateLimitHeaders(buildErrorResponse(request, new Error('Compaction State DO not available'), 500, startTime))
         }
 
-        const id = env.COMPACTION_STATE.idFromName('default')
-        const stub = env.COMPACTION_STATE.get(id)
-        const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
-        return withRateLimitHeaders(response)
+        const namespaceParam = url.searchParams.get('namespace')
+        const namespacesParam = url.searchParams.get('namespaces')
+
+        // Single namespace query - direct to its sharded DO
+        if (namespaceParam) {
+          const id = env.COMPACTION_STATE.idFromName(namespaceParam)
+          const stub = env.COMPACTION_STATE.get(id)
+          const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
+          return withRateLimitHeaders(response)
+        }
+
+        // Multiple namespaces query - aggregate from multiple DOs
+        if (namespacesParam) {
+          const namespaces = namespacesParam.split(',').map(ns => ns.trim()).filter(Boolean)
+          if (namespaces.length === 0) {
+            return withRateLimitHeaders(buildErrorResponse(
+              request,
+              new Error('namespaces parameter must contain at least one namespace'),
+              400,
+              startTime
+            ))
+          }
+
+          // Query all namespace DOs in parallel
+          const results = await Promise.all(
+            namespaces.map(async (namespace) => {
+              const id = env.COMPACTION_STATE.idFromName(namespace)
+              const stub = env.COMPACTION_STATE.get(id)
+              try {
+                const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
+                const data = await response.json() as Record<string, unknown>
+                return { namespace, ...data }
+              } catch (err) {
+                return { namespace, error: err instanceof Error ? err.message : 'Unknown error' }
+              }
+            })
+          )
+
+          // Aggregate statistics
+          const aggregated = {
+            namespaces: results,
+            summary: {
+              totalNamespaces: results.length,
+              totalActiveWindows: results.reduce((sum, r) => {
+                const windows = (r as { activeWindows?: number }).activeWindows ?? 0
+                return sum + windows
+              }, 0),
+              totalKnownWriters: [...new Set(results.flatMap(r => {
+                const writers = (r as { knownWriters?: string[] }).knownWriters ?? []
+                return writers
+              }))],
+            },
+          }
+
+          return withRateLimitHeaders(new Response(JSON.stringify(aggregated, null, 2), {
+            headers: { 'Content-Type': 'application/json' },
+          }))
+        }
+
+        // No namespace specified - return usage instructions
+        // (Can't query 'default' DO anymore since sharding is by namespace)
+        return withRateLimitHeaders(new Response(JSON.stringify({
+          message: 'CompactionStateDO is sharded by namespace. Please specify a namespace parameter.',
+          usage: {
+            single: '/compaction/status?namespace=posts',
+            multiple: '/compaction/status?namespaces=posts,comments,users',
+          },
+          note: 'Each namespace has its own CompactionStateDO instance for scalability.',
+        }, null, 2), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        }))
       }
 
       // =======================================================================

@@ -18,6 +18,11 @@
  * - Tracks all writers that have written in each window
  * - Waits for "quorum" or timeout before triggering compaction
  * - Ensures efficient merge-sort (each writer's data is pre-sorted)
+ *
+ * Namespace Sharding:
+ * - Each namespace gets its own CompactionStateDO instance
+ * - Eliminates single-DO bottleneck for high-throughput scenarios
+ * - Updates are grouped by namespace and dispatched to sharded DOs in parallel
  */
 
 import { logger } from '../utils/logger'
@@ -120,8 +125,60 @@ const WRITER_INACTIVE_THRESHOLD_MS = 30 * 60 * 1000
 // Queue Consumer Handler
 // =============================================================================
 
+/** Window entry structure */
+interface WindowReadyEntry {
+  namespace: string
+  windowStart: number
+  windowEnd: number
+  files: string[]
+  writers: string[]
+}
+
+/** Response from CompactionStateDO */
+interface WindowsReadyResponse {
+  windowsReady: WindowReadyEntry[]
+}
+
+/**
+ * Type guard for WindowsReadyResponse
+ */
+function isWindowsReadyResponse(data: unknown): data is WindowsReadyResponse {
+  if (typeof data !== 'object' || data === null) {
+    return false
+  }
+  if (!('windowsReady' in data)) {
+    return false
+  }
+  const { windowsReady } = data as { windowsReady: unknown }
+  if (!Array.isArray(windowsReady)) {
+    return false
+  }
+  // Validate each entry has required fields
+  for (const entry of windowsReady) {
+    if (typeof entry !== 'object' || entry === null) {
+      return false
+    }
+    const e = entry as Record<string, unknown>
+    if (
+      typeof e.namespace !== 'string' ||
+      typeof e.windowStart !== 'number' ||
+      typeof e.windowEnd !== 'number' ||
+      !Array.isArray(e.files) ||
+      !Array.isArray(e.writers)
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
 /**
  * Handle a batch of R2 event notifications
+ *
+ * ARCHITECTURE: Namespace Sharding
+ * Each namespace gets its own CompactionStateDO instance for scalability.
+ * Updates are grouped by namespace and sent to namespace-specific DOs.
+ * This eliminates the bottleneck of a single global DO instance.
  */
 export async function handleCompactionQueue(
   batch: MessageBatch<R2EventMessage>,
@@ -141,18 +198,14 @@ export async function handleCompactionQueue(
     namespacePrefix = 'data/',
   } = config
 
-  // Get the state DO
-  const stateId = env.COMPACTION_STATE.idFromName('default')
-  const stateDO = env.COMPACTION_STATE.get(stateId)
-
-  // Process each message
-  const updates: Array<{
+  // Process each message and group by namespace
+  const updatesByNamespace = new Map<string, Array<{
     namespace: string
     writerId: string
     file: string
     timestamp: number
     size: number
-  }> = []
+  }>>()
 
   for (const message of batch.messages) {
     const event = message.body
@@ -193,51 +246,67 @@ export async function handleCompactionQueue(
     // Filename timestamps are in seconds, convert to milliseconds
     const timestamp = parseInt(timestampStr ?? '0', 10) * 1000
 
-    updates.push({
+    const update = {
       namespace,
       writerId: writerId ?? 'unknown',
       file: event.object.key,
       timestamp,
       size: event.object.size,
-    })
+    }
+
+    // Group updates by namespace for sharded DO dispatch
+    const namespaceUpdates = updatesByNamespace.get(namespace) ?? []
+    namespaceUpdates.push(update)
+    updatesByNamespace.set(namespace, namespaceUpdates)
 
     message.ack()
   }
 
-  if (updates.length === 0) {
+  if (updatesByNamespace.size === 0) {
     console.log('[CompactionQueue] No matching updates to process')
     return
   }
 
-  console.log('[CompactionQueue] Processing updates', { count: updates.length })
-
-  // Send updates to state DO and check for windows ready for compaction
-  const response = await stateDO.fetch('http://internal/update', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      updates,
-      config: {
-        windowSizeMs,
-        minFilesToCompact,
-        maxWaitTimeMs,
-        targetFormat,
-      },
-    }),
+  console.log('[CompactionQueue] Processing updates', {
+    namespaceCount: updatesByNamespace.size,
+    totalUpdates: Array.from(updatesByNamespace.values()).reduce((sum, u) => sum + u.length, 0),
   })
 
-  const result = await response.json() as {
-    windowsReady: Array<{
-      namespace: string
-      windowStart: number
-      windowEnd: number
-      files: string[]
-      writers: string[]
-    }>
-  }
+  // Send updates to namespace-sharded DOs in parallel
+  const allWindowsReady: WindowReadyEntry[] = []
+
+  await Promise.all(
+    Array.from(updatesByNamespace.entries()).map(async ([namespace, updates]) => {
+      // Get namespace-specific DO instance for scalability
+      const stateId = env.COMPACTION_STATE.idFromName(namespace)
+      const stateDO = env.COMPACTION_STATE.get(stateId)
+
+      const response = await stateDO.fetch('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          namespace, // Include namespace for DO to know its identity
+          updates,
+          config: {
+            windowSizeMs,
+            minFilesToCompact,
+            maxWaitTimeMs,
+            targetFormat,
+          },
+        }),
+      })
+
+      const data = await response.json()
+      if (!isWindowsReadyResponse(data)) {
+        throw new Error(`Invalid response from CompactionStateDO for namespace '${namespace}': expected { windowsReady: Array<WindowReadyEntry> }`)
+      }
+
+      allWindowsReady.push(...data.windowsReady)
+    })
+  )
 
   // Trigger workflows for ready windows
-  for (const window of result.windowsReady) {
+  for (const window of allWindowsReady) {
     logger.info('Triggering compaction workflow', {
       namespace: window.namespace,
       windowStart: new Date(window.windowStart).toISOString(),
@@ -281,8 +350,11 @@ interface StoredWindowState {
   totalSize: number
 }
 
-/** Stored state structure */
+/** Stored state structure (namespace-sharded - each DO handles one namespace) */
 interface StoredState {
+  /** The namespace this DO instance handles */
+  namespace: string
+  /** Windows keyed by windowStart timestamp */
   windows: Record<string, StoredWindowState>
   knownWriters: string[]
   writerLastSeen: Record<string, number>
@@ -290,9 +362,17 @@ interface StoredState {
 
 /**
  * Durable Object for tracking compaction state across queue messages
+ *
+ * ARCHITECTURE: Namespace Sharding
+ * Each instance handles a single namespace (determined by idFromName(namespace)).
+ * This eliminates the scalability bottleneck of a single global instance.
+ * Windows are keyed by windowStart timestamp since namespace is implicit.
  */
 export class CompactionStateDO {
   private state: DurableObjectState
+  /** The namespace this DO instance handles (set on first update) */
+  private namespace: string = ''
+  /** Windows keyed by windowStart timestamp */
   private windows: Map<string, WindowState> = new Map()
   private knownWriters: Set<string> = new Set()
   private writerLastSeen: Map<string, number> = new Map()
@@ -308,7 +388,9 @@ export class CompactionStateDO {
 
     const stored = await this.state.storage.get<StoredState>('compactionState')
     if (stored) {
-      // Restore windows
+      // Restore namespace
+      this.namespace = stored.namespace ?? ''
+      // Restore windows (keyed by windowStart timestamp)
       for (const [key, sw] of Object.entries(stored.windows)) {
         this.windows.set(key, {
           windowStart: sw.windowStart,
@@ -330,6 +412,7 @@ export class CompactionStateDO {
   /** Save state to storage */
   private async saveState(): Promise<void> {
     const stored: StoredState = {
+      namespace: this.namespace,
       windows: {},
       knownWriters: Array.from(this.knownWriters),
       writerLastSeen: Object.fromEntries(this.writerLastSeen),
@@ -366,6 +449,7 @@ export class CompactionStateDO {
 
   private async handleUpdate(request: Request): Promise<Response> {
     const body = await request.json() as {
+      namespace: string
       updates: Array<{
         namespace: string
         writerId: string
@@ -381,7 +465,7 @@ export class CompactionStateDO {
       }
     }
 
-    const { updates, config } = body
+    const { namespace, updates, config } = body
     const now = Date.now()
     const windowsReady: Array<{
       namespace: string
@@ -391,18 +475,23 @@ export class CompactionStateDO {
       writers: string[]
     }> = []
 
+    // Set namespace on first update (each DO instance handles one namespace)
+    if (!this.namespace) {
+      this.namespace = namespace
+    }
+
     // Process updates
     for (const update of updates) {
-      const { namespace, writerId, file, timestamp, size } = update
+      const { writerId, file, timestamp, size } = update
 
       // Track writer
       this.knownWriters.add(writerId)
       this.writerLastSeen.set(writerId, now)
 
-      // Calculate window
+      // Calculate window - key by windowStart only since namespace is implicit
       const windowStart = Math.floor(timestamp / config.windowSizeMs) * config.windowSizeMs
       const windowEnd = windowStart + config.windowSizeMs
-      const windowKey = `${namespace}:${windowStart}`
+      const windowKey = String(windowStart)
 
       // Get or create window
       let window = this.windows.get(windowKey)
@@ -448,15 +537,14 @@ export class CompactionStateDO {
       const waitedLongEnough = (now - window.lastActivityAt) > config.maxWaitTimeMs
 
       if (missingWriters.length === 0 || waitedLongEnough) {
-        // Window is ready!
-        const namespace = windowKey.split(':')[0] ?? ''
+        // Window is ready! Use this DO's namespace
         const allFiles: string[] = []
         for (const files of window.filesByWriter.values()) {
           allFiles.push(...files)
         }
 
         windowsReady.push({
-          namespace,
+          namespace: this.namespace,
           windowStart: window.windowStart,
           windowEnd: window.windowEnd,
           files: allFiles.sort(),
@@ -478,6 +566,7 @@ export class CompactionStateDO {
 
   private handleStatus(): Response {
     const status = {
+      namespace: this.namespace,
       activeWindows: this.windows.size,
       knownWriters: Array.from(this.knownWriters),
       activeWriters: this.getActiveWriters(Date.now()),
