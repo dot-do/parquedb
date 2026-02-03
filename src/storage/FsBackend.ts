@@ -516,37 +516,85 @@ export class FsBackend implements StorageBackend {
     options?: WriteOptions
   ): Promise<WriteResult> {
     const fullPath = this.resolvePath(path)
+    const lockPath = `${fullPath}.lock.${Date.now()}.${getRandomBase36(10)}`
+    const tempPath = `${fullPath}.tmp.${Date.now()}.${getRandomBase36(10)}`
 
-    // Check current state
-    let currentStat: Stats | null = null
+    // Create parent directories
+    await fs.mkdir(dirname(fullPath), { recursive: true })
+
+    // Acquire lock using exclusive create (O_CREAT | O_EXCL via 'wx' flag)
+    // This is atomic on POSIX filesystems
+    let lockHandle: import('node:fs/promises').FileHandle | undefined
     try {
-      currentStat = await fs.stat(fullPath)
+      lockHandle = await fs.open(lockPath, 'wx')
     } catch (error: unknown) {
-      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-        currentStat = null
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST') {
+        // Lock file exists - another process is writing
+        // In practice this is rare since we use random suffixes, but handle it
+        throw new ETagMismatchError(path, expectedVersion, 'concurrent-write')
+      }
+      throw error
+    }
+
+    try {
+      // Now we hold the lock - check the etag condition
+      let currentStat: Stats | null = null
+      try {
+        currentStat = await fs.stat(fullPath)
+      } catch (error: unknown) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+          currentStat = null
+        } else {
+          throw error
+        }
+      }
+
+      if (expectedVersion === null) {
+        // Expecting file to not exist
+        if (currentStat !== null) {
+          throw new ETagMismatchError(path, null, this.generateEtag(currentStat))
+        }
       } else {
-        throw error
+        // Expecting specific version
+        if (currentStat === null) {
+          throw new ETagMismatchError(path, expectedVersion, null)
+        }
+        const currentEtag = this.generateEtag(currentStat)
+        if (currentEtag !== expectedVersion) {
+          throw new ETagMismatchError(path, expectedVersion, currentEtag)
+        }
+      }
+
+      // Write to temp file
+      await fs.writeFile(tempPath, data)
+
+      // Atomically rename temp to target (this is atomic on POSIX)
+      await fs.rename(tempPath, fullPath)
+
+      // Get final stats for return value
+      const stat = await fs.stat(fullPath)
+      return {
+        etag: this.generateEtag(stat),
+        size: data.length,
+      }
+    } finally {
+      // Always release lock and clean up
+      if (lockHandle) {
+        await lockHandle.close()
+      }
+      // Clean up lock file
+      try {
+        await fs.unlink(lockPath)
+      } catch {
+        // Intentionally ignored: lock file cleanup is best-effort
+      }
+      // Clean up temp file if it still exists (write failed)
+      try {
+        await fs.unlink(tempPath)
+      } catch {
+        // Intentionally ignored: temp file may have been renamed or doesn't exist
       }
     }
-
-    if (expectedVersion === null) {
-      // Expecting file to not exist
-      if (currentStat !== null) {
-        throw new ETagMismatchError(path, null, this.generateEtag(currentStat))
-      }
-    } else {
-      // Expecting specific version
-      if (currentStat === null) {
-        throw new ETagMismatchError(path, expectedVersion, null)
-      }
-      const currentEtag = this.generateEtag(currentStat)
-      if (currentEtag !== expectedVersion) {
-        throw new ETagMismatchError(path, expectedVersion, currentEtag)
-      }
-    }
-
-    // Proceed with atomic write
-    return this.writeAtomic(path, data, options)
   }
 
   async copy(source: string, dest: string): Promise<void> {

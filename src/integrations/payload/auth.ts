@@ -206,6 +206,7 @@ function parseCookies(cookieHeader: string): Record<string, string> {
 // JWKS cache to avoid fetching on every request
 const jwksCache = new Map<string, { jwks: ReturnType<typeof createRemoteJWKSet>; expiresAt: number }>()
 const JWKS_CACHE_TTL = 3600 * 1000 // 1 hour
+const JWKS_FETCH_TIMEOUT_MS = 10000 // 10 second timeout for JWKS fetch
 
 // Import jose for JWT verification
 import { createRemoteJWKSet, jwtVerify } from 'jose'
@@ -216,7 +217,9 @@ function getJWKS(jwksUri: string) {
     return cached.jwks
   }
 
-  const jwks = createRemoteJWKSet(new URL(jwksUri))
+  const jwks = createRemoteJWKSet(new URL(jwksUri), {
+    timeoutDuration: JWKS_FETCH_TIMEOUT_MS,
+  })
   jwksCache.set(jwksUri, { jwks, expiresAt: Date.now() + JWKS_CACHE_TTL })
   return jwks
 }

@@ -520,15 +520,22 @@ export class DOSqliteBackend implements StorageBackend {
   ): Promise<WriteResult> {
     this.ensureSchema()
     const key = this.withPrefix(path)
+    const now = new Date().toISOString()
+    const etag = generateEtag(data)
+    const size = data.length
+
+    // Use a single atomic block to check and write
+    // In DO SQLite, synchronous operations without intervening awaits are atomic
 
     // Get current state
     const existing = this.sql
-      .prepare('SELECT etag FROM parquet_blocks WHERE path = ?')
+      .prepare('SELECT etag, created_at FROM parquet_blocks WHERE path = ?')
       .bind(key)
-      .first<Pick<ParquetBlockRow, 'etag'>>()
+      .first<Pick<ParquetBlockRow, 'etag' | 'created_at'>>()
 
     const currentEtag = existing?.etag || null
 
+    // Validate expected version
     if (expectedVersion === null) {
       // Expecting file to not exist
       if (existing) {
@@ -544,7 +551,30 @@ export class DOSqliteBackend implements StorageBackend {
       }
     }
 
-    return this.write(path, data, options)
+    // Write the data in the same synchronous block
+    // Use existing created_at if available, otherwise use now
+    const createdAt = existing?.created_at || now
+
+    // Apply any additional write options
+    if (options?.ifNoneMatch === '*' && existing) {
+      throw new DOSqliteFileExistsError(path)
+    }
+    if (options?.ifMatch && (!existing || existing.etag !== options.ifMatch)) {
+      throw new DOSqliteETagMismatchError(path, options.ifMatch, currentEtag)
+    }
+
+    this.sql
+      .prepare(`
+        INSERT OR REPLACE INTO parquet_blocks (path, data, size, etag, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .bind(key, data, size, etag, createdAt, now)
+      .run()
+
+    return {
+      etag,
+      size,
+    }
   }
 
   async copy(source: string, dest: string): Promise<void> {

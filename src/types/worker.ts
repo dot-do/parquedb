@@ -63,6 +63,12 @@ export interface Env {
 
   /** CDN r2.dev URL for public access, e.g. 'https://pub-xxx.r2.dev/parquedb' */
   CDN_R2_DEV_URL?: string
+
+  /** Secret key for HMAC signing of sync upload/download tokens (required for sync routes) */
+  SYNC_SECRET?: string
+
+  /** JWKS URI for JWT token verification (e.g., 'https://api.workos.com/sso/jwks/client_xxx') */
+  JWKS_URI?: string
 }
 
 // =============================================================================

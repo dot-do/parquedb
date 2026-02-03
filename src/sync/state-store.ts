@@ -330,20 +330,47 @@ export async function reconstructState(
       }
     }
   } catch (error) {
-    // Rollback - restore from backups
+    // Rollback - restore from backups with comprehensive error tracking
+    const rollbackErrors: Array<{ path: string; error: string }> = []
+    const rollbackSuccesses: string[] = []
+
     for (const [originalPath, backupPath] of Array.from(backupPaths.entries())) {
       try {
         if (await storage.exists(backupPath)) {
           await storage.copy(backupPath, originalPath)
           await storage.delete(backupPath)
+          rollbackSuccesses.push(originalPath)
         }
-      } catch {
-        // Best effort rollback
+      } catch (rollbackError) {
+        rollbackErrors.push({
+          path: originalPath,
+          error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+        })
       }
     }
 
+    const originalError = error instanceof Error ? error.message : String(error)
+
+    if (rollbackErrors.length > 0) {
+      // Critical: rollback failed, database may be in inconsistent state
+      const failedPaths = rollbackErrors.map(e => `  - ${e.path}: ${e.error}`).join('\n')
+      const restoredPaths = rollbackSuccesses.length > 0
+        ? `\nSuccessfully restored:\n${rollbackSuccesses.map(p => `  - ${p}`).join('\n')}`
+        : ''
+
+      throw new Error(
+        `CRITICAL: State reconstruction failed and rollback was incomplete.\n` +
+        `Original error: ${originalError}\n` +
+        `\nFailed to restore the following files:\n${failedPaths}` +
+        restoredPaths +
+        `\n\nThe database may be in an inconsistent state. ` +
+        `Manual intervention may be required to restore from backups (suffix: ${backupSuffix}).`
+      )
+    }
+
+    // Rollback succeeded
     throw new Error(
-      `Failed to reconstruct state: ${error instanceof Error ? error.message : String(error)}. ` +
+      `Failed to reconstruct state: ${originalError}. ` +
       `Database has been rolled back to previous state.`
     )
   }

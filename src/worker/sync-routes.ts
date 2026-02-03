@@ -225,23 +225,31 @@ async function handleUploadUrls(
       )
     }
 
+    // Validate SYNC_SECRET is configured
+    if (!env.SYNC_SECRET) {
+      return Response.json(
+        { error: 'SYNC_SECRET is not configured. Contact administrator.' },
+        { status: 500 }
+      )
+    }
+
     // Generate signed upload URLs
     // For simplicity, we generate worker-proxied URLs with signed tokens
     const baseUrl = new URL(request.url).origin
     const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString() // 1 hour
 
-    const urls = body.files.map(file => {
+    const urls = await Promise.all(body.files.map(async file => {
       const uploadPath = database.prefix
         ? `${database.prefix}/${file.path}`
         : file.path
 
-      // Create a signed token for this upload
-      const uploadToken = signUploadToken({
+      // Create a signed token for this upload using HMAC-SHA256
+      const uploadToken = await signUploadToken({
         databaseId: body.databaseId,
         path: file.path,
         userId: user.id,
         expiresAt,
-      })
+      }, env)
 
       return {
         path: file.path,
@@ -252,7 +260,7 @@ async function handleUploadUrls(
         },
         expiresAt,
       }
-    })
+    }))
 
     return Response.json({ urls })
   } catch (error) {
@@ -646,7 +654,7 @@ async function verifyDatabaseAccess(
 }
 
 // =============================================================================
-// Token Signing (Simple HMAC-based tokens)
+// Token Signing (HMAC-SHA256 based tokens)
 // =============================================================================
 
 interface TokenPayload {
@@ -657,42 +665,136 @@ interface TokenPayload {
 }
 
 /**
- * Sign an upload token
- * In production, use a proper secret from env
+ * Get the HMAC key from the environment
+ * @throws Error if SYNC_SECRET is not configured
  */
-function signUploadToken(payload: TokenPayload): string {
+async function getHmacKey(env: Env): Promise<CryptoKey> {
+  if (!env.SYNC_SECRET) {
+    throw new Error('SYNC_SECRET environment variable is required for token signing')
+  }
+
+  const encoder = new TextEncoder()
+  const keyData = encoder.encode(env.SYNC_SECRET)
+
+  return crypto.subtle.importKey(
+    'raw',
+    keyData,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign', 'verify']
+  )
+}
+
+/**
+ * Sign data with HMAC-SHA256 and return base64url-encoded signature
+ */
+async function hmacSign(data: string, key: CryptoKey): Promise<string> {
+  const encoder = new TextEncoder()
+  const dataBuffer = encoder.encode(data)
+
+  const signature = await crypto.subtle.sign('HMAC', key, dataBuffer)
+  const signatureArray = new Uint8Array(signature)
+
+  // Convert to base64url
+  let binary = ''
+  for (const byte of signatureArray) {
+    binary += String.fromCharCode(byte)
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/**
+ * Verify HMAC-SHA256 signature
+ */
+async function hmacVerify(data: string, signature: string, key: CryptoKey): Promise<boolean> {
+  try {
+    const encoder = new TextEncoder()
+    const dataBuffer = encoder.encode(data)
+
+    // Convert base64url signature back to ArrayBuffer
+    const base64 = signature.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+    const binary = atob(padded)
+    const signatureBuffer = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) {
+      signatureBuffer[i] = binary.charCodeAt(i)
+    }
+
+    return crypto.subtle.verify('HMAC', key, signatureBuffer, dataBuffer)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Sign an upload token using HMAC-SHA256
+ * Token format: base64url(payload).base64url(signature)
+ */
+async function signUploadToken(payload: TokenPayload, env: Env): Promise<string> {
   const data = JSON.stringify({
     ...payload,
     type: 'upload',
   })
-  // Simple base64 encoding for now
-  // In production, use HMAC with env.SYNC_SECRET
-  return btoa(data)
+
+  const key = await getHmacKey(env)
+  const payloadEncoded = btoa(data).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const signature = await hmacSign(data, key)
+
+  return `${payloadEncoded}.${signature}`
 }
 
 /**
- * Sign a download token
+ * Sign a download token using HMAC-SHA256
+ * Token format: base64url(payload).base64url(signature)
  */
-function signDownloadToken(payload: TokenPayload): string {
+async function signDownloadToken(payload: TokenPayload, env: Env): Promise<string> {
   const data = JSON.stringify({
     ...payload,
     type: 'download',
   })
-  return btoa(data)
+
+  const key = await getHmacKey(env)
+  const payloadEncoded = btoa(data).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const signature = await hmacSign(data, key)
+
+  return `${payloadEncoded}.${signature}`
 }
 
 /**
  * Verify an upload token
  */
-function verifyUploadToken(token: string): TokenPayload | null {
+async function verifyUploadToken(token: string, env: Env): Promise<TokenPayload | null> {
   try {
-    const data = JSON.parse(atob(token)) as TokenPayload & { type: string }
+    const parts = token.split('.')
+    if (parts.length !== 2) {
+      return null
+    }
+
+    const [payloadEncoded, signature] = parts as [string, string]
+
+    // Decode payload
+    const base64 = payloadEncoded.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+    const jsonStr = atob(padded)
+    const data = JSON.parse(jsonStr) as TokenPayload & { type: string }
+
+    // Verify type
     if (data.type !== 'upload') {
       return null
     }
+
+    // Check expiration
     if (new Date(data.expiresAt) < new Date()) {
       return null
     }
+
+    // Verify HMAC signature
+    const key = await getHmacKey(env)
+    const isValid = await hmacVerify(jsonStr, signature, key)
+    if (!isValid) {
+      return null
+    }
+
     return data
   } catch {
     return null
@@ -702,15 +804,38 @@ function verifyUploadToken(token: string): TokenPayload | null {
 /**
  * Verify a download token
  */
-function verifyDownloadToken(token: string): TokenPayload | null {
+async function verifyDownloadToken(token: string, env: Env): Promise<TokenPayload | null> {
   try {
-    const data = JSON.parse(atob(token)) as TokenPayload & { type: string }
+    const parts = token.split('.')
+    if (parts.length !== 2) {
+      return null
+    }
+
+    const [payloadEncoded, signature] = parts as [string, string]
+
+    // Decode payload
+    const base64 = payloadEncoded.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+    const jsonStr = atob(padded)
+    const data = JSON.parse(jsonStr) as TokenPayload & { type: string }
+
+    // Verify type
     if (data.type !== 'download') {
       return null
     }
+
+    // Check expiration
     if (new Date(data.expiresAt) < new Date()) {
       return null
     }
+
+    // Verify HMAC signature
+    const key = await getHmacKey(env)
+    const isValid = await hmacVerify(jsonStr, signature, key)
+    if (!isValid) {
+      return null
+    }
+
     return data
   } catch {
     return null

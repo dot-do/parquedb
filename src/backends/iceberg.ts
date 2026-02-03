@@ -163,6 +163,10 @@ export class IcebergBackend implements EntityBackend {
   }
 
   async close(): Promise<void> {
+    // Wait for all pending write operations to complete
+    const pendingLocks = Array.from(this.writeLocks.values())
+    await Promise.all(pendingLocks)
+    this.writeLocks.clear()
     this.tableCache.clear()
     this.initialized = false
   }

@@ -416,30 +416,65 @@ export class FsxBackend implements StorageBackend {
     const fullPath = this.resolvePath(path)
 
     // Handle ifNoneMatch option (only write if file doesn't exist)
+    // Use fsx's exclusive option for atomic "create if not exists" to avoid TOCTOU race
     if (options?.ifNoneMatch === '*') {
-      const fileExists = await this.fsx.exists(fullPath)
-      if (fileExists) {
-        throw new AlreadyExistsError(path)
+      try {
+        const writeResult = await this.fsx.writeFile(fullPath, data, {
+          recursive: true,
+          contentType: options?.contentType,
+          metadata: options?.metadata,
+          tier: this.defaultTier,
+          exclusive: true, // Atomic: fails if file exists
+        })
+
+        return {
+          etag: writeResult.etag,
+          size: writeResult.size,
+        }
+      } catch (err) {
+        const fsxErr = err as FsxError
+        if (fsxErr.code === 'EEXIST') {
+          throw new AlreadyExistsError(path)
+        }
+        const error = toError(err)
+        throw new OperationError(
+          `Failed conditional write to ${path}: ${error.message}`,
+          'writeConditional',
+          path,
+          error
+        )
       }
-      return this.write(path, data, options)
     }
 
-    // Check expected version
+    // For expectedVersion === null (file should not exist), use exclusive write
     if (expectedVersion === null) {
-      // Expected file to not exist
       try {
-        const stats = await this.fsx.stat(fullPath)
-        // File exists but we expected it not to
-        throw new ETagMismatchError(path, null, stats.etag ?? null)
-      } catch (err) {
-        // Re-throw our own errors
-        if (err instanceof ETagMismatchError) {
-          throw err
+        const writeResult = await this.fsx.writeFile(fullPath, data, {
+          recursive: true,
+          contentType: options?.contentType,
+          metadata: options?.metadata,
+          tier: this.defaultTier,
+          exclusive: true, // Atomic: fails if file exists
+        })
+
+        return {
+          etag: writeResult.etag,
+          size: writeResult.size,
         }
+      } catch (err) {
         const fsxErr = err as FsxError
-        if (fsxErr.code === 'ENOENT') {
-          // File doesn't exist, write it
-          return this.write(path, data, options)
+        if (fsxErr.code === 'EEXIST') {
+          // File exists but we expected it not to - get actual etag for error message
+          try {
+            const stats = await this.fsx.stat(fullPath)
+            throw new ETagMismatchError(path, null, stats.etag ?? null)
+          } catch (statErr) {
+            // If stat also fails, just report null for actual etag
+            if (statErr instanceof ETagMismatchError) {
+              throw statErr
+            }
+            throw new ETagMismatchError(path, null, null)
+          }
         }
         const error = toError(err)
         throw new OperationError(
@@ -449,32 +484,62 @@ export class FsxBackend implements StorageBackend {
           error
         )
       }
-    } else {
+    }
+
+    // For specific ETag matching, use fsx transaction for atomicity
+    // This prevents TOCTOU race between stat() and writeFile()
+    const txn = await this.fsx.beginTransaction()
+    try {
+      // Read current file state within transaction
+      let currentEtag: string | null = null
+      try {
+        const currentData = await txn.readFile(fullPath)
+        // Get etag from stat (transaction read doesn't return etag directly)
+        const stats = await this.fsx.stat(fullPath)
+        currentEtag = stats?.etag ?? null
+      } catch (readErr) {
+        const fsxErr = readErr as FsxError
+        if (fsxErr.code !== 'ENOENT') {
+          throw readErr
+        }
+        // File doesn't exist, currentEtag remains null
+      }
+
       // Check if current version matches expected
-      try {
-        const stats = await this.fsx.stat(fullPath)
-        if (stats.etag !== expectedVersion) {
-          throw new ETagMismatchError(path, expectedVersion, stats.etag ?? null)
-        }
-        return this.write(path, data, options)
-      } catch (err) {
-        // Re-throw our own errors
-        if (err instanceof ETagMismatchError) {
-          throw err
-        }
-        const fsxErr = err as FsxError
-        if (fsxErr.code === 'ENOENT') {
-          // File doesn't exist but we expected a specific version
-          throw new ETagMismatchError(path, expectedVersion, null)
-        }
-        const error = toError(err)
-        throw new OperationError(
-          `Failed conditional write to ${path}: ${error.message}`,
-          'writeConditional',
-          path,
-          error
-        )
+      if (currentEtag !== expectedVersion) {
+        await txn.rollback()
+        throw new ETagMismatchError(path, expectedVersion, currentEtag)
       }
+
+      // Write within transaction
+      await txn.writeFile(fullPath, data)
+      await txn.commit()
+
+      // Get the new etag after commit
+      const newStats = await this.fsx.stat(fullPath)
+      return {
+        etag: newStats?.etag ?? '',
+        size: data.length,
+      }
+    } catch (err) {
+      // Ensure rollback on any error
+      try {
+        await txn.rollback()
+      } catch {
+        // Ignore rollback errors
+      }
+
+      // Re-throw our own errors
+      if (err instanceof ETagMismatchError) {
+        throw err
+      }
+      const error = toError(err)
+      throw new OperationError(
+        `Failed conditional write to ${path}: ${error.message}`,
+        'writeConditional',
+        path,
+        error
+      )
     }
   }
 

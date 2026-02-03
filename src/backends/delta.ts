@@ -22,7 +22,7 @@ import type {
   SchemaFieldType,
 } from './types'
 import { CommitConflictError } from './types'
-import { AlreadyExistsError } from '../storage/errors'
+import { AlreadyExistsError, isNotFoundError } from '../storage/errors'
 import type { Entity, EntityId, EntityData, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
 import type { Filter } from '../types/filter'
 import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions } from '../types/options'
@@ -494,13 +494,21 @@ export class DeltaBackend implements EntityBackend {
             timestamp: new Date(timestamp),
             operation: commitInfo?.commitInfo.operation,
           })
-        } catch {
-          // Skip invalid commit files
+        } catch (error) {
+          // Skip missing commit files, but propagate other errors (permission, network, etc.)
+          if (!isNotFoundError(error)) {
+            throw error
+          }
         }
       }
 
       return snapshots
-    } catch {
+    } catch (error) {
+      // Return empty list only for not found errors (table doesn't exist)
+      // Propagate other errors (permission, network, etc.)
+      if (!isNotFoundError(error)) {
+        throw error
+      }
       return []
     }
   }
@@ -530,12 +538,21 @@ export class DeltaBackend implements EntityBackend {
       let schemaObj
       try {
         schemaObj = JSON.parse(metaData.metaData.schemaString)
-      } catch {
-        // Invalid schema JSON in metadata
-        return null
+      } catch (error) {
+        // Invalid schema JSON in metadata - this is a data corruption issue
+        // Return null for JSON parse errors (schema was corrupted)
+        if (error instanceof SyntaxError) {
+          return null
+        }
+        throw error
       }
       return this.deltaSchemaToEntitySchema(ns, schemaObj)
-    } catch {
+    } catch (error) {
+      // Return null only for not found errors (commit file doesn't exist)
+      // Propagate other errors (permission, network, etc.)
+      if (!isNotFoundError(error)) {
+        throw error
+      }
       return null
     }
   }
@@ -725,8 +742,12 @@ export class DeltaBackend implements EntityBackend {
         for (const row of rows) {
           entities.push(rowToEntity(row))
         }
-      } catch {
-        // Skip unreadable files
+      } catch (error) {
+        // Skip missing files (can happen during concurrent operations)
+        // Propagate other errors (permission, network, corruption, etc.)
+        if (!isNotFoundError(error)) {
+          throw error
+        }
       }
     }
     return entities
@@ -879,8 +900,12 @@ export class DeltaBackend implements EntityBackend {
             }
           }
         }
-      } catch {
-        // Skip unreadable commits
+      } catch (error) {
+        // Skip missing commits (can happen during concurrent operations)
+        // Propagate other errors (permission, network, etc.)
+        if (!isNotFoundError(error)) {
+          throw error
+        }
       }
     }
 
@@ -910,8 +935,12 @@ export class DeltaBackend implements EntityBackend {
               await this.storage.delete(fullPath)
               filesDeleted++
               bytesReclaimed += stat.size
-            } catch {
-              // Skip files that can't be deleted
+            } catch (error) {
+              // Skip already-deleted files (can happen during concurrent operations)
+              // Propagate other errors (permission, etc.)
+              if (!isNotFoundError(error)) {
+                throw error
+              }
             }
           } else {
             filesDeleted++
@@ -1000,9 +1029,13 @@ export class DeltaBackend implements EntityBackend {
       let checkpoint: LastCheckpoint
       try {
         checkpoint = JSON.parse(new TextDecoder().decode(checkpointData))
-      } catch {
+      } catch (error) {
         // Invalid checkpoint JSON - fall through to scan from beginning
-        throw new Error('Invalid checkpoint JSON')
+        // Only suppress JSON parse errors (corrupt checkpoint file)
+        if (error instanceof SyntaxError) {
+          throw new Error('Invalid checkpoint JSON')
+        }
+        throw error
       }
 
       // Look for commits after checkpoint
@@ -1016,8 +1049,12 @@ export class DeltaBackend implements EntityBackend {
 
       this.versionCache.set(ns, version)
       return version
-    } catch {
-      // No checkpoint, scan from beginning
+    } catch (error) {
+      // No checkpoint file found - fall through to scan from beginning
+      // Propagate other errors (permission, network, etc.)
+      if (!isNotFoundError(error) && !(error instanceof Error && error.message === 'Invalid checkpoint JSON')) {
+        throw error
+      }
     }
 
     // Scan commit files

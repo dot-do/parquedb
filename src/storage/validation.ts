@@ -5,6 +5,8 @@
  * to ensure consistent error handling and behavior.
  */
 
+import { InvalidPathError } from './errors'
+
 /**
  * Error thrown when range parameters are invalid
  */
@@ -50,11 +52,11 @@ export function validateRange(start: number, end: number): void {
  *
  * @param path - The path to validate
  * @param operation - The operation name for error messages
- * @throws Error if path is empty
+ * @throws InvalidPathError if path is null or undefined
  */
 export function validatePath(path: string, operation: string): void {
   if (path === undefined || path === null) {
-    throw new Error(`${operation}: path is required`)
+    throw new InvalidPathError('', `${operation}: path is required`)
   }
 }
 

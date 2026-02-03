@@ -13,6 +13,7 @@ import {
   validateData,
   InvalidRangeError,
 } from '../../../src/storage/validation'
+import { InvalidPathError } from '../../../src/storage/errors'
 
 describe('Storage Validation Utilities', () => {
   // ===========================================================================
@@ -123,12 +124,12 @@ describe('Storage Validation Utilities', () => {
       expect(() => validatePath('a/b/c.txt', 'read')).not.toThrow()
     })
 
-    it('should throw for null path', () => {
-      expect(() => validatePath(null as unknown as string, 'read')).toThrow()
+    it('should throw InvalidPathError for null path', () => {
+      expect(() => validatePath(null as unknown as string, 'read')).toThrow(InvalidPathError)
     })
 
-    it('should throw for undefined path', () => {
-      expect(() => validatePath(undefined as unknown as string, 'read')).toThrow()
+    it('should throw InvalidPathError for undefined path', () => {
+      expect(() => validatePath(undefined as unknown as string, 'read')).toThrow(InvalidPathError)
     })
 
     it('should include operation name in error message', () => {
@@ -136,7 +137,8 @@ describe('Storage Validation Utilities', () => {
         validatePath(null as unknown as string, 'read')
         expect.fail('Should have thrown')
       } catch (error) {
-        expect((error as Error).message).toContain('read')
+        expect(error).toBeInstanceOf(InvalidPathError)
+        expect((error as InvalidPathError).message).toContain('read')
       }
     })
   })

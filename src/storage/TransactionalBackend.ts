@@ -9,12 +9,17 @@
  * - Writes are buffered and only applied on commit
  * - Deletes are buffered and only applied on commit
  * - Rollback discards all pending changes
- * - Commit applies all changes atomically (best effort - not truly atomic across files)
+ * - Commit applies all changes atomically with automatic rollback on failure
+ *
+ * Atomicity guarantee:
+ * - Before applying changes, original file states are captured
+ * - If any operation fails during commit, all successfully applied changes are rolled back
+ * - The storage is left in its original state on commit failure
  *
  * Limitations:
  * - No multi-transaction isolation (reads see globally committed state)
- * - Commit is not truly atomic - partial failures are possible
  * - No deadlock detection or timeout on transactions
+ * - Rollback during commit failure is best-effort (cannot guarantee if storage itself fails)
  */
 
 import type {
