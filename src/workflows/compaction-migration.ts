@@ -46,6 +46,12 @@ import { toInternalR2Bucket } from './utils'
 import type { WorkflowEnv as Env } from './types'
 import { readParquet } from '../parquet/reader'
 import { commitToDeltaTable } from '../backends/delta-commit'
+import {
+  StreamingMergeSorter,
+  shouldUseStreamingMerge,
+  calculateOptimalChunkSize,
+  type Row,
+} from './streaming-merge'
 
 // =============================================================================
 // Types
@@ -78,6 +84,26 @@ export interface CompactionMigrationParams {
 
   /** Target output file size in bytes (default: 128MB) */
   targetFileSize?: number
+
+  /**
+   * Use streaming merge for large windows.
+   * When true, uses memory-bounded k-way merge instead of loading all rows.
+   * @default 'auto' - automatically detect based on file count and estimated size
+   */
+  useStreamingMerge?: boolean | 'auto'
+
+  /**
+   * Maximum memory to use for streaming merge in bytes.
+   * Only applies when streaming merge is used.
+   * @default 128MB
+   */
+  maxStreamingMemoryBytes?: number
+
+  /**
+   * Estimated average row size in bytes for memory calculations.
+   * @default 500
+   */
+  estimatedAvgRowBytes?: number
 }
 
 interface CompactionState {
@@ -124,6 +150,12 @@ const DEFAULT_MAX_FILES_PER_STEP = 50
 /** Minimum time to wait for late writers (ms) */
 const WRITER_GRACE_PERIOD_MS = 30_000
 
+/** Default maximum memory for streaming merge (128MB) */
+const DEFAULT_STREAMING_MAX_MEMORY_BYTES = 128 * 1024 * 1024
+
+/** Default estimated average row size in bytes */
+const DEFAULT_ESTIMATED_AVG_ROW_BYTES = 500
+
 // =============================================================================
 // Compaction + Migration Workflow
 // =============================================================================
@@ -142,6 +174,9 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
       writers,
       targetFormat,
       deleteSource = true,
+      useStreamingMerge = 'auto',
+      maxStreamingMemoryBytes = DEFAULT_STREAMING_MAX_MEMORY_BYTES,
+      estimatedAvgRowBytes = DEFAULT_ESTIMATED_AVG_ROW_BYTES,
     } = params
     const maxFilesPerStep = params.maxFilesPerStep ?? DEFAULT_MAX_FILES_PER_STEP
 
@@ -152,6 +187,7 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
       fileCount: files.length,
       writerCount: writers.length,
       targetFormat,
+      useStreamingMerge,
     })
 
     // Step 1: Analyze files and group by writer
@@ -278,8 +314,52 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
         })
 
         try {
-          // Read and merge files
-          const { rows, bytesRead } = await this.readAndMergeFiles(storage, batch)
+          // Determine if we should use streaming merge for this batch
+          // Estimate total rows based on file sizes and average row size
+          let totalBatchSize = 0
+          for (const file of batch) {
+            const stat = await storage.stat(file)
+            if (stat) {
+              totalBatchSize += stat.size
+            }
+          }
+          const estimatedRows = Math.ceil(totalBatchSize / estimatedAvgRowBytes)
+
+          // Decide whether to use streaming merge
+          const shouldStream = useStreamingMerge === true ||
+            (useStreamingMerge === 'auto' &&
+              shouldUseStreamingMerge(
+                batch.length,
+                estimatedRows,
+                estimatedAvgRowBytes,
+                maxStreamingMemoryBytes / 2 // Use half for threshold to leave headroom
+              ))
+
+          let rows: Row[]
+          let bytesRead: number
+
+          if (shouldStream) {
+            // Use streaming merge for large batches
+            logger.info(`Using streaming merge for batch ${batchNum}`, {
+              fileCount: batch.length,
+              estimatedRows,
+              totalBatchSize,
+            })
+
+            const result = await this.readAndMergeFilesStreaming(
+              storage,
+              batch,
+              maxStreamingMemoryBytes,
+              estimatedAvgRowBytes
+            )
+            rows = result.rows
+            bytesRead = result.bytesRead
+          } else {
+            // Use standard in-memory merge for smaller batches
+            const result = await this.readAndMergeFiles(storage, batch)
+            rows = result.rows
+            bytesRead = result.bytesRead
+          }
 
           // Write to target format
           const { outputFile, bytesWritten } = await this.writeToTargetFormat(
@@ -420,6 +500,64 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
     return {
       rows: allRows,
       bytesRead,
+    }
+  }
+
+  /**
+   * Read and merge Parquet files using streaming k-way merge sort.
+   *
+   * This method handles large file sets that would exceed memory if loaded all at once.
+   * It uses a min-heap based k-way merge to process files in chunks, maintaining
+   * sorted order while keeping memory usage bounded.
+   *
+   * For very large windows, consider using this in combination with multipart upload
+   * to stream directly to R2 without holding all rows in memory.
+   */
+  private async readAndMergeFilesStreaming(
+    storage: R2Backend,
+    files: string[],
+    maxMemoryBytes: number,
+    avgRowBytes: number
+  ): Promise<{ rows: Row[]; bytesRead: number }> {
+    logger.info(`Using streaming merge for ${files.length} files`, {
+      maxMemoryBytes,
+      avgRowBytes,
+    })
+
+    // Calculate optimal chunk size based on file count and memory limit
+    const chunkSize = calculateOptimalChunkSize(
+      files.length,
+      maxMemoryBytes,
+      avgRowBytes,
+      100,    // min chunk size
+      50000   // max chunk size
+    )
+
+    logger.info(`Streaming merge chunk size: ${chunkSize}`)
+
+    // Create the streaming merge sorter
+    const sorter = new StreamingMergeSorter(storage, {
+      chunkSize,
+      maxMemoryBytes,
+      sortKey: 'createdAt',
+      sortDirection: 'asc',
+    })
+
+    // Collect all rows - for now we still collect in memory, but the streaming
+    // merge ensures we never load more than (files.length * chunkSize) rows
+    // at once from the heap, instead of loading all rows from all files.
+    const { rows, stats } = await sorter.collectAll(files)
+
+    logger.info(`Streaming merge completed`, {
+      totalRows: stats.totalRows,
+      bytesRead: stats.bytesRead,
+      filesProcessed: stats.filesProcessed,
+      durationMs: stats.durationMs,
+    })
+
+    return {
+      rows,
+      bytesRead: stats.bytesRead,
     }
   }
 
@@ -590,6 +728,7 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
     const { storage, tableLocation, dataFile } = params
 
     // Use the DeltaCommitter with proper OCC protection
+    // Checkpoints are created automatically after every 10 commits
     const result = await commitToDeltaTable({
       storage,
       tableLocation,
@@ -602,6 +741,8 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
       maxRetries: 10,
       baseBackoffMs: 100,
       maxBackoffMs: 10000,
+      // Create checkpoint every 10 commits for faster reads
+      checkpointInterval: 10,
     })
 
     return result

@@ -55,3 +55,38 @@ export {
   type ScheduleOptions,
   type CleanupScheduler,
 } from './retention'
+
+// Re-export compaction observability module
+export {
+  // Types
+  type CompactionMetrics,
+  type MetricDataPoint,
+  type MetricTimeSeries,
+  type AggregatedMetrics as CompactionAggregatedMetrics,
+  type HealthIndicator,
+  type DashboardConfig,
+  type PrometheusMetricType,
+  type PrometheusMetric,
+  type AnalyticsEngineDataPoint,
+
+  // Constants
+  DEFAULT_DASHBOARD_CONFIG,
+  PROMETHEUS_METRICS,
+  ANALYTICS_ENGINE_SCHEMA,
+
+  // Metrics functions
+  emitCompactionMetrics,
+  emitToAnalyticsEngine,
+  getLatestMetrics,
+  getAllLatestMetrics,
+  getMetricTimeSeries,
+  getAggregatedMetrics,
+  clearMetricsStore,
+  exportPrometheusMetrics,
+  exportJsonTimeSeries,
+
+  // Dashboard functions
+  evaluateHealth,
+  evaluateAggregatedHealth,
+  generateDashboardHtml,
+} from './compaction'

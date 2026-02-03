@@ -13,6 +13,12 @@
  * Delta Lake uses file-based OCC: commit files are immutable and
  * named by version number. Using ifNoneMatch: '*' ensures only
  * one writer can successfully create a commit at any version.
+ *
+ * Checkpoint support:
+ * - Checkpoints aggregate state for faster reads
+ * - Created after every N commits (configurable, default 10)
+ * - Stored as Parquet files in _delta_log/
+ * - _last_checkpoint file points to latest checkpoint
  */
 
 import { AlreadyExistsError, isNotFoundError } from '../storage/errors'
@@ -22,12 +28,18 @@ import {
   formatVersion,
   serializeCommit,
   createAddAction,
+  createRemoveAction,
   createProtocolAction,
   createMetadataAction,
   createCommitInfoAction,
   generateUUID,
   type LogAction,
+  type AddAction,
+  type RemoveAction,
+  type ProtocolAction,
+  type MetadataAction,
 } from '../delta-utils'
+import { ParquetWriter } from '../parquet/writer'
 
 // =============================================================================
 // Types
@@ -51,6 +63,12 @@ export interface DeltaCommitConfig {
 
   /** Max backoff in ms (default: 10000) */
   maxBackoffMs?: number
+
+  /**
+   * Create checkpoint every N commits (default: 10).
+   * Set to 0 to disable automatic checkpoints.
+   */
+  checkpointInterval?: number
 }
 
 /**
@@ -87,6 +105,40 @@ export interface DeltaCommitResult {
   retries?: number
 }
 
+/**
+ * Options for checkpoint creation
+ */
+export interface CheckpointOptions {
+  /** Force checkpoint creation even if not at interval boundary */
+  force?: boolean
+}
+
+/**
+ * Result of checkpoint creation
+ */
+export interface CheckpointResult {
+  /** Whether a checkpoint was created */
+  created: boolean
+
+  /** Version of the checkpoint (if created) */
+  version: number
+
+  /** Path to checkpoint file (if created) */
+  checkpointPath?: string
+
+  /** Number of actions in the checkpoint */
+  size?: number
+}
+
+/**
+ * Checkpoint metadata stored in _last_checkpoint
+ */
+interface LastCheckpoint {
+  version: number
+  size: number
+  parts?: number
+}
+
 // =============================================================================
 // Delta Committer Class
 // =============================================================================
@@ -97,6 +149,7 @@ export interface DeltaCommitResult {
  * This class provides methods for:
  * - Appending data files to existing tables
  * - Handling optimistic concurrency control (OCC) with retries
+ * - Creating checkpoint files for faster reads
  *
  * OCC Strategy:
  * - Delta Lake commit files are named by version: 00000000000000000000.json
@@ -104,11 +157,18 @@ export interface DeltaCommitResult {
  * - Uses ifNoneMatch: '*' for atomic create-only semantics
  * - On conflict (AlreadyExistsError), re-reads current version and retries
  *
+ * Checkpoint Strategy:
+ * - Checkpoints are created after every N commits (configurable)
+ * - Checkpoint files are Parquet files with all active add actions
+ * - _last_checkpoint file points to latest checkpoint
+ * - Readers check _last_checkpoint first for faster version lookup
+ *
  * @example
  * ```typescript
  * const committer = new DeltaCommitter({
  *   storage: r2Backend,
  *   tableLocation: 'warehouse/db/users',
+ *   checkpointInterval: 10, // Create checkpoint every 10 commits
  * })
  *
  * const result = await committer.commitDataFile({
@@ -119,6 +179,9 @@ export interface DeltaCommitResult {
  * if (result.success) {
  *   console.log(`Committed at version ${result.version}`)
  * }
+ *
+ * // Or manually create checkpoint after compaction
+ * await committer.maybeCreateCheckpoint()
  * ```
  */
 export class DeltaCommitter {
@@ -127,6 +190,7 @@ export class DeltaCommitter {
   private maxRetries: number
   private baseBackoffMs: number
   private maxBackoffMs: number
+  private checkpointInterval: number
 
   constructor(config: DeltaCommitConfig) {
     this.storage = config.storage
@@ -134,6 +198,7 @@ export class DeltaCommitter {
     this.maxRetries = config.maxRetries ?? 10
     this.baseBackoffMs = config.baseBackoffMs ?? 100
     this.maxBackoffMs = config.maxBackoffMs ?? 10000
+    this.checkpointInterval = config.checkpointInterval ?? 10
   }
 
   // ===========================================================================
@@ -303,6 +368,11 @@ export class DeltaCommitter {
         const committed = await this.tryCommit(commitPath, commitContent)
 
         if (committed) {
+          // Check if we should create a checkpoint
+          if (this.shouldCreateCheckpoint(nextVersion)) {
+            await this.createCheckpoint(nextVersion)
+          }
+
           return {
             success: true,
             version: nextVersion,
@@ -330,9 +400,286 @@ export class DeltaCommitter {
     }
   }
 
+  /**
+   * Commit remove actions for files (for compaction/cleanup)
+   *
+   * @param filePaths - Paths of files to remove
+   * @param readVersion - Current version (for commit info)
+   */
+  async commitRemoveFiles(
+    filePaths: string[],
+    readVersion: number
+  ): Promise<DeltaCommitResult> {
+    if (filePaths.length === 0) {
+      return { success: true }
+    }
+
+    const logDir = `${this.tableLocation}/_delta_log`
+    let retries = 0
+
+    while (retries <= this.maxRetries) {
+      try {
+        const currentVersion = await this.getCurrentVersion()
+        const nextVersion = currentVersion + 1
+
+        // Build remove actions
+        const actions: LogAction[] = filePaths.map(path =>
+          createRemoveAction(path, false)
+        )
+
+        // Add commit info
+        actions.push(createCommitInfoAction(
+          'REMOVE',
+          currentVersion,
+          false,
+          { source: 'delta-committer' }
+        ))
+
+        // Try to commit atomically
+        const commitPath = `${logDir}/${formatVersion(nextVersion)}.json`
+        const commitContent = serializeCommit(actions)
+
+        const committed = await this.tryCommit(commitPath, commitContent)
+
+        if (committed) {
+          // Check if we should create a checkpoint
+          if (this.shouldCreateCheckpoint(nextVersion)) {
+            await this.createCheckpoint(nextVersion)
+          }
+
+          return {
+            success: true,
+            version: nextVersion,
+            logPath: commitPath,
+            retries,
+          }
+        }
+
+        // Conflict detected, retry
+        retries++
+        if (retries <= this.maxRetries) {
+          logger.debug(`Delta OCC conflict on remove attempt ${retries}, retrying...`)
+          await this.backoffDelay(retries)
+        }
+      } catch (error) {
+        logger.error('Error during Delta remove commit attempt', { attempt: retries, error })
+        throw error
+      }
+    }
+
+    return {
+      success: false,
+      error: `Remove commit failed after ${this.maxRetries} retries`,
+      retries,
+    }
+  }
+
+  /**
+   * Create a checkpoint at the current version, or check if one is needed.
+   *
+   * Use this after compaction commits to ensure checkpoint is created
+   * if the interval threshold has been reached.
+   *
+   * @param options - Checkpoint options
+   * @returns Checkpoint result
+   */
+  async maybeCreateCheckpoint(options?: CheckpointOptions): Promise<CheckpointResult> {
+    const currentVersion = await this.getCurrentVersion()
+
+    if (currentVersion < 0) {
+      return { created: false, version: -1 }
+    }
+
+    const shouldCreate = options?.force || this.shouldCreateCheckpoint(currentVersion)
+
+    if (shouldCreate) {
+      return this.createCheckpoint(currentVersion)
+    }
+
+    return { created: false, version: currentVersion }
+  }
+
   // ===========================================================================
   // Private Methods
   // ===========================================================================
+
+  /**
+   * Check if a checkpoint should be created at this version
+   */
+  private shouldCreateCheckpoint(version: number): boolean {
+    if (this.checkpointInterval <= 0) {
+      return false
+    }
+    return version > 0 && version % this.checkpointInterval === 0
+  }
+
+  /**
+   * Create a checkpoint file at the specified version
+   *
+   * Delta Lake checkpoints are Parquet files containing all active actions
+   * aggregated from version 0 to the checkpoint version. This allows readers
+   * to skip reading individual log files.
+   */
+  private async createCheckpoint(version: number): Promise<CheckpointResult> {
+    const logDir = `${this.tableLocation}/_delta_log`
+
+    try {
+      // Collect all actions from log files up to this version
+      const { actions: checkpointActions, activeFiles } = await this.collectActionsForCheckpoint(version)
+
+      if (checkpointActions.length === 0) {
+        return { created: false, version }
+      }
+
+      // Convert actions to checkpoint row format
+      // Delta Lake checkpoint schema: txn, add, remove, metaData, protocol, commitInfo
+      // Each row has exactly one non-null column containing the action as JSON
+      const checkpointRows = checkpointActions.map(action => {
+        const row: Record<string, string | null> = {
+          txn: null,
+          add: null,
+          remove: null,
+          metaData: null,
+          protocol: null,
+          commitInfo: null,
+        }
+
+        if ('protocol' in action) {
+          row.protocol = JSON.stringify(action.protocol)
+        } else if ('metaData' in action) {
+          row.metaData = JSON.stringify(action.metaData)
+        } else if ('add' in action) {
+          row.add = JSON.stringify(action.add)
+        } else if ('remove' in action) {
+          row.remove = JSON.stringify(action.remove)
+        } else if ('commitInfo' in action) {
+          row.commitInfo = JSON.stringify(action.commitInfo)
+        }
+
+        return row
+      })
+
+      // Delta Lake checkpoint Parquet schema (all optional strings containing JSON)
+      const checkpointSchema = {
+        txn: { type: 'STRING' as const, optional: true },
+        add: { type: 'STRING' as const, optional: true },
+        remove: { type: 'STRING' as const, optional: true },
+        metaData: { type: 'STRING' as const, optional: true },
+        protocol: { type: 'STRING' as const, optional: true },
+        commitInfo: { type: 'STRING' as const, optional: true },
+      }
+
+      // Write checkpoint as Parquet file
+      const checkpointPath = `${logDir}/${formatVersion(version)}.checkpoint.parquet`
+      const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
+      await writer.write(checkpointPath, checkpointRows, checkpointSchema)
+
+      // Write _last_checkpoint atomically
+      const lastCheckpoint: LastCheckpoint = {
+        version,
+        size: checkpointRows.length,
+      }
+      await this.storage.write(
+        `${logDir}/_last_checkpoint`,
+        new TextEncoder().encode(JSON.stringify(lastCheckpoint))
+      )
+
+      logger.debug('Created Delta checkpoint', {
+        version,
+        actionCount: checkpointRows.length,
+        activeFiles: activeFiles.size,
+      })
+
+      return {
+        created: true,
+        version,
+        checkpointPath,
+        size: checkpointRows.length,
+      }
+    } catch (error) {
+      logger.error('Failed to create checkpoint', { version, error })
+      // Don't fail the commit if checkpoint creation fails
+      return { created: false, version }
+    }
+  }
+
+  /**
+   * Collect all actions from log files up to a version for checkpoint creation
+   */
+  private async collectActionsForCheckpoint(version: number): Promise<{
+    actions: LogAction[]
+    activeFiles: Map<string, AddAction>
+  }> {
+    const logDir = `${this.tableLocation}/_delta_log`
+    let latestProtocol: ProtocolAction | null = null
+    let latestMetadata: MetadataAction | null = null
+    const activeFiles = new Map<string, AddAction>()
+
+    for (let v = 0; v <= version; v++) {
+      const commitPath = `${logDir}/${formatVersion(v)}.json`
+
+      try {
+        const commitData = await this.storage.read(commitPath)
+        const commitText = new TextDecoder().decode(commitData)
+        const actions = this.parseCommitFile(commitText)
+
+        for (const action of actions) {
+          if ('protocol' in action) {
+            latestProtocol = action as ProtocolAction
+          } else if ('metaData' in action) {
+            latestMetadata = action as MetadataAction
+          } else if ('add' in action) {
+            activeFiles.set((action as AddAction).add.path, action as AddAction)
+          } else if ('remove' in action) {
+            activeFiles.delete((action as RemoveAction).remove.path)
+          }
+          // Skip commitInfo - not needed in checkpoint
+        }
+      } catch (error) {
+        // Skip missing commits
+        if (!isNotFoundError(error)) {
+          throw error
+        }
+      }
+    }
+
+    // Build final checkpoint actions list
+    const checkpointActions: LogAction[] = []
+
+    if (latestProtocol) {
+      checkpointActions.push(latestProtocol)
+    }
+    if (latestMetadata) {
+      checkpointActions.push(latestMetadata)
+    }
+
+    // Add all active files
+    for (const addAction of Array.from(activeFiles.values())) {
+      checkpointActions.push(addAction)
+    }
+
+    return { actions: checkpointActions, activeFiles }
+  }
+
+  /**
+   * Parse commit file content into actions
+   */
+  private parseCommitFile(content: string): LogAction[] {
+    const lines = content.trim().split('\n')
+    const actions: LogAction[] = []
+
+    for (const line of lines) {
+      if (!line.trim()) continue
+      try {
+        actions.push(JSON.parse(line) as LogAction)
+      } catch {
+        // Skip invalid lines
+        continue
+      }
+    }
+
+    return actions
+  }
 
   /**
    * Try to write commit file atomically
@@ -422,6 +769,7 @@ export async function commitToDeltaTable(config: {
   maxRetries?: number
   baseBackoffMs?: number
   maxBackoffMs?: number
+  checkpointInterval?: number
 }): Promise<DeltaCommitResult> {
   const committer = new DeltaCommitter({
     storage: config.storage,
@@ -429,6 +777,7 @@ export async function commitToDeltaTable(config: {
     maxRetries: config.maxRetries,
     baseBackoffMs: config.baseBackoffMs,
     maxBackoffMs: config.maxBackoffMs,
+    checkpointInterval: config.checkpointInterval,
   })
 
   // Ensure table exists

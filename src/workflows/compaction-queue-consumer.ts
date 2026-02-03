@@ -34,10 +34,32 @@
 import { logger } from '../utils/logger'
 import type { BackendType } from '../backends'
 import type { CompactionQueueEnv as Env } from './types'
+import {
+  emitCompactionMetrics,
+  type CompactionMetrics,
+} from '../observability/compaction'
 
 // =============================================================================
 // Types
 // =============================================================================
+
+/** Namespace priority levels: 0 (critical) to 3 (background) */
+export type NamespacePriority = 0 | 1 | 2 | 3
+
+/** Backpressure levels */
+export type BackpressureLevel = 'none' | 'normal' | 'severe'
+
+/** Priority-specific max wait times in milliseconds */
+export const PRIORITY_WAIT_TIMES: Record<NamespacePriority, number> = {
+  0: 1 * 60 * 1000,    // P0 (critical): 1 minute
+  1: 5 * 60 * 1000,    // P1 (high): 5 minutes
+  2: 15 * 60 * 1000,   // P2 (medium): 15 minutes
+  3: 60 * 60 * 1000,   // P3 (background): 1 hour
+}
+
+/** Backpressure thresholds */
+export const BACKPRESSURE_THRESHOLD = 10  // Windows pending before backpressure kicks in
+export const SEVERE_BACKPRESSURE_THRESHOLD = 20  // Windows pending before severe backpressure
 
 /** R2 Event Notification message from queue */
 export interface R2EventMessage {
@@ -69,6 +91,50 @@ export interface CompactionConsumerConfig {
 
   /** Namespace prefix to watch (default: 'data/') */
   namespacePrefix?: string
+
+  /**
+   * Time bucket sharding configuration
+   * When enabled, DOs are sharded by namespace + time bucket for extreme concurrency (>1000 writes/sec)
+   */
+  timeBucketSharding?: TimeBucketShardingConfig
+}
+
+/**
+ * Configuration for time bucket sharding
+ * Only enable for high-throughput namespaces (>1000 writes/sec)
+ */
+export interface TimeBucketShardingConfig {
+  /** Enable time bucket sharding (default: false for backwards compatibility) */
+  enabled: boolean
+
+  /** Namespaces that should use time bucket sharding (empty = all namespaces if enabled) */
+  namespacesWithSharding?: string[]
+
+  /** Time bucket size in milliseconds (default: 1 hour / 3600000) */
+  bucketSizeMs?: number
+
+  /** Maximum age of buckets to query for status aggregation in hours (default: 24) */
+  maxBucketAgeHours?: number
+}
+
+/**
+ * Check if a namespace should use time bucket sharding
+ * @param namespace - Namespace name
+ * @param config - Time bucket sharding configuration
+ * @returns True if time bucket sharding should be used
+ */
+export function shouldUseTimeBucketSharding(
+  namespace: string,
+  config?: TimeBucketShardingConfig
+): boolean {
+  if (!config?.enabled) return false
+
+  // If no specific namespaces are configured, enable for all
+  if (!config.namespacesWithSharding || config.namespacesWithSharding.length === 0) {
+    return true
+  }
+
+  return config.namespacesWithSharding.includes(namespace)
 }
 
 /** Processing status for two-phase commit */
@@ -120,6 +186,154 @@ const WRITER_INACTIVE_THRESHOLD_MS = 30 * 60 * 1000
 /** Time after which a processing window is considered stuck: 5 minutes */
 const PROCESSING_TIMEOUT_MS = 5 * 60 * 1000
 
+/** Time bucket size for DO sharding: 1 hour */
+const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000
+
+/** Maximum age of time buckets to query for status aggregation: 24 hours */
+const MAX_BUCKET_AGE_HOURS = 24
+
+/** Age after which bucket DOs can be cleaned up: 48 hours */
+const BUCKET_CLEANUP_AGE_MS = 48 * 60 * 60 * 1000
+
+// =============================================================================
+// Time Bucket Sharding Helpers
+// =============================================================================
+
+/**
+ * Calculate time bucket for a given timestamp
+ * @param timestamp - Unix timestamp in milliseconds
+ * @param bucketSizeMs - Bucket size in milliseconds (default: 1 hour)
+ * @returns Time bucket as a number (floor of timestamp / bucket size)
+ */
+export function calculateTimeBucket(timestamp: number, bucketSizeMs: number = TIME_BUCKET_SIZE_MS): number {
+  return Math.floor(timestamp / bucketSizeMs)
+}
+
+/**
+ * Get DO ID for a namespace with optional time bucket sharding
+ * @param namespace - Namespace name
+ * @param timeBucket - Optional time bucket for sharding
+ * @param useTimeBucketSharding - Whether to use time bucket sharding
+ * @returns DO ID string
+ */
+export function getCompactionStateDOId(
+  namespace: string,
+  timeBucket?: number,
+  useTimeBucketSharding: boolean = false
+): string {
+  if (useTimeBucketSharding && timeBucket !== undefined) {
+    return `${namespace}:${timeBucket}`
+  }
+  return namespace
+}
+
+/**
+ * Parse DO ID to extract namespace and optional time bucket
+ * @param doId - DO ID string
+ * @returns Object with namespace and optional timeBucket
+ */
+export function parseCompactionStateDOId(doId: string): { namespace: string; timeBucket?: number } {
+  const colonIndex = doId.lastIndexOf(':')
+  if (colonIndex !== -1) {
+    const possibleBucket = doId.slice(colonIndex + 1)
+    const bucket = parseInt(possibleBucket, 10)
+    if (!isNaN(bucket)) {
+      return {
+        namespace: doId.slice(0, colonIndex),
+        timeBucket: bucket,
+      }
+    }
+  }
+  return { namespace: doId }
+}
+
+/**
+ * Get list of time buckets to query for status aggregation
+ * @param now - Current timestamp in milliseconds
+ * @param maxAgeHours - Maximum age of buckets to include
+ * @param bucketSizeMs - Bucket size in milliseconds
+ * @returns Array of time bucket numbers
+ */
+export function getRecentTimeBuckets(
+  now: number = Date.now(),
+  maxAgeHours: number = MAX_BUCKET_AGE_HOURS,
+  bucketSizeMs: number = TIME_BUCKET_SIZE_MS
+): number[] {
+  const currentBucket = calculateTimeBucket(now, bucketSizeMs)
+  const bucketsToInclude = Math.ceil((maxAgeHours * 60 * 60 * 1000) / bucketSizeMs)
+  const buckets: number[] = []
+
+  for (let i = 0; i <= bucketsToInclude; i++) {
+    buckets.push(currentBucket - i)
+  }
+
+  return buckets
+}
+
+/**
+ * Check if a time bucket is old enough for cleanup
+ * @param timeBucket - Time bucket number
+ * @param now - Current timestamp in milliseconds
+ * @param bucketSizeMs - Bucket size in milliseconds
+ * @param cleanupAgeMs - Age after which buckets can be cleaned up
+ * @returns True if bucket is eligible for cleanup
+ */
+export function isTimeBucketExpired(
+  timeBucket: number,
+  now: number = Date.now(),
+  bucketSizeMs: number = TIME_BUCKET_SIZE_MS,
+  cleanupAgeMs: number = BUCKET_CLEANUP_AGE_MS
+): boolean {
+  const bucketEndTimestamp = (timeBucket + 1) * bucketSizeMs
+  return (now - bucketEndTimestamp) > cleanupAgeMs
+}
+
+/**
+ * Group updates by namespace and time bucket for sharded dispatch
+ * @param updates - Array of file updates
+ * @param useTimeBucketSharding - Whether to use time bucket sharding
+ * @param bucketSizeMs - Bucket size in milliseconds
+ * @returns Map of DO IDs to their updates
+ */
+export function groupUpdatesByDOId(
+  updates: Array<{
+    namespace: string
+    writerId: string
+    file: string
+    timestamp: number
+    size: number
+  }>,
+  useTimeBucketSharding: boolean = false,
+  bucketSizeMs: number = TIME_BUCKET_SIZE_MS
+): Map<string, Array<{
+  namespace: string
+  writerId: string
+  file: string
+  timestamp: number
+  size: number
+}>> {
+  const grouped = new Map<string, Array<{
+    namespace: string
+    writerId: string
+    file: string
+    timestamp: number
+    size: number
+  }>>()
+
+  for (const update of updates) {
+    const timeBucket = useTimeBucketSharding
+      ? calculateTimeBucket(update.timestamp, bucketSizeMs)
+      : undefined
+    const doId = getCompactionStateDOId(update.namespace, timeBucket, useTimeBucketSharding)
+
+    const existing = grouped.get(doId) ?? []
+    existing.push(update)
+    grouped.set(doId, existing)
+  }
+
+  return grouped
+}
+
 // =============================================================================
 // Queue Consumer Handler
 // =============================================================================
@@ -132,6 +346,8 @@ export interface WindowReadyEntry {
   windowEnd: number
   files: string[]
   writers: string[]
+  /** Namespace priority for workflow queue routing */
+  priority?: NamespacePriority
 }
 
 /** Response from CompactionStateDO */
@@ -266,6 +482,145 @@ export function aggregateHealthStatus(
 }
 
 /**
+ * Aggregated status response for time-bucket sharded namespaces
+ * Combines status from multiple bucket DOs into a single namespace view
+ */
+export interface AggregatedCompactionStatusResponse {
+  namespace: string
+  /** Number of time bucket DOs queried */
+  bucketDOsQueried: number
+  /** Number of time bucket DOs that responded successfully */
+  bucketDOsResponded: number
+  /** Combined active windows across all buckets */
+  activeWindows: number
+  knownWriters: string[]
+  activeWriters: string[]
+  oldestWindowAge: number
+  totalPendingFiles: number
+  windowsStuckInProcessing: number
+  /** Windows from all buckets */
+  windows: Array<{
+    bucketDoId: string
+    key: string
+    windowStart: string
+    windowEnd: string
+    writers: string[]
+    fileCount: number
+    totalSize: number
+    processingStatus: { state: 'pending' } | { state: 'processing'; startedAt: number } | { state: 'dispatched'; workflowId: string; dispatchedAt: number }
+  }>
+}
+
+/**
+ * Query compaction status for a namespace across all relevant time bucket DOs
+ * This is used when time bucket sharding is enabled to aggregate status from multiple DOs
+ *
+ * @param namespace - Namespace to query status for
+ * @param env - Environment with COMPACTION_STATE binding
+ * @param config - Time bucket sharding configuration
+ * @returns Aggregated status from all relevant bucket DOs
+ */
+export async function getAggregatedCompactionStatus(
+  namespace: string,
+  env: { COMPACTION_STATE: DurableObjectNamespace },
+  config?: TimeBucketShardingConfig
+): Promise<AggregatedCompactionStatusResponse> {
+  const useSharding = shouldUseTimeBucketSharding(namespace, config)
+
+  if (!useSharding) {
+    // For non-sharded namespaces, query single DO
+    const stateId = env.COMPACTION_STATE.idFromName(namespace)
+    const stateDO = env.COMPACTION_STATE.get(stateId)
+    const response = await stateDO.fetch('http://internal/status')
+    const data = await response.json() as CompactionStatusResponse
+
+    return {
+      namespace: data.namespace,
+      bucketDOsQueried: 1,
+      bucketDOsResponded: 1,
+      activeWindows: data.activeWindows,
+      knownWriters: data.knownWriters,
+      activeWriters: data.activeWriters,
+      oldestWindowAge: data.oldestWindowAge,
+      totalPendingFiles: data.totalPendingFiles,
+      windowsStuckInProcessing: data.windowsStuckInProcessing,
+      windows: data.windows.map(w => ({ ...w, bucketDoId: namespace })),
+    }
+  }
+
+  // For sharded namespaces, query all recent time buckets
+  const bucketSizeMs = config?.bucketSizeMs ?? TIME_BUCKET_SIZE_MS
+  const maxAgeHours = config?.maxBucketAgeHours ?? MAX_BUCKET_AGE_HOURS
+  const timeBuckets = getRecentTimeBuckets(Date.now(), maxAgeHours, bucketSizeMs)
+
+  const results: Array<{ doId: string; status: CompactionStatusResponse | null }> = []
+
+  // Query all bucket DOs in parallel
+  await Promise.all(
+    timeBuckets.map(async (bucket) => {
+      const doId = getCompactionStateDOId(namespace, bucket, true)
+      const stateId = env.COMPACTION_STATE.idFromName(doId)
+      const stateDO = env.COMPACTION_STATE.get(stateId)
+
+      try {
+        const response = await stateDO.fetch('http://internal/status')
+        const data = await response.json() as CompactionStatusResponse
+        results.push({ doId, status: data })
+      } catch {
+        // DO might not exist yet if no data was written in that bucket
+        results.push({ doId, status: null })
+      }
+    })
+  )
+
+  // Aggregate results
+  const aggregated: AggregatedCompactionStatusResponse = {
+    namespace,
+    bucketDOsQueried: timeBuckets.length,
+    bucketDOsResponded: 0,
+    activeWindows: 0,
+    knownWriters: [],
+    activeWriters: [],
+    oldestWindowAge: 0,
+    totalPendingFiles: 0,
+    windowsStuckInProcessing: 0,
+    windows: [],
+  }
+
+  const allKnownWriters = new Set<string>()
+  const allActiveWriters = new Set<string>()
+
+  for (const { doId, status } of results) {
+    if (!status) continue
+
+    aggregated.bucketDOsResponded++
+    aggregated.activeWindows += status.activeWindows
+    aggregated.totalPendingFiles += status.totalPendingFiles
+    aggregated.windowsStuckInProcessing += status.windowsStuckInProcessing
+
+    if (status.oldestWindowAge > aggregated.oldestWindowAge) {
+      aggregated.oldestWindowAge = status.oldestWindowAge
+    }
+
+    for (const writer of status.knownWriters) {
+      allKnownWriters.add(writer)
+    }
+    for (const writer of status.activeWriters) {
+      allActiveWriters.add(writer)
+    }
+
+    for (const window of status.windows) {
+      aggregated.windows.push({ ...window, bucketDoId: doId })
+    }
+  }
+
+  aggregated.knownWriters = Array.from(allKnownWriters)
+  aggregated.activeWriters = Array.from(allActiveWriters)
+
+  return aggregated
+}
+
+/**
  * Type guard for CompactionStatusResponse
  */
 export function isCompactionStatusResponse(data: unknown): data is CompactionStatusResponse {
@@ -319,10 +674,13 @@ export function isWindowsReadyResponse(data: unknown): data is WindowsReadyRespo
 /**
  * Handle a batch of R2 event notifications
  *
- * ARCHITECTURE: Namespace Sharding
+ * ARCHITECTURE: Namespace Sharding + Time Bucket Sharding
  * Each namespace gets its own CompactionStateDO instance for scalability.
- * Updates are grouped by namespace and sent to namespace-specific DOs.
- * This eliminates the bottleneck of a single global DO instance.
+ * For high-throughput namespaces (>1000 writes/sec), time bucket sharding
+ * further distributes load: idFromName(namespace + ':' + timeBucket).
+ *
+ * Updates are grouped by DO ID (namespace or namespace:timeBucket) and sent
+ * to the appropriate DOs in parallel.
  *
  * TWO-PHASE COMMIT:
  * 1. DO marks windows as "processing" and returns them
@@ -346,16 +704,17 @@ export async function handleCompactionQueue(
     maxWaitTimeMs = DEFAULT_MAX_WAIT_MS,
     targetFormat = 'native',
     namespacePrefix = 'data/',
+    timeBucketSharding,
   } = config
 
-  // Process each message and group by namespace
-  const updatesByNamespace = new Map<string, Array<{
+  // Collect all updates first
+  const allUpdates: Array<{
     namespace: string
     writerId: string
     file: string
     timestamp: number
     size: number
-  }>>()
+  }> = []
 
   for (const message of batch.messages) {
     const event = message.body
@@ -396,47 +755,68 @@ export async function handleCompactionQueue(
     // Filename timestamps are in seconds, convert to milliseconds
     const timestamp = parseInt(timestampStr ?? '0', 10) * 1000
 
-    const update = {
+    allUpdates.push({
       namespace,
       writerId: writerId ?? 'unknown',
       file: event.object.key,
       timestamp,
       size: event.object.size,
-    }
-
-    // Group updates by namespace for sharded DO dispatch
-    const namespaceUpdates = updatesByNamespace.get(namespace) ?? []
-    namespaceUpdates.push(update)
-    updatesByNamespace.set(namespace, namespaceUpdates)
+    })
 
     message.ack()
   }
 
-  if (updatesByNamespace.size === 0) {
+  if (allUpdates.length === 0) {
     logger.debug('No matching updates to process')
     return
   }
 
+  // Group updates by DO ID (with optional time bucket sharding)
+  // For namespaces with time bucket sharding enabled, group by namespace:timeBucket
+  const bucketSizeMs = timeBucketSharding?.bucketSizeMs ?? TIME_BUCKET_SIZE_MS
+  const updatesByDOId = new Map<string, Array<{
+    namespace: string
+    writerId: string
+    file: string
+    timestamp: number
+    size: number
+  }>>()
+
+  for (const update of allUpdates) {
+    const useSharding = shouldUseTimeBucketSharding(update.namespace, timeBucketSharding)
+    const timeBucket = useSharding ? calculateTimeBucket(update.timestamp, bucketSizeMs) : undefined
+    const doId = getCompactionStateDOId(update.namespace, timeBucket, useSharding)
+
+    const existing = updatesByDOId.get(doId) ?? []
+    existing.push(update)
+    updatesByDOId.set(doId, existing)
+  }
+
   logger.info('Processing updates', {
-    namespaceCount: updatesByNamespace.size,
-    totalUpdates: Array.from(updatesByNamespace.values()).reduce((sum, u) => sum + u.length, 0),
+    doCount: updatesByDOId.size,
+    totalUpdates: allUpdates.length,
+    timeBucketShardingEnabled: timeBucketSharding?.enabled ?? false,
   })
 
-  // Send updates to namespace-sharded DOs in parallel
+  // Send updates to sharded DOs in parallel
   // Phase 1: Mark windows as "processing" and get ready windows
-  const allWindowsReady: WindowReadyEntry[] = []
+  const allWindowsReady: Array<WindowReadyEntry & { doId: string }> = []
 
   await Promise.all(
-    Array.from(updatesByNamespace.entries()).map(async ([namespace, updates]) => {
-      // Get namespace-specific DO instance for scalability
-      const stateId = env.COMPACTION_STATE.idFromName(namespace)
+    Array.from(updatesByDOId.entries()).map(async ([doId, updates]) => {
+      // Get DO instance using the (possibly time-bucket-sharded) ID
+      const stateId = env.COMPACTION_STATE.idFromName(doId)
       const stateDO = env.COMPACTION_STATE.get(stateId)
+
+      // Extract namespace from first update (all updates in this group have same namespace)
+      const namespace = updates[0]?.namespace ?? ''
 
       const response = await stateDO.fetch('http://internal/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           namespace, // Include namespace for DO to know its identity
+          doId, // Include DO ID for logging/debugging
           updates,
           config: {
             windowSizeMs,
@@ -449,20 +829,25 @@ export async function handleCompactionQueue(
 
       const data = await response.json()
       if (!isWindowsReadyResponse(data)) {
-        throw new Error(`Invalid response from CompactionStateDO for namespace '${namespace}': expected { windowsReady: Array<WindowReadyEntry> }`)
+        throw new Error(`Invalid response from CompactionStateDO for DO '${doId}': expected { windowsReady: Array<WindowReadyEntry> }`)
       }
 
-      allWindowsReady.push(...data.windowsReady)
+      // Track doId with each ready window for Phase 2
+      for (const window of data.windowsReady) {
+        allWindowsReady.push({ ...window, doId })
+      }
     })
   )
 
   // Phase 2: Trigger workflows for ready windows with two-phase commit
   for (const window of allWindowsReady) {
-    const stateId = env.COMPACTION_STATE.idFromName(window.namespace)
+    // Use the doId that was tracked with the ready window
+    const stateId = env.COMPACTION_STATE.idFromName(window.doId)
     const stateDO = env.COMPACTION_STATE.get(stateId)
 
     logger.info('Triggering compaction workflow', {
       namespace: window.namespace,
+      doId: window.doId,
       windowKey: window.windowKey,
       windowStart: new Date(window.windowStart).toISOString(),
       files: window.files.length,
@@ -478,10 +863,12 @@ export async function handleCompactionQueue(
           files: window.files,
           writers: window.writers,
           targetFormat,
+          // Include doId so workflow can notify correct DO on completion
+          doId: window.doId,
         },
       })
 
-      logger.info('Workflow started', { workflowId: instance.id })
+      logger.info('Workflow started', { workflowId: instance.id, doId: window.doId })
 
       // Phase 2a: Confirm dispatch success - mark as dispatched
       await stateDO.fetch('http://internal/confirm-dispatch', {
@@ -496,6 +883,7 @@ export async function handleCompactionQueue(
       logger.error('Failed to start compaction workflow', {
         error: err instanceof Error ? err.message : 'Unknown',
         namespace: window.namespace,
+        doId: window.doId,
         windowKey: window.windowKey,
       })
 
@@ -540,6 +928,8 @@ interface StoredState {
   windows: Record<string, StoredWindowState>
   knownWriters: string[]
   writerLastSeen: Record<string, number>
+  /** Namespace priority: 0 (critical) to 3 (background). Default: 2 */
+  priority?: NamespacePriority
 }
 
 /**
@@ -565,6 +955,10 @@ export class CompactionStateDO {
   private knownWriters: Set<string> = new Set()
   private writerLastSeen: Map<string, number> = new Map()
   private initialized = false
+  /** Namespace priority: 0 (critical) to 3 (background). Default: 2 */
+  private priority: NamespacePriority = 2
+  /** External backpressure level (set by queue consumer) */
+  private backpressureLevel: BackpressureLevel = 'none'
 
   constructor(state: DurableObjectState) {
     this.state = state
@@ -578,6 +972,8 @@ export class CompactionStateDO {
     if (stored) {
       // Restore namespace
       this.namespace = stored.namespace ?? ''
+      // Restore priority
+      this.priority = stored.priority ?? 2
       // Restore windows (keyed by windowStart timestamp)
       for (const [key, sw] of Object.entries(stored.windows)) {
         this.windows.set(key, {
@@ -605,6 +1001,7 @@ export class CompactionStateDO {
       windows: {},
       knownWriters: Array.from(this.knownWriters),
       writerLastSeen: Object.fromEntries(this.writerLastSeen),
+      priority: this.priority,
     }
 
     for (const [key, window] of this.windows) {
@@ -622,12 +1019,64 @@ export class CompactionStateDO {
     await this.state.storage.put('compactionState', stored)
   }
 
+  // ===========================================================================
+  // Priority and Backpressure Helpers
+  // ===========================================================================
+
+  /**
+   * Get the effective max wait time based on priority
+   */
+  private getEffectiveMaxWaitTimeMs(): number {
+    return PRIORITY_WAIT_TIMES[this.priority]
+  }
+
+  /**
+   * Check if this namespace should be skipped due to backpressure
+   */
+  private shouldSkipDueToBackpressure(): boolean {
+    // P0 always processes
+    if (this.priority === 0) return false
+
+    // P1 processes under normal backpressure, skipped under severe
+    if (this.priority === 1) return this.backpressureLevel === 'severe'
+
+    // P2 skipped under severe backpressure
+    if (this.priority === 2) return this.backpressureLevel === 'severe'
+
+    // P3 skipped under any backpressure
+    return this.backpressureLevel !== 'none'
+  }
+
+  /**
+   * Calculate current backpressure level based on pending windows
+   */
+  private calculateBackpressureLevel(): BackpressureLevel {
+    let pendingCount = 0
+    for (const window of this.windows.values()) {
+      if (window.processingStatus.state === 'pending') {
+        pendingCount++
+      }
+    }
+
+    if (pendingCount >= SEVERE_BACKPRESSURE_THRESHOLD) return 'severe'
+    if (pendingCount >= BACKPRESSURE_THRESHOLD) return 'normal'
+    return 'none'
+  }
+
   async fetch(request: Request): Promise<Response> {
     await this.ensureInitialized()
     const url = new URL(request.url)
 
     if (url.pathname === '/update' && request.method === 'POST') {
       return this.handleUpdate(request)
+    }
+
+    if (url.pathname === '/config' && request.method === 'POST') {
+      return this.handleConfig(request)
+    }
+
+    if (url.pathname === '/set-backpressure' && request.method === 'POST') {
+      return this.handleSetBackpressure(request)
     }
 
     if (url.pathname === '/confirm-dispatch' && request.method === 'POST') {
@@ -647,6 +1096,61 @@ export class CompactionStateDO {
     }
 
     return new Response('Not Found', { status: 404 })
+  }
+
+  /**
+   * Handle /config endpoint - configure namespace priority
+   */
+  private async handleConfig(request: Request): Promise<Response> {
+    const body = await request.json() as { priority?: number }
+
+    if (body.priority !== undefined) {
+      // Validate priority is 0-3
+      if (typeof body.priority !== 'number' || body.priority < 0 || body.priority > 3) {
+        return new Response(JSON.stringify({ error: 'Priority must be 0, 1, 2, or 3' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      this.priority = body.priority as NamespacePriority
+    }
+
+    await this.saveState()
+
+    logger.info('Namespace priority configured', {
+      namespace: this.namespace,
+      priority: this.priority,
+    })
+
+    return new Response(JSON.stringify({ success: true, priority: this.priority }), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  /**
+   * Handle /set-backpressure endpoint - set external backpressure level
+   * This is typically called by the queue consumer based on global system state
+   */
+  private async handleSetBackpressure(request: Request): Promise<Response> {
+    const body = await request.json() as { level: BackpressureLevel }
+
+    if (!['none', 'normal', 'severe'].includes(body.level)) {
+      return new Response(JSON.stringify({ error: 'Invalid backpressure level' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    this.backpressureLevel = body.level
+
+    logger.info('Backpressure level set', {
+      namespace: this.namespace,
+      backpressure: this.backpressureLevel,
+    })
+
+    return new Response(JSON.stringify({ success: true, backpressure: this.backpressureLevel }), {
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 
   private async handleUpdate(request: Request): Promise<Response> {
@@ -725,6 +1229,24 @@ export class CompactionStateDO {
       }
     }
 
+    // Check if we should skip processing due to backpressure
+    const skippedDueToBackpressure = this.shouldSkipDueToBackpressure()
+    if (skippedDueToBackpressure) {
+      await this.saveState()
+      this.emitMetrics(now)
+      logger.info('Skipping window processing due to backpressure', {
+        namespace: this.namespace,
+        priority: this.priority,
+        backpressure: this.backpressureLevel,
+      })
+      return new Response(JSON.stringify({ windowsReady: [], skippedDueToBackpressure: true }), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    // Use priority-based max wait time
+    const effectiveMaxWaitTimeMs = this.getEffectiveMaxWaitTimeMs()
+
     // Check for windows ready for compaction (only pending windows)
     const activeWriters = this.getActiveWriters(now)
 
@@ -732,8 +1254,8 @@ export class CompactionStateDO {
       // Skip non-pending windows
       if (window.processingStatus.state !== 'pending') continue
 
-      // Skip if window is too recent (still filling)
-      if (now < window.windowEnd + config.maxWaitTimeMs) continue
+      // Skip if window is too recent (still filling) - use priority-based wait time
+      if (now < window.windowEnd + effectiveMaxWaitTimeMs) continue
 
       // Count total files
       let totalFiles = 0
@@ -746,7 +1268,7 @@ export class CompactionStateDO {
 
       // Check if we've heard from all active writers (or waited long enough)
       const missingWriters = activeWriters.filter(w => !window.writers.has(w))
-      const waitedLongEnough = (now - window.lastActivityAt) > config.maxWaitTimeMs
+      const waitedLongEnough = (now - window.lastActivityAt) > effectiveMaxWaitTimeMs
 
       if (missingWriters.length === 0 || waitedLongEnough) {
         // Window is ready! Mark as processing (Phase 1 of two-phase commit)
@@ -764,6 +1286,7 @@ export class CompactionStateDO {
           windowEnd: window.windowEnd,
           files: allFiles.sort(),
           writers: Array.from(window.writers),
+          priority: this.priority,
         })
       }
     }
@@ -771,9 +1294,70 @@ export class CompactionStateDO {
     // Persist state
     await this.saveState()
 
-    return new Response(JSON.stringify({ windowsReady }), {
+    // Emit metrics for observability dashboard
+    this.emitMetrics(now)
+
+    return new Response(JSON.stringify({ windowsReady, skippedDueToBackpressure: false }), {
       headers: { 'Content-Type': 'application/json' },
     })
+  }
+
+  /**
+   * Collect and emit compaction metrics for monitoring
+   * Called after each update to track system health
+   */
+  private emitMetrics(now: number): void {
+    // Count windows by state
+    let pendingWindows = 0
+    let processingWindows = 0
+    let dispatchedWindows = 0
+    let stuckWindows = 0
+    let totalPendingFiles = 0
+    let totalPendingBytes = 0
+    let oldestWindowAge = 0
+
+    for (const window of this.windows.values()) {
+      const windowAge = now - window.windowEnd
+      if (windowAge > oldestWindowAge) {
+        oldestWindowAge = windowAge
+      }
+
+      switch (window.processingStatus.state) {
+        case 'pending':
+          pendingWindows++
+          for (const files of window.filesByWriter.values()) {
+            totalPendingFiles += files.length
+          }
+          totalPendingBytes += window.totalSize
+          break
+        case 'processing':
+          processingWindows++
+          // Check if stuck (> 5 minutes in processing)
+          if (now - window.processingStatus.startedAt > PROCESSING_TIMEOUT_MS) {
+            stuckWindows++
+          }
+          break
+        case 'dispatched':
+          dispatchedWindows++
+          break
+      }
+    }
+
+    const metrics: CompactionMetrics = {
+      namespace: this.namespace,
+      timestamp: now,
+      windows_pending: pendingWindows,
+      windows_processing: processingWindows,
+      windows_dispatched: dispatchedWindows,
+      files_pending: totalPendingFiles,
+      oldest_window_age_ms: oldestWindowAge,
+      known_writers: this.knownWriters.size,
+      active_writers: this.getActiveWriters(now).length,
+      bytes_pending: totalPendingBytes,
+      windows_stuck: stuckWindows,
+    }
+
+    emitCompactionMetrics(metrics)
   }
 
   /**
@@ -959,7 +1543,10 @@ export class CompactionStateDO {
   private handleStatus(): Response {
     const now = Date.now()
 
-    // Calculate alerting metrics
+    // Calculate queue metrics
+    let pendingWindows = 0
+    let processingWindows = 0
+    let dispatchedWindows = 0
     let oldestWindowAge = 0
     let totalPendingFiles = 0
     let windowsStuckInProcessing = 0
@@ -971,25 +1558,61 @@ export class CompactionStateDO {
         oldestWindowAge = windowAge
       }
 
-      // Count pending files (only count pending windows, not processing/dispatched)
-      if (window.processingStatus.state === 'pending') {
-        for (const files of window.filesByWriter.values()) {
-          totalPendingFiles += files.length
-        }
+      switch (window.processingStatus.state) {
+        case 'pending':
+          pendingWindows++
+          for (const files of window.filesByWriter.values()) {
+            totalPendingFiles += files.length
+          }
+          break
+        case 'processing':
+          processingWindows++
+          // Count stuck processing windows (> 5 minutes in processing state)
+          if (now - window.processingStatus.startedAt > PROCESSING_TIMEOUT_MS) {
+            windowsStuckInProcessing++
+          }
+          break
+        case 'dispatched':
+          dispatchedWindows++
+          break
       }
+    }
 
-      // Count stuck processing windows (> 5 minutes in processing state)
-      if (
-        window.processingStatus.state === 'processing' &&
-        now - window.processingStatus.startedAt > PROCESSING_TIMEOUT_MS
-      ) {
-        windowsStuckInProcessing++
-      }
+    // Calculate health status based on priority
+    const effectiveMaxWaitTimeMs = this.getEffectiveMaxWaitTimeMs()
+    const healthThresholdMs = effectiveMaxWaitTimeMs * 2 // 2x the wait time is concerning
+    let healthStatus: 'healthy' | 'degraded' | 'unhealthy' = 'healthy'
+    const healthIssues: string[] = []
+
+    if (oldestWindowAge > healthThresholdMs) {
+      healthStatus = 'degraded'
+      healthIssues.push(`Oldest window age (${Math.round(oldestWindowAge / 60000)}m) exceeds threshold (${Math.round(healthThresholdMs / 60000)}m)`)
+    }
+
+    if (windowsStuckInProcessing > 0) {
+      healthStatus = 'unhealthy'
+      healthIssues.push(`${windowsStuckInProcessing} window(s) stuck in processing`)
     }
 
     const status = {
       namespace: this.namespace,
+      // Priority-based scheduling fields
+      priority: this.priority,
+      effectiveMaxWaitTimeMs: this.getEffectiveMaxWaitTimeMs(),
+      backpressure: this.calculateBackpressureLevel(),
+      // Queue metrics
       activeWindows: this.windows.size,
+      queueMetrics: {
+        pendingWindows,
+        processingWindows,
+        dispatchedWindows,
+      },
+      // Health status
+      health: {
+        status: healthStatus,
+        issues: healthIssues,
+      },
+      // Writer info
       knownWriters: Array.from(this.knownWriters),
       activeWriters: this.getActiveWriters(now),
       // Alerting metrics for health monitoring

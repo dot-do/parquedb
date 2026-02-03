@@ -1271,6 +1271,121 @@ export default {
       }
 
       // =======================================================================
+      // Compaction Dashboard - HTML monitoring page
+      // Rate limited via 'compaction' endpoint type (30 req/min)
+      //
+      // Query parameters:
+      // - namespaces: Comma-separated list of namespaces to monitor (required)
+      // =======================================================================
+      if (path === '/compaction/dashboard') {
+        const { generateDashboardHtml } = await import('../observability/compaction')
+
+        const namespacesParam = url.searchParams.get('namespaces')
+        if (!namespacesParam) {
+          return withRateLimitHeaders(
+            new Response(
+              JSON.stringify(
+                {
+                  error: 'namespaces parameter is required',
+                  usage: '/compaction/dashboard?namespaces=users,posts,comments',
+                },
+                null,
+                2
+              ),
+              {
+                status: 400,
+                headers: { 'Content-Type': 'application/json' },
+              }
+            )
+          )
+        }
+
+        const namespaces = namespacesParam
+          .split(',')
+          .map((ns) => ns.trim())
+          .filter(Boolean)
+        if (namespaces.length === 0) {
+          return withRateLimitHeaders(
+            buildErrorResponse(
+              request,
+              new Error('namespaces parameter must contain at least one namespace'),
+              400,
+              startTime
+            )
+          )
+        }
+
+        const html = generateDashboardHtml(baseUrl, namespaces)
+        return withRateLimitHeaders(
+          new Response(html, {
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+          })
+        )
+      }
+
+      // =======================================================================
+      // Compaction Metrics - Prometheus format export
+      // Rate limited via 'compaction' endpoint type (30 req/min)
+      //
+      // Query parameters:
+      // - namespaces: Optional comma-separated list of namespaces to include
+      // =======================================================================
+      if (path === '/compaction/metrics') {
+        const { exportPrometheusMetrics } = await import('../observability/compaction')
+
+        const namespacesParam = url.searchParams.get('namespaces')
+        const namespaces = namespacesParam
+          ? namespacesParam
+              .split(',')
+              .map((ns) => ns.trim())
+              .filter(Boolean)
+          : undefined
+
+        const prometheusOutput = exportPrometheusMetrics(namespaces)
+        return withRateLimitHeaders(
+          new Response(prometheusOutput, {
+            headers: {
+              'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+            },
+          })
+        )
+      }
+
+      // =======================================================================
+      // Compaction Metrics JSON - JSON time-series export
+      // Rate limited via 'compaction' endpoint type (30 req/min)
+      //
+      // Query parameters:
+      // - namespaces: Optional comma-separated list of namespaces to include
+      // - since: Optional Unix timestamp (ms) to filter data points from
+      // - limit: Optional max data points per series (default: 100)
+      // =======================================================================
+      if (path === '/compaction/metrics/json') {
+        const { exportJsonTimeSeries } = await import('../observability/compaction')
+
+        const namespacesParam = url.searchParams.get('namespaces')
+        const namespaces = namespacesParam
+          ? namespacesParam
+              .split(',')
+              .map((ns) => ns.trim())
+              .filter(Boolean)
+          : undefined
+
+        const sinceParam = url.searchParams.get('since')
+        const since = sinceParam ? parseInt(sinceParam, 10) : undefined
+
+        const limitParam = url.searchParams.get('limit')
+        const limit = limitParam ? parseInt(limitParam, 10) : 100
+
+        const jsonData = exportJsonTimeSeries(namespaces, since, limit)
+        return withRateLimitHeaders(
+          new Response(JSON.stringify(jsonData, null, 2), {
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      }
+
+      // =======================================================================
       // Debug Endpoints
       // Rate limited via 'debug' endpoint type (30 req/min)
       // =======================================================================

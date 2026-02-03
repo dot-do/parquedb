@@ -63,6 +63,18 @@ export {
   CompactionStateDO,
   type R2EventMessage,
   type CompactionConsumerConfig,
+  // Time bucket sharding helpers
+  type TimeBucketShardingConfig,
+  calculateTimeBucket,
+  getCompactionStateDOId,
+  parseCompactionStateDOId,
+  getRecentTimeBuckets,
+  isTimeBucketExpired,
+  groupUpdatesByDOId,
+  shouldUseTimeBucketSharding,
+  // Status aggregation
+  type AggregatedCompactionStatusResponse,
+  getAggregatedCompactionStatus,
 } from './compaction-queue-consumer'
 
 // Migration Workflow (standalone)
@@ -78,6 +90,52 @@ export {
   type VacuumResult,
   type OrphanedFileInfo,
 } from './vacuum-workflow'
+
+// Hierarchical Compaction (LSM-tree style) - Types and Pure Functions
+export {
+  type CompactionLevel,
+  type HierarchicalCompactionConfig,
+  type HierarchicalCompactionLevels,
+  type LevelFileMetadata,
+  type LevelState,
+  type NamespaceLevelState,
+  type CompactionPromotionParams,
+  type PromotionResult,
+  DEFAULT_HIERARCHICAL_CONFIG,
+  getNextLevel,
+  getPromotionThreshold,
+  getISOWeek,
+  generateLevelPath,
+  parseLevelFromPath,
+  shouldPromote,
+  createEmptyLevelState,
+  createEmptyNamespaceLevelState,
+  addFileToLevel,
+  removeFilesFromLevel,
+  getPromotionsNeeded,
+} from './hierarchical-compaction-types'
+
+// Hierarchical Compaction (LSM-tree style) - Worker Classes
+export {
+  LevelStateDO,
+  CompactionPromotionWorkflow,
+  registerCompactedFile,
+  checkPromotionNeeded,
+  removePromotedFiles,
+} from './hierarchical-compaction'
+
+// Streaming Merge-Sort (for large compaction windows)
+export {
+  StreamingMergeSorter,
+  MinHeap,
+  streamingMergeSort,
+  estimateStreamingMergeMemory,
+  calculateOptimalChunkSize,
+  shouldUseStreamingMerge,
+  type Row,
+  type StreamingMergeOptions,
+  type StreamingMergeResult,
+} from './streaming-merge'
 
 // Utilities and Type Guards
 export {
