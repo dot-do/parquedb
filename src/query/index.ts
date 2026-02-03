@@ -13,6 +13,9 @@ export {
   deepEqual,
   compareValues,
   getValueType,
+  setFilterConfig,
+  getFilterConfig,
+  type FilterConfig,
 } from './filter'
 
 // Update operators engine

@@ -37,6 +37,82 @@ import type { Filter } from '../types/filter'
 import { deepEqual, compareValues, getNestedValue, getValueType, createSafeRegex } from '../utils'
 
 // =============================================================================
+// Configuration
+// =============================================================================
+
+/**
+ * Configuration for filter evaluation behavior
+ */
+export interface FilterConfig {
+  /**
+   * Behavior when an unknown operator is encountered:
+   * - 'ignore': Silently ignore unknown operators (default, backward compatible)
+   * - 'warn': Log a warning to console
+   * - 'error': Throw an error
+   */
+  unknownOperatorBehavior?: 'ignore' | 'warn' | 'error'
+}
+
+/**
+ * Global filter configuration
+ * Can be overridden per operation
+ */
+let globalFilterConfig: FilterConfig = {
+  unknownOperatorBehavior: 'ignore',
+}
+
+/**
+ * Set global filter configuration
+ */
+export function setFilterConfig(config: FilterConfig): void {
+  globalFilterConfig = { ...globalFilterConfig, ...config }
+}
+
+/**
+ * Get current filter configuration
+ */
+export function getFilterConfig(): FilterConfig {
+  return { ...globalFilterConfig }
+}
+
+/**
+ * Known operators for validation
+ */
+const KNOWN_OPERATORS = new Set([
+  // Comparison operators
+  '$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin',
+  // String operators
+  '$regex', '$options', '$startsWith', '$endsWith', '$contains',
+  // Array operators
+  '$all', '$elemMatch', '$size',
+  // Existence operators
+  '$exists', '$type',
+  // Logical operators (top-level)
+  '$and', '$or', '$not', '$nor',
+  // Special operators (handled elsewhere)
+  '$text', '$vector', '$geo',
+])
+
+/**
+ * Handle unknown operator
+ */
+function handleUnknownOperator(operator: string, config?: FilterConfig): void {
+  const behavior = config?.unknownOperatorBehavior ?? globalFilterConfig.unknownOperatorBehavior ?? 'ignore'
+
+  if (behavior === 'ignore') {
+    return
+  }
+
+  const message = `Unknown query operator: ${operator}`
+
+  if (behavior === 'warn') {
+    console.warn(message)
+  } else if (behavior === 'error') {
+    throw new Error(message)
+  }
+}
+
+// =============================================================================
 // Main Filter Evaluation
 // =============================================================================
 
@@ -45,9 +121,10 @@ import { deepEqual, compareValues, getNestedValue, getValueType, createSafeRegex
  *
  * @param row - The row to check
  * @param filter - MongoDB-style filter
+ * @param config - Optional filter configuration
  * @returns true if the row matches the filter
  */
-export function matchesFilter(row: unknown, filter: Filter): boolean {
+export function matchesFilter(row: unknown, filter: Filter, config?: FilterConfig): boolean {
   if (!filter || Object.keys(filter).length === 0) {
     return true
   }
@@ -93,7 +170,10 @@ export function matchesFilter(row: unknown, filter: Filter): boolean {
           if (opValue.some(v => deepEqual(row, v))) return false
           break
         default:
-          // Unknown operator for primitives - ignore
+          // Unknown operator for primitives
+          if (!KNOWN_OPERATORS.has(op)) {
+            handleUnknownOperator(op, config)
+          }
           break
       }
     }
@@ -105,28 +185,28 @@ export function matchesFilter(row: unknown, filter: Filter): boolean {
   // Handle logical operators - these must be combined with field conditions
   // First check $and if present
   if (filter.$and) {
-    if (!filter.$and.every(subFilter => matchesFilter(row, subFilter))) {
+    if (!filter.$and.every(subFilter => matchesFilter(row, subFilter, config))) {
       return false
     }
   }
 
   // Check $or if present
   if (filter.$or) {
-    if (!filter.$or.some(subFilter => matchesFilter(row, subFilter))) {
+    if (!filter.$or.some(subFilter => matchesFilter(row, subFilter, config))) {
       return false
     }
   }
 
   // Check $not if present
   if (filter.$not) {
-    if (matchesFilter(row, filter.$not)) {
+    if (matchesFilter(row, filter.$not, config)) {
       return false
     }
   }
 
   // Check $nor if present
   if (filter.$nor) {
-    if (filter.$nor.some(subFilter => matchesFilter(row, subFilter))) {
+    if (filter.$nor.some(subFilter => matchesFilter(row, subFilter, config))) {
       return false
     }
   }
@@ -140,7 +220,7 @@ export function matchesFilter(row: unknown, filter: Filter): boolean {
 
     const fieldValue = getNestedValue(obj, field)
 
-    if (!matchesCondition(fieldValue, condition)) {
+    if (!matchesCondition(fieldValue, condition, config)) {
       return false
     }
   }
@@ -152,10 +232,11 @@ export function matchesFilter(row: unknown, filter: Filter): boolean {
  * Create a predicate function from a filter
  *
  * @param filter - MongoDB-style filter
+ * @param config - Optional filter configuration
  * @returns Predicate function
  */
-export function createPredicate(filter: Filter): (row: unknown) => boolean {
-  return (row: unknown) => matchesFilter(row, filter)
+export function createPredicate(filter: Filter, config?: FilterConfig): (row: unknown) => boolean {
+  return (row: unknown) => matchesFilter(row, filter, config)
 }
 
 /**
@@ -168,9 +249,10 @@ export function createPredicate(filter: Filter): (row: unknown) => boolean {
  *
  * @param value - The value to check
  * @param condition - The condition to match against
+ * @param config - Optional filter configuration
  * @returns true if the value matches
  */
-export function matchesCondition(value: unknown, condition: unknown): boolean {
+export function matchesCondition(value: unknown, condition: unknown, config?: FilterConfig): boolean {
   // Null condition - matches both null and undefined (MongoDB behavior)
   if (condition === null) {
     return value === null || value === undefined
@@ -183,7 +265,7 @@ export function matchesCondition(value: unknown, condition: unknown): boolean {
 
   // Operator object
   if (isOperatorObject(condition)) {
-    return evaluateOperators(value, condition as Record<string, unknown>)
+    return evaluateOperators(value, condition as Record<string, unknown>, config)
   }
 
   // Direct equality
@@ -210,7 +292,7 @@ function isOperatorObject(value: unknown): boolean {
 /**
  * Evaluate operator conditions
  */
-function evaluateOperators(value: unknown, operators: Record<string, unknown>): boolean {
+function evaluateOperators(value: unknown, operators: Record<string, unknown>, config?: FilterConfig): boolean {
   for (const [op, opValue] of Object.entries(operators)) {
     switch (op) {
       case '$eq':
@@ -296,7 +378,7 @@ function evaluateOperators(value: unknown, operators: Record<string, unknown>): 
       case '$elemMatch': {
         if (!Array.isArray(value)) return false
         const subFilter = opValue as Filter
-        if (!value.some(elem => matchesFilter(elem, subFilter))) return false
+        if (!value.some(elem => matchesFilter(elem, subFilter, config))) return false
         break
       }
 
@@ -320,7 +402,10 @@ function evaluateOperators(value: unknown, operators: Record<string, unknown>): 
       }
 
       default:
-        // Unknown operator - ignore
+        // Unknown operator - validate and handle
+        if (!KNOWN_OPERATORS.has(op)) {
+          handleUnknownOperator(op, config)
+        }
         break
     }
   }

@@ -182,6 +182,30 @@ Deploy to Cloudflare Workers with R2 storage. See [Payload Adapter Documentation
 
 ParqueDB supports MongoDB-style filter operators:
 
+### Unknown Operator Validation
+
+ParqueDB can validate query operators to catch typos and incorrect usage. Configure the behavior for unknown operators:
+
+```typescript
+import { setFilterConfig } from 'parquedb'
+
+// Configure globally
+setFilterConfig({ unknownOperatorBehavior: 'warn' })  // Log warnings (recommended)
+setFilterConfig({ unknownOperatorBehavior: 'error' }) // Throw errors (strict)
+setFilterConfig({ unknownOperatorBehavior: 'ignore' }) // Silent (default, backward compatible)
+
+// Or pass config per query
+const results = await db.Posts.find(
+  { score: { $customOp: 100 } },  // Will trigger validation
+  { config: { unknownOperatorBehavior: 'error' } }
+)
+```
+
+This helps catch common mistakes like:
+- Typos: `{ score: { $get: 50 } }` instead of `{ $gte: 50 }`
+- Wrong case: `{ score: { $GT: 50 } }` instead of `{ $gt: 50 }`
+- Invalid operators: `{ name: { $match: 'test' } }` (use `$regex` instead)
+
 ### Comparison Operators
 
 | Operator | Description | Example |
