@@ -799,6 +799,294 @@ The tail worker lives in `src/tail/` (not `src/worker/`) because:
 2. **Separate deployment** - Deployed independently from main ParqueDB worker
 3. **Different concerns** - Pure ingestion, no query serving
 
+## Local Streaming MVs (Node.js)
+
+Streaming MVs also work locally for development and non-Workers environments.
+
+### Runtime Adapters
+
+```typescript
+import { createStreamAdapter } from 'parquedb'
+
+// Node.js - EventEmitter
+const nodeAdapter = createStreamAdapter({
+  type: 'node',
+  emitter: myEventEmitter,  // EventEmitter instance
+  event: 'data',            // Event name to listen for
+})
+
+// Generic - Async iterator
+const iteratorAdapter = createStreamAdapter({
+  type: 'iterator',
+  source: async function* () {
+    for await (const event of myAsyncSource) {
+      yield event
+    }
+  },
+})
+
+// Pull-based - Polling
+const pollingAdapter = createStreamAdapter({
+  type: 'poll',
+  fetch: async () => fetchLatestEvents(),
+  intervalMs: 1000,
+})
+```
+
+### Local Processing Loop
+
+```typescript
+// Start local MV processing
+const processor = db.createStreamProcessor({
+  views: [WorkerLogs, WorkerErrors, WorkerRequests],
+  adapter: nodeAdapter,
+  batchSize: 100,
+  flushIntervalMs: 5000,
+})
+
+await processor.start()
+
+// Later
+await processor.stop()
+```
+
+## AI Observability MVs
+
+Pre-built MVs for AI SDK and evalite that auto-materialize analytics.
+
+### AI Request Analytics
+
+```typescript
+import { AIRequestsMV, AIErrorsMV, AIUsageMV } from 'parquedb/integrations/ai-sdk'
+
+// These MVs auto-subscribe to AI SDK middleware events
+const db = new ParqueDB({ storage })
+
+// Register the AI MVs
+db.registerView(AIRequestsMV)    // All AI requests with latency, tokens, cost
+db.registerView(AIErrorsMV)      // Failed requests with error details
+db.registerView(AIUsageMV)       // Aggregated usage by model/provider/day
+```
+
+#### AIRequestsMV Schema
+
+```typescript
+const AIRequestsMV = defineStreamView({
+  $type: 'AIRequest',
+  $stream: 'ai-sdk',
+  $schema: {
+    $id: 'string!',
+    requestType: 'string!',    // 'generate' | 'stream'
+    modelId: 'string!',
+    providerId: 'string!',
+    promptTokens: 'int?',
+    completionTokens: 'int?',
+    totalTokens: 'int?',
+    latencyMs: 'int!',
+    cached: 'boolean!',
+    finishReason: 'string?',
+    timestamp: 'timestamp!',
+    // Cost tracking
+    estimatedCost: 'decimal(10,6)?',
+  },
+  // Auto-populated from AI SDK middleware logs
+})
+```
+
+#### AIUsageMV (Aggregated)
+
+```typescript
+const AIUsageMV = defineStreamView({
+  $type: 'AIUsage',
+  $stream: 'ai-sdk',
+  $schema: {
+    modelId: 'string!',
+    providerId: 'string!',
+    date: 'date!',
+    requestCount: 'int!',
+    totalTokens: 'long!',
+    totalLatencyMs: 'long!',
+    cacheHits: 'int!',
+    cacheMisses: 'int!',
+    errorCount: 'int!',
+    estimatedCost: 'decimal(10,4)!',
+  },
+  $groupBy: ['modelId', 'providerId', { date: '$timestamp' }],
+  $compute: {
+    requestCount: { $count: '*' },
+    totalTokens: { $sum: 'totalTokens' },
+    totalLatencyMs: { $sum: 'latencyMs' },
+    cacheHits: { $sum: { $cond: ['$cached', 1, 0] } },
+    cacheMisses: { $sum: { $cond: ['$cached', 0, 1] } },
+    errorCount: { $sum: { $cond: [{ $exists: '$error' }, 1, 0] } },
+    estimatedCost: { $sum: 'estimatedCost' },
+  },
+})
+```
+
+### Generated Content Stream
+
+Capture all AI-generated content for analysis, training data, or audit.
+
+```typescript
+const GeneratedContentMV = defineStreamView({
+  $type: 'GeneratedContent',
+  $stream: 'ai-sdk',
+  $schema: {
+    $id: 'string!',
+    modelId: 'string!',
+    contentType: 'string!',   // 'text' | 'object' | 'embedding'
+    prompt: 'string?',        // Input prompt (verbose mode)
+    content: 'variant!',      // Generated text or structured object
+    schema: 'string?',        // Zod schema name if structured
+    tokens: 'int?',
+    timestamp: 'timestamp!',
+  },
+  $filter: (event) => event.response?.text || event.response?.object,
+  $transform: (event) => ({
+    $id: `gen-${event.timestamp}-${event.modelId}`,
+    modelId: event.modelId,
+    contentType: event.response?.object ? 'object' : 'text',
+    prompt: event.prompt,
+    content: event.response?.object ?? event.response?.text,
+    schema: event.response?.schema?.name,
+    tokens: event.usage?.completionTokens,
+    timestamp: new Date(event.timestamp),
+  }),
+})
+```
+
+### Evalite Integration
+
+Auto-materialize eval analytics from evalite runs.
+
+```typescript
+import { EvalScoresMV, EvalTrendsMV } from 'parquedb/integrations/evalite'
+
+// Track score distributions over time
+const EvalScoresMV = defineStreamView({
+  $type: 'EvalScore',
+  $stream: 'evalite',
+  $schema: {
+    runId: 'int!',
+    suiteName: 'string!',
+    scorerName: 'string!',
+    score: 'decimal(5,4)!',
+    timestamp: 'timestamp!',
+  },
+})
+
+// Aggregate trends by suite/scorer
+const EvalTrendsMV = defineStreamView({
+  $type: 'EvalTrend',
+  $stream: 'evalite',
+  $groupBy: ['suiteName', 'scorerName', { week: '$timestamp' }],
+  $compute: {
+    avgScore: { $avg: 'score' },
+    minScore: { $min: 'score' },
+    maxScore: { $max: 'score' },
+    runCount: { $count: '*' },
+  },
+})
+```
+
+### Wiring It Up Locally
+
+```typescript
+// evalite.config.ts
+import { defineConfig } from 'evalite'
+import { createEvaliteAdapter } from 'parquedb/integrations/evalite'
+import { FsBackend } from 'parquedb/storage'
+
+const storage = new FsBackend('./data')
+
+export default defineConfig({
+  storage: () => createEvaliteAdapter({
+    storage,
+    // Enable streaming MVs
+    mvs: {
+      enabled: true,
+      views: ['EvalScoresMV', 'EvalTrendsMV'],
+    },
+  }),
+})
+```
+
+```typescript
+// ai-app.ts
+import { ParqueDB } from 'parquedb'
+import { createParqueDBMiddleware } from 'parquedb/integrations/ai-sdk'
+import { AIRequestsMV, AIUsageMV, GeneratedContentMV } from 'parquedb/integrations/ai-sdk'
+import { wrapLanguageModel } from 'ai'
+import { openai } from '@ai-sdk/openai'
+
+const db = new ParqueDB({
+  storage: { type: 'fs', path: './data' },
+})
+
+// Register AI MVs
+db.registerView(AIRequestsMV)
+db.registerView(AIUsageMV)
+db.registerView(GeneratedContentMV)
+
+// Create middleware with MV streaming
+const middleware = createParqueDBMiddleware({
+  db,
+  logging: { enabled: true, level: 'verbose' },
+  mvs: { enabled: true },  // Stream to registered MVs
+})
+
+const model = wrapLanguageModel({
+  model: openai('gpt-4'),
+  middleware,
+})
+
+// Use model - all requests auto-stream to MVs
+const result = await generateText({ model, prompt: 'Hello!' })
+
+// Query the MVs
+const todayUsage = await db.AIUsageMV.find({
+  date: new Date().toISOString().split('T')[0],
+})
+
+const recentContent = await db.GeneratedContentMV.find({
+  contentType: 'object',
+}, { limit: 100, sort: { timestamp: -1 } })
+```
+
+### Architecture: Local vs Workers
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Stream Sources                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐     │
+│  │  Tail       │   │  AI SDK     │   │  Evalite    │   │  Custom     │     │
+│  │  Events     │   │  Middleware │   │  Adapter    │   │  Streams    │     │
+│  │  (Workers)  │   │  (Node.js)  │   │  (Node.js)  │   │  (Any)      │     │
+│  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘   └──────┬──────┘     │
+│         │                 │                 │                 │             │
+│         └─────────────────┼─────────────────┼─────────────────┘             │
+│                           │                 │                               │
+│                           ▼                 ▼                               │
+│                 ┌─────────────────────────────────────┐                     │
+│                 │      Stream Processor               │                     │
+│                 │  ┌─────────┐  ┌─────────┐          │                     │
+│                 │  │ Filter  │→ │Transform│→ Batch   │                     │
+│                 │  └─────────┘  └─────────┘          │                     │
+│                 └─────────────────┬───────────────────┘                     │
+│                                   │                                         │
+│                                   ▼                                         │
+│                 ┌─────────────────────────────────────┐                     │
+│                 │      MV Storage                      │                     │
+│                 │  Native | Iceberg | Delta Lake      │                     │
+│                 │  (Parquet files)                    │                     │
+│                 └─────────────────────────────────────┘                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Future Enhancements
 
 1. **Cascading MVs** - MVs that depend on other MVs
