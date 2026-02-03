@@ -21,6 +21,10 @@ pnpm add parquedb
 
 ParqueDB offers two modes: flexible (schema-less) and typed (with schema).
 
+**Collection Naming**:
+- With the auto-configured `db` export: Use plural names (e.g., `db.Users`, `db.Posts`)
+- With typed `DB()` factory: Use exact schema names (e.g., if schema defines `User`, use `database.User`)
+
 ### Flexible Mode
 
 The simplest way to get started - no schema required:
@@ -29,6 +33,7 @@ The simplest way to get started - no schema required:
 import { db } from 'parquedb'
 
 // Create entities in any collection
+// Note: Collection name is typically plural (Posts, Users, etc.)
 const post = await db.Posts.create({
   title: 'Hello World',
   content: 'My first post!',
@@ -38,7 +43,7 @@ const post = await db.Posts.create({
 // Query with MongoDB-style filters
 const published = await db.Posts.find({ status: 'published' })
 
-// Get by ID
+// Get by ID (supports both full ID or short ID)
 const found = await db.Posts.get(post.$id)
 ```
 
@@ -63,8 +68,9 @@ const database = DB({
 })
 
 // TypeScript knows the shape of your data
-await database.User.create({ email: 'alice@example.com', name: 'Alice' })
-await database.Post.create({ title: 'Hello', content: 'World', author: 'users/alice' })
+// Note: With typed schema, collection names match your schema exactly (User, not Users)
+const user = await database.User.create({ email: 'alice@example.com', name: 'Alice' })
+await database.Post.create({ title: 'Hello', content: 'World', author: user.$id })
 ```
 
 ## Schema Notation
@@ -83,27 +89,55 @@ Field types use a concise string notation:
 | `-> Target` | Forward relationship |
 | `<- Target.field[]` | Reverse relationship |
 
-Example schema with relationships:
+Example schema with bidirectional relationships:
 
 ```typescript
 const db = DB({
   User: {
     email: 'email!#',
     name: 'string!',
-    posts: '<- Post.author[]'    // reverse: all posts by this user
+    posts: '<- Post.author[]'    // Reverse: all posts by this user
   },
   Post: {
     title: 'string!',
     content: 'markdown',
-    author: '-> User.posts',     // forward: link to user
-    tags: '-> Tag.posts[]'       // many-to-many
+    author: '-> User.posts',     // Forward: link to user (one-to-many)
+    tags: '-> Tag.posts[]'       // Forward: link to tags (many-to-many)
   },
   Tag: {
     name: 'string!#',
-    posts: '<- Post.tags[]'
+    posts: '<- Post.tags[]'      // Reverse: all posts with this tag
   }
 })
+
+// Relationships are bidirectional - traverse in either direction
+const user = await db.User.create({ email: 'alice@example.com', name: 'Alice' })
+const post = await db.Post.create({ title: 'Hello', content: 'World', author: user.$id })
+
+// Forward traversal (Post -> User)
+const author = await db.User.get(post.author)
+
+// Reverse traversal (User -> Posts) - automatically indexed
+const userPosts = await db.Post.find({ author: user.$id })
 ```
+
+## Entity Structure
+
+All entities in ParqueDB have built-in fields that are automatically managed:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `$id` | string | Unique identifier (format: `namespace/ulid`) |
+| `$type` | string | Entity type (e.g., 'User', 'Post') - auto-derived from collection name |
+| `name` | string | Human-readable name - auto-derived from `name`, `title`, or `label` fields |
+| `createdAt` | Date | Creation timestamp |
+| `createdBy` | string | Creator entity ID |
+| `updatedAt` | Date | Last update timestamp |
+| `updatedBy` | string | Last updater entity ID |
+| `deletedAt` | Date? | Soft delete timestamp (null if not deleted) |
+| `deletedBy` | string? | Deleter entity ID (null if not deleted) |
+
+**Important**: When creating entities, provide a `name`, `title`, or `label` field - ParqueDB will automatically use this for the entity's `name` property.
 
 ## CRUD Operations
 
@@ -115,23 +149,44 @@ const user = await db.Users.create({
   name: 'Alice'
 })
 
-console.log(user.$id)       // 'users/abc123'
+console.log(user.$id)       // 'users/abc123' (namespace/ulid format)
+console.log(user.$type)     // 'User' (auto-derived from collection name)
+console.log(user.name)      // 'Alice'
 console.log(user.createdAt) // Date object
 ```
 
 ### Find
 
 ```typescript
-// Find all
+// Find all entities in a collection
 const allUsers = await db.Users.find()
 
-// With filter
+// Filter with exact match
 const active = await db.Users.find({ status: 'active' })
 
-// With options
+// Filter with operators (MongoDB-style)
+const adults = await db.Users.find({ age: { $gte: 18 } })
+
+// Multiple conditions (AND)
+const activeAdults = await db.Users.find({
+  status: 'active',
+  age: { $gte: 18 }
+})
+
+// With pagination and sorting
 const page = await db.Users.find(
   { status: 'active' },
-  { limit: 10, sort: { createdAt: -1 } }
+  {
+    limit: 10,
+    skip: 20,
+    sort: { createdAt: -1 }  // -1 for descending, 1 for ascending
+  }
+)
+
+// Projection (select specific fields)
+const names = await db.Users.find(
+  {},
+  { project: { name: 1, email: 1 } }  // Only return name and email
 )
 ```
 
@@ -141,8 +196,8 @@ const page = await db.Users.find(
 // By full ID
 const user = await db.Users.get('users/abc123')
 
-// Short ID (namespace inferred)
-const user = await db.Users.get('abc123')
+// By short ID (namespace inferred from collection)
+const sameUser = await db.Users.get('abc123')
 
 // Returns null if not found
 const missing = await db.Users.get('nonexistent')  // null
@@ -150,23 +205,34 @@ const missing = await db.Users.get('nonexistent')  // null
 
 ### Update
 
+ParqueDB supports MongoDB-style update operators:
+
 ```typescript
-// $set - Set field values
+// $set - Set or update field values
 await db.Users.update(user.$id, {
   $set: { name: 'Alice Smith', status: 'verified' }
 })
 
-// $inc - Increment numbers
+// $inc - Increment or decrement numeric values
 await db.Posts.update(post.$id, {
-  $inc: { viewCount: 1 }
+  $inc: { viewCount: 1, likes: -1 }
 })
 
-// $push - Add to array
+// $push - Add item(s) to an array
 await db.Posts.update(post.$id, {
-  $push: { tags: 'featured' }
+  $push: { tags: 'featured' }  // Single item
 })
 
-// $link - Create relationship
+await db.Posts.update(post.$id, {
+  $push: { tags: ['featured', 'popular'] }  // Multiple items
+})
+
+// $unset - Remove fields
+await db.Users.update(user.$id, {
+  $unset: { temporaryFlag: true }
+})
+
+// $link - Create a relationship
 await db.Posts.update(post.$id, {
   $link: { author: user.$id }
 })
@@ -175,24 +241,27 @@ await db.Posts.update(post.$id, {
 ### Delete
 
 ```typescript
-// Soft delete (default)
+// Soft delete (default) - sets deletedAt timestamp
 await db.Posts.delete(post.$id)
 
-// Hard delete (permanent)
+// Hard delete (permanent) - completely removes the entity
 await db.Posts.delete(post.$id, { hard: true })
+
+// Soft-deleted entities are excluded from queries by default
+const posts = await db.Posts.find()  // Won't include soft-deleted posts
 ```
 
 ## SQL Support
 
-ParqueDB includes a SQL template tag for familiar queries:
+ParqueDB includes a SQL template tag for familiar queries. SQL queries are automatically translated to the underlying ParqueDB operations:
 
 ```typescript
 import { db } from 'parquedb'
 
-// Template literal syntax with parameter binding
+// Template literal syntax with automatic parameter binding
 const users = await db.sql`SELECT * FROM users WHERE age > ${21}`
 
-// Complex queries
+// Complex queries with joins and aggregations
 const results = await db.sql`
   SELECT u.name, COUNT(p.$id) as post_count
   FROM users u
@@ -204,19 +273,24 @@ const results = await db.sql`
 `
 ```
 
-SQL can also be destructured from a DB instance:
+SQL can also be destructured from a typed DB instance:
 
 ```typescript
-const { sql } = DB({
-  User: { email: 'string!#', name: 'string' }
+import { DB } from 'parquedb'
+
+const database = DB({
+  User: { email: 'string!#', name: 'string', role: 'string' }
 })
+
+// Destructure sql for direct use
+const { sql } = database
 
 const admins = await sql`SELECT * FROM users WHERE role = ${'admin'}`
 ```
 
 ## Configuration File
 
-Create `parquedb.config.ts` for persistent configuration:
+Create `parquedb.config.ts` in your project root for persistent configuration. The auto-configured `db` and `sql` exports will automatically detect and load this configuration:
 
 ```typescript
 import { defineConfig, defineSchema } from 'parquedb/config'
@@ -233,7 +307,7 @@ export const schema = defineSchema({
     status: 'string',
     author: '-> User',
 
-    // Studio layout configuration
+    // Optional: Studio layout configuration
     $layout: [['title'], 'content'],
     $sidebar: ['$id', 'status', 'createdAt'],
     $studio: {
@@ -253,6 +327,16 @@ export default defineConfig({
 })
 ```
 
+With this configuration file in place, `db` and `sql` imports automatically use your schema and storage settings:
+
+```typescript
+import { db, sql } from 'parquedb'
+
+// Uses the schema and storage from parquedb.config.ts
+await db.Users.create({ email: 'user@example.com', name: 'User' })
+const users = await sql`SELECT * FROM users`
+```
+
 ## Type-Safe Imports
 
 ParqueDB provides two approaches for full TypeScript type safety:
@@ -270,7 +354,10 @@ export const schema = defineSchema({
   Post: { title: 'string!', author: '-> User' }
 })
 
-export default defineConfig({ storage: 'fs', schema })
+export default defineConfig({
+  storage: { type: 'fs', path: './data' },
+  schema
+})
 ```
 
 ```typescript
@@ -278,18 +365,18 @@ export default defineConfig({ storage: 'fs', schema })
 import { DB } from 'parquedb'
 import { schema } from '../parquedb.config'
 
-// Fully typed - TypeScript knows your collections
+// Fully typed - TypeScript knows your collection names and fields
 export const db = DB(schema)
 export const { sql } = db
 
-// Usage with full autocomplete
+// Usage with full autocomplete and type checking
 await db.User.create({ email: 'alice@example.com', name: 'Alice' })
-await db.Post.find({ title: { $contains: 'Hello' } })
+const posts = await db.Post.find({ title: { $contains: 'Hello' } })
 ```
 
 ### Option 2: Generate Types
 
-Generate typed exports from your config file:
+Generate typed exports from your `parquedb.config.ts` file:
 
 ```bash
 # Generate to default location (src/db.generated.ts)
@@ -299,32 +386,93 @@ npx parquedb generate
 npx parquedb generate --output lib/database.ts
 ```
 
-Then import the generated file:
+Then import the generated, fully-typed database instance:
 
 ```typescript
 import { db, sql } from './db.generated'
 
-// Fully typed!
+// Fully typed with autocomplete and type checking
 await db.User.create({ email: 'bob@example.com', name: 'Bob' })
 const users = await db.User.find({ role: 'admin' })
+
+// SQL is also fully typed
+const result = await sql`SELECT * FROM users WHERE role = ${'admin'}`
 ```
 
 ## ParqueDB Studio
 
-Launch the admin interface:
+Launch the admin interface to browse and edit your data:
 
 ```bash
-# Auto-discover Parquet files
+# Auto-discover Parquet files in current directory
 npx parquedb studio
 
-# Specify directory
+# Specify data directory
 npx parquedb studio ./data
 
-# Custom port, read-only mode
-npx parquedb studio --port 8080 --read-only
+# Custom port
+npx parquedb studio --port 8080
+
+# Read-only mode (prevents edits)
+npx parquedb studio --read-only
 ```
 
-See [Studio Documentation](./studio.md) for layout configuration and deployment.
+Studio automatically uses your `parquedb.config.ts` if present, including schema definitions and layout configurations.
+
+See [Studio Documentation](./studio.md) for advanced layout configuration and deployment options.
+
+## Storage Backends
+
+ParqueDB supports multiple storage backends for different environments:
+
+```typescript
+import { DB, MemoryBackend, FsBackend, R2Backend } from 'parquedb'
+
+// In-memory (testing/development)
+const memDb = DB({ schema: 'flexible' }, {
+  storage: new MemoryBackend()
+})
+
+// Filesystem (Node.js)
+const fsDb = DB({ schema: 'flexible' }, {
+  storage: new FsBackend('./data')
+})
+
+// Cloudflare R2 (Workers)
+const r2Db = DB({ schema: 'flexible' }, {
+  storage: new R2Backend(env.BUCKET)
+})
+```
+
+In `parquedb.config.ts`, you can configure storage using shortcuts:
+
+```typescript
+export default defineConfig({
+  storage: 'fs',  // Uses default ./data directory
+  // or
+  storage: { type: 'fs', path: './my-data' },
+  // or
+  storage: { type: 'memory' },
+  schema
+})
+```
+
+## Quick Reference
+
+| Operation | Code Example |
+|-----------|--------------|
+| **Create** | `await db.Users.create({ name: 'Alice', email: 'alice@example.com' })` |
+| **Find all** | `await db.Users.find()` |
+| **Find with filter** | `await db.Users.find({ status: 'active' })` |
+| **Find with operators** | `await db.Users.find({ age: { $gte: 18 } })` |
+| **Get by ID** | `await db.Users.get('users/abc123')` |
+| **Update** | `await db.Users.update(id, { $set: { name: 'Bob' } })` |
+| **Delete (soft)** | `await db.Users.delete(id)` |
+| **Delete (hard)** | `await db.Users.delete(id, { hard: true })` |
+| **SQL query** | `await db.sql\`SELECT * FROM users WHERE age > \${21}\`` |
+| **Pagination** | `await db.Users.find({}, { limit: 10, skip: 20 })` |
+| **Sorting** | `await db.Users.find({}, { sort: { createdAt: -1 } })` |
+| **Projection** | `await db.Users.find({}, { project: { name: 1, email: 1 } })` |
 
 ## Next Steps
 
