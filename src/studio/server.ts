@@ -210,7 +210,7 @@ function printSetupInstructions(config: StudioConfig, error: Error): void {
  */
 function generateAdminHTML(collections: ReturnType<typeof generateCollections>): string {
   const collectionList = collections
-    .map((c) => `<li><strong>${c.labels?.plural ?? c.slug}</strong> (${c.slug})</li>`)
+    .map((c) => `<li><strong>${escapeHtml(c.labels?.plural ?? c.slug)}</strong> (${escapeHtml(c.slug)})</li>`)
     .join('\n')
 
   return `
@@ -275,6 +275,18 @@ async function saveGeneratedConfig(
 // =============================================================================
 // Utilities
 // =============================================================================
+
+/**
+ * Escape HTML special characters to prevent XSS attacks
+ */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
 
 /**
  * Print discovery summary
