@@ -401,10 +401,11 @@ export class EvaliteMVIntegration {
    * Register a custom analytics view
    */
   registerView<T>(view: EvaliteAnalyticsView<T>): void {
-    this.customViews.set(view.name, view as EvaliteAnalyticsView)
+    // Store with unknown type since we can't preserve the generic at runtime
+    this.customViews.set(view.name, view as EvaliteAnalyticsView<unknown>)
 
     // Register corresponding MV handler
-    const handler = this.createViewHandler(view)
+    const handler = this.createViewHandler(view as EvaliteAnalyticsView<unknown>)
     this.engine.registerMV(handler)
   }
 

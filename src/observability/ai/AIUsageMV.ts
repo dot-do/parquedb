@@ -1,0 +1,729 @@
+/**
+ * AIUsageMV - Materialized View for AI API Usage Tracking
+ *
+ * Aggregates AI API requests by model, provider, and time period to provide
+ * cost estimates, usage statistics, and performance metrics.
+ *
+ * Features:
+ * - Aggregation by model/provider/day (configurable granularity)
+ * - Cost estimation based on token usage and model pricing
+ * - Latency statistics (avg, min, max, percentiles)
+ * - Error rate tracking
+ * - Incremental refresh support
+ *
+ * @example
+ * ```typescript
+ * import { AIUsageMV } from 'parquedb/observability'
+ * import { DB } from 'parquedb'
+ *
+ * const db = DB()
+ * const usageMV = new AIUsageMV(db, {
+ *   granularity: 'day',
+ *   customPricing: [
+ *     { modelId: 'my-fine-tuned-model', providerId: 'openai', inputPricePerMillion: 5.00, outputPricePerMillion: 15.00 }
+ *   ]
+ * })
+ *
+ * // Refresh the view (process new logs)
+ * await usageMV.refresh()
+ *
+ * // Query usage
+ * const usage = await usageMV.getUsage({ modelId: 'gpt-4', from: new Date('2026-02-01') })
+ *
+ * // Get summary
+ * const summary = await usageMV.getSummary({ from: new Date('2026-02-01') })
+ * ```
+ *
+ * @module observability/ai/AIUsageMV
+ */
+
+import type { ParqueDB } from '../../ParqueDB'
+import type {
+  AIUsageMVConfig,
+  ResolvedAIUsageMVConfig,
+  ModelPricing,
+  AIUsageAggregate,
+  AIUsageSummary,
+  AIUsageQueryOptions,
+  RefreshResult,
+  TimeGranularity,
+  TokenUsage,
+} from './types'
+import { DEFAULT_MODEL_PRICING } from './types'
+import { AI_USAGE_MAX_AGE_MS, MAX_BATCH_SIZE } from '../../constants'
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const DEFAULT_SOURCE_COLLECTION = 'ai_logs'
+const DEFAULT_TARGET_COLLECTION = 'ai_usage'
+const DEFAULT_GRANULARITY: TimeGranularity = 'day'
+const DEFAULT_MAX_AGE_MS = AI_USAGE_MAX_AGE_MS
+const DEFAULT_BATCH_SIZE = MAX_BATCH_SIZE
+
+// =============================================================================
+// Utility Functions
+// =============================================================================
+
+/**
+ * Generate a date key based on granularity
+ */
+function generateDateKey(date: Date, granularity: TimeGranularity): string {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  const hour = String(date.getUTCHours()).padStart(2, '0')
+
+  switch (granularity) {
+    case 'hour':
+      return `${year}-${month}-${day}T${hour}`
+    case 'day':
+      return `${year}-${month}-${day}`
+    case 'week': {
+      // ISO week: Get the Thursday of the current week
+      const d = new Date(date)
+      d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7))
+      const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1))
+      const weekNum = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7)
+      return `${d.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`
+    }
+    case 'month':
+      return `${year}-${month}`
+    default:
+      return `${year}-${month}-${day}`
+  }
+}
+
+/**
+ * Generate aggregate ID from model, provider, and date key
+ */
+function generateAggregateId(modelId: string, providerId: string, dateKey: string): string {
+  // Normalize IDs to be safe for use in keys
+  const safeModelId = (modelId ?? 'unknown').replace(/[^a-zA-Z0-9-_.]/g, '_')
+  const safeProviderId = (providerId ?? 'unknown').replace(/[^a-zA-Z0-9-_.]/g, '_')
+  return `${safeModelId}_${safeProviderId}_${dateKey}`
+}
+
+/**
+ * Calculate cost based on token usage and pricing
+ */
+function calculateCost(
+  promptTokens: number,
+  completionTokens: number,
+  pricing: ModelPricing | undefined
+): { inputCost: number; outputCost: number; totalCost: number } {
+  if (!pricing) {
+    return { inputCost: 0, outputCost: 0, totalCost: 0 }
+  }
+
+  const inputCost = (promptTokens / 1_000_000) * pricing.inputPricePerMillion
+  const outputCost = (completionTokens / 1_000_000) * pricing.outputPricePerMillion
+
+  return {
+    inputCost,
+    outputCost,
+    totalCost: inputCost + outputCost,
+  }
+}
+
+/**
+ * Normalize model ID for pricing lookup
+ *
+ * Handles variations like 'gpt-4-0613', 'gpt-4-turbo-2024-04-09' -> 'gpt-4', 'gpt-4-turbo'
+ */
+function normalizeModelId(modelId: string): string {
+  if (!modelId) return 'unknown'
+
+  // Remove date suffixes (e.g., -0613, -2024-04-09)
+  let normalized = modelId.replace(/-\d{4}(-\d{2}(-\d{2})?)?$/, '')
+  normalized = normalized.replace(/-\d{4}$/, '')
+
+  // Common normalizations
+  const mappings: Record<string, string> = {
+    'gpt-4-turbo-preview': 'gpt-4-turbo',
+    'gpt-4-vision-preview': 'gpt-4-turbo',
+    'claude-3-opus-20240229': 'claude-3-opus',
+    'claude-3-sonnet-20240229': 'claude-3-sonnet',
+    'claude-3-haiku-20240307': 'claude-3-haiku',
+    'claude-3-5-sonnet-20240620': 'claude-3-5-sonnet',
+    'claude-3-5-sonnet-20241022': 'claude-3-5-sonnet',
+  }
+
+  return mappings[normalized] || normalized
+}
+
+/**
+ * Build pricing lookup map
+ */
+function buildPricingMap(
+  customPricing: ModelPricing[] | undefined,
+  mergeWithDefault: boolean
+): Map<string, ModelPricing> {
+  const map = new Map<string, ModelPricing>()
+
+  // Add default pricing first (if merging)
+  if (mergeWithDefault) {
+    for (const pricing of DEFAULT_MODEL_PRICING) {
+      const key = `${pricing.modelId}:${pricing.providerId}`
+      map.set(key, pricing)
+    }
+  }
+
+  // Override with custom pricing
+  if (customPricing) {
+    for (const pricing of customPricing) {
+      const key = `${pricing.modelId}:${pricing.providerId}`
+      map.set(key, pricing)
+    }
+  }
+
+  return map
+}
+
+/**
+ * Resolve configuration with defaults
+ */
+function resolveConfig(config: AIUsageMVConfig): ResolvedAIUsageMVConfig {
+  return {
+    sourceCollection: config.sourceCollection ?? DEFAULT_SOURCE_COLLECTION,
+    targetCollection: config.targetCollection ?? DEFAULT_TARGET_COLLECTION,
+    granularity: config.granularity ?? DEFAULT_GRANULARITY,
+    pricing: buildPricingMap(config.customPricing, config.mergeWithDefaultPricing ?? true),
+    maxAgeMs: config.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
+    batchSize: config.batchSize ?? DEFAULT_BATCH_SIZE,
+    debug: config.debug ?? false,
+  }
+}
+
+// =============================================================================
+// AIUsageMV Class
+// =============================================================================
+
+/**
+ * AIUsageMV - Materialized View for AI API Usage Tracking
+ *
+ * Aggregates AI API logs into usage summaries by model, provider, and time period.
+ * Supports incremental refresh and configurable granularity.
+ */
+export class AIUsageMV {
+  private readonly db: ParqueDB
+  private readonly config: ResolvedAIUsageMVConfig
+  private lastRefreshTime?: Date
+
+  /**
+   * Create a new AIUsageMV instance
+   *
+   * @param db - ParqueDB instance
+   * @param config - Configuration options
+   */
+  constructor(db: ParqueDB, config: AIUsageMVConfig = {}) {
+    this.db = db
+    this.config = resolveConfig(config)
+  }
+
+  /**
+   * Get pricing information for a model
+   */
+  getPricing(modelId: string, providerId: string): ModelPricing | undefined {
+    const normalizedModelId = normalizeModelId(modelId)
+    return this.config.pricing.get(`${normalizedModelId}:${providerId}`)
+  }
+
+  /**
+   * Refresh the materialized view
+   *
+   * Processes new AI log entries and updates usage aggregates.
+   * Supports incremental refresh - only processes logs since last refresh.
+   *
+   * @param options - Refresh options
+   * @returns Refresh result with statistics
+   */
+  async refresh(options: { full?: boolean } = {}): Promise<RefreshResult> {
+    const startTime = Date.now()
+    let recordsProcessed = 0
+    let aggregatesUpdated = 0
+
+    try {
+      const sourceCollection = this.db.collection(this.config.sourceCollection)
+      const targetCollection = this.db.collection(this.config.targetCollection)
+
+      // Determine time range for logs to process
+      const now = new Date()
+      const maxAge = new Date(now.getTime() - this.config.maxAgeMs)
+
+      // Build filter for logs to process
+      const filter: Record<string, unknown> = {
+        timestamp: { $gte: maxAge },
+      }
+
+      // For incremental refresh, only get logs since last refresh
+      if (!options.full && this.lastRefreshTime) {
+        filter.timestamp = { $gte: this.lastRefreshTime }
+      }
+
+      // Fetch logs in batches
+      const logs = await sourceCollection.find(filter, {
+        limit: this.config.batchSize,
+        sort: { timestamp: 1 },
+      })
+
+      if (logs.length === 0) {
+        return {
+          success: true,
+          recordsProcessed: 0,
+          aggregatesUpdated: 0,
+          durationMs: Date.now() - startTime,
+        }
+      }
+
+      // Group logs by aggregate key
+      const aggregates = new Map<string, AIUsageAggregate>()
+
+      for (const log of logs) {
+        recordsProcessed++
+
+        const modelId = ((log as Record<string, unknown>).modelId as string) ?? 'unknown'
+        const providerId = ((log as Record<string, unknown>).providerId as string) ?? 'unknown'
+        const timestamp = new Date((log as Record<string, unknown>).timestamp as string | Date)
+        const dateKey = generateDateKey(timestamp, this.config.granularity)
+        const aggregateId = generateAggregateId(modelId, providerId, dateKey)
+
+        // Get or create aggregate
+        let aggregate = aggregates.get(aggregateId)
+        if (!aggregate) {
+          // Try to load existing aggregate from DB
+          const existingAggregates = await targetCollection.find({ dateKey, modelId, providerId }, { limit: 1 })
+          if (existingAggregates.length > 0) {
+            aggregate = existingAggregates[0] as unknown as AIUsageAggregate
+          } else {
+            aggregate = createEmptyAggregate(aggregateId, modelId, providerId, dateKey, this.config.granularity)
+          }
+          aggregates.set(aggregateId, aggregate)
+        }
+
+        // Update aggregate with log entry
+        updateAggregateFromLog(aggregate, log as Record<string, unknown>, this.config.pricing)
+      }
+
+      // Save all aggregates
+      for (const aggregate of aggregates.values()) {
+        aggregate.updatedAt = now
+        aggregate.version++
+
+        // Check if this aggregate exists
+        const existing = await targetCollection.find({ dateKey: aggregate.dateKey, modelId: aggregate.modelId, providerId: aggregate.providerId }, { limit: 1 })
+
+        if (existing.length > 0) {
+          const existingId = ((existing[0] as Record<string, unknown>).$id as string).split('/').pop()
+          if (existingId) {
+            await targetCollection.update(existingId, {
+              $set: {
+                requestCount: aggregate.requestCount,
+                successCount: aggregate.successCount,
+                errorCount: aggregate.errorCount,
+                cachedCount: aggregate.cachedCount,
+                generateCount: aggregate.generateCount,
+                streamCount: aggregate.streamCount,
+                totalPromptTokens: aggregate.totalPromptTokens,
+                totalCompletionTokens: aggregate.totalCompletionTokens,
+                totalTokens: aggregate.totalTokens,
+                avgTokensPerRequest: aggregate.avgTokensPerRequest,
+                totalLatencyMs: aggregate.totalLatencyMs,
+                avgLatencyMs: aggregate.avgLatencyMs,
+                minLatencyMs: aggregate.minLatencyMs,
+                maxLatencyMs: aggregate.maxLatencyMs,
+                estimatedInputCost: aggregate.estimatedInputCost,
+                estimatedOutputCost: aggregate.estimatedOutputCost,
+                estimatedTotalCost: aggregate.estimatedTotalCost,
+                updatedAt: aggregate.updatedAt,
+                version: aggregate.version,
+              },
+            })
+          }
+        } else {
+          await targetCollection.create({
+            $type: 'AIUsage',
+            name: `${aggregate.modelId}/${aggregate.providerId} (${aggregate.dateKey})`,
+            modelId: aggregate.modelId,
+            providerId: aggregate.providerId,
+            dateKey: aggregate.dateKey,
+            granularity: aggregate.granularity,
+            requestCount: aggregate.requestCount,
+            successCount: aggregate.successCount,
+            errorCount: aggregate.errorCount,
+            cachedCount: aggregate.cachedCount,
+            generateCount: aggregate.generateCount,
+            streamCount: aggregate.streamCount,
+            totalPromptTokens: aggregate.totalPromptTokens,
+            totalCompletionTokens: aggregate.totalCompletionTokens,
+            totalTokens: aggregate.totalTokens,
+            avgTokensPerRequest: aggregate.avgTokensPerRequest,
+            totalLatencyMs: aggregate.totalLatencyMs,
+            avgLatencyMs: aggregate.avgLatencyMs,
+            minLatencyMs: aggregate.minLatencyMs,
+            maxLatencyMs: aggregate.maxLatencyMs,
+            estimatedInputCost: aggregate.estimatedInputCost,
+            estimatedOutputCost: aggregate.estimatedOutputCost,
+            estimatedTotalCost: aggregate.estimatedTotalCost,
+            createdAt: aggregate.createdAt,
+            updatedAt: aggregate.updatedAt,
+            version: aggregate.version,
+          })
+        }
+        aggregatesUpdated++
+      }
+
+      this.lastRefreshTime = now
+
+      return {
+        success: true,
+        recordsProcessed,
+        aggregatesUpdated,
+        durationMs: Date.now() - startTime,
+      }
+    } catch (error) {
+      return {
+        success: false,
+        recordsProcessed,
+        aggregatesUpdated,
+        durationMs: Date.now() - startTime,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  /**
+   * Query AI usage aggregates
+   *
+   * @param options - Query options
+   * @returns Array of usage aggregates
+   */
+  async getUsage(options: AIUsageQueryOptions = {}): Promise<AIUsageAggregate[]> {
+    const targetCollection = this.db.collection(this.config.targetCollection)
+
+    // Build filter
+    const filter: Record<string, unknown> = {}
+
+    if (options.modelId) {
+      filter.modelId = options.modelId
+    }
+
+    if (options.providerId) {
+      filter.providerId = options.providerId
+    }
+
+    if (options.granularity) {
+      filter.granularity = options.granularity
+    }
+
+    if (options.from || options.to) {
+      const dateKeyFilter: Record<string, string> = {}
+      if (options.from) {
+        dateKeyFilter.$gte = generateDateKey(options.from, options.granularity ?? this.config.granularity)
+      }
+      if (options.to) {
+        dateKeyFilter.$lte = generateDateKey(options.to, options.granularity ?? this.config.granularity)
+      }
+      filter.dateKey = dateKeyFilter
+    }
+
+    // Build sort
+    const sortField = options.sort?.replace('-', '') ?? 'dateKey'
+    const sortOrder = options.sort?.startsWith('-') ? -1 : 1
+
+    const results = await targetCollection.find(filter, {
+      limit: options.limit ?? 100,
+      sort: { [sortField]: sortOrder },
+    })
+
+    return results as unknown as AIUsageAggregate[]
+  }
+
+  /**
+   * Get usage summary across all models/providers
+   *
+   * @param options - Query options for time range
+   * @returns Usage summary
+   */
+  async getSummary(options: { from?: Date; to?: Date } = {}): Promise<AIUsageSummary> {
+    const aggregates = await this.getUsage({
+      from: options.from,
+      to: options.to,
+      limit: 10000, // Get all for summary
+    })
+
+    const summary: AIUsageSummary = {
+      totalRequests: 0,
+      totalSuccessful: 0,
+      totalErrors: 0,
+      errorRate: 0,
+      totalTokens: 0,
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      avgLatencyMs: 0,
+      estimatedTotalCost: 0,
+      byModel: {},
+      byProvider: {},
+      timeRange: {
+        from: options.from ?? new Date(0),
+        to: options.to ?? new Date(),
+      },
+    }
+
+    let totalLatencyMs = 0
+
+    for (const agg of aggregates) {
+      summary.totalRequests += agg.requestCount
+      summary.totalSuccessful += agg.successCount
+      summary.totalErrors += agg.errorCount
+      summary.totalTokens += agg.totalTokens
+      summary.totalPromptTokens += agg.totalPromptTokens
+      summary.totalCompletionTokens += agg.totalCompletionTokens
+      summary.estimatedTotalCost += agg.estimatedTotalCost
+      totalLatencyMs += agg.totalLatencyMs
+
+      // By model
+      if (!summary.byModel[agg.modelId]) {
+        summary.byModel[agg.modelId] = {
+          requestCount: 0,
+          totalTokens: 0,
+          estimatedCost: 0,
+          avgLatencyMs: 0,
+        }
+      }
+      summary.byModel[agg.modelId].requestCount += agg.requestCount
+      summary.byModel[agg.modelId].totalTokens += agg.totalTokens
+      summary.byModel[agg.modelId].estimatedCost += agg.estimatedTotalCost
+
+      // By provider
+      if (!summary.byProvider[agg.providerId]) {
+        summary.byProvider[agg.providerId] = {
+          requestCount: 0,
+          totalTokens: 0,
+          estimatedCost: 0,
+          avgLatencyMs: 0,
+        }
+      }
+      summary.byProvider[agg.providerId].requestCount += agg.requestCount
+      summary.byProvider[agg.providerId].totalTokens += agg.totalTokens
+      summary.byProvider[agg.providerId].estimatedCost += agg.estimatedTotalCost
+    }
+
+    // Calculate averages
+    if (summary.totalRequests > 0) {
+      summary.avgLatencyMs = totalLatencyMs / summary.totalRequests
+      summary.errorRate = summary.totalErrors / summary.totalRequests
+    }
+
+    // Calculate per-model averages
+    for (const modelId of Object.keys(summary.byModel)) {
+      const modelAggs = aggregates.filter(a => a.modelId === modelId)
+      const modelTotalLatency = modelAggs.reduce((sum, a) => sum + a.totalLatencyMs, 0)
+      if (summary.byModel[modelId].requestCount > 0) {
+        summary.byModel[modelId].avgLatencyMs = modelTotalLatency / summary.byModel[modelId].requestCount
+      }
+    }
+
+    // Calculate per-provider averages
+    for (const providerId of Object.keys(summary.byProvider)) {
+      const providerAggs = aggregates.filter(a => a.providerId === providerId)
+      const providerTotalLatency = providerAggs.reduce((sum, a) => sum + a.totalLatencyMs, 0)
+      if (summary.byProvider[providerId].requestCount > 0) {
+        summary.byProvider[providerId].avgLatencyMs = providerTotalLatency / summary.byProvider[providerId].requestCount
+      }
+    }
+
+    return summary
+  }
+
+  /**
+   * Get daily cost breakdown for a time period
+   *
+   * @param options - Query options
+   * @returns Array of daily costs
+   */
+  async getDailyCosts(options: { from?: Date; to?: Date; modelId?: string; providerId?: string } = {}): Promise<Array<{
+    dateKey: string
+    totalCost: number
+    inputCost: number
+    outputCost: number
+    totalTokens: number
+    requestCount: number
+  }>> {
+    const aggregates = await this.getUsage({
+      ...options,
+      granularity: 'day',
+      sort: 'dateKey',
+      limit: 365, // Up to a year
+    })
+
+    // Group by date key (in case of multiple models)
+    const byDate = new Map<string, {
+      dateKey: string
+      totalCost: number
+      inputCost: number
+      outputCost: number
+      totalTokens: number
+      requestCount: number
+    }>()
+
+    for (const agg of aggregates) {
+      const existing = byDate.get(agg.dateKey) ?? {
+        dateKey: agg.dateKey,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        totalTokens: 0,
+        requestCount: 0,
+      }
+
+      existing.totalCost += agg.estimatedTotalCost
+      existing.inputCost += agg.estimatedInputCost
+      existing.outputCost += agg.estimatedOutputCost
+      existing.totalTokens += agg.totalTokens
+      existing.requestCount += agg.requestCount
+
+      byDate.set(agg.dateKey, existing)
+    }
+
+    return Array.from(byDate.values())
+  }
+
+  /**
+   * Get the current configuration
+   */
+  getConfig(): ResolvedAIUsageMVConfig {
+    return { ...this.config }
+  }
+}
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+/**
+ * Create an empty aggregate
+ */
+function createEmptyAggregate(
+  id: string,
+  modelId: string,
+  providerId: string,
+  dateKey: string,
+  granularity: TimeGranularity
+): AIUsageAggregate {
+  const now = new Date()
+  return {
+    $id: id,
+    $type: 'AIUsage',
+    name: `${modelId}/${providerId} (${dateKey})`,
+    modelId,
+    providerId,
+    dateKey,
+    granularity,
+    requestCount: 0,
+    successCount: 0,
+    errorCount: 0,
+    cachedCount: 0,
+    generateCount: 0,
+    streamCount: 0,
+    totalPromptTokens: 0,
+    totalCompletionTokens: 0,
+    totalTokens: 0,
+    avgTokensPerRequest: 0,
+    totalLatencyMs: 0,
+    avgLatencyMs: 0,
+    minLatencyMs: Infinity,
+    maxLatencyMs: 0,
+    estimatedInputCost: 0,
+    estimatedOutputCost: 0,
+    estimatedTotalCost: 0,
+    createdAt: now,
+    updatedAt: now,
+    version: 0,
+  }
+}
+
+/**
+ * Update an aggregate from a log entry
+ */
+function updateAggregateFromLog(
+  aggregate: AIUsageAggregate,
+  log: Record<string, unknown>,
+  pricingMap: Map<string, ModelPricing>
+): void {
+  // Update request counts
+  aggregate.requestCount++
+
+  const hasError = log.error !== undefined && log.error !== null
+  if (hasError) {
+    aggregate.errorCount++
+  } else {
+    aggregate.successCount++
+  }
+
+  if (log.cached === true) {
+    aggregate.cachedCount++
+  }
+
+  if (log.requestType === 'generate') {
+    aggregate.generateCount++
+  } else if (log.requestType === 'stream') {
+    aggregate.streamCount++
+  }
+
+  // Update token usage
+  const usage = log.usage as { promptTokens?: number; completionTokens?: number; totalTokens?: number } | undefined
+  if (usage) {
+    const promptTokens = usage.promptTokens ?? 0
+    const completionTokens = usage.completionTokens ?? 0
+    const totalTokens = usage.totalTokens ?? (promptTokens + completionTokens)
+
+    aggregate.totalPromptTokens += promptTokens
+    aggregate.totalCompletionTokens += completionTokens
+    aggregate.totalTokens += totalTokens
+
+    // Calculate cost
+    const normalizedModelId = normalizeModelId(aggregate.modelId)
+    const pricing = pricingMap.get(`${normalizedModelId}:${aggregate.providerId}`)
+    const cost = calculateCost(promptTokens, completionTokens, pricing)
+
+    aggregate.estimatedInputCost += cost.inputCost
+    aggregate.estimatedOutputCost += cost.outputCost
+    aggregate.estimatedTotalCost += cost.totalCost
+  }
+
+  // Update latency stats
+  const latencyMs = typeof log.latencyMs === 'number' ? log.latencyMs : 0
+  aggregate.totalLatencyMs += latencyMs
+  aggregate.minLatencyMs = Math.min(aggregate.minLatencyMs, latencyMs)
+  aggregate.maxLatencyMs = Math.max(aggregate.maxLatencyMs, latencyMs)
+
+  // Update averages
+  if (aggregate.requestCount > 0) {
+    aggregate.avgLatencyMs = aggregate.totalLatencyMs / aggregate.requestCount
+    aggregate.avgTokensPerRequest = aggregate.totalTokens / aggregate.requestCount
+  }
+}
+
+// =============================================================================
+// Factory Function
+// =============================================================================
+
+/**
+ * Create an AIUsageMV instance
+ *
+ * @param db - ParqueDB instance
+ * @param config - Configuration options
+ * @returns AIUsageMV instance
+ *
+ * @example
+ * ```typescript
+ * const usageMV = createAIUsageMV(db)
+ * await usageMV.refresh()
+ * const summary = await usageMV.getSummary()
+ * ```
+ */
+export function createAIUsageMV(db: ParqueDB, config: AIUsageMVConfig = {}): AIUsageMV {
+  return new AIUsageMV(db, config)
+}
