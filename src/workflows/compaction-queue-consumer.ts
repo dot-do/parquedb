@@ -36,7 +36,8 @@ export interface R2EventMessage {
     size: number
     eTag: string
   }
-  eventType: 'object-create' | 'object-delete'
+  /** R2 uses 'action' field with values like 'PutObject', 'DeleteObject' */
+  action: 'PutObject' | 'CopyObject' | 'CompleteMultipartUpload' | 'DeleteObject' | 'LifecycleDeletion'
   eventTime: string
 }
 
@@ -127,6 +128,11 @@ export async function handleCompactionQueue(
   env: Env,
   config: CompactionConsumerConfig = {}
 ): Promise<void> {
+  console.log('[CompactionQueue] Received batch', {
+    messageCount: batch.messages.length,
+    queue: batch.queue,
+  })
+
   const {
     windowSizeMs = DEFAULT_WINDOW_SIZE_MS,
     minFilesToCompact = DEFAULT_MIN_FILES,
@@ -150,11 +156,23 @@ export async function handleCompactionQueue(
 
   for (const message of batch.messages) {
     const event = message.body
+    console.log('[CompactionQueue] Event:', JSON.stringify(event))
 
     // Only process object-create events for Parquet files
-    if (event.eventType !== 'object-create') continue
-    if (!event.object.key.endsWith('.parquet')) continue
-    if (!event.object.key.startsWith(namespacePrefix)) continue
+    // R2 uses 'action' field: PutObject, CopyObject, CompleteMultipartUpload for creates
+    const isCreateAction = event.action === 'PutObject' || event.action === 'CopyObject' || event.action === 'CompleteMultipartUpload'
+    if (!isCreateAction) {
+      console.log('[CompactionQueue] Skipping non-create action:', event.action)
+      continue
+    }
+    if (!event.object.key.endsWith('.parquet')) {
+      console.log('[CompactionQueue] Skipping non-parquet file:', event.object.key)
+      continue
+    }
+    if (!event.object.key.startsWith(namespacePrefix)) {
+      console.log('[CompactionQueue] Skipping file outside prefix:', event.object.key, 'prefix:', namespacePrefix)
+      continue
+    }
 
     // Parse file info: data/{namespace}/{timestamp}-{writerId}-{seq}.parquet
     const keyWithoutPrefix = event.object.key.slice(namespacePrefix.length)
@@ -162,9 +180,11 @@ export async function handleCompactionQueue(
     const namespace = parts.slice(0, -1).join('/')
     const filename = parts[parts.length - 1] ?? ''
 
+    console.log('[CompactionQueue] Parsed:', { namespace, filename })
+
     const match = filename.match(/^(\d+)-([^-]+)-(\d+)\.parquet$/)
     if (!match) {
-      logger.debug(`Skipping file with unexpected format: ${event.object.key}`)
+      console.log('[CompactionQueue] Skipping file with unexpected format:', event.object.key, 'filename:', filename)
       message.ack()
       continue
     }
@@ -183,7 +203,12 @@ export async function handleCompactionQueue(
     message.ack()
   }
 
-  if (updates.length === 0) return
+  if (updates.length === 0) {
+    console.log('[CompactionQueue] No matching updates to process')
+    return
+  }
+
+  console.log('[CompactionQueue] Processing updates', { count: updates.length })
 
   // Send updates to state DO and check for windows ready for compaction
   const response = await stateDO.fetch('http://internal/update', {
