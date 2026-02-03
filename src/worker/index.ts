@@ -140,6 +140,11 @@ export { DATASETS, getDataset, getDatasetIds, type DatasetConfig } from './datas
 export { ParqueDBDO, type CacheInvalidationSignal } from './ParqueDBDO'
 export { MigrationDO } from './MigrationDO'
 
+// Export Workflows and supporting DOs
+export { CompactionMigrationWorkflow } from '../workflows/compaction-migration'
+export { MigrationWorkflow } from '../workflows/migration-workflow'
+export { CompactionStateDO, handleCompactionQueue } from '../workflows/compaction-queue-consumer'
+
 // Re-export cache invalidation utilities
 export {
   CacheInvalidator,
@@ -1022,5 +1027,25 @@ export default {
       const err = error instanceof Error ? error : new Error(String(error))
       return buildErrorResponse(request, err, 500, startTime)
     }
+  },
+
+  /**
+   * Queue handler for R2 event notifications
+   * Batches events and triggers compaction workflows when windows are ready
+   */
+  async queue(
+    batch: MessageBatch<import('../workflows/compaction-queue-consumer').R2EventMessage>,
+    env: Env,
+    _ctx: ExecutionContext
+  ): Promise<void> {
+    const { handleCompactionQueue } = await import('../workflows/compaction-queue-consumer')
+
+    await handleCompactionQueue(batch, env as Parameters<typeof handleCompactionQueue>[1], {
+      windowSizeMs: 60 * 60 * 1000, // 1 hour windows
+      minFilesToCompact: 10,
+      maxWaitTimeMs: 5 * 60 * 1000, // 5 minute grace period
+      targetFormat: 'iceberg', // Progressive migration to Iceberg
+      namespacePrefix: 'data/',
+    })
   },
 }

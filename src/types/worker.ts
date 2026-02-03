@@ -51,6 +51,32 @@ export interface Env {
   /** Durable Object namespace for backend migrations (batch processing) */
   MIGRATION?: DurableObjectNamespace
 
+  /** Durable Object namespace for compaction state tracking */
+  COMPACTION_STATE?: DurableObjectNamespace
+
+  // =============================================================================
+  // Cloudflare Workflows (resumable long-running tasks)
+  // =============================================================================
+
+  /** Compaction + Migration Workflow binding */
+  COMPACTION_WORKFLOW?: {
+    create(options: { params: unknown }): Promise<{ id: string }>
+    get(id: string): Promise<{ status(): Promise<unknown> }>
+  }
+
+  /** Migration Workflow binding */
+  MIGRATION_WORKFLOW?: {
+    create(options: { params: unknown }): Promise<{ id: string }>
+    get(id: string): Promise<{ status(): Promise<unknown> }>
+  }
+
+  // =============================================================================
+  // Queues (for R2 event notifications and compaction batching)
+  // =============================================================================
+
+  /** Queue producer for compaction events */
+  COMPACTION_QUEUE?: Queue<unknown>
+
   // Note: Caching uses the free Cloudflare Cache API (caches.default), not KV.
   // Cache API provides 500MB on free accounts, 5GB+ on enterprise.
   // No binding needed - caches.default is globally available in Workers.

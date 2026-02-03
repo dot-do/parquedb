@@ -31,6 +31,10 @@
       {
         "name": "MIGRATION",
         "class_name": "MigrationDO"
+      },
+      {
+        "name": "COMPACTION_STATE",
+        "class_name": "CompactionStateDO"
       }
     ]
   },
@@ -44,8 +48,49 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["MigrationDO"]
+    },
+    {
+      "tag": "v3",
+      "new_classes": ["CompactionStateDO"]
     }
   ],
+
+  // =============================================================================
+  // Cloudflare Workflows (resumable long-running tasks)
+  // =============================================================================
+
+  "workflows": [
+    {
+      "name": "compaction-migration-workflow",
+      "binding": "COMPACTION_WORKFLOW",
+      "class_name": "CompactionMigrationWorkflow"
+    },
+    {
+      "name": "migration-workflow",
+      "binding": "MIGRATION_WORKFLOW",
+      "class_name": "MigrationWorkflow"
+    }
+  ],
+
+  // =============================================================================
+  // Queues (for R2 event notifications and compaction batching)
+  // =============================================================================
+
+  "queues": {
+    "producers": [
+      {
+        "binding": "COMPACTION_QUEUE",
+        "queue": "parquedb-compaction-events"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "parquedb-compaction-events",
+        "max_batch_size": 100,
+        "max_batch_timeout": 30
+      }
+    ]
+  },
 
   // =============================================================================
   // R2 Storage
