@@ -378,8 +378,8 @@ describe('branch-manager', () => {
       branches = await branchManager.list()
       expect(branches).toHaveLength(2)
 
-      // Switch to feature branch
-      await branchManager.checkout('feature/new-thing')
+      // Switch to feature branch (skip state reconstruction for test commits)
+      await branchManager.checkout('feature/new-thing', { skipStateReconstruction: true })
       const current = await branchManager.current()
       expect(current).toBe('feature/new-thing')
 
@@ -387,8 +387,8 @@ describe('branch-manager', () => {
       const commit2 = await createAndSaveCommit('Feature commit', [commit1])
       await refManager.updateRef('feature/new-thing', commit2)
 
-      // Switch back to main
-      await branchManager.checkout('main')
+      // Switch back to main (skip state reconstruction for test commits)
+      await branchManager.checkout('main', { skipStateReconstruction: true })
       const mainResolved = await refManager.resolveRef('HEAD')
       expect(mainResolved).toBe(commit1)
 
@@ -420,7 +420,8 @@ describe('branch-manager', () => {
       await refManager.setHead('main')
       await refManager.updateRef('main', commitHash)
 
-      await branchManager.checkout('hotfix', { create: true })
+      // Skip state reconstruction for test commits
+      await branchManager.checkout('hotfix', { create: true, skipStateReconstruction: true })
 
       const current = await branchManager.current()
       expect(current).toBe('hotfix')

@@ -82,45 +82,53 @@ export interface ParqueDBClient {
   readonly schema: SchemaClient
 }
 
-export interface DiffResult {
-  collections: Record<string, CollectionDiff>
+export interface EntitySample {
+  readonly $id: string
+  readonly name?: string
+  readonly [key: string]: unknown
+}
+
+export interface CollectionSamples {
+  readonly added?: readonly EntitySample[]
+  readonly removed?: readonly EntitySample[]
+  readonly modified?: readonly EntitySample[]
 }
 
 export interface CollectionDiff {
-  added: number
-  removed: number
-  modified: number
-  samples?: {
-    added?: Array<{ $id: string; name?: string; [key: string]: unknown }>
-    removed?: Array<{ $id: string; name?: string; [key: string]: unknown }>
-    modified?: Array<{ $id: string; name?: string; [key: string]: unknown }>
-  }
+  readonly added: number
+  readonly removed: number
+  readonly modified: number
+  readonly samples?: CollectionSamples
+}
+
+export interface DiffResult {
+  readonly collections: Readonly<Record<string, CollectionDiff>>
 }
 
 export interface ResolveResult {
-  resolved: string[]
-  strategy: string
-}
-
-export interface SchemaDiffResult {
-  changes: SchemaChange[]
-  breakingChanges: BreakingChange[]
+  readonly resolved: readonly string[]
+  readonly strategy: string
 }
 
 export interface SchemaChange {
-  type: string
-  collection: string
-  field: string
-  fieldType?: string
+  readonly type: string
+  readonly collection: string
+  readonly field: string
+  readonly fieldType?: string
 }
 
 export interface BreakingChange {
-  type: string
-  collection: string
-  field: string
-  oldType?: string
-  newType?: string
-  migrationHint?: string
+  readonly type: string
+  readonly collection: string
+  readonly field: string
+  readonly oldType?: string
+  readonly newType?: string
+  readonly migrationHint?: string
+}
+
+export interface SchemaDiffResult {
+  readonly changes: readonly SchemaChange[]
+  readonly breakingChanges: readonly BreakingChange[]
 }
 
 export interface OctokitClient {

@@ -285,7 +285,8 @@ describe('Branch Lifecycle', () => {
     })
 
     it('updates HEAD when renaming current branch', async () => {
-      await branchManager.checkout('main')
+      // Use skipStateReconstruction since test commits don't have real data objects
+      await branchManager.checkout('main', { skipStateReconstruction: true })
 
       await branchManager.rename('main', 'primary')
 
@@ -324,7 +325,8 @@ describe('Checkout Operations', () => {
     it('switches HEAD to target branch', async () => {
       await branchManager.create('develop')
 
-      await branchManager.checkout('develop')
+      // Use skipStateReconstruction since test commits don't have real data objects
+      await branchManager.checkout('develop', { skipStateReconstruction: true })
 
       const current = await branchManager.current()
       expect(current).toBe('develop')
@@ -336,8 +338,9 @@ describe('Checkout Operations', () => {
 
     it('can checkout back to main', async () => {
       await branchManager.create('feature')
-      await branchManager.checkout('feature')
-      await branchManager.checkout('main')
+      // Use skipStateReconstruction since test commits don't have real data objects
+      await branchManager.checkout('feature', { skipStateReconstruction: true })
+      await branchManager.checkout('main', { skipStateReconstruction: true })
 
       const current = await branchManager.current()
       expect(current).toBe('main')
@@ -345,7 +348,8 @@ describe('Checkout Operations', () => {
 
     it('reflects correct current branch in list', async () => {
       await branchManager.create('develop')
-      await branchManager.checkout('develop')
+      // Use skipStateReconstruction since test commits don't have real data objects
+      await branchManager.checkout('develop', { skipStateReconstruction: true })
 
       const branches = await branchManager.list()
       const mainBranch = branches.find(b => b.name === 'main')

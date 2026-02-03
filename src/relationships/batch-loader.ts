@@ -20,7 +20,7 @@
  * @packageDocumentation
  */
 
-import type { Entity, EntityId } from '../types/entity'
+import type { Entity } from '../types/entity'
 import type { GetRelatedOptions, GetRelatedResult } from '../ParqueDB/types'
 
 // =============================================================================
