@@ -22,10 +22,34 @@ const TITLE_TYPES = ['movie', 'tvSeries', 'short', 'tvEpisode', 'tvMovie', 'vide
 const GENRES = ['Action', 'Drama', 'Comedy', 'Thriller', 'Horror', 'Romance', 'Sci-Fi', 'Documentary']
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface TitleRecord {
+  id: string
+  titleType: string
+  primaryTitle: string
+  startYear: number
+  genres: string[]
+  averageRating: number
+  numVotes: number
+}
+
+interface QueryResult {
+  rowsReturned: number
+  queryTimeMs: number
+}
+
+interface FileReader {
+  byteLength: number
+  slice: (start: number, end: number) => ArrayBuffer
+}
+
+// =============================================================================
 // Utilities
 // =============================================================================
 
-function formatBytes(bytes) {
+function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
@@ -35,8 +59,8 @@ function formatBytes(bytes) {
 // Data Generation
 // =============================================================================
 
-function generateTitleRecords(count) {
-  const records = []
+function generateTitleRecords(count: number): TitleRecord[] {
+  const records: TitleRecord[] = []
 
   for (let i = 0; i < count; i++) {
     const titleType = i % 3 === 0 ? 'movie' : TITLE_TYPES[i % TITLE_TYPES.length]
@@ -64,7 +88,7 @@ function generateTitleRecords(count) {
 // File Writers
 // =============================================================================
 
-async function writeV1JsonFile(records, path) {
+async function writeV1JsonFile(records: TitleRecord[], path: string): Promise<number> {
   const buffer = parquetWriteBuffer({
     columnData: [
       { name: '$id', type: 'STRING', data: records.map(r => r.id) },
@@ -78,7 +102,7 @@ async function writeV1JsonFile(records, path) {
   return buffer.byteLength
 }
 
-async function writeV2NativeFile(records, path) {
+async function writeV2NativeFile(records: TitleRecord[], path: string): Promise<number> {
   const buffer = parquetWriteBuffer({
     columnData: [
       { name: '$id', type: 'STRING', data: records.map(r => r.id) },
@@ -97,7 +121,7 @@ async function writeV2NativeFile(records, path) {
   return buffer.byteLength
 }
 
-async function writeV3DualFile(records, path) {
+async function writeV3DualFile(records: TitleRecord[], path: string): Promise<number> {
   const buffer = parquetWriteBuffer({
     columnData: [
       { name: '$id', type: 'STRING', data: records.map(r => r.id) },
@@ -117,25 +141,29 @@ async function writeV3DualFile(records, path) {
 // Query Functions
 // =============================================================================
 
-async function queryV1Json(path, targetType) {
-  const start = performance.now()
-  const fileBuffer = await fs.readFile(path)
-  const file = {
+function createFileReader(fileBuffer: Buffer): FileReader {
+  return {
     byteLength: fileBuffer.byteLength,
-    slice: (s, e) => {
+    slice: (s: number, e: number): ArrayBuffer => {
       const buf = fileBuffer.slice(s, e)
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
     },
   }
+}
+
+async function queryV1Json(path: string, targetType: string): Promise<QueryResult> {
+  const start = performance.now()
+  const fileBuffer = await fs.readFile(path)
+  const file = createFileReader(fileBuffer)
 
   const rows = await parquetQuery({
     file,
     columns: ['$id', '$data'],
     compressors,
-  })
+  }) as Array<{ $data: string }>
 
   const filtered = rows.filter(row => {
-    const data = JSON.parse(row.$data)
+    const data = JSON.parse(row.$data) as TitleRecord
     return data.titleType === targetType
   })
 
@@ -145,22 +173,16 @@ async function queryV1Json(path, targetType) {
   }
 }
 
-async function queryV2Native(path, targetType) {
+async function queryV2Native(path: string, targetType: string): Promise<QueryResult> {
   const start = performance.now()
   const fileBuffer = await fs.readFile(path)
-  const file = {
-    byteLength: fileBuffer.byteLength,
-    slice: (s, e) => {
-      const buf = fileBuffer.slice(s, e)
-      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
-    },
-  }
+  const file = createFileReader(fileBuffer)
 
   const rows = await parquetQuery({
     file,
     filter: { titleType: targetType },
     compressors,
-  })
+  }) as unknown[]
 
   return {
     rowsReturned: rows.length,
@@ -168,23 +190,17 @@ async function queryV2Native(path, targetType) {
   }
 }
 
-async function queryV3Dual(path, targetType) {
+async function queryV3Dual(path: string, targetType: string): Promise<QueryResult> {
   const start = performance.now()
   const fileBuffer = await fs.readFile(path)
-  const file = {
-    byteLength: fileBuffer.byteLength,
-    slice: (s, e) => {
-      const buf = fileBuffer.slice(s, e)
-      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
-    },
-  }
+  const file = createFileReader(fileBuffer)
 
   const rows = await parquetQuery({
     file,
     columns: ['$id', '$data', '$index_titleType'],
     filter: { '$index_titleType': targetType },
     compressors,
-  })
+  }) as unknown[]
 
   return {
     rowsReturned: rows.length,
@@ -193,25 +209,19 @@ async function queryV3Dual(path, targetType) {
 }
 
 // Range query functions (for startYear range)
-async function queryV1JsonRange(path, minYear, maxYear) {
+async function queryV1JsonRange(path: string, minYear: number, maxYear: number): Promise<QueryResult> {
   const start = performance.now()
   const fileBuffer = await fs.readFile(path)
-  const file = {
-    byteLength: fileBuffer.byteLength,
-    slice: (s, e) => {
-      const buf = fileBuffer.slice(s, e)
-      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
-    },
-  }
+  const file = createFileReader(fileBuffer)
 
   const rows = await parquetQuery({
     file,
     columns: ['$id', '$data'],
     compressors,
-  })
+  }) as Array<{ $data: string }>
 
   const filtered = rows.filter(row => {
-    const data = JSON.parse(row.$data)
+    const data = JSON.parse(row.$data) as TitleRecord
     return data.startYear >= minYear && data.startYear <= maxYear
   })
 
@@ -221,22 +231,16 @@ async function queryV1JsonRange(path, minYear, maxYear) {
   }
 }
 
-async function queryV2NativeRange(path, minYear, maxYear) {
+async function queryV2NativeRange(path: string, minYear: number, maxYear: number): Promise<QueryResult> {
   const start = performance.now()
   const fileBuffer = await fs.readFile(path)
-  const file = {
-    byteLength: fileBuffer.byteLength,
-    slice: (s, e) => {
-      const buf = fileBuffer.slice(s, e)
-      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
-    },
-  }
+  const file = createFileReader(fileBuffer)
 
   const rows = await parquetQuery({
     file,
     filter: { startYear: { $gte: minYear, $lte: maxYear } },
     compressors,
-  })
+  }) as unknown[]
 
   return {
     rowsReturned: rows.length,
@@ -244,23 +248,17 @@ async function queryV2NativeRange(path, minYear, maxYear) {
   }
 }
 
-async function queryV3DualRange(path, minYear, maxYear) {
+async function queryV3DualRange(path: string, minYear: number, maxYear: number): Promise<QueryResult> {
   const start = performance.now()
   const fileBuffer = await fs.readFile(path)
-  const file = {
-    byteLength: fileBuffer.byteLength,
-    slice: (s, e) => {
-      const buf = fileBuffer.slice(s, e)
-      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
-    },
-  }
+  const file = createFileReader(fileBuffer)
 
   const rows = await parquetQuery({
     file,
     columns: ['$id', '$data', '$index_startYear'],
     filter: { '$index_startYear': { $gte: minYear, $lte: maxYear } },
     compressors,
-  })
+  }) as unknown[]
 
   return {
     rowsReturned: rows.length,
@@ -272,7 +270,7 @@ async function queryV3DualRange(path, minYear, maxYear) {
 // Main
 // =============================================================================
 
-async function runBenchmark() {
+async function runBenchmark(): Promise<void> {
   console.log('='.repeat(80))
   console.log('Variant Shredding Benchmark')
   console.log('='.repeat(80))
@@ -281,9 +279,9 @@ async function runBenchmark() {
   await fs.mkdir(BENCHMARK_DIR, { recursive: true })
 
   for (const rowCount of ROW_COUNTS) {
-    console.log(`\n${'─'.repeat(80)}`)
+    console.log(`\n${'-'.repeat(80)}`)
     console.log(`Dataset: ${rowCount.toLocaleString()} records`)
-    console.log('─'.repeat(80))
+    console.log('-'.repeat(80))
 
     console.log('Generating test data...')
     const genStart = performance.now()
@@ -317,11 +315,11 @@ async function runBenchmark() {
     console.log()
 
     const iterations = 5
-    const avg = arr => arr.reduce((a, b) => a + b, 0) / arr.length
-    const min = arr => Math.min(...arr)
+    const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length
+    const min = (arr: number[]) => Math.min(...arr)
 
     // V1 benchmarks
-    const v1Times = []
+    const v1Times: number[] = []
     let v1Rows = 0
     for (let i = 0; i < iterations; i++) {
       const result = await queryV1Json(v1Path, 'movie')
@@ -330,7 +328,7 @@ async function runBenchmark() {
     }
 
     // V2 benchmarks
-    const v2Times = []
+    const v2Times: number[] = []
     let v2Rows = 0
     for (let i = 0; i < iterations; i++) {
       const result = await queryV2Native(v2Path, 'movie')
@@ -339,7 +337,7 @@ async function runBenchmark() {
     }
 
     // V3 benchmarks
-    const v3Times = []
+    const v3Times: number[] = []
     let v3Rows = 0
     for (let i = 0; i < iterations; i++) {
       const result = await queryV3Dual(v3Path, 'movie')
@@ -375,7 +373,7 @@ async function runBenchmark() {
     console.log()
 
     // V1 range benchmarks
-    const v1RangeTimes = []
+    const v1RangeTimes: number[] = []
     let v1RangeRows = 0
     for (let i = 0; i < iterations; i++) {
       const result = await queryV1JsonRange(v1Path, targetYearMin, targetYearMax)
@@ -384,7 +382,7 @@ async function runBenchmark() {
     }
 
     // V2 range benchmarks
-    const v2RangeTimes = []
+    const v2RangeTimes: number[] = []
     let v2RangeRows = 0
     for (let i = 0; i < iterations; i++) {
       const result = await queryV2NativeRange(v2Path, targetYearMin, targetYearMax)
@@ -393,7 +391,7 @@ async function runBenchmark() {
     }
 
     // V3 range benchmarks
-    const v3RangeTimes = []
+    const v3RangeTimes: number[] = []
     let v3RangeRows = 0
     for (let i = 0; i < iterations; i++) {
       const result = await queryV3DualRange(v3Path, targetYearMin, targetYearMax)

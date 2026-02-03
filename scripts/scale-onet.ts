@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 /**
  * Scale O*NET Dataset to Realistic Size
  *
@@ -21,10 +22,102 @@ const OUTPUT_DIR = './data-v3/onet-full';
 const ROW_GROUP_SIZE = 10000;
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface ColumnData {
+  name: string;
+  type: 'STRING' | 'INT32' | 'DOUBLE';
+  data: (string | number)[];
+}
+
+interface SOCMajorGroup {
+  prefix: string;
+  name: string;
+  count: number;
+}
+
+interface Occupation {
+  socCode: string;
+  title: string;
+  majorGroup: string;
+  majorGroupName: string;
+  jobZone: number;
+  description: string;
+}
+
+interface Skill {
+  elementId: string;
+  name: string;
+  category: string;
+  subcategory: string;
+}
+
+interface Ability {
+  elementId: string;
+  name: string;
+  category: string;
+  subcategory: string;
+}
+
+interface KnowledgeArea {
+  elementId: string;
+  name: string;
+  category: string;
+}
+
+interface OccupationSkillRating {
+  id: string;
+  socCode: string;
+  elementId: string;
+  skillName: string;
+  scaleId: string;
+  scaleName: string;
+  importance: number;
+  level: number;
+  dataValue: number;
+  n: number;
+  standardError: number;
+  date: string;
+  domainSource: string;
+}
+
+interface OccupationAbilityRating {
+  id: string;
+  socCode: string;
+  elementId: string;
+  abilityName: string;
+  importance: number;
+  level: number;
+  n: number;
+  standardError: number;
+  date: string;
+  domainSource: string;
+}
+
+interface OccupationKnowledgeRating {
+  id: string;
+  socCode: string;
+  elementId: string;
+  knowledgeName: string;
+  importance: number;
+  level: number;
+  n: number;
+  standardError: number;
+  date: string;
+  domainSource: string;
+}
+
+interface SkillProfile {
+  high: string[];
+  medium: string[];
+}
+
+// =============================================================================
 // Utilities
 // =============================================================================
 
-async function writeParquet(path, columnData, rowGroupSize = ROW_GROUP_SIZE) {
+async function writeParquet(path: string, columnData: ColumnData[], rowGroupSize: number = ROW_GROUP_SIZE): Promise<number> {
   const buffer = parquetWriteBuffer({ columnData, rowGroupSize });
   const fullPath = join(OUTPUT_DIR, path);
   await fs.mkdir(fullPath.split('/').slice(0, -1).join('/') || OUTPUT_DIR, { recursive: true });
@@ -35,8 +128,8 @@ async function writeParquet(path, columnData, rowGroupSize = ROW_GROUP_SIZE) {
 }
 
 // Seeded random for reproducibility
-function seededRandom(seed) {
-  return function() {
+function seededRandom(seed: number): () => number {
+  return function(): number {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     return seed / 0x7fffffff;
   };
@@ -45,7 +138,7 @@ function seededRandom(seed) {
 const random = seededRandom(42);
 
 // Generate a random value in range with normal-ish distribution
-function randomInRange(min, max) {
+function randomInRange(min: number, max: number): number {
   // Average of two randoms for slightly normal distribution
   const r = (random() + random()) / 2;
   return min + r * (max - min);
@@ -57,7 +150,7 @@ function randomInRange(min, max) {
 
 // Real SOC major groups (11-xxxx through 53-xxxx)
 // Total: 1,000 occupations (adjusted counts to match real O*NET proportions)
-const SOC_MAJOR_GROUPS = [
+const SOC_MAJOR_GROUPS: SOCMajorGroup[] = [
   { prefix: '11', name: 'Management', count: 45 },
   { prefix: '13', name: 'Business and Financial Operations', count: 55 },
   { prefix: '15', name: 'Computer and Mathematical', count: 40 },
@@ -83,7 +176,7 @@ const SOC_MAJOR_GROUPS = [
 ];
 
 // Sample occupation titles by category
-const OCCUPATION_TITLES = {
+const OCCUPATION_TITLES: Record<string, string[]> = {
   '11': ['Chief Executive', 'General Manager', 'Operations Manager', 'Marketing Manager', 'Sales Manager', 'Human Resources Manager', 'Training Manager', 'Financial Manager', 'IT Manager', 'Project Manager'],
   '13': ['Accountant', 'Auditor', 'Budget Analyst', 'Financial Analyst', 'Tax Preparer', 'Cost Estimator', 'Management Analyst', 'Market Research Analyst', 'Buyer', 'Claims Adjuster'],
   '15': ['Software Developer', 'Data Scientist', 'Systems Analyst', 'Database Administrator', 'Network Architect', 'Security Analyst', 'Web Developer', 'DevOps Engineer', 'Machine Learning Engineer', 'QA Engineer'],
@@ -113,7 +206,7 @@ const OCCUPATION_TITLES = {
 // =============================================================================
 
 // 35 Skills based on O*NET skill categories
-const SKILLS = [
+const SKILLS: Skill[] = [
   // Basic Skills (Content) - 2.A.1.*
   { elementId: '2.A.1.a', name: 'Reading Comprehension', category: 'Basic Skills', subcategory: 'Content' },
   { elementId: '2.A.1.b', name: 'Active Listening', category: 'Basic Skills', subcategory: 'Content' },
@@ -165,7 +258,7 @@ const SKILLS = [
 ];
 
 // 52 Abilities based on O*NET ability categories
-const ABILITIES = [
+const ABILITIES: Ability[] = [
   // Cognitive Abilities - Verbal
   { elementId: '1.A.1.a.1', name: 'Oral Comprehension', category: 'Cognitive', subcategory: 'Verbal' },
   { elementId: '1.A.1.a.2', name: 'Written Comprehension', category: 'Cognitive', subcategory: 'Verbal' },
@@ -250,7 +343,7 @@ const ABILITIES = [
 ];
 
 // 33 Knowledge areas based on O*NET
-const KNOWLEDGE_AREAS = [
+const KNOWLEDGE_AREAS: KnowledgeArea[] = [
   // Business and Management
   { elementId: '2.C.1.a', name: 'Administration and Management', category: 'Business and Management' },
   { elementId: '2.C.1.b', name: 'Clerical', category: 'Business and Management' },
@@ -310,7 +403,7 @@ const KNOWLEDGE_AREAS = [
 // =============================================================================
 
 // Define which skills are important for each SOC major group
-const SKILL_PROFILES = {
+const SKILL_PROFILES: Record<string, SkillProfile> = {
   '11': { high: ['2.A.1.c', '2.A.1.d', '2.B.1.d', '2.B.4.e', '2.B.5.d'], medium: ['2.A.2.a', '2.B.1.c', '2.B.5.b'] },
   '13': { high: ['2.A.1.a', '2.A.1.e', '2.A.2.a', '2.B.4.g'], medium: ['2.A.1.c', '2.B.4.e', '2.B.5.a'] },
   '15': { high: ['2.B.3.e', '2.B.2.i', '2.A.2.a', '2.B.4.g'], medium: ['2.A.1.a', '2.B.3.k', '2.A.2.b'] },
@@ -339,9 +432,9 @@ const SKILL_PROFILES = {
 // Data Generation
 // =============================================================================
 
-function generateOccupations() {
+function generateOccupations(): Occupation[] {
   console.log('  Generating 1,000 occupations...');
-  const occupations = [];
+  const occupations: Occupation[] = [];
 
   for (const group of SOC_MAJOR_GROUPS) {
     const titles = OCCUPATION_TITLES[group.prefix] || ['Specialist'];
@@ -353,7 +446,7 @@ function generateOccupations() {
       const titleSuffix = i >= titles.length ? ` ${Math.floor(i / titles.length) + 1}` : '';
 
       // Job zone based on occupation type
-      let jobZone;
+      let jobZone: number;
       if (['15', '17', '19', '23', '29'].includes(group.prefix)) {
         jobZone = Math.floor(randomInRange(3, 5.99)); // Higher skill jobs
       } else if (['31', '35', '37', '39', '45'].includes(group.prefix)) {
@@ -378,9 +471,9 @@ function generateOccupations() {
   return occupations;
 }
 
-function generateOccupationSkillRatings(occupations) {
+function generateOccupationSkillRatings(occupations: Occupation[]): OccupationSkillRating[] {
   console.log('  Generating occupation-skill ratings (~100K target)...');
-  const ratings = [];
+  const ratings: OccupationSkillRating[] = [];
 
   for (const occ of occupations) {
     const profile = SKILL_PROFILES[occ.majorGroup] || { high: [], medium: [] };
@@ -389,7 +482,8 @@ function generateOccupationSkillRatings(occupations) {
     // Real O*NET stores importance and level as separate scale records
     // We generate BOTH to reach the ~100K target
     for (const skill of SKILLS) {
-      let importanceValue, levelValue;
+      let importanceValue: number;
+      let levelValue: number;
 
       if (profile.high.includes(skill.elementId)) {
         importanceValue = randomInRange(3.5, 5.0);
@@ -468,15 +562,16 @@ function generateOccupationSkillRatings(occupations) {
   return ratings;
 }
 
-function generateOccupationAbilityRatings(occupations) {
+function generateOccupationAbilityRatings(occupations: Occupation[]): OccupationAbilityRating[] {
   console.log('  Generating occupation-ability ratings (~50K target)...');
-  const ratings = [];
+  const ratings: OccupationAbilityRating[] = [];
 
   for (const occ of occupations) {
     // Each occupation gets ratings for ALL abilities (100% coverage)
     for (const ability of ABILITIES) {
       // Cognitive abilities more important for knowledge workers
-      let importance, level;
+      let importance: number;
+      let level: number;
       const isKnowledgeWork = ['11', '13', '15', '17', '19', '23', '25', '29'].includes(occ.majorGroup);
       const isPhysicalWork = ['31', '35', '37', '45', '47', '49', '51', '53'].includes(occ.majorGroup);
 
@@ -515,12 +610,12 @@ function generateOccupationAbilityRatings(occupations) {
   return ratings;
 }
 
-function generateOccupationKnowledgeRatings(occupations) {
+function generateOccupationKnowledgeRatings(occupations: Occupation[]): OccupationKnowledgeRating[] {
   console.log('  Generating occupation-knowledge ratings (~30K target)...');
-  const ratings = [];
+  const ratings: OccupationKnowledgeRating[] = [];
 
   // Knowledge relevance by occupation group
-  const KNOWLEDGE_PROFILES = {
+  const KNOWLEDGE_PROFILES: Record<string, string[]> = {
     '11': ['2.C.1.a', '2.C.1.f', '2.C.1.c', '2.C.1.d'],
     '13': ['2.C.1.c', '2.C.1.b', '2.C.1.a', '2.C.4.a'],
     '15': ['2.C.3.a', '2.C.4.a', '2.C.3.b', '2.C.7.a'],
@@ -550,7 +645,8 @@ function generateOccupationKnowledgeRatings(occupations) {
 
     // Each occupation gets ratings for ALL knowledge areas (100% coverage)
     for (const knowledge of KNOWLEDGE_AREAS) {
-      let importance, level;
+      let importance: number;
+      let level: number;
 
       if (relevantKnowledge.includes(knowledge.elementId)) {
         importance = randomInRange(3.5, 5.0);

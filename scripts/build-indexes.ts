@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Build FTS and Bloom Filter Indexes for ParqueDB
  *
@@ -6,16 +6,78 @@
  * Supports multi-file datasets with per-collection index definitions.
  *
  * Usage:
- *   node scripts/build-indexes.mjs --dataset imdb-1m --collection titles --field name --type fts
- *   node scripts/build-indexes.mjs --dataset onet-full --collection occupations --all  # Build all FTS indexes for collection
- *   node scripts/build-indexes.mjs --dataset imdb-1m --all  # Build all FTS indexes for all collections in dataset
- *   node scripts/build-indexes.mjs --dataset imdb-1m --all --bloom  # Include bloom filters
+ *   bun scripts/build-indexes.ts --dataset imdb-1m --collection titles --field name --type fts
+ *   bun scripts/build-indexes.ts --dataset onet-full --collection occupations --all  # Build all FTS indexes for collection
+ *   bun scripts/build-indexes.ts --dataset imdb-1m --all  # Build all FTS indexes for all collections in dataset
+ *   bun scripts/build-indexes.ts --dataset imdb-1m --all --bloom  # Include bloom filters
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { parquetRead, parquetMetadataAsync } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
+
+// =============================================================================
+// Types
+// =============================================================================
+
+interface IndexDefinition {
+  name: string
+  field: string
+  type: 'fts'
+}
+
+interface FTSPosting {
+  docId: string
+  field: string
+  frequency: number
+  positions: number[]
+}
+
+interface DocStats {
+  docId: string
+  fieldLengths: Map<string, number>
+  totalLength: number
+}
+
+interface CorpusStats {
+  documentCount: number
+  avgDocLength: number
+  documentFrequency: Map<string, number>
+}
+
+interface IndexResult {
+  name: string
+  type: string
+  field: string
+  path: string
+  sizeBytes: number
+  entryCount: number
+  rowGroups: number
+  updatedAt: string
+  bloomPath?: string
+  bloomSizeBytes?: number
+}
+
+interface CollectionCatalog {
+  version: number
+  collection: string
+  indexes: IndexResult[]
+  updatedAt: string
+}
+
+interface GlobalCatalog {
+  version: number
+  dataset: string
+  collections: Record<string, { indexes: IndexResult[]; catalogPath: string }>
+  updatedAt: string
+}
+
+interface ParquetRow {
+  $id?: string
+  data?: string | Record<string, unknown>
+  [key: string]: unknown
+}
 
 // =============================================================================
 // Configuration
@@ -29,11 +91,10 @@ const BLOOM_FILTER_MAGIC = new Uint8Array([0x50, 0x51, 0x42, 0x46]) // "PQBF"
 const BLOOM_FILTER_VERSION = 1
 const BLOOM_FILTER_HEADER_SIZE = 16
 const BLOOM_VALUE_FILTER_SIZE = 131072 // 128KB for global value bloom
-const BLOOM_ROW_GROUP_SIZE = 4096 // 4KB per row group bloom
 const BLOOM_NUM_HASH_FUNCTIONS = 3 // Optimized for ~1% FPR
 
 // Dataset files mapping - lists all parquet files per dataset
-const DATASET_FILES = {
+const DATASET_FILES: Record<string, string[]> = {
   'imdb': ['titles', 'people', 'cast'],  // ~100K titles - fits in Worker limits
   'imdb-1m': ['titles', 'people', 'cast'],
   'onet-full': [
@@ -49,7 +110,7 @@ const DATASET_FILES = {
 }
 
 // Index definitions per dataset and collection (FTS only)
-const INDEX_DEFINITIONS = {
+const INDEX_DEFINITIONS: Record<string, Record<string, IndexDefinition[]>> = {
   'imdb': {
     titles: [
       { name: 'name', field: 'name', type: 'fts' },
@@ -103,11 +164,11 @@ const INDEX_DEFINITIONS = {
 /**
  * Build an FTS index from Parquet data
  */
-function buildFTSIndex(rows, field, idField = '$id') {
+function buildFTSIndex(rows: ParquetRow[], field: string, idField = '$id'): Uint8Array {
   console.log(`  Building FTS index for ${field}...`)
-  const index = new Map()
-  const docStats = new Map()
-  const corpusStats = {
+  const index = new Map<string, FTSPosting[]>()
+  const docStats = new Map<string, DocStats>()
+  const corpusStats: CorpusStats = {
     documentCount: 0,
     avgDocLength: 0,
     documentFrequency: new Map(),
@@ -124,24 +185,25 @@ function buildFTSIndex(rows, field, idField = '$id') {
 
     // Tokenize
     const tokens = tokenize(text)
-    const termFreqs = new Map()
+    const termFreqs = new Map<string, { freq: number; positions: number[] }>()
 
     for (let pos = 0; pos < tokens.length; pos++) {
       const term = tokens[pos]
       if (!termFreqs.has(term)) {
         termFreqs.set(term, { freq: 0, positions: [] })
       }
-      termFreqs.get(term).freq++
-      termFreqs.get(term).positions.push(pos)
+      const termData = termFreqs.get(term)!
+      termData.freq++
+      termData.positions.push(pos)
     }
 
     // Add to index
-    const termsInDoc = new Set()
+    const termsInDoc = new Set<string>()
     for (const [term, { freq, positions }] of termFreqs) {
       if (!index.has(term)) {
         index.set(term, [])
       }
-      index.get(term).push({
+      index.get(term)!.push({
         docId: String(docId),
         field,
         frequency: freq,
@@ -179,7 +241,7 @@ function buildFTSIndex(rows, field, idField = '$id') {
 /**
  * MurmurHash3 32-bit for bloom filter hashing
  */
-function murmurHash3ForBloom(key, seed) {
+function murmurHash3ForBloom(key: Uint8Array, seed: number): number {
   const c1 = 0xcc9e2d51
   const c2 = 0x1b873593
   const r1 = 15
@@ -240,11 +302,11 @@ function murmurHash3ForBloom(key, seed) {
 /**
  * Generate multiple hash values using double hashing technique
  */
-function getBloomHashes(key, numHashes, filterBits) {
+function getBloomHashes(key: Uint8Array, numHashes: number, filterBits: number): number[] {
   const h1 = murmurHash3ForBloom(key, 0)
   const h2 = murmurHash3ForBloom(key, h1)
 
-  const hashes = []
+  const hashes: number[] = []
   for (let i = 0; i < numHashes; i++) {
     const hash = ((h1 + i * h2) >>> 0) % filterBits
     hashes.push(hash)
@@ -256,7 +318,7 @@ function getBloomHashes(key, numHashes, filterBits) {
 /**
  * Encode a value to bytes for bloom filter hashing
  */
-function encodeValueForBloom(value) {
+function encodeValueForBloom(value: unknown): Uint8Array {
   if (value === null || value === undefined) {
     return new Uint8Array([0])
   }
@@ -285,7 +347,7 @@ function encodeValueForBloom(value) {
  * Uses the formula: m = -n * ln(p) / (ln(2))^2
  * Where m = bits, n = expected items, p = false positive rate
  */
-function calculateOptimalBloomSize(expectedItems, fpr = 0.01) {
+function calculateOptimalBloomSize(expectedItems: number, fpr = 0.01): number {
   const m = Math.ceil((-expectedItems * Math.log(fpr)) / Math.pow(Math.log(2), 2))
   // Round up to nearest 256 bytes for alignment
   const bytes = Math.ceil(m / 8 / 256) * 256
@@ -298,17 +360,12 @@ function calculateOptimalBloomSize(expectedItems, fpr = 0.01) {
  * Creates a two-level bloom filter:
  * 1. Value bloom - "Does value X exist anywhere in this index?"
  * 2. Row group blooms - "Which row groups might contain value X?"
- *
- * @param {Array} rows - The data rows
- * @param {string} field - Field to index
- * @param {number[]} rowGroupBoundaries - Cumulative row counts per row group
- * @returns {Uint8Array} Serialized bloom filter
  */
-function buildBloomFilter(rows, field, rowGroupBoundaries = []) {
+function buildBloomFilter(rows: ParquetRow[], field: string, rowGroupBoundaries: number[] = []): Uint8Array {
   console.log(`  Building bloom filter for ${field}...`)
 
   // First pass: count unique values to optimize bloom filter size
-  const uniqueValues = new Set()
+  const uniqueValues = new Set<string>()
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
     const value = getFieldValue(row, field)
@@ -333,7 +390,7 @@ function buildBloomFilter(rows, field, rowGroupBoundaries = []) {
 
   // Initialize bloom filter arrays
   const valueBloom = new Uint8Array(valueFilterSize)
-  const rowGroupBlooms = []
+  const rowGroupBlooms: Uint8Array[] = []
   for (let i = 0; i < numRowGroups; i++) {
     rowGroupBlooms.push(new Uint8Array(rgBloomSize))
   }
@@ -422,7 +479,7 @@ const STOP_WORDS = new Set([
   'the', 'to', 'was', 'were', 'will', 'with'
 ])
 
-function tokenize(text) {
+function tokenize(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/[^\w\s]/g, ' ')
@@ -435,7 +492,7 @@ function tokenize(text) {
 // Porter Stemmer (matching src/indexes/fts/tokenizer.ts)
 // =============================================================================
 
-function porterStem(word) {
+function porterStem(word: string): string {
   if (word.length <= 2) return word
 
   let stem = word
@@ -480,7 +537,7 @@ function porterStem(word) {
   return stem
 }
 
-function step1bPostProcess(stem) {
+function step1bPostProcess(stem: string): string {
   if (stem.endsWith('at') || stem.endsWith('bl') || stem.endsWith('iz')) return stem + 'e'
   if (stem.length >= 2) {
     const last = stem[stem.length - 1]
@@ -493,8 +550,8 @@ function step1bPostProcess(stem) {
   return stem
 }
 
-function step2(stem) {
-  const suffixes = {
+function step2(stem: string): string {
+  const suffixes: Record<string, string> = {
     'ational': 'ate', 'tional': 'tion', 'enci': 'ence', 'anci': 'ance',
     'izer': 'ize', 'abli': 'able', 'alli': 'al', 'entli': 'ent',
     'eli': 'e', 'ousli': 'ous', 'ization': 'ize', 'ation': 'ate',
@@ -510,8 +567,8 @@ function step2(stem) {
   return stem
 }
 
-function step3(stem) {
-  const suffixes = { 'icate': 'ic', 'ative': '', 'alize': 'al', 'iciti': 'ic', 'ical': 'ic', 'ful': '', 'ness': '' }
+function step3(stem: string): string {
+  const suffixes: Record<string, string> = { 'icate': 'ic', 'ative': '', 'alize': 'al', 'iciti': 'ic', 'ical': 'ic', 'ful': '', 'ness': '' }
   for (const [suffix, replacement] of Object.entries(suffixes)) {
     if (stem.endsWith(suffix)) {
       const prefix = stem.slice(0, -suffix.length)
@@ -521,7 +578,7 @@ function step3(stem) {
   return stem
 }
 
-function step4(stem) {
+function step4(stem: string): string {
   const suffixes = ['al', 'ance', 'ence', 'er', 'ic', 'able', 'ible', 'ant', 'ement', 'ment', 'ent', 'ion', 'ou', 'ism', 'ate', 'iti', 'ous', 'ive', 'ize']
   for (const suffix of suffixes) {
     if (stem.endsWith(suffix)) {
@@ -534,21 +591,21 @@ function step4(stem) {
   return stem
 }
 
-function isVowel(word, index) {
+function isVowel(word: string, index: number): boolean {
   const c = word[index]
   if ('aeiou'.includes(c)) return true
   if (c === 'y' && index > 0 && !isVowel(word, index - 1)) return true
   return false
 }
 
-function isConsonant(word, index) { return !isVowel(word, index) }
+function isConsonant(word: string, index: number): boolean { return !isVowel(word, index) }
 
-function hasVowel(word) {
+function hasVowel(word: string): boolean {
   for (let i = 0; i < word.length; i++) if (isVowel(word, i)) return true
   return false
 }
 
-function measureConsonants(word) {
+function measureConsonants(word: string): number {
   let m = 0, i = 0
   while (i < word.length && isConsonant(word, i)) i++
   while (i < word.length) {
@@ -560,7 +617,7 @@ function measureConsonants(word) {
   return m
 }
 
-function endsWithCVC(word) {
+function endsWithCVC(word: string): boolean {
   const len = word.length
   if (len < 3) return false
   if (isConsonant(word, len - 3) && isVowel(word, len - 2) && isConsonant(word, len - 1)) {
@@ -573,7 +630,7 @@ function endsWithCVC(word) {
 // Serialization
 // =============================================================================
 
-function serializeFTSIndex(index, docStats, corpusStats) {
+function serializeFTSIndex(index: Map<string, FTSPosting[]>, docStats: Map<string, DocStats>, corpusStats: CorpusStats): Uint8Array {
   const data = {
     version: 1,
     index: Array.from(index.entries()),
@@ -596,23 +653,20 @@ function serializeFTSIndex(index, docStats, corpusStats) {
 // Utilities
 // =============================================================================
 
-function getFieldValue(obj, path) {
+function getFieldValue(obj: Record<string, unknown>, path: string): unknown {
   const parts = path.split('.')
-  let current = obj
+  let current: unknown = obj
   for (const part of parts) {
     if (current === null || current === undefined) return undefined
-    current = current[part]
+    current = (current as Record<string, unknown>)[part]
   }
   return current
 }
 
 /**
  * Calculate which row group a row index belongs to
- * @param {number} rowIndex - Global row index
- * @param {number[]} boundaries - Cumulative row counts [end1, end2, ...]
- * @returns {number} Row group index
  */
-function getRowGroup(rowIndex, boundaries) {
+function getRowGroup(rowIndex: number, boundaries: number[]): number {
   if (!boundaries || boundaries.length === 0) return 0
   for (let rg = 0; rg < boundaries.length; rg++) {
     if (rowIndex < boundaries[rg]) {
@@ -622,14 +676,19 @@ function getRowGroup(rowIndex, boundaries) {
   return boundaries.length - 1
 }
 
-async function readParquetFile(path) {
+interface ReadParquetResult {
+  rows: ParquetRow[]
+  rowGroupBoundaries: number[]
+}
+
+async function readParquetFile(path: string): Promise<ReadParquetResult> {
   console.log(`Reading ${path}...`)
   const nodeBuffer = readFileSync(path)
   const buffer = nodeBuffer.buffer.slice(nodeBuffer.byteOffset, nodeBuffer.byteOffset + nodeBuffer.byteLength)
 
   // Get metadata to extract row group boundaries
   const metadata = await parquetMetadataAsync(buffer)
-  const rowGroupBoundaries = []
+  const rowGroupBoundaries: number[] = []
   let cumulativeRows = 0
 
   if (metadata.row_groups) {
@@ -637,16 +696,16 @@ async function readParquetFile(path) {
       cumulativeRows += Number(rg.num_rows)
       rowGroupBoundaries.push(cumulativeRows)
     }
-    console.log(`  Found ${metadata.row_groups.length} row groups: [${metadata.row_groups.map(rg => Number(rg.num_rows)).join(', ')}] rows each`)
+    console.log(`  Found ${metadata.row_groups.length} row groups: [${metadata.row_groups.map((rg: { num_rows: number | bigint }) => Number(rg.num_rows)).join(', ')}] rows each`)
   }
 
-  const rows = []
+  const rows: ParquetRow[] = []
 
   await parquetRead({
     rowFormat: 'object',
     file: buffer,
     compressors,
-    onComplete: (data) => {
+    onComplete: (data: ParquetRow[]) => {
       for (let i = 0; i < data.length; i += 10000) { const chunk = data.slice(i, i + 10000); rows.push(...chunk); }
     },
   })
@@ -655,7 +714,7 @@ async function readParquetFile(path) {
   return { rows, rowGroupBoundaries }
 }
 
-function ensureDir(path) {
+function ensureDir(path: string): void {
   const dir = dirname(path)
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })
@@ -664,12 +723,8 @@ function ensureDir(path) {
 
 /**
  * Build indexes for a single collection
- * @param {string} dataset - Dataset name
- * @param {string} collection - Collection name
- * @param {Array} indexesToBuild - Index definitions to build
- * @param {boolean} buildBloomFilters - Build bloom filters for pre-filtering
  */
-async function buildCollectionIndexes(dataset, collection, indexesToBuild, buildBloomFilters = false) {
+async function buildCollectionIndexes(dataset: string, collection: string, indexesToBuild: IndexDefinition[], buildBloomFilters = false): Promise<IndexResult[] | null> {
   // Read data file for this collection
   const dataPath = join(DATA_DIR, dataset, `${collection}.parquet`)
   if (!existsSync(dataPath)) {
@@ -683,12 +738,12 @@ async function buildCollectionIndexes(dataset, collection, indexesToBuild, build
   const unpackedRows = rows.map(row => {
     if (row.data) {
       const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data
-      return { ...row, ...data }
+      return { ...row, ...(data as Record<string, unknown>) }
     }
     return row
   })
 
-  const results = []
+  const results: IndexResult[] = []
 
   // Build each index
   for (const def of indexesToBuild) {
@@ -709,7 +764,7 @@ async function buildCollectionIndexes(dataset, collection, indexesToBuild, build
     console.log(`  Wrote ${outputPath} (${indexData.length} bytes)`)
 
     // Build bloom filter if requested
-    let bloomInfo = null
+    let bloomInfo: { bloomPath: string; bloomSizeBytes: number } | null = null
     if (buildBloomFilters) {
       const bloomData = buildBloomFilter(unpackedRows, def.field, rowGroupBoundaries)
       const bloomDir = join(OUTPUT_DIR, dataset, collection, 'indexes', 'fts')
@@ -724,7 +779,7 @@ async function buildCollectionIndexes(dataset, collection, indexesToBuild, build
       }
     }
 
-    const result = {
+    const result: IndexResult = {
       name: def.name,
       type: def.type,
       field: def.field,
@@ -750,14 +805,14 @@ async function buildCollectionIndexes(dataset, collection, indexesToBuild, build
 // Main
 // =============================================================================
 
-async function main() {
+async function main(): Promise<void> {
   const args = process.argv.slice(2)
 
   // Parse arguments
-  let dataset = null
-  let collection = null
-  let field = null
-  let type = null
+  let dataset: string | null = null
+  let collection: string | null = null
+  let field: string | null = null
+  let type: string | null = null
   let buildAll = false
   let buildBloom = false
 
@@ -782,7 +837,7 @@ async function main() {
   }
 
   if (!dataset) {
-    console.error('Usage: node scripts/build-indexes.mjs --dataset <name> [--collection <name>] [--field <field> --type fts] [--all] [--bloom]')
+    console.error('Usage: bun scripts/build-indexes.ts --dataset <name> [--collection <name>] [--field <field> --type fts] [--all] [--bloom]')
     console.error('\nAvailable datasets:')
     for (const [d, collections] of Object.entries(DATASET_FILES)) {
       console.error(`  ${d}:`)
@@ -821,7 +876,7 @@ async function main() {
   }
 
   // Global catalog for the dataset
-  const globalCatalog = {
+  const globalCatalog: GlobalCatalog = {
     version: 1,
     dataset,
     collections: {},
@@ -861,7 +916,7 @@ async function main() {
 
     if (results && results.length > 0) {
       // Write collection-level catalog
-      const collectionCatalog = {
+      const collectionCatalog: CollectionCatalog = {
         version: 1,
         collection: col,
         indexes: results,

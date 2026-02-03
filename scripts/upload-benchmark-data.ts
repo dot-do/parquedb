@@ -1,11 +1,11 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Upload benchmark data (data-v3) to R2 for real I/O performance testing
  *
  * Usage:
- *   CLOUDFLARE_ACCOUNT_ID=xxx node scripts/upload-benchmark-data.mjs
- *   CLOUDFLARE_ACCOUNT_ID=xxx node scripts/upload-benchmark-data.mjs --force
- *   CLOUDFLARE_ACCOUNT_ID=xxx node scripts/upload-benchmark-data.mjs --datasets imdb,onet
+ *   CLOUDFLARE_ACCOUNT_ID=xxx bun scripts/upload-benchmark-data.ts
+ *   CLOUDFLARE_ACCOUNT_ID=xxx bun scripts/upload-benchmark-data.ts --force
+ *   CLOUDFLARE_ACCOUNT_ID=xxx bun scripts/upload-benchmark-data.ts --datasets imdb,onet
  *
  * This uploads all parquet files from data-v3/ to the parquedb R2 bucket
  * under the benchmark-data/ prefix.
@@ -31,12 +31,29 @@ const R2_PREFIX = 'benchmark-data'
 const args = process.argv.slice(2)
 const forceUpload = args.includes('--force')
 const datasetsArg = args.find(a => a.startsWith('--datasets='))
-const selectedDatasets = datasetsArg ? datasetsArg.split('=')[1].split(',') : null
+const selectedDatasets: string[] | null = datasetsArg ? datasetsArg.split('=')[1].split(',') : null
+
+interface FileInfo {
+  fullPath: string
+  relativePath: string
+}
+
+interface R2FileInfo {
+  exists: boolean
+  size: number
+}
+
+interface UploadResult {
+  uploaded: number
+  skipped: number
+  failed: number
+  bytesUploaded: number
+}
 
 /**
  * Format bytes to human readable
  */
-function formatBytes(bytes) {
+function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
@@ -45,7 +62,7 @@ function formatBytes(bytes) {
 /**
  * Upload a file to R2 using wrangler CLI
  */
-async function uploadFile(localPath, r2Path, size) {
+async function uploadFile(localPath: string, r2Path: string, size: number): Promise<boolean> {
   const sizeStr = formatBytes(size)
   console.log(`  Uploading: ${r2Path} (${sizeStr})`)
   try {
@@ -55,7 +72,7 @@ async function uploadFile(localPath, r2Path, size) {
     )
     return true
   } catch (error) {
-    console.error(`    Failed: ${error.message}`)
+    console.error(`    Failed: ${(error as Error).message}`)
     return false
   }
 }
@@ -63,7 +80,7 @@ async function uploadFile(localPath, r2Path, size) {
 /**
  * Check if file exists in R2 and get its size
  */
-async function getR2FileInfo(r2Path) {
+async function getR2FileInfo(r2Path: string): Promise<R2FileInfo> {
   try {
     const output = execSync(`npx wrangler r2 object head ${BUCKET}/${r2Path}`, {
       encoding: 'utf-8',
@@ -83,7 +100,7 @@ async function getR2FileInfo(r2Path) {
 /**
  * Recursively find all files in a directory
  */
-async function* walkDir(dir, baseDir = dir) {
+async function* walkDir(dir: string, baseDir: string = dir): AsyncGenerator<FileInfo> {
   const entries = await fs.readdir(dir, { withFileTypes: true })
   for (const entry of entries) {
     const fullPath = join(dir, entry.name)
@@ -100,7 +117,7 @@ async function* walkDir(dir, baseDir = dir) {
 /**
  * Check if a file should be uploaded
  */
-function shouldUploadFile(filename) {
+function shouldUploadFile(filename: string): boolean {
   // Upload parquet files, index files, and catalog files
   return filename.endsWith('.parquet') ||
          filename.endsWith('.idx') ||
@@ -111,7 +128,7 @@ function shouldUploadFile(filename) {
 /**
  * Upload dataset files to R2 (recursive)
  */
-async function uploadDataset(datasetName, localDir) {
+async function uploadDataset(datasetName: string, localDir: string): Promise<UploadResult> {
   console.log(`\n${'─'.repeat(50)}`)
   console.log(`Dataset: ${datasetName}`)
   console.log(`${'─'.repeat(50)}`)
@@ -161,7 +178,7 @@ async function uploadDataset(datasetName, localDir) {
 /**
  * List all datasets in data-v3
  */
-async function listDatasets() {
+async function listDatasets(): Promise<string[]> {
   const entries = await fs.readdir(DATA_DIR, { withFileTypes: true })
   return entries.filter((e) => e.isDirectory()).map((e) => e.name)
 }
@@ -169,7 +186,7 @@ async function listDatasets() {
 /**
  * Get total size of a dataset (recursive)
  */
-async function getDatasetSize(localDir) {
+async function getDatasetSize(localDir: string): Promise<number> {
   let total = 0
   try {
     for await (const { fullPath, relativePath } of walkDir(localDir)) {
@@ -186,7 +203,7 @@ async function getDatasetSize(localDir) {
 /**
  * Main function
  */
-async function main() {
+async function main(): Promise<void> {
   console.log('═'.repeat(60))
   console.log('Upload Benchmark Data to R2')
   console.log('═'.repeat(60))
@@ -267,10 +284,10 @@ async function main() {
 
   console.log('\n' + '─'.repeat(40))
   console.log('Test the benchmark endpoint:')
-  console.log('  curl https://parquedb.workers.do/benchmark-datasets')
+  console.log('  curl https://api.parquedb.com/benchmark-datasets')
   console.log('')
   console.log('With specific datasets:')
-  console.log('  curl "https://parquedb.workers.do/benchmark-datasets?iterations=5"')
+  console.log('  curl "https://api.parquedb.com/benchmark-datasets?iterations=5"')
 }
 
 main().catch((error) => {

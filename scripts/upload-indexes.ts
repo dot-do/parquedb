@@ -1,13 +1,13 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Upload Secondary Indexes to R2
  *
  * Uploads built indexes from local filesystem to Cloudflare R2 bucket.
  *
  * Usage:
- *   node scripts/upload-indexes.mjs --dataset imdb-1m
- *   node scripts/upload-indexes.mjs --dataset imdb-1m --dry-run
- *   node scripts/upload-indexes.mjs --all
+ *   bun scripts/upload-indexes.ts --dataset imdb-1m
+ *   bun scripts/upload-indexes.ts --dataset imdb-1m --dry-run
+ *   bun scripts/upload-indexes.ts --all
  *
  * Environment variables:
  *   R2_ACCOUNT_ID - Cloudflare account ID
@@ -34,10 +34,33 @@ const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY
 const R2_BUCKET = process.env.R2_BUCKET || 'parquedb'
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface IndexFile {
+  localPath: string
+  r2Key: string
+  size: number
+}
+
+interface UploadResult {
+  skipped: boolean
+  size: number
+  error?: Error
+}
+
+interface DatasetUploadResult {
+  uploaded: number
+  skipped: number
+  totalBytes: number
+  errors: number
+}
+
+// =============================================================================
 // R2 Client
 // =============================================================================
 
-function createR2Client() {
+function createR2Client(): S3Client {
   if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
     console.error('Missing R2 credentials. Set environment variables:')
     console.error('  R2_ACCOUNT_ID')
@@ -60,20 +83,20 @@ function createR2Client() {
 // File Discovery
 // =============================================================================
 
-function findIndexFiles(dataset) {
+function findIndexFiles(dataset: string): IndexFile[] {
   const datasetDir = join(LOCAL_DIR, dataset)
   if (!existsSync(datasetDir)) {
     return []
   }
 
-  const files = []
+  const files: IndexFile[] = []
 
-  function walkDir(dir, baseR2Path) {
+  function walkDir(dir: string, _baseR2Path: string): void {
     const entries = readdirSync(dir, { withFileTypes: true })
     for (const entry of entries) {
       const fullPath = join(dir, entry.name)
       if (entry.isDirectory()) {
-        walkDir(fullPath, baseR2Path)
+        walkDir(fullPath, _baseR2Path)
       } else {
         const stat = statSync(fullPath)
         const r2Key = relative(LOCAL_DIR, fullPath)
@@ -105,7 +128,7 @@ function findIndexFiles(dataset) {
 // Upload
 // =============================================================================
 
-async function uploadFile(client, localPath, r2Key, dryRun) {
+async function uploadFile(client: S3Client, localPath: string, r2Key: string, dryRun: boolean): Promise<UploadResult> {
   const content = readFileSync(localPath)
   const size = content.length
 
@@ -151,12 +174,12 @@ async function uploadFile(client, localPath, r2Key, dryRun) {
     console.log(`  [OK] Uploaded: ${r2Key} (${formatSize(size)})`)
     return { skipped: false, size }
   } catch (err) {
-    console.error(`  [ERROR] Failed to upload ${r2Key}: ${err.message}`)
-    return { skipped: false, size: 0, error: err }
+    console.error(`  [ERROR] Failed to upload ${r2Key}: ${(err as Error).message}`)
+    return { skipped: false, size: 0, error: err as Error }
   }
 }
 
-async function uploadDataset(client, dataset, dryRun) {
+async function uploadDataset(client: S3Client, dataset: string, dryRun: boolean): Promise<DatasetUploadResult> {
   console.log(`\nUploading indexes for ${dataset}...`)
 
   const files = findIndexFiles(dataset)
@@ -191,7 +214,7 @@ async function uploadDataset(client, dataset, dryRun) {
 // Utilities
 // =============================================================================
 
-function formatSize(bytes) {
+function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
@@ -201,10 +224,10 @@ function formatSize(bytes) {
 // Main
 // =============================================================================
 
-async function main() {
+async function main(): Promise<void> {
   const args = process.argv.slice(2)
 
-  let dataset = null
+  let dataset: string | null = null
   let uploadAll = false
   let dryRun = false
 
@@ -219,8 +242,8 @@ async function main() {
   }
 
   if (!dataset && !uploadAll) {
-    console.error('Usage: node scripts/upload-indexes.mjs --dataset <name> [--dry-run]')
-    console.error('       node scripts/upload-indexes.mjs --all [--dry-run]')
+    console.error('Usage: bun scripts/upload-indexes.ts --dataset <name> [--dry-run]')
+    console.error('       bun scripts/upload-indexes.ts --all [--dry-run]')
     console.error('\nAvailable datasets:')
     for (const d of DATASETS) {
       console.error(`  ${d}`)
@@ -228,7 +251,7 @@ async function main() {
     process.exit(1)
   }
 
-  const datasetsToUpload = uploadAll ? DATASETS : [dataset]
+  const datasetsToUpload = uploadAll ? DATASETS : [dataset!]
   const invalidDatasets = datasetsToUpload.filter(d => !DATASETS.includes(d))
 
   if (invalidDatasets.length > 0) {

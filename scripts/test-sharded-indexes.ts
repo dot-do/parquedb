@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { ShardedHashIndex } from '../src/indexes/secondary/sharded-hash.ts'
 import { ShardedSSTIndex } from '../src/indexes/secondary/sharded-sst.ts'
 import { FsBackend } from '../src/storage/FsBackend.ts'
@@ -13,7 +13,17 @@ console.log('Available indexes:')
 const files = readdirSync('data-v3/imdb-1m/titles/indexes/secondary')
 console.log(files.join(', '))
 
-async function main() {
+interface RangeQuery {
+  $gte?: number
+  $lte?: number
+}
+
+interface RangeTest {
+  name: string
+  query: RangeQuery
+}
+
+async function main(): Promise<void> {
   // Test hash index for titleType
   console.log('\n--- Hash Index: titleType ---')
   const hashIndex = new ShardedHashIndex(
@@ -37,7 +47,7 @@ async function main() {
       console.log(`  ${type}: ${result.docIds.length.toLocaleString()} docs, ${result.rowGroups.length} row groups in ${elapsed.toFixed(2)}ms`)
     } catch (err) {
       const elapsed = performance.now() - start
-      console.log(`  ${type}: ERROR - ${err.message} (${elapsed.toFixed(2)}ms)`)
+      console.log(`  ${type}: ERROR - ${(err as Error).message} (${elapsed.toFixed(2)}ms)`)
     }
   }
 
@@ -53,7 +63,7 @@ async function main() {
   await sstIndex.load()
   console.log(`  Load time: ${(performance.now() - sstLoadStart).toFixed(2)}ms`)
 
-  const ranges = [
+  const ranges: RangeTest[] = [
     { name: '2020-2025', query: { $gte: 2020, $lte: 2025 } },
     { name: '2010-2019', query: { $gte: 2010, $lte: 2019 } },
     { name: '2000-2009', query: { $gte: 2000, $lte: 2009 } },
@@ -69,7 +79,7 @@ async function main() {
       console.log(`  ${name}: ${result.docIds.length.toLocaleString()} docs, ${result.rowGroups.length} row groups in ${elapsed.toFixed(2)}ms`)
     } catch (err) {
       const elapsed = performance.now() - start
-      console.log(`  ${name}: ERROR - ${err.message} (${elapsed.toFixed(2)}ms)`)
+      console.log(`  ${name}: ERROR - ${(err as Error).message} (${elapsed.toFixed(2)}ms)`)
     }
   }
 
@@ -85,7 +95,7 @@ async function main() {
   await ratingIndex.load()
   console.log(`  Load time: ${(performance.now() - ratingLoadStart).toFixed(2)}ms`)
 
-  const ratingRanges = [
+  const ratingRanges: RangeTest[] = [
     { name: '>= 9.0 (elite)', query: { $gte: 9.0, $lte: 10.0 } },
     { name: '>= 8.0 (excellent)', query: { $gte: 8.0, $lte: 10.0 } },
     { name: '>= 7.0 (good)', query: { $gte: 7.0, $lte: 10.0 } },
@@ -100,7 +110,7 @@ async function main() {
       console.log(`  ${name}: ${result.docIds.length.toLocaleString()} docs, ${result.rowGroups.length} row groups in ${elapsed.toFixed(2)}ms`)
     } catch (err) {
       const elapsed = performance.now() - start
-      console.log(`  ${name}: ERROR - ${err.message} (${elapsed.toFixed(2)}ms)`)
+      console.log(`  ${name}: ERROR - ${(err as Error).message} (${elapsed.toFixed(2)}ms)`)
     }
   }
 }

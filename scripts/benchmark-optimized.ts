@@ -26,28 +26,70 @@ const CATEGORIES = ['electronics', 'clothing', 'books', 'home', 'sports', 'toys'
 const STATUSES = ['active', 'inactive', 'pending', 'archived']
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface Product {
+  id: string
+  name: string
+  category: string
+  status: string
+  price: number
+  rating: number
+  createdYear: number
+}
+
+interface FileReader {
+  byteLength: number
+  slice: (start: number, end: number) => ArrayBuffer
+}
+
+interface Scenario {
+  name: string
+  description: string
+  filter: Record<string, unknown> | null
+  columns: string[]
+  selectivity: number | null
+  dynamic?: boolean
+}
+
+interface ScenarioResult {
+  name: string
+  median: number
+  p95: number
+  rows: number
+  selectivity: number
+  throughputPerSec: number
+}
+
+interface SizeResult {
+  size: number
+  scenarios: ScenarioResult[]
+}
+
+// =============================================================================
 // Utilities
 // =============================================================================
 
-function formatBytes(bytes) {
+function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
-function formatNumber(n) {
+function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
   return String(n)
 }
 
-function median(arr) {
+function median(arr: number[]): number {
   const sorted = [...arr].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
 }
 
-function p95(arr) {
+function p95(arr: number[]): number {
   const sorted = [...arr].sort((a, b) => a - b)
   return sorted[Math.floor(sorted.length * 0.95)]
 }
@@ -56,8 +98,8 @@ function p95(arr) {
 // Data Generation
 // =============================================================================
 
-function generateProducts(count) {
-  const products = []
+function generateProducts(count: number): Product[] {
+  const products: Product[] = []
   for (let i = 0; i < count; i++) {
     products.push({
       id: `prod_${String(i).padStart(8, '0')}`,
@@ -76,17 +118,17 @@ function generateProducts(count) {
 // File Operations
 // =============================================================================
 
-function createFileReader(fileBuffer) {
+function createFileReader(fileBuffer: Buffer): FileReader {
   return {
     byteLength: fileBuffer.byteLength,
-    slice: (s, e) => {
+    slice: (s: number, e: number): ArrayBuffer => {
       const buf = fileBuffer.slice(s, e)
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
     },
   }
 }
 
-async function writeV3(products, path) {
+async function writeV3(products: Product[], path: string): Promise<number> {
   const buffer = parquetWriteBuffer({
     columnData: [
       { name: '$id', type: 'STRING', data: products.map(p => p.id) },
@@ -108,7 +150,7 @@ async function writeV3(products, path) {
 // Query Scenarios
 // =============================================================================
 
-const SCENARIOS = [
+const SCENARIOS: Scenario[] = [
   {
     name: 'Count only (no data fetch)',
     description: 'Filter + count, no $data column',
@@ -162,36 +204,13 @@ const SCENARIOS = [
 ]
 
 // =============================================================================
-// Comparison: With vs Without Row Group Statistics
-// =============================================================================
-
-async function measureRowGroupSkipping(file, filter, columns) {
-  // Get metadata to see row group info
-  const metadata = await parquetMetadataAsync(file)
-  const totalRowGroups = metadata.row_groups.length
-  const totalRows = metadata.num_rows
-
-  const start = performance.now()
-  const rows = await parquetQuery({ file, filter, columns, compressors })
-  const elapsed = performance.now() - start
-
-  return {
-    elapsed,
-    rowsReturned: rows.length,
-    totalRows,
-    totalRowGroups,
-    rowGroupsAccessed: 'N/A', // Would need instrumentation in hyparquet
-  }
-}
-
-// =============================================================================
 // Main Benchmark
 // =============================================================================
 
-async function runBenchmark() {
-  console.log('═'.repeat(100))
+async function runBenchmark(): Promise<void> {
+  console.log('='.repeat(100))
   console.log('Optimized ParqueDB Benchmark')
-  console.log('═'.repeat(100))
+  console.log('='.repeat(100))
   console.log()
   console.log(`Row group size: ${ROWS_PER_GROUP.toLocaleString()} (smaller = better pushdown potential)`)
   console.log(`Compression: LZ4_RAW (fast)`)
@@ -200,12 +219,12 @@ async function runBenchmark() {
 
   await fs.mkdir(BENCHMARK_DIR, { recursive: true })
 
-  const results = []
+  const results: SizeResult[] = []
 
   for (const size of DATASET_SIZES) {
-    console.log('\n' + '─'.repeat(100))
+    console.log('\n' + '-'.repeat(100))
     console.log(`Dataset: ${formatNumber(size)} products (${Math.ceil(size / ROWS_PER_GROUP)} row groups)`)
-    console.log('─'.repeat(100))
+    console.log('-'.repeat(100))
 
     // Generate and write
     console.log('\nGenerating data...')
@@ -224,15 +243,15 @@ async function runBenchmark() {
     // Get metadata
     const metadata = await parquetMetadataAsync(file)
     console.log(`  Row groups: ${metadata.row_groups.length}`)
-    console.log(`  Columns: ${metadata.schema.slice(1).map(s => s.name).join(', ')}`)
+    console.log(`  Columns: ${metadata.schema.slice(1).map((s: { name: string }) => s.name).join(', ')}`)
 
     // Run scenarios
     console.log('\n  Queries:')
-    console.log('  ' + '─'.repeat(96))
+    console.log('  ' + '-'.repeat(96))
     console.log('  ' + 'Scenario'.padEnd(35) + 'Median'.padStart(12) + 'P95'.padStart(12) + 'Rows'.padStart(12) + 'Select%'.padStart(10) + 'Throughput'.padStart(15))
-    console.log('  ' + '─'.repeat(96))
+    console.log('  ' + '-'.repeat(96))
 
-    const sizeResults = { size, scenarios: [] }
+    const sizeResults: SizeResult = { size, scenarios: [] }
 
     for (const scenario of SCENARIOS) {
       let filter = scenario.filter
@@ -245,7 +264,7 @@ async function runBenchmark() {
         expectedSelectivity = 1 / size
       }
 
-      const times = []
+      const times: number[] = []
       let rowCount = 0
 
       for (let i = 0; i < ITERATIONS; i++) {
@@ -257,7 +276,7 @@ async function runBenchmark() {
           compressors,
         })
         times.push(performance.now() - start)
-        rowCount = rows.length
+        rowCount = (rows as unknown[]).length
       }
 
       const med = median(times)
@@ -288,45 +307,45 @@ async function runBenchmark() {
   }
 
   // Summary table
-  console.log('\n' + '═'.repeat(100))
+  console.log('\n' + '='.repeat(100))
   console.log('SUMMARY: Query Latency by Dataset Size')
-  console.log('═'.repeat(100))
+  console.log('='.repeat(100))
 
   // Create comparison table
   const scenarioNames = SCENARIOS.map(s => s.name)
   console.log('\n' + 'Scenario'.padEnd(35) + DATASET_SIZES.map(s => formatNumber(s).padStart(12)).join(''))
-  console.log('─'.repeat(35 + DATASET_SIZES.length * 12))
+  console.log('-'.repeat(35 + DATASET_SIZES.length * 12))
 
   for (const scenarioName of scenarioNames) {
     const row = [scenarioName.padEnd(35)]
     for (const sizeResult of results) {
       const scenario = sizeResult.scenarios.find(s => s.name === scenarioName)
-      row.push(`${scenario.median.toFixed(1)}ms`.padStart(12))
+      row.push(`${scenario!.median.toFixed(1)}ms`.padStart(12))
     }
     console.log(row.join(''))
   }
 
   // Throughput summary
-  console.log('\n' + '═'.repeat(100))
+  console.log('\n' + '='.repeat(100))
   console.log('SUMMARY: Throughput (rows/sec)')
-  console.log('═'.repeat(100))
+  console.log('='.repeat(100))
 
   console.log('\n' + 'Scenario'.padEnd(35) + DATASET_SIZES.map(s => formatNumber(s).padStart(12)).join(''))
-  console.log('─'.repeat(35 + DATASET_SIZES.length * 12))
+  console.log('-'.repeat(35 + DATASET_SIZES.length * 12))
 
   for (const scenarioName of scenarioNames) {
     const row = [scenarioName.padEnd(35)]
     for (const sizeResult of results) {
       const scenario = sizeResult.scenarios.find(s => s.name === scenarioName)
-      row.push(formatNumber(scenario.throughputPerSec).padStart(12))
+      row.push(formatNumber(scenario!.throughputPerSec).padStart(12))
     }
     console.log(row.join(''))
   }
 
   // Scaling analysis
-  console.log('\n' + '═'.repeat(100))
+  console.log('\n' + '='.repeat(100))
   console.log('SCALING ANALYSIS')
-  console.log('═'.repeat(100))
+  console.log('='.repeat(100))
 
   console.log('\nLatency scaling factor (1M / 10K):')
   const baseline = results.find(r => r.size === 10_000)
@@ -336,16 +355,16 @@ async function runBenchmark() {
     for (const scenarioName of scenarioNames) {
       const baseScenario = baseline.scenarios.find(s => s.name === scenarioName)
       const largeScenario = largest.scenarios.find(s => s.name === scenarioName)
-      const scaleFactor = largeScenario.median / baseScenario.median
+      const scaleFactor = largeScenario!.median / baseScenario!.median
       const expectedLinear = largest.size / baseline.size // 100x
       const efficiency = (expectedLinear / scaleFactor * 100).toFixed(0)
       console.log(`  ${scenarioName.padEnd(35)} ${scaleFactor.toFixed(1)}x (${efficiency}% efficient vs linear)`)
     }
   }
 
-  console.log('\n' + '═'.repeat(100))
+  console.log('\n' + '='.repeat(100))
   console.log('Benchmark complete!')
-  console.log('═'.repeat(100))
+  console.log('='.repeat(100))
 }
 
 runBenchmark().catch(console.error)

@@ -17,6 +17,78 @@ import { parquetQuery } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface Product {
+  id: string;
+  name: string;
+  category: string;
+  status: string;
+  region: string;
+  price: number;
+  rating: number;
+  createdYear: number;
+  inventory: number;
+  tags: string[];
+  metadata: {
+    sku: string;
+    weight: number;
+    dimensions: { w: number; h: number; d: number };
+  };
+}
+
+interface Relationship {
+  from_id: string;
+  to_id: string;
+  predicate: string;
+  weight: number;
+  createdAt: number;
+}
+
+interface FileReader {
+  byteLength: number;
+  slice: (start: number, end: number) => ArrayBuffer;
+}
+
+interface QueryDefinition {
+  name: string;
+  description: string;
+  selectivity: (count: number) => number;
+  v1Filter: (setupData: string | null) => (p: Product) => boolean;
+  v3Filter: (setupData: string | null) => Record<string, unknown>;
+  v3Columns: string[];
+  setup: (products: Product[]) => string | null;
+}
+
+interface QueryResult {
+  name: string;
+  v1Median: number;
+  v3Median: number;
+  speedup: number;
+  rows: number;
+  selectivity: number;
+}
+
+interface GraphResult {
+  oneHop: { median: number; p95: number; count: number };
+  reverse: { median: number; p95: number; count: number };
+  predicate: { median: number; p95: number; count: number };
+}
+
+interface SizeResult {
+  size: number;
+  queries: QueryResult[];
+  graph: GraphResult | null;
+}
+
+interface ParquetRow {
+  $id?: string;
+  $data?: string;
+  [key: string]: unknown;
+}
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
@@ -34,29 +106,29 @@ const REGIONS = ['north', 'south', 'east', 'west', 'central']
 // Utilities
 // =============================================================================
 
-function formatBytes(bytes) {
+function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
-function formatNumber(n) {
+function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
   return String(n)
 }
 
-function avg(arr) {
+function avg(arr: number[]): number {
   return arr.reduce((a, b) => a + b, 0) / arr.length
 }
 
-function median(arr) {
+function median(arr: number[]): number {
   const sorted = [...arr].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
 }
 
-function p95(arr) {
+function p95(arr: number[]): number {
   const sorted = [...arr].sort((a, b) => a - b)
   return sorted[Math.floor(sorted.length * 0.95)]
 }
@@ -65,8 +137,8 @@ function p95(arr) {
 // Data Generation
 // =============================================================================
 
-function generateProducts(count) {
-  const products = []
+function generateProducts(count: number): Product[] {
+  const products: Product[] = []
 
   for (let i = 0; i < count; i++) {
     const category = CATEGORIES[i % CATEGORIES.length]
@@ -99,8 +171,8 @@ function generateProducts(count) {
   return products
 }
 
-function generateRelationships(products, avgRelsPerProduct = 5) {
-  const relationships = []
+function generateRelationships(products: Product[], avgRelsPerProduct = 5): Relationship[] {
+  const relationships: Relationship[] = []
   const count = products.length
 
   for (let i = 0; i < count; i++) {
@@ -126,7 +198,7 @@ function generateRelationships(products, avgRelsPerProduct = 5) {
 // File Writers
 // =============================================================================
 
-async function writeProductsV1(products, path) {
+async function writeProductsV1(products: Product[], path: string): Promise<number> {
   const buffer = parquetWriteBuffer({
     columnData: [
       { name: '$id', type: 'STRING', data: products.map(p => p.id) },
@@ -139,7 +211,7 @@ async function writeProductsV1(products, path) {
   return buffer.byteLength
 }
 
-async function writeProductsV3(products, path) {
+async function writeProductsV3(products: Product[], path: string): Promise<number> {
   const buffer = parquetWriteBuffer({
     columnData: [
       { name: '$id', type: 'STRING', data: products.map(p => p.id) },
@@ -159,7 +231,7 @@ async function writeProductsV3(products, path) {
   return buffer.byteLength
 }
 
-async function writeRelationships(relationships, path) {
+async function writeRelationships(relationships: Relationship[], path: string): Promise<number> {
   const buffer = parquetWriteBuffer({
     columnData: [
       { name: 'from_id', type: 'STRING', data: relationships.map(r => r.from_id) },
@@ -178,17 +250,17 @@ async function writeRelationships(relationships, path) {
 // Query Helpers
 // =============================================================================
 
-function createFileReader(fileBuffer) {
+function createFileReader(fileBuffer: Buffer): FileReader {
   return {
     byteLength: fileBuffer.byteLength,
-    slice: (s, e) => {
+    slice: (s: number, e: number) => {
       const buf = fileBuffer.slice(s, e)
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
     },
   }
 }
 
-async function loadFile(path) {
+async function loadFile(path: string): Promise<FileReader> {
   const fileBuffer = await fs.readFile(path)
   return createFileReader(fileBuffer)
 }
@@ -197,18 +269,18 @@ async function loadFile(path) {
 // Query Functions - V1 (JSON blob, no pushdown)
 // =============================================================================
 
-async function queryV1(file, filterFn) {
-  const rows = await parquetQuery({ file, columns: ['$id', '$data'], compressors })
-  return rows.filter(row => filterFn(JSON.parse(row.$data)))
+async function queryV1(file: FileReader, filterFn: (p: Product) => boolean): Promise<ParquetRow[]> {
+  const rows = await parquetQuery({ file, columns: ['$id', '$data'], compressors }) as ParquetRow[]
+  return rows.filter(row => filterFn(JSON.parse(row.$data!) as Product))
 }
 
 // =============================================================================
 // Query Functions - V3 (Dual index, with pushdown)
 // =============================================================================
 
-async function queryV3(file, filter, indexColumns = []) {
+async function queryV3(file: FileReader, filter: Record<string, unknown>, indexColumns: string[] = []): Promise<ParquetRow[]> {
   const columns = ['$id', '$data', ...indexColumns]
-  const rows = await parquetQuery({ file, columns, filter, compressors })
+  const rows = await parquetQuery({ file, columns, filter, compressors }) as ParquetRow[]
   return rows
 }
 
@@ -216,7 +288,7 @@ async function queryV3(file, filter, indexColumns = []) {
 // Benchmark Queries
 // =============================================================================
 
-const QUERIES = [
+const QUERIES: QueryDefinition[] = [
   {
     name: 'Point lookup (by ID)',
     description: 'Single record by exact ID',
@@ -304,13 +376,13 @@ const QUERIES = [
 // Graph Query Benchmarks
 // =============================================================================
 
-async function benchmarkGraphQueries(products, relsFile, size) {
+async function benchmarkGraphQueries(products: Product[], relsFile: FileReader, size: number): Promise<GraphResult> {
   console.log('\n  Graph Traversal Queries:')
 
   const targetProduct = products[Math.floor(products.length / 2)]
 
   // 1-hop: Find all related products
-  const oneHopTimes = []
+  const oneHopTimes: number[] = []
   let oneHopCount = 0
   for (let i = 0; i < ITERATIONS; i++) {
     const start = performance.now()
@@ -318,7 +390,7 @@ async function benchmarkGraphQueries(products, relsFile, size) {
       file: relsFile,
       filter: { from_id: targetProduct.id },
       compressors,
-    })
+    }) as ParquetRow[]
     oneHopTimes.push(performance.now() - start)
     oneHopCount = rels.length
   }
@@ -327,7 +399,7 @@ async function benchmarkGraphQueries(products, relsFile, size) {
   console.log(`      Median: ${median(oneHopTimes).toFixed(2)}ms  P95: ${p95(oneHopTimes).toFixed(2)}ms  Results: ${oneHopCount}`)
 
   // Reverse lookup: Find products that link TO this one
-  const reverseTimes = []
+  const reverseTimes: number[] = []
   let reverseCount = 0
   for (let i = 0; i < ITERATIONS; i++) {
     const start = performance.now()
@@ -335,7 +407,7 @@ async function benchmarkGraphQueries(products, relsFile, size) {
       file: relsFile,
       filter: { to_id: targetProduct.id },
       compressors,
-    })
+    }) as ParquetRow[]
     reverseTimes.push(performance.now() - start)
     reverseCount = rels.length
   }
@@ -344,7 +416,7 @@ async function benchmarkGraphQueries(products, relsFile, size) {
   console.log(`      Median: ${median(reverseTimes).toFixed(2)}ms  P95: ${p95(reverseTimes).toFixed(2)}ms  Results: ${reverseCount}`)
 
   // Filter by predicate
-  const predicateTimes = []
+  const predicateTimes: number[] = []
   let predicateCount = 0
   for (let i = 0; i < ITERATIONS; i++) {
     const start = performance.now()
@@ -352,7 +424,7 @@ async function benchmarkGraphQueries(products, relsFile, size) {
       file: relsFile,
       filter: { predicate: 'similar_to' },
       compressors,
-    })
+    }) as ParquetRow[]
     predicateTimes.push(performance.now() - start)
     predicateCount = rels.length
   }
@@ -371,7 +443,7 @@ async function benchmarkGraphQueries(products, relsFile, size) {
 // Main Benchmark Runner
 // =============================================================================
 
-async function runBenchmark() {
+async function runBenchmark(): Promise<void> {
   console.log('═'.repeat(100))
   console.log('ParqueDB Full Benchmark Suite')
   console.log('═'.repeat(100))
@@ -383,7 +455,7 @@ async function runBenchmark() {
 
   await fs.mkdir(BENCHMARK_DIR, { recursive: true })
 
-  const allResults = []
+  const allResults: SizeResult[] = []
 
   for (const size of DATASET_SIZES) {
     console.log('\n' + '─'.repeat(100))
@@ -429,7 +501,7 @@ async function runBenchmark() {
     console.log('  ' + 'Query'.padEnd(35) + 'V1 (JSON)'.padStart(15) + 'V3 (Index)'.padStart(15) + 'Speedup'.padStart(10) + 'Rows'.padStart(12) + 'Select%'.padStart(10))
     console.log('  ' + '─'.repeat(96))
 
-    const sizeResults = { size, queries: [], graph: null }
+    const sizeResults: SizeResult = { size, queries: [], graph: null }
 
     for (const query of QUERIES) {
       const setupData = query.setup(products)
@@ -437,7 +509,7 @@ async function runBenchmark() {
       const v3Filter = query.v3Filter(setupData)
 
       // V1 benchmark
-      const v1Times = []
+      const v1Times: number[] = []
       let v1Count = 0
       for (let i = 0; i < ITERATIONS; i++) {
         const start = performance.now()
@@ -447,7 +519,7 @@ async function runBenchmark() {
       }
 
       // V3 benchmark
-      const v3Times = []
+      const v3Times: number[] = []
       let v3Count = 0
       for (let i = 0; i < ITERATIONS; i++) {
         const start = performance.now()

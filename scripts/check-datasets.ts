@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 /**
  * Check Dataset Availability
@@ -7,9 +7,9 @@
  * in the production R2 bucket by making HTTP requests to the API.
  *
  * Usage:
- *   node scripts/check-datasets.mjs
- *   node scripts/check-datasets.mjs --verbose
- *   node scripts/check-datasets.mjs --base-url https://staging.example.com
+ *   bun scripts/check-datasets.ts
+ *   bun scripts/check-datasets.ts --verbose
+ *   bun scripts/check-datasets.ts --base-url https://staging.example.com
  *
  * Exit codes:
  *   0 - All datasets available
@@ -17,14 +17,47 @@
  */
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface Options {
+  verbose: boolean
+  baseUrl: string
+}
+
+interface DatasetConfig {
+  name: string
+  description: string
+  collections: string[]
+  prefix: string
+}
+
+interface CheckResult {
+  success: boolean
+  status: number
+  error?: string
+  elapsed: number
+  itemCount?: number
+  dataset?: string
+  collection?: string
+}
+
+interface ApiResponse {
+  items?: unknown[]
+  api?: {
+    returned?: number
+  }
+}
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
-const DEFAULT_BASE_URL = 'https://parquedb.workers.do'
+const DEFAULT_BASE_URL = 'https://api.parquedb.com'
 const REQUEST_TIMEOUT_MS = 30000
 
 // Dataset configuration (mirrored from src/worker/datasets.ts)
-const DATASETS = {
+const DATASETS: Record<string, DatasetConfig> = {
   imdb: {
     name: 'IMDB',
     description: 'Internet Movie Database - Sample titles and names',
@@ -52,9 +85,9 @@ const DATASETS = {
 /**
  * Parse command line arguments
  */
-function parseArgs() {
+function parseArgs(): Options {
   const args = process.argv.slice(2)
-  const options = {
+  const options: Options = {
     verbose: false,
     baseUrl: DEFAULT_BASE_URL,
   }
@@ -67,7 +100,7 @@ function parseArgs() {
       options.baseUrl = args[++i]
     } else if (arg === '--help' || arg === '-h') {
       console.log(`
-Usage: node scripts/check-datasets.mjs [options]
+Usage: bun scripts/check-datasets.ts [options]
 
 Options:
   --verbose, -v       Show detailed output
@@ -88,7 +121,7 @@ Exit codes:
 /**
  * Fetch with timeout
  */
-async function fetchWithTimeout(url, timeoutMs = REQUEST_TIMEOUT_MS) {
+async function fetchWithTimeout(url: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
 
@@ -113,7 +146,7 @@ async function fetchWithTimeout(url, timeoutMs = REQUEST_TIMEOUT_MS) {
 /**
  * Check a single collection endpoint
  */
-async function checkCollection(baseUrl, datasetId, collectionId, verbose) {
+async function checkCollection(baseUrl: string, datasetId: string, collectionId: string, _verbose: boolean): Promise<CheckResult> {
   const url = `${baseUrl}/datasets/${datasetId}/${collectionId}?limit=1`
   const startTime = Date.now()
 
@@ -130,11 +163,11 @@ async function checkCollection(baseUrl, datasetId, collectionId, verbose) {
       }
     }
 
-    const data = await response.json()
+    const data = await response.json() as ApiResponse
 
     // Verify response has data
     const itemCount = data.items?.length ?? 0
-    const hasData = itemCount > 0 || data.api?.returned > 0
+    const hasData = itemCount > 0 || (data.api?.returned ?? 0) > 0
 
     if (!hasData) {
       return {
@@ -153,9 +186,10 @@ async function checkCollection(baseUrl, datasetId, collectionId, verbose) {
     }
   } catch (error) {
     const elapsed = Date.now() - startTime
-    const errorMessage = error.name === 'AbortError'
+    const err = error as Error & { name?: string }
+    const errorMessage = err.name === 'AbortError'
       ? `Timeout after ${REQUEST_TIMEOUT_MS}ms`
-      : error.message
+      : err.message
 
     return {
       success: false,
@@ -169,8 +203,8 @@ async function checkCollection(baseUrl, datasetId, collectionId, verbose) {
 /**
  * Check all collections for a dataset
  */
-async function checkDataset(baseUrl, datasetId, dataset, verbose) {
-  const results = []
+async function checkDataset(baseUrl: string, datasetId: string, dataset: DatasetConfig, verbose: boolean): Promise<CheckResult[]> {
+  const results: CheckResult[] = []
 
   for (const collection of dataset.collections) {
     const result = await checkCollection(baseUrl, datasetId, collection, verbose)
@@ -188,7 +222,7 @@ async function checkDataset(baseUrl, datasetId, dataset, verbose) {
 // Main
 // =============================================================================
 
-async function main() {
+async function main(): Promise<void> {
   const options = parseArgs()
   const { verbose, baseUrl } = options
 
@@ -200,7 +234,7 @@ async function main() {
   console.log(`Collections: ${Object.values(DATASETS).reduce((sum, d) => sum + d.collections.length, 0)}`)
   console.log('')
 
-  const allResults = []
+  const allResults: CheckResult[] = []
   let totalPassed = 0
   let totalFailed = 0
 

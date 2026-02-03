@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 /**
  * Reload Datasets with Dual Variant Architecture
  *
@@ -12,10 +13,91 @@ import { join } from 'node:path';
 const OUTPUT_DIR = './data-v3';
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface ColumnData {
+  name: string;
+  type: string;
+  data: (string | number | boolean | null)[];
+}
+
+interface UnspscSegment {
+  code: string;
+  title: string;
+}
+
+interface UnspscFamily {
+  code: string;
+  title: string;
+  segmentCode: string;
+}
+
+interface UnspscClass {
+  code: string;
+  title: string;
+  familyCode: string;
+  segmentCode: string;
+}
+
+interface UnspscCommodity {
+  code: string;
+  title: string;
+  classCode: string;
+  familyCode: string;
+  segmentCode: string;
+}
+
+interface OnetOccupation {
+  socCode: string;
+  title: string;
+  jobZone: number;
+  description: string;
+}
+
+interface OnetSkill {
+  elementId: string;
+  name: string;
+  category: string;
+}
+
+interface OnetOccupationSkill {
+  id: string;
+  socCode: string;
+  elementId: string;
+  importance: number;
+  level: number;
+}
+
+interface ImdbTitle {
+  tconst: string;
+  titleType: string;
+  primaryTitle: string;
+  startYear: number;
+  genres: string[];
+  averageRating: number;
+  numVotes: number;
+}
+
+interface ImdbPerson {
+  nconst: string;
+  primaryName: string;
+  birthYear: number;
+  primaryProfession: string;
+}
+
+interface ImdbCast {
+  tconst: string;
+  nconst: string;
+  category: string;
+  ordering: number;
+}
+
+// =============================================================================
 // Utilities
 // =============================================================================
 
-async function writeParquet(path, columnData, rowGroupSize = 10000) {
+async function writeParquet(path: string, columnData: ColumnData[], rowGroupSize: number = 10000): Promise<number> {
   const buffer = parquetWriteBuffer({ columnData, rowGroupSize });
   await fs.mkdir(join(OUTPUT_DIR, path.split('/').slice(0, -1).join('/')), { recursive: true });
   await fs.writeFile(join(OUTPUT_DIR, path), Buffer.from(buffer));
@@ -27,17 +109,17 @@ async function writeParquet(path, columnData, rowGroupSize = 10000) {
 // UNSPSC - Generate Sample Data
 // =============================================================================
 
-async function loadUNSPSC() {
+async function loadUNSPSC(): Promise<void> {
   console.log('\n=== Loading UNSPSC (Sample) ===\n');
 
   // Generate sample UNSPSC hierarchy
-  const segments = [];
-  const families = [];
-  const classes = [];
-  const commodities = [];
+  const segments: UnspscSegment[] = [];
+  const families: UnspscFamily[] = [];
+  const classes: UnspscClass[] = [];
+  const commodities: UnspscCommodity[] = [];
 
   // IT Segment (43)
-  const itSegment = { code: '43', title: 'Information Technology Broadcasting and Telecommunications' };
+  const itSegment: UnspscSegment = { code: '43', title: 'Information Technology Broadcasting and Telecommunications' };
   segments.push(itSegment);
 
   const itFamilies = [
@@ -74,7 +156,7 @@ async function loadUNSPSC() {
   }
 
   // Add more segments
-  const otherSegments = [
+  const otherSegments: UnspscSegment[] = [
     { code: '10', title: 'Live Plant and Animal Material' },
     { code: '20', title: 'Mining and Well Drilling Machinery' },
     { code: '30', title: 'Structures and Building and Construction' },
@@ -133,17 +215,14 @@ async function loadUNSPSC() {
 // O*NET - Convert Existing CSV Data
 // =============================================================================
 
-async function loadONET() {
+async function loadONET(): Promise<void> {
   console.log('\n=== Loading O*NET (from existing CSV) ===\n');
 
   // Read existing O*NET occupation data
-  const occPath = './data/onet/Occupation Data.parquet';
-  const skillsPath = './data/onet/Skills.parquet';
-
   // Since we can't read the existing parquet, generate sample data
-  const occupations = [];
-  const skills = [];
-  const occupationSkills = [];
+  const occupations: OnetOccupation[] = [];
+  const skills: OnetSkill[] = [];
+  const occupationSkills: OnetOccupationSkill[] = [];
 
   // Sample occupations (SOC codes)
   const sampleOccupations = [
@@ -171,7 +250,7 @@ async function loadONET() {
   }
 
   // Sample skills
-  const sampleSkills = [
+  const sampleSkills: OnetSkill[] = [
     { elementId: '2.A.1.a', name: 'Reading Comprehension', category: 'Basic Skills' },
     { elementId: '2.A.1.b', name: 'Active Listening', category: 'Basic Skills' },
     { elementId: '2.A.1.c', name: 'Writing', category: 'Basic Skills' },
@@ -240,12 +319,12 @@ async function loadONET() {
 // IMDB - Generate Sample Data
 // =============================================================================
 
-async function loadIMDB() {
+async function loadIMDB(): Promise<void> {
   console.log('\n=== Loading IMDB (Sample 100K) ===\n');
 
-  const titles = [];
-  const people = [];
-  const cast = [];
+  const titles: ImdbTitle[] = [];
+  const people: ImdbPerson[] = [];
+  const cast: ImdbCast[] = [];
 
   const titleTypes = ['movie', 'tvSeries', 'short', 'tvEpisode', 'tvMovie'];
   const genres = ['Action', 'Drama', 'Comedy', 'Thriller', 'Horror', 'Romance', 'Sci-Fi', 'Documentary'];
@@ -318,7 +397,7 @@ async function loadIMDB() {
 
   // Write cast
   await writeParquet('imdb/cast.parquet', [
-    { name: '$id', type: 'STRING', data: cast.map((c, i) => `cast:${i}`) },
+    { name: '$id', type: 'STRING', data: cast.map((_, i) => `cast:${i}`) },
     { name: '$index_tconst', type: 'STRING', data: cast.map(c => c.tconst) },
     { name: '$index_nconst', type: 'STRING', data: cast.map(c => c.nconst) },
     { name: '$index_category', type: 'STRING', data: cast.map(c => c.category) },
@@ -346,7 +425,7 @@ await loadIMDB();
 
 // Summary
 const totalSize = await fs.readdir(OUTPUT_DIR, { recursive: true })
-  .then(files => files.filter(f => f.endsWith('.parquet')))
+  .then(files => (files as string[]).filter(f => f.endsWith('.parquet')))
   .then(async files => {
     let total = 0;
     for (const f of files) {

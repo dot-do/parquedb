@@ -11,6 +11,60 @@ import { parquetQuery } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface Product {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  status: string;
+  price: number;
+  rating: number;
+  createdYear: number;
+  tags: string[];
+  metadata: {
+    sku: string;
+    weight: number;
+    inStock: boolean;
+  };
+}
+
+interface FileReader {
+  byteLength: number;
+  slice: (start: number, end: number) => ArrayBuffer;
+}
+
+interface QueryDefinition {
+  name: string;
+  desc: string;
+  selectivity: number;
+  v1Filter: (p: Product) => boolean;
+  v3Filter: Record<string, unknown>;
+  v3Cols: string[];
+}
+
+interface QueryResult {
+  name: string;
+  v1: number;
+  v3: number;
+  speedup: number;
+  rows: number;
+}
+
+interface SizeResult {
+  size: number;
+  queries: QueryResult[];
+}
+
+interface ParquetRow {
+  $id?: string;
+  $data?: string;
+  [key: string]: unknown;
+}
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
@@ -26,19 +80,19 @@ const STATUSES = ['active', 'inactive', 'pending', 'archived']
 // Utilities
 // =============================================================================
 
-function formatBytes(bytes) {
+function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
-function formatNumber(n) {
+function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
   return String(n)
 }
 
-function median(arr) {
+function median(arr: number[]): number {
   const sorted = [...arr].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
@@ -48,8 +102,8 @@ function median(arr) {
 // Data Generation
 // =============================================================================
 
-function generateProducts(count) {
-  const products = []
+function generateProducts(count: number): Product[] {
+  const products: Product[] = []
   for (let i = 0; i < count; i++) {
     products.push({
       id: `prod_${String(i).padStart(8, '0')}`,
@@ -75,17 +129,17 @@ function generateProducts(count) {
 // File Operations
 // =============================================================================
 
-function createFileReader(fileBuffer) {
+function createFileReader(fileBuffer: Buffer): FileReader {
   return {
     byteLength: fileBuffer.byteLength,
-    slice: (s, e) => {
+    slice: (s: number, e: number) => {
       const buf = fileBuffer.slice(s, e)
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
     },
   }
 }
 
-async function writeV1(products, path) {
+async function writeV1(products: Product[], path: string): Promise<number> {
   // V1: Just $id and $data (JSON blob)
   const buffer = parquetWriteBuffer({
     columnData: [
@@ -99,7 +153,7 @@ async function writeV1(products, path) {
   return buffer.byteLength
 }
 
-async function writeV3(products, path) {
+async function writeV3(products: Product[], path: string): Promise<number> {
   // V3: $id + $index_* columns + $data
   const buffer = parquetWriteBuffer({
     columnData: [
@@ -122,7 +176,7 @@ async function writeV3(products, path) {
 // Query Definitions
 // =============================================================================
 
-const QUERIES = [
+const QUERIES: QueryDefinition[] = [
   {
     name: 'String equality',
     desc: "category = 'electronics'",
@@ -181,7 +235,7 @@ const QUERIES = [
 // Benchmark Runner
 // =============================================================================
 
-async function runBenchmark() {
+async function runBenchmark(): Promise<void> {
   console.log('╔' + '═'.repeat(98) + '╗')
   console.log('║' + ' ParqueDB Final Benchmark: V1 (JSON) vs V3 (Dual Index) '.padStart(75).padEnd(98) + '║')
   console.log('╚' + '═'.repeat(98) + '╝')
@@ -194,7 +248,7 @@ async function runBenchmark() {
 
   await fs.mkdir(BENCHMARK_DIR, { recursive: true })
 
-  const allResults = []
+  const allResults: SizeResult[] = []
 
   for (const size of DATASET_SIZES) {
     console.log('\n' + '━'.repeat(100))
@@ -225,11 +279,11 @@ async function runBenchmark() {
     console.log('  │' + ' Query'.padEnd(40) + '│' + ' V1 (JSON)'.padStart(12) + '│' + ' V3 (Index)'.padStart(12) + '│' + ' Speedup'.padStart(10) + '│' + ' Rows'.padStart(12) + '│' + ' Select'.padStart(8) + '│')
     console.log('  ├' + '─'.repeat(40) + '┼' + '─'.repeat(12) + '┼' + '─'.repeat(12) + '┼' + '─'.repeat(10) + '┼' + '─'.repeat(12) + '┼' + '─'.repeat(8) + '┤')
 
-    const sizeResults = { size, queries: [] }
+    const sizeResults: SizeResult = { size, queries: [] }
 
     for (const query of QUERIES) {
       // V1 benchmark: Read all data, parse JSON, filter in JS
-      const v1Times = []
+      const v1Times: number[] = []
       let v1Count = 0
       for (let i = 0; i < ITERATIONS; i++) {
         const start = performance.now()
@@ -237,14 +291,14 @@ async function runBenchmark() {
           file: v1File,
           columns: ['$id', '$data'],
           compressors,
-        })
-        const filtered = rows.filter(row => query.v1Filter(JSON.parse(row.$data)))
+        }) as ParquetRow[]
+        const filtered = rows.filter(row => query.v1Filter(JSON.parse(row.$data!) as Product))
         v1Times.push(performance.now() - start)
         v1Count = filtered.length
       }
 
       // V3 benchmark: Filter at Parquet level using $index columns
-      const v3Times = []
+      const v3Times: number[] = []
       let v3Count = 0
       for (let i = 0; i < ITERATIONS; i++) {
         const start = performance.now()
@@ -253,7 +307,7 @@ async function runBenchmark() {
           columns: ['$id', '$data', ...query.v3Cols],
           filter: query.v3Filter,
           compressors,
-        })
+        }) as ParquetRow[]
         v3Times.push(performance.now() - start)
         v3Count = rows.length
       }

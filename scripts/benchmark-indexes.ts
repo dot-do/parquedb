@@ -13,17 +13,62 @@ import { FTSIndex } from '../dist/indexes/fts/search.js';
 import { MemoryBackend } from '../dist/storage/MemoryBackend.js';
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface BenchmarkResult {
+  name: string;
+  median: number;
+  results: number;
+}
+
+interface MovieData {
+  $id: string;
+  titleType: string;
+  name: string;
+  description: string;
+  startYear: number;
+  rating: number;
+  numVotes: number;
+}
+
+interface OccupationData {
+  $id: string;
+  title: string;
+  description: string;
+  jobZone: number;
+  salary: number;
+}
+
+interface IndexEntry {
+  doc: MovieData;
+  docId: string;
+  rowGroup: number;
+  rowOffset: number;
+}
+
+interface FTSEntry {
+  docId: string;
+  doc: MovieData;
+}
+
+interface LookupResult {
+  docIds?: string[];
+  length?: number;
+}
+
+// =============================================================================
 // Utilities
 // =============================================================================
 
-function median(arr) {
+function median(arr: number[]): number {
   const sorted = [...arr].sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length / 2)];
 }
 
-async function benchmark(name, fn, iterations = 10) {
-  const times = [];
-  let result;
+async function benchmark(name: string, fn: () => unknown | Promise<unknown>, iterations = 10): Promise<BenchmarkResult> {
+  const times: number[] = [];
+  let result: unknown;
   // Warmup
   for (let i = 0; i < 3; i++) {
     result = await fn();
@@ -35,8 +80,9 @@ async function benchmark(name, fn, iterations = 10) {
     times.push(performance.now() - start);
   }
   const med = median(times);
-  const resultCount = Array.isArray(result) ? result.length :
-                     result?.docIds?.length ?? result?.length ?? 0;
+  const lookupResult = result as LookupResult | unknown[];
+  const resultCount = Array.isArray(lookupResult) ? lookupResult.length :
+                     (lookupResult as LookupResult)?.docIds?.length ?? (lookupResult as LookupResult)?.length ?? 0;
   console.log(`  ${name.padEnd(50)} ${med.toFixed(3).padStart(10)}ms  ${String(resultCount).padStart(8)} results`);
   return { name, median: med, results: resultCount };
 }
@@ -45,7 +91,7 @@ async function benchmark(name, fn, iterations = 10) {
 // Data Generation
 // =============================================================================
 
-function generateMovieData(count) {
+function generateMovieData(count: number): MovieData[] {
   const types = ['movie', 'tvSeries', 'short', 'tvEpisode', 'tvMovie'];
   const genres = ['Action', 'Drama', 'Comedy', 'Thriller', 'Horror', 'Sci-Fi'];
 
@@ -62,7 +108,7 @@ function generateMovieData(count) {
   }));
 }
 
-function generateOccupationData(count) {
+function generateOccupationData(count: number): OccupationData[] {
   const jobZones = [1, 2, 3, 4, 5];
   const categories = ['Computer', 'Healthcare', 'Education', 'Engineering', 'Business'];
 
@@ -79,13 +125,13 @@ function generateOccupationData(count) {
 // Hash Index Benchmarks
 // =============================================================================
 
-async function benchmarkHashIndex() {
+async function benchmarkHashIndex(): Promise<BenchmarkResult[]> {
   console.log('\n' + '═'.repeat(75));
   console.log('Hash Index Benchmarks');
   console.log('═'.repeat(75) + '\n');
 
   const storage = new MemoryBackend();
-  const results = [];
+  const results: BenchmarkResult[] = [];
 
   for (const size of [10_000, 100_000, 500_000]) {
     console.log(`\nDataset size: ${size.toLocaleString()}`);
@@ -95,7 +141,7 @@ async function benchmarkHashIndex() {
 
     const definition = {
       name: 'idx_titleType',
-      type: 'hash',
+      type: 'hash' as const,
       fields: [{ path: 'titleType' }],
     };
 
@@ -103,7 +149,7 @@ async function benchmarkHashIndex() {
 
     // Build time
     const buildStart = performance.now();
-    index.buildFromArray(data.map((doc, i) => ({
+    index.buildFromArray(data.map((doc, i): IndexEntry => ({
       doc,
       docId: doc.$id,
       rowGroup: Math.floor(i / 5000),
@@ -133,13 +179,13 @@ async function benchmarkHashIndex() {
 // SST Index Benchmarks
 // =============================================================================
 
-async function benchmarkSSTIndex() {
+async function benchmarkSSTIndex(): Promise<BenchmarkResult[]> {
   console.log('\n' + '═'.repeat(75));
   console.log('SST Index Benchmarks (Range Queries)');
   console.log('═'.repeat(75) + '\n');
 
   const storage = new MemoryBackend();
-  const results = [];
+  const results: BenchmarkResult[] = [];
 
   for (const size of [10_000, 100_000, 500_000]) {
     console.log(`\nDataset size: ${size.toLocaleString()}`);
@@ -149,7 +195,7 @@ async function benchmarkSSTIndex() {
 
     const definition = {
       name: 'idx_startYear',
-      type: 'sst',
+      type: 'sst' as const,
       fields: [{ path: 'startYear' }],
     };
 
@@ -157,7 +203,7 @@ async function benchmarkSSTIndex() {
 
     // Build time
     const buildStart = performance.now();
-    index.buildFromArray(data.map((doc, i) => ({
+    index.buildFromArray(data.map((doc, i): IndexEntry => ({
       doc,
       docId: doc.$id,
       rowGroup: Math.floor(i / 5000),
@@ -191,13 +237,13 @@ async function benchmarkSSTIndex() {
 // FTS Index Benchmarks
 // =============================================================================
 
-async function benchmarkFTSIndex() {
+async function benchmarkFTSIndex(): Promise<BenchmarkResult[]> {
   console.log('\n' + '═'.repeat(75));
   console.log('Full-Text Search Benchmarks');
   console.log('═'.repeat(75) + '\n');
 
   const storage = new MemoryBackend();
-  const results = [];
+  const results: BenchmarkResult[] = [];
 
   for (const size of [10_000, 50_000, 100_000]) {
     console.log(`\nDataset size: ${size.toLocaleString()}`);
@@ -207,7 +253,7 @@ async function benchmarkFTSIndex() {
 
     const definition = {
       name: 'idx_fts',
-      type: 'fts',
+      type: 'fts' as const,
       fields: [{ path: 'name' }, { path: 'description' }],
     };
 
@@ -215,7 +261,7 @@ async function benchmarkFTSIndex() {
 
     // Build time
     const buildStart = performance.now();
-    index.buildFromArray(data.map(doc => ({
+    index.buildFromArray(data.map((doc): FTSEntry => ({
       docId: doc.$id,
       doc,
     })));
@@ -252,7 +298,7 @@ async function benchmarkFTSIndex() {
 // Comparison: Scan vs Index
 // =============================================================================
 
-async function benchmarkScanVsIndex() {
+async function benchmarkScanVsIndex(): Promise<void> {
   console.log('\n' + '═'.repeat(75));
   console.log('Full Scan vs Index Comparison');
   console.log('═'.repeat(75) + '\n');
@@ -269,7 +315,7 @@ async function benchmarkScanVsIndex() {
     type: 'hash',
     fields: [{ path: 'titleType' }],
   });
-  hashIndex.buildFromArray(data.map((doc, i) => ({
+  hashIndex.buildFromArray(data.map((doc, i): IndexEntry => ({
     doc, docId: doc.$id, rowGroup: 0, rowOffset: i,
   })));
 
@@ -279,7 +325,7 @@ async function benchmarkScanVsIndex() {
     type: 'sst',
     fields: [{ path: 'rating' }],
   });
-  sstIndex.buildFromArray(data.map((doc, i) => ({
+  sstIndex.buildFromArray(data.map((doc, i): IndexEntry => ({
     doc, docId: doc.$id, rowGroup: 0, rowOffset: i,
   })));
 

@@ -1,9 +1,9 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Upload benchmark datasets (data + indexes) to R2
  */
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs'
-import { join, relative } from 'path'
+import { join } from 'path'
 import { S3Client, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3'
 
 const LOCAL_DIR = 'data-v3'
@@ -14,17 +14,23 @@ const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY
 const R2_BUCKET = process.env.R2_BUCKET || 'parquedb'
 
+interface FileEntry {
+  localPath: string
+  r2Key: string
+  size: number
+}
+
 const client = new S3Client({
   region: 'auto',
   endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
   credentials: {
-    accessKeyId: R2_ACCESS_KEY_ID,
-    secretAccessKey: R2_SECRET_ACCESS_KEY,
+    accessKeyId: R2_ACCESS_KEY_ID!,
+    secretAccessKey: R2_SECRET_ACCESS_KEY!,
   },
 })
 
-function findAllFiles(dir, basePath = '') {
-  const files = []
+function findAllFiles(dir: string, basePath: string = ''): FileEntry[] {
+  const files: FileEntry[] = []
   const entries = readdirSync(dir, { withFileTypes: true })
   for (const entry of entries) {
     const fullPath = join(dir, entry.name)
@@ -38,7 +44,7 @@ function findAllFiles(dir, basePath = '') {
   return files
 }
 
-async function uploadFile(file, dryRun) {
+async function uploadFile(file: FileEntry, dryRun: boolean): Promise<void> {
   const content = readFileSync(file.localPath)
   let contentType = 'application/octet-stream'
   if (file.r2Key.endsWith('.json')) contentType = 'application/json'
@@ -55,7 +61,9 @@ async function uploadFile(file, dryRun) {
       console.log(`[SKIP] ${file.r2Key}`)
       return
     }
-  } catch {}
+  } catch {
+    // File doesn't exist, continue with upload
+  }
 
   await client.send(new PutObjectCommand({
     Bucket: R2_BUCKET,
@@ -70,16 +78,20 @@ const dryRun = process.argv.includes('--dry-run')
 const specificDataset = process.argv.find(a => !a.startsWith('-') && DATASETS.includes(a))
 const datasets = specificDataset ? [specificDataset] : DATASETS
 
-for (const dataset of datasets) {
-  const dir = join(LOCAL_DIR, dataset)
-  if (!existsSync(dir)) {
-    console.log(`[SKIP] ${dataset} not found`)
-    continue
+async function main(): Promise<void> {
+  for (const dataset of datasets) {
+    const dir = join(LOCAL_DIR, dataset)
+    if (!existsSync(dir)) {
+      console.log(`[SKIP] ${dataset} not found`)
+      continue
+    }
+    console.log(`\nUploading ${dataset}...`)
+    const files = findAllFiles(dir, dataset)
+    for (const file of files) {
+      await uploadFile(file, dryRun)
+    }
   }
-  console.log(`\nUploading ${dataset}...`)
-  const files = findAllFiles(dir, dataset)
-  for (const file of files) {
-    await uploadFile(file, dryRun)
-  }
+  console.log('\nDone!')
 }
-console.log('\nDone!')
+
+main().catch(console.error)

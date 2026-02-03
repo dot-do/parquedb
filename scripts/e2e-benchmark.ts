@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * E2E Benchmark Script - Node.js client to deployed ParqueDB Worker
  *
@@ -6,10 +6,10 @@
  * the deployed Worker endpoints with actual datasets.
  *
  * Usage:
- *   node scripts/e2e-benchmark.mjs [options]
+ *   bun scripts/e2e-benchmark.ts [options]
  *
  * Options:
- *   --url=<url>         Worker URL (default: https://parquedb.workers.do)
+ *   --url=<url>         Worker URL (default: https://api.parquedb.com)
  *   --datasets=<list>   Comma-separated datasets (default: imdb,onet-full,unspsc-full)
  *   --iterations=<n>    Iterations per query (default: 3)
  *   --warmup=<n>        Warmup iterations (default: 1)
@@ -20,17 +20,79 @@
  *   --help              Show this help
  *
  * Examples:
- *   node scripts/e2e-benchmark.mjs
- *   node scripts/e2e-benchmark.mjs --datasets=imdb --iterations=5
- *   node scripts/e2e-benchmark.mjs --url=http://localhost:8787 --verbose
+ *   bun scripts/e2e-benchmark.ts
+ *   bun scripts/e2e-benchmark.ts --datasets=imdb --iterations=5
+ *   bun scripts/e2e-benchmark.ts --url=http://localhost:8787 --verbose
  */
+
+// =============================================================================
+// Types
+// =============================================================================
+
+interface Config {
+  url: string
+  datasets: string[]
+  iterations: number
+  warmup: number
+  maxQueries: number
+  concurrency: number
+  output: string
+  verbose: boolean
+}
+
+interface FetchResult {
+  success: boolean
+  status?: number
+  error?: string
+  latency: number
+  data?: unknown
+  serverTiming?: string | null
+}
+
+interface PercentileStats {
+  min: number
+  max: number
+  p50: number
+  p95: number
+  p99: number
+  avg: number
+}
+
+interface BenchmarkResult {
+  description: string
+  url: string
+  iterations: number
+  warmup: number
+  successCount: number
+  latencyMs: PercentileStats
+  lastResult?: FetchResult
+}
+
+interface ConcurrencyResult {
+  concurrency: number
+  successCount: number
+  totalTimeMs: number
+  throughput: number
+  latencyMs: PercentileStats
+}
+
+interface AllResults {
+  config: Config
+  startedAt: string
+  completedAt?: string
+  health: FetchResult | null
+  benchmark: BenchmarkResult | null
+  benchmarkDatasets: BenchmarkResult[] | null
+  benchmarkIndexed: BenchmarkResult | null
+  concurrency: ConcurrencyResult | null
+}
 
 // =============================================================================
 // Configuration
 // =============================================================================
 
-const DEFAULT_CONFIG = {
-  url: 'https://parquedb.workers.do',
+const DEFAULT_CONFIG: Config = {
+  url: 'https://api.parquedb.com',
   datasets: ['imdb', 'onet-full', 'unspsc-full'],
   iterations: 3,
   warmup: 1,
@@ -41,7 +103,7 @@ const DEFAULT_CONFIG = {
 }
 
 // Parse CLI arguments
-function parseArgs() {
+function parseArgs(): Config {
   const args = process.argv.slice(2)
   const config = { ...DEFAULT_CONFIG }
 
@@ -50,7 +112,7 @@ function parseArgs() {
       console.log(`
 E2E Benchmark - ParqueDB Worker Performance Testing
 
-Usage: node scripts/e2e-benchmark.mjs [options]
+Usage: bun scripts/e2e-benchmark.ts [options]
 
 Options:
   --url=<url>         Worker URL (default: ${DEFAULT_CONFIG.url})
@@ -110,10 +172,10 @@ Endpoints tested:
 /**
  * Run a single HTTP request and measure latency
  */
-async function timedFetch(url, options = {}) {
+async function timedFetch(url: string, _options: RequestInit = {}): Promise<FetchResult> {
   const start = performance.now()
   try {
-    const response = await fetch(url, options)
+    const response = await fetch(url)
     const latency = performance.now() - start
     const data = await response.json()
     return {
@@ -126,7 +188,7 @@ async function timedFetch(url, options = {}) {
   } catch (error) {
     return {
       success: false,
-      error: error.message,
+      error: (error as Error).message,
       latency: performance.now() - start,
     }
   }
@@ -135,7 +197,7 @@ async function timedFetch(url, options = {}) {
 /**
  * Calculate percentiles from an array of numbers
  */
-function percentiles(values) {
+function percentiles(values: number[]): PercentileStats {
   if (values.length === 0) return { min: 0, max: 0, p50: 0, p95: 0, p99: 0, avg: 0 }
   const sorted = [...values].sort((a, b) => a - b)
   const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length
@@ -152,9 +214,9 @@ function percentiles(values) {
 /**
  * Run benchmark endpoint multiple times and collect metrics
  */
-async function benchmarkEndpoint(url, iterations, warmup, description) {
-  const latencies = []
-  const results = []
+async function benchmarkEndpoint(url: string, iterations: number, warmup: number, description: string): Promise<BenchmarkResult> {
+  const latencies: number[] = []
+  const results: FetchResult[] = []
 
   // Warmup iterations (not counted)
   for (let i = 0; i < warmup; i++) {
@@ -188,7 +250,7 @@ async function benchmarkEndpoint(url, iterations, warmup, description) {
 /**
  * Test /benchmark endpoint - R2 I/O performance
  */
-async function testBenchmark(config) {
+async function testBenchmark(config: Config): Promise<BenchmarkResult> {
   console.log('\n--- /benchmark - R2 I/O Performance ---')
 
   // Use smaller sizes and fewer iterations for E2E to avoid timeouts
@@ -202,15 +264,20 @@ async function testBenchmark(config) {
   )
 
   if (result.lastResult?.data) {
-    const data = result.lastResult.data
-    console.log(`  Total time: ${data.totalTimeMs}ms`)
-    console.log(`  Average speedup: ${data.summary?.avgSpeedup}x`)
-    console.log(`  Best speedup: ${data.summary?.bestSpeedup?.speedup}x (${data.summary?.bestSpeedup?.query})`)
-    console.log(`  Bytes reduction: ${data.summary?.avgBytesReduction}%`)
+    const data = result.lastResult.data as Record<string, unknown>
+    const summary = data.summary as Record<string, unknown> | undefined
+    const datasets = data.datasets as Array<{ size: number; queries: Array<{ name: string; speedup: string; bytesReduction: string }> }> | undefined
 
-    if (config.verbose && data.datasets) {
+    console.log(`  Total time: ${data.totalTimeMs}ms`)
+    console.log(`  Average speedup: ${summary?.avgSpeedup}x`)
+
+    const bestSpeedup = summary?.bestSpeedup as Record<string, unknown> | undefined
+    console.log(`  Best speedup: ${bestSpeedup?.speedup}x (${bestSpeedup?.query})`)
+    console.log(`  Bytes reduction: ${summary?.avgBytesReduction}%`)
+
+    if (config.verbose && datasets) {
       console.log('\n  Detailed Results:')
-      for (const ds of data.datasets) {
+      for (const ds of datasets) {
         console.log(`    Dataset ${ds.size.toLocaleString()} rows:`)
         for (const q of ds.queries) {
           console.log(`      ${q.name}: ${q.speedup}x speedup, ${q.bytesReduction} bytes saved`)
@@ -225,10 +292,10 @@ async function testBenchmark(config) {
 /**
  * Test /benchmark-datasets endpoint - Real dataset queries
  */
-async function testBenchmarkDatasets(config) {
+async function testBenchmarkDatasets(config: Config): Promise<BenchmarkResult[]> {
   console.log('\n--- /benchmark-datasets - Real Dataset Queries ---')
 
-  const results = []
+  const results: BenchmarkResult[] = []
 
   for (const dataset of config.datasets) {
     console.log(`\n  Dataset: ${dataset}`)
@@ -243,14 +310,17 @@ async function testBenchmarkDatasets(config) {
     )
 
     if (result.lastResult?.data) {
-      const data = result.lastResult.data
-      console.log(`    Total time: ${data.totalTimeMs}ms`)
-      console.log(`    Queries executed: ${data.summary?.queriesExecuted}`)
-      console.log(`    Avg latency: ${data.summary?.avgLatency}`)
-      console.log(`    Total bytes read: ${data.summary?.totalBytesRead}`)
+      const data = result.lastResult.data as Record<string, unknown>
+      const summary = data.summary as Record<string, unknown> | undefined
+      const datasets = data.datasets as Array<{ files: Array<{ name: string; size: string }>; queries: Array<{ name: string; latency: { median: string; p95: string } }> }> | undefined
 
-      if (config.verbose && data.datasets) {
-        for (const ds of data.datasets) {
+      console.log(`    Total time: ${data.totalTimeMs}ms`)
+      console.log(`    Queries executed: ${summary?.queriesExecuted}`)
+      console.log(`    Avg latency: ${summary?.avgLatency}`)
+      console.log(`    Total bytes read: ${summary?.totalBytesRead}`)
+
+      if (config.verbose && datasets) {
+        for (const ds of datasets) {
           console.log(`\n    Files:`)
           for (const f of ds.files) {
             console.log(`      ${f.name}: ${f.size}`)
@@ -262,7 +332,8 @@ async function testBenchmarkDatasets(config) {
         }
       }
     } else if (result.lastResult?.error) {
-      console.log(`    Error: ${result.lastResult.data?.message || 'Unknown error'}`)
+      const data = result.lastResult.data as Record<string, unknown> | undefined
+      console.log(`    Error: ${data?.message || 'Unknown error'}`)
     }
 
     results.push(result)
@@ -274,7 +345,7 @@ async function testBenchmarkDatasets(config) {
 /**
  * Test /benchmark-indexed endpoint - Secondary index performance
  */
-async function testBenchmarkIndexed(config) {
+async function testBenchmarkIndexed(config: Config): Promise<BenchmarkResult> {
   console.log('\n--- /benchmark-indexed - Secondary Index Performance ---')
 
   const url = `${config.url}/benchmark-indexed?iterations=${config.iterations}&warmup=${config.warmup}&maxQueries=${config.maxQueries}&datasets=${config.datasets.join(',')}&includeScans=true`
@@ -287,31 +358,51 @@ async function testBenchmarkIndexed(config) {
   )
 
   if (result.lastResult?.data) {
-    const data = result.lastResult.data
+    const data = result.lastResult.data as Record<string, unknown>
+    const metadata = data.metadata as Record<string, unknown> | undefined
+    const summary = data.summary as Record<string, unknown> | undefined
+    const queries = data.queries as Array<{
+      query: { id: string }
+      indexed: { success: boolean; error?: string; latencyMs: { p50: number } }
+      scan: { latencyMs: { p50: number } }
+      speedup: string
+    }> | undefined
+    const datasetSummaries = data.datasetSummaries as Array<{
+      dataset: string
+      queryCount: number
+      avgSpeedup: string
+      bestSpeedup: { queryId: string; speedup: string }
+      avgIndexedLatencyMs: string
+    }> | undefined
+
     console.log(`  Total time: ${data.totalTimeMs}ms`)
-    console.log(`  Total queries: ${data.metadata?.totalQueries}`)
-    console.log(`  Avg speedup: ${data.summary?.avgSpeedup}x`)
-    console.log(`  Median speedup: ${data.summary?.medianSpeedup}x`)
-    console.log(`  Best overall: ${data.summary?.bestOverall?.queryId} (${data.summary?.bestOverall?.speedup}x)`)
-    console.log(`  Index beneficial rate: ${data.summary?.indexBeneficialRate}%`)
+    console.log(`  Total queries: ${metadata?.totalQueries}`)
+    console.log(`  Avg speedup: ${summary?.avgSpeedup}x`)
+    console.log(`  Median speedup: ${summary?.medianSpeedup}x`)
+
+    const bestOverall = summary?.bestOverall as Record<string, unknown> | undefined
+    console.log(`  Best overall: ${bestOverall?.queryId} (${bestOverall?.speedup}x)`)
+    console.log(`  Index beneficial rate: ${summary?.indexBeneficialRate}%`)
 
     console.log('\n  By Index Type:')
-    if (data.summary?.byIndexType) {
-      for (const [type, stats] of Object.entries(data.summary.byIndexType)) {
+    const byIndexType = summary?.byIndexType as Record<string, { count: number; avgSpeedup: string }> | undefined
+    if (byIndexType) {
+      for (const [type, stats] of Object.entries(byIndexType)) {
         console.log(`    ${type}: ${stats.count} queries, ${stats.avgSpeedup}x avg speedup`)
       }
     }
 
     console.log('\n  By Query Category:')
-    if (data.summary?.byCategory) {
-      for (const [cat, stats] of Object.entries(data.summary.byCategory)) {
+    const byCategory = summary?.byCategory as Record<string, { count: number; avgSpeedup: string }> | undefined
+    if (byCategory) {
+      for (const [cat, stats] of Object.entries(byCategory)) {
         console.log(`    ${cat}: ${stats.count} queries, ${stats.avgSpeedup}x avg speedup`)
       }
     }
 
-    if (config.verbose && data.queries) {
+    if (config.verbose && queries) {
       console.log('\n  Query Details:')
-      for (const q of data.queries) {
+      for (const q of queries) {
         const status = q.indexed.success ? 'OK' : 'FAIL'
         console.log(`    [${status}] ${q.query.id}: ${q.speedup}x (indexed: ${q.indexed.latencyMs.p50}ms, scan: ${q.scan.latencyMs.p50}ms)`)
         if (!q.indexed.success && q.indexed.error) {
@@ -321,9 +412,9 @@ async function testBenchmarkIndexed(config) {
     }
 
     // Show dataset summaries
-    if (data.datasetSummaries) {
+    if (datasetSummaries) {
       console.log('\n  Dataset Summaries:')
-      for (const ds of data.datasetSummaries) {
+      for (const ds of datasetSummaries) {
         console.log(`    ${ds.dataset}:`)
         console.log(`      Queries: ${ds.queryCount}, Avg speedup: ${ds.avgSpeedup}x`)
         console.log(`      Best: ${ds.bestSpeedup.queryId} (${ds.bestSpeedup.speedup}x)`)
@@ -331,7 +422,8 @@ async function testBenchmarkIndexed(config) {
       }
     }
   } else if (result.lastResult?.error) {
-    console.log(`  Error: ${result.lastResult.data?.message || 'Unknown error'}`)
+    const data = result.lastResult.data as Record<string, unknown> | undefined
+    console.log(`  Error: ${data?.message || 'Unknown error'}`)
   }
 
   return result
@@ -340,7 +432,7 @@ async function testBenchmarkIndexed(config) {
 /**
  * Test concurrent requests
  */
-async function testConcurrency(config) {
+async function testConcurrency(config: Config): Promise<ConcurrencyResult | null> {
   if (config.concurrency <= 1) return null
 
   console.log(`\n--- Concurrency Test (${config.concurrency} parallel requests) ---`)
@@ -374,15 +466,18 @@ async function testConcurrency(config) {
 /**
  * Test health endpoint (sanity check)
  */
-async function testHealth(config) {
+async function testHealth(config: Config): Promise<FetchResult | null> {
   console.log('--- Health Check ---')
 
   const result = await timedFetch(`${config.url}/health`)
 
   if (result.success) {
-    console.log(`  Status: ${result.data?.api?.status || 'unknown'}`)
+    const data = result.data as Record<string, unknown>
+    const api = data?.api as Record<string, unknown> | undefined
+    const user = data?.user as Record<string, unknown> | undefined
+    console.log(`  Status: ${api?.status || 'unknown'}`)
     console.log(`  Latency: ${Math.round(result.latency)}ms`)
-    console.log(`  Colo: ${result.data?.user?.colo || 'unknown'}`)
+    console.log(`  Colo: ${user?.colo || 'unknown'}`)
   } else {
     console.log(`  Failed: ${result.error || result.status}`)
     return null
@@ -395,7 +490,7 @@ async function testHealth(config) {
 // Main
 // =============================================================================
 
-async function main() {
+async function main(): Promise<void> {
   const config = parseArgs()
 
   console.log('====================================')
@@ -409,7 +504,7 @@ async function main() {
   console.log(`Concurrency: ${config.concurrency}`)
   console.log(`Started at: ${new Date().toISOString()}`)
 
-  const allResults = {
+  const allResults: AllResults = {
     config,
     startedAt: new Date().toISOString(),
     health: null,
@@ -436,7 +531,7 @@ async function main() {
     allResults.concurrency = await testConcurrency(config)
 
   } catch (error) {
-    console.error('\nBenchmark failed:', error.message)
+    console.error('\nBenchmark failed:', (error as Error).message)
     process.exit(1)
   }
 
@@ -447,19 +542,26 @@ async function main() {
   console.log('Summary')
   console.log('====================================')
 
-  if (allResults.benchmark?.lastResult?.data?.summary) {
-    const s = allResults.benchmark.lastResult.data.summary
-    console.log(`\nR2 I/O (V3 vs V1):`)
-    console.log(`  Avg speedup: ${s.avgSpeedup}x`)
-    console.log(`  Best: ${s.bestSpeedup?.speedup}x`)
+  if (allResults.benchmark?.lastResult?.data) {
+    const data = allResults.benchmark.lastResult.data as Record<string, unknown>
+    const s = data.summary as Record<string, unknown> | undefined
+    if (s) {
+      const bestSpeedup = s.bestSpeedup as Record<string, unknown> | undefined
+      console.log(`\nR2 I/O (V3 vs V1):`)
+      console.log(`  Avg speedup: ${s.avgSpeedup}x`)
+      console.log(`  Best: ${bestSpeedup?.speedup}x`)
+    }
   }
 
-  if (allResults.benchmarkIndexed?.lastResult?.data?.summary) {
-    const s = allResults.benchmarkIndexed.lastResult.data.summary
-    console.log(`\nSecondary Indexes:`)
-    console.log(`  Avg speedup: ${s.avgSpeedup}x`)
-    console.log(`  Median speedup: ${s.medianSpeedup}x`)
-    console.log(`  Index beneficial: ${s.indexBeneficialRate}%`)
+  if (allResults.benchmarkIndexed?.lastResult?.data) {
+    const data = allResults.benchmarkIndexed.lastResult.data as Record<string, unknown>
+    const s = data.summary as Record<string, unknown> | undefined
+    if (s) {
+      console.log(`\nSecondary Indexes:`)
+      console.log(`  Avg speedup: ${s.avgSpeedup}x`)
+      console.log(`  Median speedup: ${s.medianSpeedup}x`)
+      console.log(`  Index beneficial: ${s.indexBeneficialRate}%`)
+    }
   }
 
   if (allResults.concurrency) {

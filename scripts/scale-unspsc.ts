@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 /**
  * Scale UNSPSC Dataset to Full Taxonomy Size
  *
@@ -18,10 +19,46 @@ import { join } from 'node:path';
 const OUTPUT_DIR = './data-v3/unspsc-full';
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface Segment {
+  code: string;
+  title: string;
+}
+
+interface Family {
+  code: string;
+  title: string;
+  segmentCode: string;
+}
+
+interface Class {
+  code: string;
+  title: string;
+  familyCode: string;
+  segmentCode: string;
+}
+
+interface Commodity {
+  code: string;
+  title: string;
+  classCode: string;
+  familyCode: string;
+  segmentCode: string;
+}
+
+interface ColumnData {
+  name: string;
+  type: string;
+  data: (string | number)[];
+}
+
+// =============================================================================
 // Segment Names - Based on real UNSPSC taxonomy
 // =============================================================================
 
-const SEGMENT_NAMES = {
+const SEGMENT_NAMES: Record<string, string> = {
   '10': 'Live Plant and Animal Material and Accessories and Supplies',
   '11': 'Mineral and Textile and Inedible Plant and Animal Materials',
   '12': 'Chemicals including Bio Chemicals and Gas Materials',
@@ -81,7 +118,7 @@ const SEGMENT_NAMES = {
 };
 
 // Family name templates for each segment
-const FAMILY_TEMPLATES = [
+const FAMILY_TEMPLATES: string[] = [
   'Equipment and Supplies',
   'Systems and Components',
   'Services and Consulting',
@@ -93,7 +130,7 @@ const FAMILY_TEMPLATES = [
 ];
 
 // Class name templates
-const CLASS_TEMPLATES = [
+const CLASS_TEMPLATES: string[] = [
   'Standard',
   'Industrial',
   'Commercial',
@@ -107,7 +144,7 @@ const CLASS_TEMPLATES = [
 ];
 
 // Commodity adjectives for name generation
-const COMMODITY_ADJECTIVES = [
+const COMMODITY_ADJECTIVES: string[] = [
   'Standard', 'Premium', 'Economy', 'Industrial', 'Commercial',
   'Professional', 'Heavy Duty', 'Light Duty', 'Portable', 'Stationary',
   'Electric', 'Manual', 'Automatic', 'Semi-automatic', 'Digital',
@@ -118,7 +155,7 @@ const COMMODITY_ADJECTIVES = [
 // Utilities
 // =============================================================================
 
-async function writeParquet(path, columnData, rowGroupSize = 10000) {
+async function writeParquet(path: string, columnData: ColumnData[], rowGroupSize: number = 10000): Promise<number> {
   const buffer = parquetWriteBuffer({ columnData, rowGroupSize });
   await fs.mkdir(join(path.split('/').slice(0, -1).join('/')), { recursive: true });
   await fs.writeFile(path, Buffer.from(buffer));
@@ -127,19 +164,19 @@ async function writeParquet(path, columnData, rowGroupSize = 10000) {
   return stats.size;
 }
 
-function generateFamilyName(segmentTitle, index) {
+function generateFamilyName(segmentTitle: string, index: number): string {
   const template = FAMILY_TEMPLATES[index % FAMILY_TEMPLATES.length];
   const words = segmentTitle.split(' and ').slice(0, 2).join(' ');
   return `${words} ${template}`;
 }
 
-function generateClassName(familyTitle, index) {
+function generateClassName(familyTitle: string, index: number): string {
   const template = CLASS_TEMPLATES[index % CLASS_TEMPLATES.length];
   const words = familyTitle.split(' ').slice(0, 3).join(' ');
   return `${template} ${words}`;
 }
 
-function generateCommodityName(classTitle, index) {
+function generateCommodityName(classTitle: string, index: number): string {
   const adj = COMMODITY_ADJECTIVES[index % COMMODITY_ADJECTIVES.length];
   const words = classTitle.split(' ').slice(0, 4).join(' ');
   return `${adj} ${words} Item ${(index % 100) + 1}`;
@@ -149,14 +186,14 @@ function generateCommodityName(classTitle, index) {
 // Generate Full UNSPSC Taxonomy
 // =============================================================================
 
-async function generateUNSPSC() {
+async function generateUNSPSC(): Promise<void> {
   console.log('\n=== Generating Full UNSPSC Taxonomy ===\n');
   const startTime = Date.now();
 
-  const segments = [];
-  const families = [];
-  const classes = [];
-  const commodities = [];
+  const segments: Segment[] = [];
+  const families: Family[] = [];
+  const classes: Class[] = [];
+  const commodities: Commodity[] = [];
 
   // Get segment codes (all defined segments)
   const segmentCodes = Object.keys(SEGMENT_NAMES).sort();

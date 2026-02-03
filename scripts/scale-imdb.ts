@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 /**
  * Scale IMDB Dataset to 1M+ Rows
  *
@@ -24,8 +25,55 @@ const TITLE_COUNT = 1_000_000;
 const PEOPLE_COUNT = 500_000;
 const CAST_COUNT = 2_000_000;
 
+// =============================================================================
+// Types
+// =============================================================================
+
+interface ColumnData {
+  name: string;
+  type: string;
+  data: (string | number | boolean | null)[];
+}
+
+interface WeightedItem {
+  name?: string;
+  type?: string;
+  weight: number;
+}
+
+interface ImdbTitle {
+  tconst: string;
+  titleType: string;
+  primaryTitle: string;
+  startYear: number;
+  endYear: number | null;
+  runtimeMinutes: number;
+  genres: string[];
+  averageRating: number;
+  numVotes: number;
+  isAdult: boolean;
+}
+
+interface ImdbPerson {
+  nconst: string;
+  primaryName: string;
+  birthYear: number;
+  deathYear: number | null;
+  primaryProfession: string;
+  knownForTitles: string[];
+}
+
+interface ImdbCast {
+  tconst: string;
+  nconst: string;
+  ordering: number;
+  category: string;
+  job: string | null;
+  characters: string[] | null;
+}
+
 // Title type distribution: movie (35%), tvSeries (25%), tvEpisode (30%), other (10%)
-const TITLE_TYPE_DISTRIBUTION = [
+const TITLE_TYPE_DISTRIBUTION: WeightedItem[] = [
   { type: 'movie', weight: 0.35 },
   { type: 'tvSeries', weight: 0.25 },
   { type: 'tvEpisode', weight: 0.30 },
@@ -35,7 +83,7 @@ const TITLE_TYPE_DISTRIBUTION = [
 ];
 
 // Genre distribution (realistic mix)
-const GENRES = [
+const GENRES: WeightedItem[] = [
   { name: 'Drama', weight: 0.25 },
   { name: 'Comedy', weight: 0.18 },
   { name: 'Action', weight: 0.12 },
@@ -50,7 +98,7 @@ const GENRES = [
 ];
 
 // Profession distribution
-const PROFESSIONS = [
+const PROFESSIONS: WeightedItem[] = [
   { name: 'actor', weight: 0.40 },
   { name: 'actress', weight: 0.30 },
   { name: 'director', weight: 0.10 },
@@ -61,7 +109,7 @@ const PROFESSIONS = [
 ];
 
 // Cast category distribution
-const CAST_CATEGORIES = [
+const CAST_CATEGORIES: WeightedItem[] = [
   { name: 'actor', weight: 0.35 },
   { name: 'actress', weight: 0.30 },
   { name: 'director', weight: 0.15 },
@@ -77,25 +125,25 @@ const CAST_CATEGORIES = [
 
 // Seeded random for reproducibility
 let seed = 42;
-function random() {
+function random(): number {
   seed = (seed * 1103515245 + 12345) & 0x7fffffff;
   return seed / 0x7fffffff;
 }
 
-function weightedRandom(items) {
+function weightedRandom(items: WeightedItem[]): string {
   const r = random();
   let cumulative = 0;
   for (const item of items) {
     cumulative += item.weight;
     if (r < cumulative) {
-      return item.name || item.type;
+      return item.name || item.type || '';
     }
   }
-  return items[items.length - 1].name || items[items.length - 1].type;
+  return items[items.length - 1].name || items[items.length - 1].type || '';
 }
 
 // Normal distribution using Box-Muller transform
-function normalRandom(mean, stdDev) {
+function normalRandom(mean: number, stdDev: number): number {
   const u1 = random();
   const u2 = random();
   const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
@@ -103,7 +151,7 @@ function normalRandom(mean, stdDev) {
 }
 
 // Year distribution: more recent years weighted higher
-function generateYear() {
+function generateYear(): number {
   // Use exponential-like distribution favoring recent years
   const base = random();
   const weighted = Math.pow(base, 0.5); // Square root favors higher values
@@ -122,7 +170,7 @@ const TITLE_WORDS = [
 ];
 const TITLE_SUFFIXES = ['', '', '', '', 'II', 'III', 'Returns', 'Rising', 'Begins', 'Forever'];
 
-function generateTitle(i) {
+function generateTitle(_i: number): string {
   const prefix = TITLE_PREFIXES[Math.floor(random() * TITLE_PREFIXES.length)];
   const word1 = TITLE_WORDS[Math.floor(random() * TITLE_WORDS.length)];
   const word2 = TITLE_WORDS[Math.floor(random() * TITLE_WORDS.length)];
@@ -149,14 +197,14 @@ const LAST_NAMES = [
   'Walker', 'Young', 'Allen', 'King', 'Wright', 'Scott', 'Torres', 'Nguyen', 'Hill', 'Flores',
 ];
 
-function generatePersonName() {
+function generatePersonName(): string {
   const first = FIRST_NAMES[Math.floor(random() * FIRST_NAMES.length)];
   const last = LAST_NAMES[Math.floor(random() * LAST_NAMES.length)];
   return `${first} ${last}`;
 }
 
 // Generate birth year with realistic distribution
-function generateBirthYear() {
+function generateBirthYear(): number {
   // Most active professionals born 1940-2000
   const base = random();
   const weighted = Math.pow(base, 0.8);
@@ -164,29 +212,29 @@ function generateBirthYear() {
 }
 
 // Generate rating with normal distribution around 6.5
-function generateRating() {
+function generateRating(): number {
   const rating = normalRandom(6.5, 1.5);
   return Math.round(Math.max(1.0, Math.min(10.0, rating)) * 10) / 10;
 }
 
 // Generate vote count with exponential distribution
-function generateVotes() {
+function generateVotes(): number {
   const base = random();
   const exp = Math.pow(base, 0.3); // Heavy tail towards lower values
   return Math.floor(exp * 1000000) + 10;
 }
 
 // Generate 1-3 genres
-function generateGenres() {
+function generateGenres(): string[] {
   const count = random() < 0.3 ? 1 : random() < 0.7 ? 2 : 3;
-  const selected = new Set();
+  const selected = new Set<string>();
   while (selected.size < count) {
     selected.add(weightedRandom(GENRES));
   }
   return Array.from(selected);
 }
 
-async function writeParquet(path, columnData, rowGroupSize = ROW_GROUP_SIZE) {
+async function writeParquet(path: string, columnData: ColumnData[], rowGroupSize: number = ROW_GROUP_SIZE): Promise<number> {
   const buffer = parquetWriteBuffer({ columnData, rowGroupSize });
   await fs.mkdir(join(OUTPUT_DIR, path.split('/').slice(0, -1).join('/')), { recursive: true });
   await fs.writeFile(join(OUTPUT_DIR, path), Buffer.from(buffer));
@@ -196,7 +244,7 @@ async function writeParquet(path, columnData, rowGroupSize = ROW_GROUP_SIZE) {
   return buffer.byteLength;
 }
 
-function formatDuration(ms) {
+function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
@@ -206,11 +254,11 @@ function formatDuration(ms) {
 // Data Generation
 // =============================================================================
 
-async function generateTitles() {
+async function generateTitles(): Promise<ImdbTitle[]> {
   console.log(`\nGenerating ${TITLE_COUNT.toLocaleString()} titles...`);
   const startTime = Date.now();
 
-  const titles = [];
+  const titles: ImdbTitle[] = [];
 
   for (let i = 0; i < TITLE_COUNT; i++) {
     const titleType = weightedRandom(TITLE_TYPE_DISTRIBUTION);
@@ -246,7 +294,7 @@ async function generateTitles() {
   titles.sort((a, b) => a.titleType.localeCompare(b.titleType));
 
   // Log distribution
-  const typeCounts = {};
+  const typeCounts: Record<string, number> = {};
   for (const t of titles) {
     typeCounts[t.titleType] = (typeCounts[t.titleType] || 0) + 1;
   }
@@ -272,11 +320,11 @@ async function generateTitles() {
   return titles;
 }
 
-async function generatePeople() {
+async function generatePeople(): Promise<ImdbPerson[]> {
   console.log(`\nGenerating ${PEOPLE_COUNT.toLocaleString()} people...`);
   const startTime = Date.now();
 
-  const people = [];
+  const people: ImdbPerson[] = [];
 
   for (let i = 0; i < PEOPLE_COUNT; i++) {
     const birthYear = generateBirthYear();
@@ -304,7 +352,7 @@ async function generatePeople() {
   people.sort((a, b) => a.nconst.localeCompare(b.nconst));
 
   // Log distribution
-  const profCounts = {};
+  const profCounts: Record<string, number> = {};
   for (const p of people) {
     profCounts[p.primaryProfession] = (profCounts[p.primaryProfession] || 0) + 1;
   }
@@ -328,14 +376,14 @@ async function generatePeople() {
   return people;
 }
 
-async function generateCast(titleCount, peopleCount) {
+async function generateCast(titleCount: number, peopleCount: number): Promise<ImdbCast[]> {
   console.log(`\nGenerating ${CAST_COUNT.toLocaleString()} cast entries...`);
   const startTime = Date.now();
 
-  const cast = [];
+  const cast: ImdbCast[] = [];
 
   // Track which titles have how many cast members for realistic ordering
-  const titleCastCounts = new Map();
+  const titleCastCounts = new Map<string, number>();
 
   for (let i = 0; i < CAST_COUNT; i++) {
     // Slightly favor popular titles (lower IDs get more cast)
@@ -376,7 +424,7 @@ async function generateCast(titleCount, peopleCount) {
   cast.sort((a, b) => a.tconst.localeCompare(b.tconst));
 
   // Log distribution
-  const catCounts = {};
+  const catCounts: Record<string, number> = {};
   for (const c of cast) {
     catCounts[c.category] = (catCounts[c.category] || 0) + 1;
   }
@@ -388,7 +436,7 @@ async function generateCast(titleCount, peopleCount) {
   // Write parquet
   console.log('  Writing parquet...');
   await writeParquet('cast.parquet', [
-    { name: '$id', type: 'STRING', data: cast.map((c, i) => `cast:${i}`) },
+    { name: '$id', type: 'STRING', data: cast.map((_, i) => `cast:${i}`) },
     { name: '$index_tconst', type: 'STRING', data: cast.map(c => c.tconst) },
     { name: '$index_nconst', type: 'STRING', data: cast.map(c => c.nconst) },
     { name: '$index_category', type: 'STRING', data: cast.map(c => c.category) },

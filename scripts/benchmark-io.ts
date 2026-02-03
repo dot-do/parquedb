@@ -15,6 +15,39 @@ import { parquetQuery } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface Product {
+  id: string;
+  category: string;
+  price: number;
+  name: string;
+  description: string;
+  tags: string[];
+  metadata: {
+    sku: string;
+    weight: number;
+    dimensions: { w: number; h: number; d: number };
+    extra: string;
+  };
+}
+
+interface TrackingFileReader {
+  byteLength: number;
+  slice: (start: number, end: number) => ArrayBuffer;
+  getBytesRead: () => number;
+  resetBytesRead: () => void;
+}
+
+interface ParquetRow {
+  $id?: string;
+  $data?: string;
+  $index_category?: string;
+  [key: string]: unknown;
+}
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
@@ -29,19 +62,19 @@ const CATEGORIES = ['electronics', 'clothing', 'books', 'home', 'sports', 'toys'
 // Utilities
 // =============================================================================
 
-function formatBytes(bytes) {
+function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
-function formatNumber(n) {
+function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
   return String(n)
 }
 
-function median(arr) {
+function median(arr: number[]): number {
   const sorted = [...arr].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
@@ -51,8 +84,8 @@ function median(arr) {
 // Data Generation (with large $data payloads)
 // =============================================================================
 
-function generateProducts(count) {
-  const products = []
+function generateProducts(count: number): Product[] {
+  const products: Product[] = []
   const largePayload = 'x'.repeat(500) // Simulate realistic JSON payload
 
   for (let i = 0; i < count; i++) {
@@ -79,12 +112,12 @@ function generateProducts(count) {
 // File Operations
 // =============================================================================
 
-function createFileReader(fileBuffer) {
+function createFileReader(fileBuffer: Buffer): TrackingFileReader {
   // Track bytes read
   let bytesRead = 0
   return {
     byteLength: fileBuffer.byteLength,
-    slice: (s, e) => {
+    slice: (s: number, e: number) => {
       bytesRead += (e - s)
       const buf = fileBuffer.slice(s, e)
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
@@ -94,7 +127,7 @@ function createFileReader(fileBuffer) {
   }
 }
 
-async function writeV3(products, path) {
+async function writeV3(products: Product[], path: string): Promise<number> {
   const buffer = parquetWriteBuffer({
     columnData: [
       { name: '$id', type: 'STRING', data: products.map(p => p.id) },
@@ -113,7 +146,7 @@ async function writeV3(products, path) {
 // Main Benchmark
 // =============================================================================
 
-async function runBenchmark() {
+async function runBenchmark(): Promise<void> {
   console.log('╔' + '═'.repeat(98) + '╗')
   console.log('║' + ' I/O Efficiency Benchmark: Measuring Bytes Read '.padStart(73).padEnd(98) + '║')
   console.log('╚' + '═'.repeat(98) + '╝')
@@ -151,7 +184,7 @@ async function runBenchmark() {
 
     // Count only - just read index columns
     file.resetBytesRead()
-    const countTimes = []
+    const countTimes: number[] = []
     let countResult = 0
     for (let i = 0; i < ITERATIONS; i++) {
       file.resetBytesRead()
@@ -161,7 +194,7 @@ async function runBenchmark() {
         columns: ['$id', '$index_category'],
         filter,
         compressors,
-      })
+      }) as ParquetRow[]
       countTimes.push(performance.now() - start)
       countResult = rows.length
     }
@@ -175,7 +208,7 @@ async function runBenchmark() {
 
     // Return IDs only
     file.resetBytesRead()
-    const idsTimes = []
+    const idsTimes: number[] = []
     let idsResult = 0
     for (let i = 0; i < ITERATIONS; i++) {
       file.resetBytesRead()
@@ -185,7 +218,7 @@ async function runBenchmark() {
         columns: ['$id', '$index_category'],
         filter,
         compressors,
-      })
+      }) as ParquetRow[]
       idsTimes.push(performance.now() - start)
       idsResult = rows.length
     }
@@ -199,7 +232,7 @@ async function runBenchmark() {
 
     // Full data (must read $data)
     file.resetBytesRead()
-    const fullTimes = []
+    const fullTimes: number[] = []
     let fullResult = 0
     for (let i = 0; i < ITERATIONS; i++) {
       file.resetBytesRead()
@@ -209,7 +242,7 @@ async function runBenchmark() {
         columns: ['$id', '$index_category', '$data'],
         filter,
         compressors,
-      })
+      }) as ParquetRow[]
       fullTimes.push(performance.now() - start)
       fullResult = rows.length
     }
@@ -223,7 +256,7 @@ async function runBenchmark() {
 
     // V1 style (read all, filter in JS)
     file.resetBytesRead()
-    const v1Times = []
+    const v1Times: number[] = []
     let v1Result = 0
     for (let i = 0; i < ITERATIONS; i++) {
       file.resetBytesRead()
@@ -232,9 +265,9 @@ async function runBenchmark() {
         file,
         columns: ['$id', '$data'],
         compressors,
-      })
+      }) as ParquetRow[]
       const filtered = rows.filter(r => {
-        const data = JSON.parse(r.$data)
+        const data = JSON.parse(r.$data!) as Product
         return data.category === 'electronics'
       })
       v1Times.push(performance.now() - start)

@@ -8,25 +8,44 @@ import { compressors } from 'hyparquet-compressors';
 import { promises as fs } from 'node:fs';
 
 // =============================================================================
+// Types
+// =============================================================================
+
+interface FileReader {
+  byteLength: number;
+  slice: (start: number, end: number) => ArrayBuffer;
+}
+
+interface BenchmarkResult {
+  name: string;
+  median: number;
+  rows: number;
+}
+
+interface ParquetRow {
+  [key: string]: unknown;
+}
+
+// =============================================================================
 // Utilities
 // =============================================================================
 
-async function loadFile(path) {
+async function loadFile(path: string): Promise<FileReader> {
   const buffer = await fs.readFile(path);
   return {
     byteLength: buffer.byteLength,
-    slice: (s, e) => buffer.slice(s, e).buffer
+    slice: (s: number, e: number) => buffer.slice(s, e).buffer
   };
 }
 
-function median(arr) {
+function median(arr: number[]): number {
   const sorted = [...arr].sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length / 2)];
 }
 
-async function benchmark(name, fn, iterations = 5) {
-  const times = [];
-  let result;
+async function benchmark(name: string, fn: () => Promise<ParquetRow[]>, iterations = 5): Promise<BenchmarkResult> {
+  const times: number[] = [];
+  let result: ParquetRow[] | undefined;
   for (let i = 0; i < iterations; i++) {
     const start = performance.now();
     result = await fn();
@@ -41,7 +60,7 @@ async function benchmark(name, fn, iterations = 5) {
 // IMDB Benchmarks
 // =============================================================================
 
-async function benchmarkIMDB() {
+async function benchmarkIMDB(): Promise<void> {
   console.log('\n=== IMDB Benchmarks (1M rows per table) ===\n');
 
   const titlesFile = await loadFile('./data/imdb/title.basics.parquet');
@@ -115,7 +134,7 @@ async function benchmarkIMDB() {
 // O*NET Benchmarks
 // =============================================================================
 
-async function benchmarkONET() {
+async function benchmarkONET(): Promise<void> {
   console.log('\n=== O*NET Benchmarks ===\n');
 
   const occupationsFile = await loadFile('./data/onet/Occupation Data.parquet');
@@ -127,8 +146,8 @@ async function benchmarkONET() {
     const rows = await parquetQuery({
       file: occupationsFile,
       compressors
-    });
-    return rows.filter(r => r['O*NET-SOC Code']?.startsWith('15-'));
+    }) as ParquetRow[];
+    return rows.filter(r => (r['O*NET-SOC Code'] as string)?.startsWith('15-'));
   });
 
   // Q2: Filter skills by importance
@@ -169,7 +188,7 @@ async function benchmarkONET() {
 // O*NET Optimized Benchmarks (with $id/$type pattern)
 // =============================================================================
 
-async function benchmarkONETOptimized() {
+async function benchmarkONETOptimized(): Promise<void> {
   console.log('\n=== O*NET Optimized (with $id/$type) ===\n');
 
   try {
@@ -203,7 +222,7 @@ async function benchmarkONETOptimized() {
     });
 
   } catch (e) {
-    console.log('  O*NET Optimized not available:', e.message);
+    console.log('  O*NET Optimized not available:', (e as Error).message);
   }
 }
 
