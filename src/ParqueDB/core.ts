@@ -347,6 +347,24 @@ export class ParqueDBImpl {
   // Public API - Lifecycle
   // ===========================================================================
 
+  /**
+   * Wait for any pending flush operations to complete.
+   * Call this before cleanup to ensure all data is written.
+   */
+  async flush(): Promise<void> {
+    if (this.flushPromise) {
+      try {
+        await this.flushPromise
+      } catch {
+        // Ignore flush errors during cleanup
+      }
+    }
+  }
+
+  /**
+   * Synchronously dispose of resources without waiting for pending flushes.
+   * Use disposeAsync() if you need to wait for pending operations.
+   */
   dispose(): void {
     this.pendingEvents = []
     this.flushPromise = null
@@ -364,6 +382,14 @@ export class ParqueDBImpl {
     this.reverseRelIndex.clear()
     this.entityEventIndex.clear()
     this.reconstructionCache.clear()
+  }
+
+  /**
+   * Asynchronously dispose of resources, waiting for pending flushes first.
+   */
+  async disposeAsync(): Promise<void> {
+    await this.flush()
+    this.dispose()
   }
 
   // ===========================================================================
