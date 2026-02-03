@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "parquedb-site",
+  "account_id": "b6641681fe423910342b9ffa1364c76d",
+  "compatibility_date": "2024-12-01",
+
+  // Static assets configuration
+  "assets": {
+    "directory": "./out"
+  },
+
+  // Deploy to parquedb.com
+  "routes": [
+    {
+      "pattern": "parquedb.com/*",
+      "zone_name": "parquedb.com"
+    },
+    {
+      "pattern": "www.parquedb.com/*",
+      "zone_name": "parquedb.com"
+    }
+  ]
+}
