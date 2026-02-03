@@ -68,6 +68,17 @@ interface ImdbTitle {
 }
 
 // =============================================================================
+// Constants
+// =============================================================================
+
+const DEFAULT_SEARCH_LIMIT_LARGE = 50
+const DEFAULT_SEARCH_LIMIT_SMALL = 20
+const MAX_SEARCH_LIMIT = 100
+const MAX_BROWSE_RESULTS = 1000
+const CACHE_MAX_AGE_SECONDS = 3600
+const CACHE_MAX_AGE_SECONDS_IMDB = 300
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
@@ -208,7 +219,7 @@ async function handleOnetSearch(params: URLSearchParams, env: Env): Promise<Resp
 
   const q = params.get('q')
   const code = params.get('code')
-  const limit = Math.min(parseInt(params.get('limit') ?? '50', 10), 100)
+  const limit = Math.min(parseInt(params.get('limit') ?? String(DEFAULT_SEARCH_LIMIT_LARGE), 10), MAX_SEARCH_LIMIT)
   const offset = parseInt(params.get('offset') ?? '0', 10)
 
   const { data, fetchMs } = await loadDataset<Occupation>('onet', env)
@@ -245,7 +256,7 @@ async function handleOnetSearch(params: URLSearchParams, env: Env): Promise<Resp
 
   return Response.json(result, {
     headers: {
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': `public, max-age=${CACHE_MAX_AGE_SECONDS}`,
       'Content-Type': 'application/json',
     },
   })
@@ -258,7 +269,7 @@ async function handleUnspscSearch(params: URLSearchParams, env: Env): Promise<Re
   const commodity = params.get('commodity')
   const family = params.get('family')
   const segment = params.get('segment')
-  const limit = Math.min(parseInt(params.get('limit') ?? '50', 10), 100)
+  const limit = Math.min(parseInt(params.get('limit') ?? String(DEFAULT_SEARCH_LIMIT_LARGE), 10), MAX_SEARCH_LIMIT)
   const offset = parseInt(params.get('offset') ?? '0', 10)
 
   const { data, fetchMs } = await loadDataset<UnspscEntry>('unspsc', env)
@@ -301,7 +312,7 @@ async function handleUnspscSearch(params: URLSearchParams, env: Env): Promise<Re
 
   return Response.json(result, {
     headers: {
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': `public, max-age=${CACHE_MAX_AGE_SECONDS}`,
       'Content-Type': 'application/json',
     },
   })
@@ -314,7 +325,7 @@ async function handleImdbSearch(params: URLSearchParams, env: Env): Promise<Resp
   const type = params.get('type')
   const genre = params.get('genre')
   const year = params.get('year')
-  const limit = Math.min(parseInt(params.get('limit') ?? '20', 10), 100)
+  const limit = Math.min(parseInt(params.get('limit') ?? String(DEFAULT_SEARCH_LIMIT_SMALL), 10), MAX_SEARCH_LIMIT)
   const offset = parseInt(params.get('offset') ?? '0', 10)
 
   const { data, fetchMs } = await loadDataset<ImdbTitle>('imdb', env)
@@ -359,7 +370,7 @@ async function handleImdbSearch(params: URLSearchParams, env: Env): Promise<Resp
 
   return Response.json(result, {
     headers: {
-      'Cache-Control': 'public, max-age=300',
+      'Cache-Control': `public, max-age=${CACHE_MAX_AGE_SECONDS_IMDB}`,
       'Content-Type': 'application/json',
     },
   })

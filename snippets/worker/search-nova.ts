@@ -35,15 +35,36 @@ interface SearchResponse {
   }
 }
 
+// Constants
+const DEFAULT_SEARCH_LIMIT = 20
+const MAX_SEARCH_LIMIT = 50
+const MAX_TERM_SHARDS = 3
+const MAX_DOC_SHARDS = 3
+const MAX_VECTOR_SHARDS = 3
+const MAX_FACET_FIELDS = 3
+const MAX_DOC_CACHE_SIZE = 10
+const MAX_BROWSE_RESULTS = 500
+const MAX_FACET_SAMPLE_SIZE = 200
+const MAX_FACET_VALUES = 10
+const MAX_SUGGESTIONS = 10
+const MAX_SUGGEST_SCAN = 100
+const MIN_SUGGEST_QUERY_LENGTH = 2
+const MAX_PREFIX_MATCHES = 5
+const SCORE_FTS_MATCH = 10
+const RRF_K = 60
+const DEFAULT_FTS_WEIGHT = 0.5
+const MAX_RANGE_FETCH_OVERSHOOT = 100
+const MAX_RANGE_FETCH_LIMIT = 300
+const CACHE_MAX_AGE_SECONDS = 3600
+const MAX_QUERY_TERMS = 5
+const STOPS = new Set(['the','a','an','and','or','but','in','on','at','to','for','of','with','by','is','are','was','were'])
+
 // Caches
 const termCache = new Map<string, Record<string, number[]>>()
 const hashCache = new Map<string, Record<string, number[]>>()
 const metaCache = new Map<string, Meta>()
 const docCache = new Map<string, unknown[]>()
 const vectorCache = new Map<string, Float32Array[]>()
-
-// Constants
-const STOPS = new Set(['the','a','an','and','or','but','in','on','at','to','for','of','with','by','is','are','was','were'])
 
 // Text Processing
 function stem(w: string): string {
@@ -91,7 +112,7 @@ async function loadDocs(ds: string, n: number, env: Env): Promise<unknown[]> {
   const o = await env.DATA.get(`indexes/${ds}/docs-${n}.json`)
   if (!o) throw new Error(`Shard: ${ds}/${n}`)
   const d = (await o.json()) as unknown[]
-  if (docCache.size >= 10) docCache.delete(docCache.keys().next().value as string)
+  if (docCache.size >= MAX_DOC_CACHE_SIZE) docCache.delete(docCache.keys().next().value as string)
   docCache.set(k, d)
   return d
 }
@@ -165,7 +186,7 @@ async function applyPredicates(
   // 2. Load FTS term sets
   if (terms.length > 0) {
     const letters = new Set(terms.map(t => /\d/.test(t[0]!) ? '0' : t[0]!))
-    const shards = await Promise.all([...letters].slice(0, 3).map(l => loadTermShard(ds, l, env)))
+    const shards = await Promise.all([...letters].slice(0, MAX_TERM_SHARDS).map(l => loadTermShard(ds, l, env)))
     const index: Record<string, number[]> = {}
     for (const s of shards) if (s) Object.assign(index, s)
 
@@ -185,7 +206,7 @@ async function applyPredicates(
       // Prefix match (limited)
       let prefixCount = 0
       for (const [k, indices] of Object.entries(index)) {
-        if (prefixCount >= 5) break
+        if (prefixCount >= MAX_PREFIX_MATCHES) break
         if (k.startsWith(term) && k !== term) {
           prefixCount++
           for (const i of indices) termSet.add(i)
@@ -217,7 +238,7 @@ function scoreFTS(
     for (const [term, termSet] of ftsTermSets) {
       if (termSet.has(idx)) {
         // Exact match scores higher
-        score += 10
+        score += SCORE_FTS_MATCH
       }
     }
     if (score > 0) scores.set(idx, score)
@@ -262,10 +283,10 @@ async function vectorSearch(
   // Determine which shards to load
   const shardIndices = candidates
     ? [...new Set([...candidates].map(i => Math.floor(i / meta.shardSize)))]
-    : Array.from({ length: Math.min(meta.shardCount, 3) }, (_, i) => i)
+    : Array.from({ length: Math.min(meta.shardCount, MAX_VECTOR_SHARDS) }, (_, i) => i)
 
   // Load vectors from relevant shards
-  for (const shardIdx of shardIndices.slice(0, 3)) {
+  for (const shardIdx of shardIndices.slice(0, MAX_VECTOR_SHARDS)) {
     const vectors = await loadVectors(ds, shardIdx, env)
     if (!vectors) continue
 
@@ -295,8 +316,8 @@ async function vectorSearch(
 function reciprocalRankFusion(
   ftsScores: Map<number, number>,
   vectorScores: Map<number, number>,
-  k: number = 60,
-  ftsWeight: number = 0.5
+  k: number = RRF_K,
+  ftsWeight: number = DEFAULT_FTS_WEIGHT
 ): Map<number, number> {
   // Convert to rankings
   const ftsRanked = [...ftsScores.entries()]
@@ -397,7 +418,7 @@ function computeFacets(
   const r: Record<string, { value: string; count: number }[]> = {}
   for (const f of fields) {
     const c = new Map<string, number>()
-    for (const d of docs.slice(0, 200)) {
+    for (const d of docs.slice(0, MAX_FACET_SAMPLE_SIZE)) {
       const v = d[f]
       if (Array.isArray(v)) {
         for (const item of v) c.set(String(item), (c.get(String(item)) || 0) + 1)
@@ -405,7 +426,7 @@ function computeFacets(
         c.set(String(v), (c.get(String(v)) || 0) + 1)
       }
     }
-    r[f] = [...c.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)
+    r[f] = [...c.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_FACET_VALUES)
       .map(([value, count]) => ({ value, count }))
   }
   return r
@@ -431,7 +452,7 @@ async function fetchDocs(
     groups.get(shard)!.push({ idx, pos })
   }
 
-  const shardNums = [...groups.keys()].slice(0, 3)
+  const shardNums = [...groups.keys()].slice(0, MAX_DOC_SHARDS)
   const shards = await Promise.all(shardNums.map(n => loadDocs(ds, n, env)))
   const shardMap = new Map(shardNums.map((n, i) => [n, shards[i]!]))
 
@@ -476,9 +497,9 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
   const q = p.get('q') || ''
   const vectorParam = p.get('vector')  // JSON array: [0.1, 0.2, ...]
   const mode = p.get('mode') as 'fts' | 'vector' | 'hybrid' | null
-  const ftsWeight = parseFloat(p.get('fts_weight') || '0.5')
+  const ftsWeight = parseFloat(p.get('fts_weight') || String(DEFAULT_FTS_WEIGHT))
   const metric = (p.get('metric') || 'cosine') as 'cosine' | 'dot'
-  const limit = Math.min(+(p.get('limit') || 20), 50)
+  const limit = Math.min(+(p.get('limit') || DEFAULT_SEARCH_LIMIT), MAX_SEARCH_LIMIT)
   const offset = Math.max(+(p.get('offset') || 0), 0)
   const sortParam = p.get('sort')
   const sortSpec = sortParam
@@ -487,7 +508,7 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
         return { field: f!, dir: d as 'asc' | 'desc' }
       })
     : []
-  const facetFields = (p.get('facets') || '').split(',').filter(Boolean).slice(0, 3)
+  const facetFields = (p.get('facets') || '').split(',').filter(Boolean).slice(0, MAX_FACET_FIELDS)
   const showTiming = p.get('timing') === 'true'
 
   const meta = await loadMeta(ds, env)
@@ -497,7 +518,7 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
   const terms = q.toLowerCase()
     .split(/\s+/)
     .filter(t => t.length >= 2 && !STOPS.has(t))
-    .slice(0, 5)
+    .slice(0, MAX_QUERY_TERMS)
 
   // Parse vector
   let queryVector: number[] | null = null
@@ -565,14 +586,14 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
   // If no scores (browse mode), use candidates or all docs
   if (rankedIndices.length === 0) {
     if (candidates.size > 0) {
-      rankedIndices = [...candidates].slice(0, 500)
+      rankedIndices = [...candidates].slice(0, MAX_BROWSE_RESULTS)
     } else {
-      rankedIndices = Array.from({ length: Math.min(meta.totalDocs, 500) }, (_, i) => i)
+      rankedIndices = Array.from({ length: Math.min(meta.totalDocs, MAX_BROWSE_RESULTS) }, (_, i) => i)
     }
   }
 
   // Apply range filters (post-fetch for now)
-  let docs = await fetchDocs(ds, rankedIndices, meta, env, Math.min(limit + 100, 300), 0)
+  let docs = await fetchDocs(ds, rankedIndices, meta, env, Math.min(limit + MAX_RANGE_FETCH_OVERSHOOT, MAX_RANGE_FETCH_LIMIT), 0)
 
   // Range filter
   for (const r of filters.range) {
@@ -632,14 +653,14 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
   }
 
   return Response.json(response, {
-    headers: { 'Cache-Control': 'public, max-age=3600' }
+    headers: { 'Cache-Control': `public, max-age=${CACHE_MAX_AGE_SECONDS}` }
   })
 }
 
 // Suggest
 async function handleSuggest(ds: string, p: URLSearchParams, env: Env): Promise<Response> {
   const q = p.get('q') || ''
-  if (q.length < 2) return Response.json({ suggestions: [], query: q })
+  if (q.length < MIN_SUGGEST_QUERY_LENGTH) return Response.json({ suggestions: [], query: q })
 
   const letter = q[0]!
   const shard = await loadTermShard(ds, /\d/.test(letter) ? '0' : letter, env)
@@ -652,12 +673,12 @@ async function handleSuggest(ds: string, p: URLSearchParams, env: Env): Promise<
     if (term.startsWith(prefix) && term !== prefix) {
       matches.push({ term, count: indices.length })
     }
-    if (matches.length >= 100) break
+    if (matches.length >= MAX_SUGGEST_SCAN) break
   }
 
   const suggestions = matches
     .sort((a, b) => b.count - a.count)
-    .slice(0, 10)
+    .slice(0, MAX_SUGGESTIONS)
     .map(m => m.term)
 
   return Response.json({ suggestions, query: q })

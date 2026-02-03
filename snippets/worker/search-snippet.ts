@@ -55,6 +55,19 @@ interface SearchResponse {
 }
 
 // =============================================================================
+// Constants
+// =============================================================================
+
+const DEFAULT_SEARCH_LIMIT = 20
+const MAX_SEARCH_LIMIT = 50
+const MAX_TERM_SHARDS = 3
+const MAX_DOC_SHARDS = 3
+const MAX_BROWSE_RESULTS = 1000
+const DOC_CACHE_MAX = 9 // 3 datasets * 3 shards each
+const CACHE_MAX_AGE_SECONDS = 3600
+const CDN_CACHE_MAX_AGE_SECONDS = 86400
+
+// =============================================================================
 // Caches (persist across requests in same isolate)
 // =============================================================================
 
@@ -68,7 +81,6 @@ const hashCache = new Map<string, Record<string, number[]>>()
 const metaCache = new Map<string, Meta>()
 // Document shard cache (LRU-style, keep last 3 per dataset)
 const docCache = new Map<string, unknown[]>()
-const DOC_CACHE_MAX = 9 // 3 datasets * 3 shards each
 
 // =============================================================================
 // Core Loading Functions
@@ -218,7 +230,7 @@ async function searchTerms(
   const letters = getTermLetters(query)
 
   // Load only needed term shards in parallel (max 3 to stay in budget)
-  const shardPromises = letters.slice(0, 3).map((l) => loadTermShard(dataset, l, env))
+  const shardPromises = letters.slice(0, MAX_TERM_SHARDS).map((l) => loadTermShard(dataset, l, env))
   const shards = await Promise.all(shardPromises)
 
   // Check if we got v2 shards
@@ -329,8 +341,8 @@ async function fetchDocuments(
     shardGroups.get(shardNum)!.push({ idx, pos })
   }
 
-  // Load shards in parallel (max 3 to stay in subrequest budget)
-  const shardNums = [...shardGroups.keys()].slice(0, 3)
+  // Load shards in parallel (max MAX_DOC_SHARDS to stay in subrequest budget)
+  const shardNums = [...shardGroups.keys()].slice(0, MAX_DOC_SHARDS)
   const shardPromises = shardNums.map((n) => loadDocShard(dataset, n, env))
   const shards = await Promise.all(shardPromises)
 
@@ -374,7 +386,7 @@ async function handleSearch(
   const startTime = performance.now()
 
   const q = params.get('q')
-  const limit = Math.min(parseInt(params.get('limit') || '20', 10), 50)
+  const limit = Math.min(parseInt(params.get('limit') || String(DEFAULT_SEARCH_LIMIT), 10), MAX_SEARCH_LIMIT)
   const offset = Math.max(parseInt(params.get('offset') || '0', 10), 0)
   const timing = params.get('timing') === 'true'
 
@@ -389,7 +401,7 @@ async function handleSearch(
     indices = await searchTerms(dataset, q, env, meta)
   } else {
     // No query = return first N docs
-    indices = Array.from({ length: Math.min(meta.totalDocs, 1000) }, (_, i) => i)
+    indices = Array.from({ length: Math.min(meta.totalDocs, MAX_BROWSE_RESULTS) }, (_, i) => i)
   }
 
   // Apply dataset-specific filters
@@ -458,8 +470,8 @@ async function handleSearch(
 
   return Response.json(response, {
     headers: {
-      'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',
-      'CDN-Cache-Control': 'max-age=86400',
+      'Cache-Control': `public, max-age=${CACHE_MAX_AGE_SECONDS}, stale-while-revalidate=${CDN_CACHE_MAX_AGE_SECONDS}`,
+      'CDN-Cache-Control': `max-age=${CDN_CACHE_MAX_AGE_SECONDS}`,
       'Vary': 'Accept-Encoding',
     },
   })
@@ -486,7 +498,7 @@ export default {
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, OPTIONS',
-          'Access-Control-Max-Age': '86400',
+          'Access-Control-Max-Age': String(CDN_CACHE_MAX_AGE_SECONDS),
         },
       })
     }

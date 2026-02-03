@@ -42,12 +42,31 @@ interface SearchResponse {
 // Caches
 // =============================================================================
 
+// =============================================================================
+// Constants
+// =============================================================================
+
+const DEFAULT_SEARCH_LIMIT = 20
+const MAX_SEARCH_LIMIT = 100
+const MAX_TERM_SHARDS = 4
+const MAX_DOC_SHARDS = 4
+const MAX_BROWSE_RESULTS = 1000
+const MAX_FETCH_COUNT = 500
+const DOC_CACHE_MAX = 12
+const SCORE_EXACT_MATCH = 10
+const SCORE_STEMMED_MATCH = 5
+const SCORE_PREFIX_MATCH = 3
+const MIN_PREFIX_TERM_LENGTH = 3
+const CACHE_MAX_AGE_SECONDS = 3600
+const CDN_CACHE_MAX_AGE_SECONDS = 86400
+
+// =============================================================================
+
 const termShardCache = new Map<string, Record<string, number[]>>()
 const indexCache = new Map<string, Record<string, number[]>>()
 const hashCache = new Map<string, Record<string, number[]>>()
 const metaCache = new Map<string, Meta>()
 const docCache = new Map<string, unknown[]>()
-const DOC_CACHE_MAX = 12
 
 // =============================================================================
 // Stemming
@@ -175,7 +194,7 @@ async function searchWithScoring(
   const letters = getLetters(unique)
 
   // Load shards
-  const shards = await Promise.all(letters.slice(0, 4).map(l => loadTermShard(dataset, l, env)))
+  const shards = await Promise.all(letters.slice(0, MAX_TERM_SHARDS).map(l => loadTermShard(dataset, l, env)))
   const combined: Record<string, number[]> = {}
   const hasV2 = shards.some(s => s !== null)
 
@@ -192,16 +211,16 @@ async function searchWithScoring(
     const variants = expandTerm(term)
     for (const v of variants) {
       if (combined[v]) {
-        const score = v === term ? 10 : 5
+        const score = v === term ? SCORE_EXACT_MATCH : SCORE_STEMMED_MATCH
         for (const idx of combined[v]) scores.set(idx, (scores.get(idx) || 0) + score)
         matched.add(v)
       }
     }
     // Prefix matching
-    if (term.length >= 3) {
+    if (term.length >= MIN_PREFIX_TERM_LENGTH) {
       for (const [k, indices] of Object.entries(combined)) {
         if (k.startsWith(term) && k !== term) {
-          for (const idx of indices) scores.set(idx, (scores.get(idx) || 0) + 3)
+          for (const idx of indices) scores.set(idx, (scores.get(idx) || 0) + SCORE_PREFIX_MATCH)
           matched.add(k)
         }
       }
@@ -353,7 +372,7 @@ async function fetchDocs(
 ): Promise<{ docs: Record<string, unknown>[]; total: number }> {
   // If we have range filters or sorting, we need to fetch more docs
   const needsPostProcess = rangeFilters.length > 0 || sort !== null
-  const fetchLimit = needsPostProcess ? Math.min(indices.length, 500) : limit
+  const fetchLimit = needsPostProcess ? Math.min(indices.length, MAX_FETCH_COUNT) : limit
   const fetchOffset = needsPostProcess ? 0 : offset
 
   const toFetch = indices.slice(fetchOffset, fetchOffset + fetchLimit)
@@ -368,8 +387,7 @@ async function fetchDocs(
     groups.get(shard)!.push({ idx, pos })
   }
 
-  // Fetch up to 4 shards
-  const shardNums = [...groups.keys()].slice(0, 4)
+  const shardNums = [...groups.keys()].slice(0, MAX_DOC_SHARDS)
   const shards = await Promise.all(shardNums.map(n => loadDocShard(dataset, n, env)))
   const shardMap = new Map(shardNums.map((n, i) => [n, shards[i]!]))
 
@@ -446,7 +464,7 @@ async function handleSearch(dataset: string, params: URLSearchParams, env: Env):
   const start = performance.now()
 
   const q = params.get('q')
-  const limit = Math.min(parseInt(params.get('limit') || '20'), 100)
+  const limit = Math.min(parseInt(params.get('limit') || String(DEFAULT_SEARCH_LIMIT)), MAX_SEARCH_LIMIT)
   const offset = Math.max(parseInt(params.get('offset') || '0'), 0)
   const timing = params.get('timing') === 'true'
   const doHighlight = params.get('highlight') !== 'false'
@@ -467,7 +485,7 @@ async function handleSearch(dataset: string, params: URLSearchParams, env: Env):
     matched = result.matched
     expanded = result.expanded
   } else {
-    indices = Array.from({ length: Math.min(meta.totalDocs, 1000) }, (_, i) => i)
+    indices = Array.from({ length: Math.min(meta.totalDocs, MAX_BROWSE_RESULTS) }, (_, i) => i)
   }
 
   // Apply hash filters
@@ -520,8 +538,8 @@ async function handleSearch(dataset: string, params: URLSearchParams, env: Env):
 
   return Response.json(response, {
     headers: {
-      'Cache-Control': 'public, max-age=3600',
-      'CDN-Cache-Control': 'max-age=86400',
+      'Cache-Control': `public, max-age=${CACHE_MAX_AGE_SECONDS}`,
+      'CDN-Cache-Control': `max-age=${CDN_CACHE_MAX_AGE_SECONDS}`,
     },
   })
 }

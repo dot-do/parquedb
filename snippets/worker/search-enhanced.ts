@@ -50,6 +50,23 @@ interface SearchResponse {
 }
 
 // =============================================================================
+// Constants
+// =============================================================================
+
+const DEFAULT_SEARCH_LIMIT = 20
+const MAX_SEARCH_LIMIT = 50
+const MAX_TERM_SHARDS = 4
+const MAX_DOC_SHARDS = 3
+const MAX_BROWSE_RESULTS = 1000
+const DOC_CACHE_MAX = 9
+const SCORE_EXACT_MATCH = 10
+const SCORE_STEMMED_MATCH = 5
+const SCORE_PREFIX_MATCH = 3
+const MIN_PREFIX_TERM_LENGTH = 3
+const CACHE_MAX_AGE_SECONDS = 3600
+const CDN_CACHE_MAX_AGE_SECONDS = 86400
+
+// =============================================================================
 // Caches
 // =============================================================================
 
@@ -58,7 +75,6 @@ const indexCache = new Map<string, Record<string, number[]>>()
 const hashCache = new Map<string, Record<string, number[]>>()
 const metaCache = new Map<string, Meta>()
 const docCache = new Map<string, unknown[]>()
-const DOC_CACHE_MAX = 9
 
 // =============================================================================
 // Stemming (Porter Stemmer - simplified)
@@ -267,7 +283,7 @@ async function searchWithScoring(
   const letters = getTermLetters(uniqueVariants)
 
   // Load term shards
-  const shardPromises = letters.slice(0, 4).map((l) => loadTermShard(dataset, l, env))
+  const shardPromises = letters.slice(0, MAX_TERM_SHARDS).map((l) => loadTermShard(dataset, l, env))
   const shards = await Promise.all(shardPromises)
 
   // Merge shards
@@ -296,7 +312,7 @@ async function searchWithScoring(
     for (const variant of variants) {
       // Exact match
       if (combinedIndex[variant]) {
-        const matchScore = variant === term ? 10 : 5 // Exact match scores higher
+        const matchScore = variant === term ? SCORE_EXACT_MATCH : SCORE_STEMMED_MATCH
         if (matchScore > bestMatchScore) {
           bestMatchScore = matchScore
           matchedVariant = variant
@@ -306,11 +322,11 @@ async function searchWithScoring(
         }
       }
 
-      // Prefix match (only for terms >= 3 chars)
-      if (term.length >= 3) {
+      // Prefix match (only for terms >= MIN_PREFIX_TERM_LENGTH chars)
+      if (term.length >= MIN_PREFIX_TERM_LENGTH) {
         for (const [indexTerm, indices] of Object.entries(combinedIndex)) {
           if (indexTerm.startsWith(term) && indexTerm !== term) {
-            const prefixScore = 3 // Prefix match scores lower
+            const prefixScore = SCORE_PREFIX_MATCH
             if (!matchedVariant) matchedVariant = indexTerm
             for (const idx of indices) {
               scores.set(idx, (scores.get(idx) || 0) + prefixScore)
@@ -362,7 +378,7 @@ async function fetchDocuments(
     shardGroups.get(shardNum)!.push({ idx, pos })
   }
 
-  const shardNums = [...shardGroups.keys()].slice(0, 3)
+  const shardNums = [...shardGroups.keys()].slice(0, MAX_DOC_SHARDS)
   const shardPromises = shardNums.map((n) => loadDocShard(dataset, n, env))
   const shards = await Promise.all(shardPromises)
 
@@ -417,7 +433,7 @@ async function handleSearch(
   const startTime = performance.now()
 
   const q = params.get('q')
-  const limit = Math.min(parseInt(params.get('limit') || '20', 10), 50)
+  const limit = Math.min(parseInt(params.get('limit') || String(DEFAULT_SEARCH_LIMIT), 10), MAX_SEARCH_LIMIT)
   const offset = Math.max(parseInt(params.get('offset') || '0', 10), 0)
   const timing = params.get('timing') === 'true'
   const highlight = params.get('highlight') !== 'false' // Default true
@@ -436,7 +452,7 @@ async function handleSearch(
     matchedTerms = result.matchedTerms
     expandedTerms = result.expandedTerms
   } else {
-    indices = Array.from({ length: Math.min(meta.totalDocs, 1000) }, (_, i) => i)
+    indices = Array.from({ length: Math.min(meta.totalDocs, MAX_BROWSE_RESULTS) }, (_, i) => i)
   }
 
   // Apply dataset-specific filters
@@ -526,8 +542,8 @@ async function handleSearch(
 
   return Response.json(response, {
     headers: {
-      'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',
-      'CDN-Cache-Control': 'max-age=86400',
+      'Cache-Control': `public, max-age=${CACHE_MAX_AGE_SECONDS}, stale-while-revalidate=${CDN_CACHE_MAX_AGE_SECONDS}`,
+      'CDN-Cache-Control': `max-age=${CDN_CACHE_MAX_AGE_SECONDS}`,
       'Vary': 'Accept-Encoding',
     },
   })
@@ -567,7 +583,7 @@ export default {
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, OPTIONS',
-          'Access-Control-Max-Age': '86400',
+          'Access-Control-Max-Age': String(CDN_CACHE_MAX_AGE_SECONDS),
         },
       })
     }

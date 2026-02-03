@@ -30,6 +30,31 @@ interface SearchResponse {
   query?: unknown
 }
 
+// Constants
+const DEFAULT_SEARCH_LIMIT = 20
+const MAX_SEARCH_LIMIT = 100
+const MAX_TERM_SHARDS = 5
+const MAX_DOC_SHARDS = 4
+const MAX_DOC_CACHE_SIZE = 15
+const MAX_BROWSE_RESULTS = 1000
+const MAX_FETCH_COUNT = 500
+const MAX_FACET_VALUES = 10
+const MAX_SUGGESTIONS = 10
+const MAX_PREFIX_EXTRA_LENGTH = 5
+const MIN_PREFIX_TERM_LENGTH = 3
+const MIN_FUZZY_TERM_LENGTH = 4
+const MIN_SUGGEST_QUERY_LENGTH = 2
+const SCORE_EXACT_MATCH = 10
+const SCORE_STEMMED_MATCH = 5
+const SCORE_SYNONYM_MATCH = 3
+const SCORE_PREFIX_MATCH = 2
+const SCORE_FUZZY_MATCH = 1
+const SCORE_WILDCARD_MATCH = 4
+const SNIPPET_LENGTH = 150
+const SNIPPET_CONTEXT_BEFORE = 50
+const SNIPPET_CONTEXT_AFTER = 100
+const CACHE_MAX_AGE_SECONDS = 3600
+
 // Caches
 const termCache = new Map<string, Record<string, number[]>>()
 const indexCache = new Map<string, Record<string, number[]>>()
@@ -159,7 +184,7 @@ async function loadDocs(ds: string, n: number, env: Env): Promise<unknown[]> {
   const o = await env.DATA.get(`indexes/${ds}/docs-${n}.json`)
   if (!o) throw new Error(`Shard: ${ds}/${n}`)
   const d = (await o.json()) as unknown[]
-  if (docCache.size >= 15) docCache.delete(docCache.keys().next().value as string)
+  if (docCache.size >= MAX_DOC_CACHE_SIZE) docCache.delete(docCache.keys().next().value as string)
   docCache.set(k, d); return d
 }
 
@@ -179,7 +204,7 @@ async function search(ds: string, pq: ParsedQuery, boosts: Record<string, number
   for (const t of allTerms) { const f = t[0] || ''; letters.add(/\d/.test(f) ? '0' : f) }
 
   // Load shards
-  const shards = await Promise.all([...letters].slice(0, 5).map(l => loadTermShard(ds, l, env)))
+  const shards = await Promise.all([...letters].slice(0, MAX_TERM_SHARDS).map(l => loadTermShard(ds, l, env)))
   const index: Record<string, number[]> = {}
   if (shards.some(s => s)) { for (const s of shards) if (s) Object.assign(index, s) }
   else Object.assign(index, await loadFullIndex(ds, env))
@@ -197,7 +222,7 @@ async function search(ds: string, pq: ParsedQuery, boosts: Record<string, number
 
     for (const v of variants) {
       if (index[v]) {
-        const pts = (v === term ? 10 : 5) * boost
+        const pts = (v === term ? SCORE_EXACT_MATCH : SCORE_STEMMED_MATCH) * boost
         for (const idx of index[v]) addScore(idx, pts, `${v}=${pts}`)
         matched.add(v)
       }
@@ -205,17 +230,17 @@ async function search(ds: string, pq: ParsedQuery, boosts: Record<string, number
 
     for (const syn of synonyms) {
       if (index[syn]) {
-        const pts = 3 * boost
+        const pts = SCORE_SYNONYM_MATCH * boost
         for (const idx of index[syn]) addScore(idx, pts, `syn:${syn}=${pts}`)
         matched.add(syn)
       }
     }
 
     // Prefix
-    if (term.length >= 3) {
+    if (term.length >= MIN_PREFIX_TERM_LENGTH) {
       for (const [k, idxs] of Object.entries(index)) {
-        if (k.startsWith(term) && k !== term && k.length <= term.length + 5) {
-          const pts = 2 * boost
+        if (k.startsWith(term) && k !== term && k.length <= term.length + MAX_PREFIX_EXTRA_LENGTH) {
+          const pts = SCORE_PREFIX_MATCH * boost
           for (const idx of idxs) addScore(idx, pts, `prefix:${k}=${pts}`)
           matched.add(k)
         }
@@ -223,10 +248,10 @@ async function search(ds: string, pq: ParsedQuery, boosts: Record<string, number
     }
 
     // Fuzzy
-    if (pq.fuzzy && term.length >= 4) {
+    if (pq.fuzzy && term.length >= MIN_FUZZY_TERM_LENGTH) {
       for (const [k, idxs] of Object.entries(index)) {
         if (Math.abs(k.length - term.length) <= 1 && levenshtein(term, k) === 1) {
-          for (const idx of idxs) addScore(idx, 1, `fuzzy:${k}=1`)
+          for (const idx of idxs) addScore(idx, SCORE_FUZZY_MATCH, `fuzzy:${k}=${SCORE_FUZZY_MATCH}`)
           matched.add(k)
         }
       }
@@ -237,7 +262,7 @@ async function search(ds: string, pq: ParsedQuery, boosts: Record<string, number
   for (const wc of pq.wildcards) {
     for (const [k, idxs] of Object.entries(index)) {
       if (k.startsWith(wc)) {
-        for (const idx of idxs) addScore(idx, 4, `wc:${k}=4`)
+        for (const idx of idxs) addScore(idx, SCORE_WILDCARD_MATCH, `wc:${k}=${SCORE_WILDCARD_MATCH}`)
         matched.add(k)
       }
     }
@@ -258,7 +283,7 @@ async function search(ds: string, pq: ParsedQuery, boosts: Record<string, number
 
 // Suggestions/Autocomplete
 async function getSuggestions(ds: string, prefix: string, env: Env): Promise<string[]> {
-  if (prefix.length < 2) return []
+  if (prefix.length < MIN_SUGGEST_QUERY_LENGTH) return []
   const letter = prefix[0]!
   const shard = await loadTermShard(ds, /\d/.test(letter) ? '0' : letter, env)
   if (!shard) return []
@@ -269,7 +294,7 @@ async function getSuggestions(ds: string, prefix: string, env: Env): Promise<str
       matches.push({ term, count: indices.length })
     }
   }
-  return matches.sort((a, b) => b.count - a.count).slice(0, 10).map(m => m.term)
+  return matches.sort((a, b) => b.count - a.count).slice(0, MAX_SUGGESTIONS).map(m => m.term)
 }
 
 // Filters
@@ -340,7 +365,7 @@ function computeFacets(docs: Record<string, unknown>[], fields: string[]): Recor
   for (const f of fields) {
     const c = new Map<string, number>()
     for (const d of docs) { const v = d[f]; if (v != null) c.set(String(v), (c.get(String(v)) || 0) + 1) }
-    r[f] = [...c.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([value, count]) => ({ value, count }))
+    r[f] = [...c.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_FACET_VALUES).map(([value, count]) => ({ value, count }))
   }
   return r
 }
@@ -360,7 +385,7 @@ async function fetchDocs(
   facetFields: string[], statFields: string[], distinctField: string | null
 ): Promise<{ docs: Record<string, unknown>[]; total: number; facets?: Record<string, { value: string; count: number }[]>; stats?: Record<string, { min: number; max: number; avg: number }> }> {
   const needsAll = sort.length > 0 || filters.range.length > 0 || filters.exists.length > 0 || facetFields.length > 0 || statFields.length > 0 || distinctField
-  const fetchCount = needsAll ? Math.min(indices.length, 500) : limit
+  const fetchCount = needsAll ? Math.min(indices.length, MAX_FETCH_COUNT) : limit
   const toFetch = indices.slice(needsAll ? 0 : offset, needsAll ? fetchCount : offset + limit)
   if (!toFetch.length) return { docs: [], total: 0 }
 
@@ -371,7 +396,7 @@ async function fetchDocs(
     groups.get(shard)!.push({ idx, pos })
   }
 
-  const shardNums = [...groups.keys()].slice(0, 4)
+  const shardNums = [...groups.keys()].slice(0, MAX_DOC_SHARDS)
   const shards = await Promise.all(shardNums.map(n => loadDocs(ds, n, env)))
   const shardMap = new Map(shardNums.map((n, i) => [n, shards[i]!]))
 
@@ -427,14 +452,14 @@ function highlight(text: string, matched: Set<string>): string {
   return r
 }
 
-function extractSnippet(text: string, matched: Set<string>, len = 150): string {
+function extractSnippet(text: string, matched: Set<string>, len = SNIPPET_LENGTH): string {
   if (!text || !matched.size) return text.slice(0, len)
   const lower = text.toLowerCase()
   for (const t of matched) {
     const idx = lower.indexOf(t)
     if (idx >= 0) {
-      const start = Math.max(0, idx - 50)
-      const end = Math.min(text.length, idx + t.length + 100)
+      const start = Math.max(0, idx - SNIPPET_CONTEXT_BEFORE)
+      const end = Math.min(text.length, idx + t.length + SNIPPET_CONTEXT_AFTER)
       return (start > 0 ? '...' : '') + text.slice(start, end) + (end < text.length ? '...' : '')
     }
   }
@@ -446,7 +471,7 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
   const start = performance.now()
 
   const q = p.get('q') || ''
-  const limit = Math.min(+(p.get('limit') || 20), 100)
+  const limit = Math.min(+(p.get('limit') || DEFAULT_SEARCH_LIMIT), MAX_SEARCH_LIMIT)
   const offset = Math.max(+(p.get('offset') || 0), 0)
   const showTiming = p.get('timing') === 'true'
   const doHighlight = p.get('highlight') !== 'false'
@@ -480,7 +505,7 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
     const result = await search(ds, pq, boosts, env)
     indices = result.indices; matched = result.matched; explains = result.explains
   } else {
-    indices = Array.from({ length: Math.min(meta.totalDocs, 1000) }, (_, i) => i)
+    indices = Array.from({ length: Math.min(meta.totalDocs, MAX_BROWSE_RESULTS) }, (_, i) => i)
   }
 
   if (filters.hash.length) indices = await applyHashFilters(indices, filters.hash, ds, env)
@@ -531,7 +556,7 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
   if (showTiming) response.timing = { searchMs: +searchMs.toFixed(2), fetchMs: +fetchMs.toFixed(2), totalMs: +(performance.now() - start).toFixed(2) }
   if (debug) response.query = { parsed: pq, matched: [...matched], boosts }
 
-  return Response.json(response, { headers: { 'Cache-Control': 'public, max-age=3600' } })
+  return Response.json(response, { headers: { 'Cache-Control': `public, max-age=${CACHE_MAX_AGE_SECONDS}` } })
 }
 
 // Suggest endpoint

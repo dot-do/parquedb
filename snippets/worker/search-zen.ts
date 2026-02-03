@@ -28,6 +28,55 @@ interface SearchResponse {
   cpuBudget?: { used: number; limit: number; exceeded: boolean }
 }
 
+// =============================================================================
+// Constants - Named values for all magic numbers
+// =============================================================================
+
+// Search limits
+const DEFAULT_SEARCH_LIMIT = 20
+const MAX_SEARCH_LIMIT = 50
+const MAX_QUERY_TERMS = 5
+const MAX_BROWSE_RESULTS = 500
+
+// Shard and cache limits
+const MAX_TERM_SHARDS = 3
+const MAX_DOC_SHARDS = 3
+const MAX_DOC_CACHE_SIZE = 10
+const MAX_FETCH_COUNT = 300
+
+// Facets and stats
+const MAX_FACET_FIELDS = 3
+const MAX_STAT_FIELDS = 2
+const MAX_FACET_STAT_DOCS = 200
+const MAX_FACET_VALUES = 10
+
+// Search phase limits
+const MAX_PREFIX_MATCHES_PER_TERM = 10
+const MAX_PREFIX_EXTRA_LENGTH = 4
+const MAX_FUZZY_CHECKS = 100
+const MAX_SPELL_CHECKS = 50
+const MAX_SPELL_EDIT_DISTANCE = 3
+const MAX_SYNONYM_EXPANSIONS = 3
+
+// Minimum lengths for search phases
+const MIN_PREFIX_TERM_LENGTH = 3
+const MIN_FUZZY_TERM_LENGTH = 4
+const MIN_SUGGEST_QUERY_LENGTH = 2
+
+// Scoring weights
+const SCORE_EXACT_MATCH = 10
+const SCORE_STEMMED_MATCH = 5
+const SCORE_SYNONYM_MATCH = 3
+const SCORE_PREFIX_MATCH = 2
+const SCORE_FUZZY_MATCH = 1
+
+// Suggest limits
+const MAX_SUGGEST_ITERATIONS = 200
+const MAX_SUGGESTIONS = 10
+
+// Cache TTL
+const CACHE_MAX_AGE_SECONDS = 3600
+
 // CPU Budget tracking - tracks only synchronous CPU work, not I/O
 const CPU_BUDGET_MS = 4  // Leave 1ms margin
 let cpuAccumulated = 0
@@ -150,7 +199,7 @@ async function loadDocs(ds: string, n: number, env: Env): Promise<unknown[]> {
   const o = await env.DATA.get(`indexes/${ds}/docs-${n}.json`)
   if (!o) throw new Error(`Shard: ${ds}/${n}`)
   const d = (await o.json()) as unknown[]
-  if (docCache.size >= 10) docCache.delete(docCache.keys().next().value as string)
+  if (docCache.size >= MAX_DOC_CACHE_SIZE) docCache.delete(docCache.keys().next().value as string)
   docCache.set(k, d)
   return d
 }
@@ -174,7 +223,7 @@ async function search(ds: string, terms: string[], fuzzy: boolean, env: Env): Pr
 
   // Load shards (I/O - doesn't count toward CPU)
   const letters = new Set(terms.map(t => /\d/.test(t[0]!) ? '0' : t[0]!))
-  const shards = await Promise.all([...letters].slice(0, 3).map(l => loadTermShard(ds, l, env)))
+  const shards = await Promise.all([...letters].slice(0, MAX_TERM_SHARDS).map(l => loadTermShard(ds, l, env)))
 
   // START CPU work: index building
   startCpuSegment()
@@ -192,7 +241,7 @@ async function search(ds: string, terms: string[], fuzzy: boolean, env: Env): Pr
     for (const variant of [term, stemmed]) {
       if (index[variant]) {
         exactMatchFound = true
-        const pts = variant === term ? 10 : 5
+        const pts = variant === term ? SCORE_EXACT_MATCH : SCORE_STEMMED_MATCH
         for (const idx of index[variant]!) {
           scores.set(idx, (scores.get(idx) || 0) + pts)
         }
@@ -203,10 +252,10 @@ async function search(ds: string, terms: string[], fuzzy: boolean, env: Env): Pr
     // Synonyms (limited)
     const syns = SYNONYMS[term] || SYNONYMS[stemmed]
     if (syns) {
-      for (const syn of syns.slice(0, 3)) {
+      for (const syn of syns.slice(0, MAX_SYNONYM_EXPANSIONS)) {
         if (index[syn]) {
           for (const idx of index[syn]!) {
-            scores.set(idx, (scores.get(idx) || 0) + 3)
+            scores.set(idx, (scores.get(idx) || 0) + SCORE_SYNONYM_MATCH)
           }
           matched.add(syn)
         }
@@ -214,19 +263,19 @@ async function search(ds: string, terms: string[], fuzzy: boolean, env: Env): Pr
     }
   }
 
-  // Phase 2: Prefix matches (capped at 10 per term)
+  // Phase 2: Prefix matches (capped at MAX_PREFIX_MATCHES_PER_TERM per term)
   if (checkCpuBudget()) {
     for (const term of terms) {
-      if (term.length < 3) continue
+      if (term.length < MIN_PREFIX_TERM_LENGTH) continue
       if (!checkCpuBudget()) { cpuExceeded = true; break }
 
       let prefixCount = 0
       for (const k of indexTerms) {
-        if (prefixCount >= 10) break
-        if (k.startsWith(term) && k !== term && k.length <= term.length + 4) {
+        if (prefixCount >= MAX_PREFIX_MATCHES_PER_TERM) break
+        if (k.startsWith(term) && k !== term && k.length <= term.length + MAX_PREFIX_EXTRA_LENGTH) {
           prefixCount++
           for (const idx of index[k]!) {
-            scores.set(idx, (scores.get(idx) || 0) + 2)
+            scores.set(idx, (scores.get(idx) || 0) + SCORE_PREFIX_MATCH)
           }
           matched.add(k)
         }
@@ -236,11 +285,10 @@ async function search(ds: string, terms: string[], fuzzy: boolean, env: Env): Pr
 
   // Phase 3: Fuzzy matches (only if no exact matches, capped iterations)
   if (fuzzy && !exactMatchFound && checkCpuBudget()) {
-    const MAX_FUZZY_CHECKS = 100
     let fuzzyChecks = 0
 
     for (const term of terms) {
-      if (term.length < 4) continue
+      if (term.length < MIN_FUZZY_TERM_LENGTH) continue
       if (!checkCpuBudget()) { cpuExceeded = true; break }
 
       for (const k of indexTerms) {
@@ -250,7 +298,7 @@ async function search(ds: string, terms: string[], fuzzy: boolean, env: Env): Pr
         fuzzyChecks++
         if (levenshteinFast(term, k, 1) === 1) {
           for (const idx of index[k]!) {
-            scores.set(idx, (scores.get(idx) || 0) + 1)
+            scores.set(idx, (scores.get(idx) || 0) + SCORE_FUZZY_MATCH)
           }
           matched.add(k)
         }
@@ -260,14 +308,13 @@ async function search(ds: string, terms: string[], fuzzy: boolean, env: Env): Pr
 
   // Phase 4: Spell correction (only if 0 results)
   if (scores.size === 0 && checkCpuBudget()) {
-    const MAX_SPELL_CHECKS = 50
     let spellChecks = 0
 
     for (const term of terms) {
       if (!checkCpuBudget()) break
 
       let bestMatch: string | null = null
-      let bestDist = 3
+      let bestDist = MAX_SPELL_EDIT_DISTANCE
 
       for (const k of indexTerms) {
         if (spellChecks >= MAX_SPELL_CHECKS) break
@@ -353,7 +400,7 @@ function computeFacets(docs: Record<string, unknown>[], fields: string[]): Recor
   const r: Record<string, { value: string; count: number }[]> = {}
   for (const f of fields) {
     const c = new Map<string, number>()
-    for (const d of docs.slice(0, 200)) {  // Cap at 200 docs for facets
+    for (const d of docs.slice(0, MAX_FACET_STAT_DOCS)) {
       const v = d[f]
       if (Array.isArray(v)) {
         for (const item of v) c.set(String(item), (c.get(String(item)) || 0) + 1)
@@ -361,7 +408,7 @@ function computeFacets(docs: Record<string, unknown>[], fields: string[]): Recor
         c.set(String(v), (c.get(String(v)) || 0) + 1)
       }
     }
-    r[f] = [...c.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([value, count]) => ({ value, count }))
+    r[f] = [...c.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_FACET_VALUES).map(([value, count]) => ({ value, count }))
   }
   return r
 }
@@ -370,7 +417,7 @@ function computeFacets(docs: Record<string, unknown>[], fields: string[]): Recor
 function computeStats(docs: Record<string, unknown>[], fields: string[]): Record<string, { min: number; max: number; avg: number }> {
   const r: Record<string, { min: number; max: number; avg: number }> = {}
   for (const f of fields) {
-    const vals = docs.slice(0, 200).map(d => d[f]).filter(v => typeof v === 'number') as number[]
+    const vals = docs.slice(0, MAX_FACET_STAT_DOCS).map(d => d[f]).filter(v => typeof v === 'number') as number[]
     if (vals.length) {
       r[f] = {
         min: Math.min(...vals),
@@ -394,7 +441,7 @@ async function fetchDocs(
   stats?: Record<string, { min: number; max: number; avg: number }>
 }> {
   const needsAll = sortSpec.length > 0 || filters.range.length > 0 || facetFields.length > 0 || statFields.length > 0
-  const fetchCount = needsAll ? Math.min(indices.length, 300) : limit  // Cap fetch
+  const fetchCount = needsAll ? Math.min(indices.length, MAX_FETCH_COUNT) : limit
   const toFetch = indices.slice(needsAll ? 0 : offset, needsAll ? fetchCount : offset + limit)
 
   if (!toFetch.length) return { docs: [], total: 0 }
@@ -407,7 +454,7 @@ async function fetchDocs(
     groups.get(shard)!.push({ idx, pos })
   }
 
-  const shardNums = [...groups.keys()].slice(0, 3)  // Cap at 3 shards
+  const shardNums = [...groups.keys()].slice(0, MAX_DOC_SHARDS)
   const shards = await Promise.all(shardNums.map(n => loadDocs(ds, n, env)))
 
   // START CPU work: doc assembly and filtering
@@ -473,7 +520,7 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
   const wallStart = performance.now()
 
   const q = p.get('q') || ''
-  const limit = Math.min(+(p.get('limit') || 20), 50)  // Cap limit
+  const limit = Math.min(+(p.get('limit') || DEFAULT_SEARCH_LIMIT), MAX_SEARCH_LIMIT)
   const offset = Math.max(+(p.get('offset') || 0), 0)
   const fuzzy = q.includes('~') || p.get('fuzzy') === 'true'
   const showTiming = p.get('timing') === 'true'
@@ -485,15 +532,15 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
         return { field: f!, dir: d as 'asc' | 'desc' }
       })
     : []
-  const facetFields = (p.get('facets') || '').split(',').filter(Boolean).slice(0, 3)  // Cap facet fields
-  const statFields = (p.get('stats') || '').split(',').filter(Boolean).slice(0, 2)  // Cap stat fields
+  const facetFields = (p.get('facets') || '').split(',').filter(Boolean).slice(0, MAX_FACET_FIELDS)
+  const statFields = (p.get('stats') || '').split(',').filter(Boolean).slice(0, MAX_STAT_FIELDS)
 
   // Parse query
   const cleanQ = q.replace(/~/g, '')
   const terms = cleanQ.toLowerCase()
     .split(/\s+/)
     .filter(t => t.length >= 2 && !STOPS.has(t))
-    .slice(0, 5)  // Cap query terms
+    .slice(0, MAX_QUERY_TERMS)
 
   const meta = await loadMeta(ds, env)
   const filters = parseFilters(p, ds)
@@ -513,7 +560,7 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
     didYouMean = result.didYouMean
     cpuExceeded = result.cpuExceeded
   } else {
-    indices = Array.from({ length: Math.min(meta.totalDocs, 500) }, (_, i) => i)
+    indices = Array.from({ length: Math.min(meta.totalDocs, MAX_BROWSE_RESULTS) }, (_, i) => i)
   }
 
   // Apply hash filters
@@ -565,14 +612,14 @@ async function handleSearch(ds: string, p: URLSearchParams, env: Env): Promise<R
   }
 
   return Response.json(response, {
-    headers: { 'Cache-Control': 'public, max-age=3600' }
+    headers: { 'Cache-Control': `public, max-age=${CACHE_MAX_AGE_SECONDS}` }
   })
 }
 
 // Suggest endpoint
 async function handleSuggest(ds: string, p: URLSearchParams, env: Env): Promise<Response> {
   const q = p.get('q') || ''
-  if (q.length < 2) return Response.json({ suggestions: [], query: q })
+  if (q.length < MIN_SUGGEST_QUERY_LENGTH) return Response.json({ suggestions: [], query: q })
 
   const letter = q[0]!
   const shard = await loadTermShard(ds, /\d/.test(letter) ? '0' : letter, env)
@@ -584,7 +631,7 @@ async function handleSuggest(ds: string, p: URLSearchParams, env: Env): Promise<
   // Limit iterations
   let checked = 0
   for (const [term, indices] of Object.entries(shard)) {
-    if (checked++ > 200) break  // CPU guard
+    if (checked++ > MAX_SUGGEST_ITERATIONS) break
     if (term.startsWith(prefix) && term !== prefix) {
       matches.push({ term, count: indices.length })
     }
@@ -592,7 +639,7 @@ async function handleSuggest(ds: string, p: URLSearchParams, env: Env): Promise<
 
   const suggestions = matches
     .sort((a, b) => b.count - a.count)
-    .slice(0, 10)
+    .slice(0, MAX_SUGGESTIONS)
     .map(m => m.term)
 
   return Response.json({ suggestions, query: q })
@@ -653,13 +700,13 @@ export default {
             'suggest', 'spell_correct'
           ],
           guards: [
-            'max 5 query terms',
-            'max 100 fuzzy comparisons',
-            'max 50 spell checks',
-            'max 10 prefix matches per term',
-            'max 200 docs for facets/stats',
-            'max 3 doc shards fetched',
-            'max 50 results per page'
+            `max ${MAX_QUERY_TERMS} query terms`,
+            `max ${MAX_FUZZY_CHECKS} fuzzy comparisons`,
+            `max ${MAX_SPELL_CHECKS} spell checks`,
+            `max ${MAX_PREFIX_MATCHES_PER_TERM} prefix matches per term`,
+            `max ${MAX_FACET_STAT_DOCS} docs for facets/stats`,
+            `max ${MAX_DOC_SHARDS} doc shards fetched`,
+            `max ${MAX_SEARCH_LIMIT} results per page`
           ]
         })
       }

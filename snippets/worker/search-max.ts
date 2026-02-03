@@ -57,6 +57,28 @@ interface SearchResponse {
 }
 
 // =============================================================================
+// Constants
+// =============================================================================
+
+const DEFAULT_SEARCH_LIMIT = 20
+const MAX_SEARCH_LIMIT = 100
+const MAX_TERM_SHARDS = 4
+const MAX_DOC_SHARDS = 4
+const MAX_DOC_CACHE_SIZE = 15
+const MAX_BROWSE_RESULTS = 1000
+const MAX_FETCH_COUNT = 500
+const MAX_FACET_VALUES = 10
+const MAX_PREFIX_EXTRA_LENGTH = 5
+const MIN_PREFIX_TERM_LENGTH = 3
+const MIN_FUZZY_TERM_LENGTH = 4
+const SCORE_EXACT_MATCH = 10
+const SCORE_STEMMED_MATCH = 5
+const SCORE_SYNONYM_MATCH = 3
+const SCORE_PREFIX_MATCH = 2
+const SCORE_FUZZY_MATCH = 1
+const CACHE_MAX_AGE_SECONDS = 3600
+
+// =============================================================================
 // Caches & Config
 // =============================================================================
 
@@ -257,7 +279,7 @@ async function loadDocShard(ds: string, n: number, env: Env): Promise<unknown[]>
   const obj = await env.DATA.get(`indexes/${ds}/docs-${n}.json`)
   if (!obj) throw new Error(`Shard: ${ds}/${n}`)
   const docs = (await obj.json()) as unknown[]
-  if (docCache.size >= 15) docCache.delete(docCache.keys().next().value as string)
+  if (docCache.size >= MAX_DOC_CACHE_SIZE) docCache.delete(docCache.keys().next().value as string)
   docCache.set(k, docs)
   return docs
 }
@@ -288,7 +310,7 @@ async function search(
   }
 
   // Load shards
-  const shards = await Promise.all([...letters].slice(0, 4).map(l => loadTermShard(ds, l, env)))
+  const shards = await Promise.all([...letters].slice(0, MAX_TERM_SHARDS).map(l => loadTermShard(ds, l, env)))
   const index: Record<string, number[]> = {}
   const hasV2 = shards.some(s => s !== null)
   if (hasV2) {
@@ -303,7 +325,7 @@ async function search(
 
     for (const v of variants) {
       if (index[v]) {
-        const score = v === term ? 10 : 5
+        const score = v === term ? SCORE_EXACT_MATCH : SCORE_STEMMED_MATCH
         for (const idx of index[v]) scores.set(idx, (scores.get(idx) || 0) + score)
         matched.add(v)
       }
@@ -311,28 +333,28 @@ async function search(
 
     for (const syn of synonyms) {
       if (index[syn]) {
-        for (const idx of index[syn]) scores.set(idx, (scores.get(idx) || 0) + 3)
+        for (const idx of index[syn]) scores.set(idx, (scores.get(idx) || 0) + SCORE_SYNONYM_MATCH)
         matched.add(syn)
       }
     }
 
     // Prefix matching
-    if (term.length >= 3) {
+    if (term.length >= MIN_PREFIX_TERM_LENGTH) {
       for (const [k, indices] of Object.entries(index)) {
-        if (k.startsWith(term) && k !== term && k.length <= term.length + 5) {
-          for (const idx of indices) scores.set(idx, (scores.get(idx) || 0) + 2)
+        if (k.startsWith(term) && k !== term && k.length <= term.length + MAX_PREFIX_EXTRA_LENGTH) {
+          for (const idx of indices) scores.set(idx, (scores.get(idx) || 0) + SCORE_PREFIX_MATCH)
           matched.add(k)
         }
       }
     }
 
     // Fuzzy matching
-    if (pq.fuzzy && term.length >= 4) {
+    if (pq.fuzzy && term.length >= MIN_FUZZY_TERM_LENGTH) {
       for (const [k, indices] of Object.entries(index)) {
         if (k.length >= term.length - 1 && k.length <= term.length + 1) {
           const dist = levenshtein(term, k)
           if (dist === 1) {
-            for (const idx of indices) scores.set(idx, (scores.get(idx) || 0) + 1)
+            for (const idx of indices) scores.set(idx, (scores.get(idx) || 0) + SCORE_FUZZY_MATCH)
             matched.add(k)
           }
         }
@@ -463,7 +485,7 @@ function computeFacets(docs: Record<string, unknown>[], fields: string[]): Recor
     }
     result[f] = [...counts.entries()]
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
+      .slice(0, MAX_FACET_VALUES)
       .map(([value, count]) => ({ value, count }))
   }
   return result
@@ -501,7 +523,7 @@ async function fetchDocs(
   statFields: string[]
 ): Promise<{ docs: Record<string, unknown>[]; total: number; facets?: Record<string, Facet[]>; stats?: Record<string, { min: number; max: number; avg: number }> }> {
   const needsAll = sort.length > 0 || filters.range.length > 0 || filters.exists.length > 0 || facetFields.length > 0 || statFields.length > 0
-  const fetchCount = needsAll ? Math.min(indices.length, 500) : limit
+  const fetchCount = needsAll ? Math.min(indices.length, MAX_FETCH_COUNT) : limit
   const toFetch = indices.slice(needsAll ? 0 : offset, needsAll ? fetchCount : offset + limit)
 
   if (!toFetch.length) return { docs: [], total: 0 }
@@ -516,7 +538,7 @@ async function fetchDocs(
   }
 
   // Fetch shards
-  const shardNums = [...groups.keys()].slice(0, 4)
+  const shardNums = [...groups.keys()].slice(0, MAX_DOC_SHARDS)
   const shards = await Promise.all(shardNums.map(n => loadDocShard(ds, n, env)))
   const shardMap = new Map(shardNums.map((n, i) => [n, shards[i]!]))
 
@@ -587,7 +609,7 @@ async function handleSearch(ds: string, params: URLSearchParams, env: Env): Prom
   const start = performance.now()
 
   const q = params.get('q') || ''
-  const limit = Math.min(+(params.get('limit') || 20), 100)
+  const limit = Math.min(+(params.get('limit') || DEFAULT_SEARCH_LIMIT), MAX_SEARCH_LIMIT)
   const offset = Math.max(+(params.get('offset') || 0), 0)
   const showTiming = params.get('timing') === 'true'
   const doHighlight = params.get('highlight') !== 'false'
@@ -609,7 +631,7 @@ async function handleSearch(ds: string, params: URLSearchParams, env: Env): Prom
     indices = result.indices
     matched = result.matched
   } else {
-    indices = Array.from({ length: Math.min(meta.totalDocs, 1000) }, (_, i) => i)
+    indices = Array.from({ length: Math.min(meta.totalDocs, MAX_BROWSE_RESULTS) }, (_, i) => i)
   }
 
   if (filters.hash.length) {
@@ -642,7 +664,7 @@ async function handleSearch(ds: string, params: URLSearchParams, env: Env): Prom
   if (showTiming) response.timing = { searchMs: +searchMs.toFixed(2), fetchMs: +fetchMs.toFixed(2), totalMs: +(performance.now() - start).toFixed(2) }
   if (debug) response.query = { parsed: pq, matched: [...matched] }
 
-  return Response.json(response, { headers: { 'Cache-Control': 'public, max-age=3600' } })
+  return Response.json(response, { headers: { 'Cache-Control': `public, max-age=${CACHE_MAX_AGE_SECONDS}` } })
 }
 
 // =============================================================================
