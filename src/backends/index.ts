@@ -73,6 +73,26 @@ export {
 } from './iceberg'
 
 // =============================================================================
+// Shared Parquet Utilities
+// =============================================================================
+
+export {
+  // Entity serialization
+  entityToRow,
+  rowToEntity,
+  buildEntityParquetSchema,
+  // Filter matching
+  matchesFilter,
+  // ID generation
+  generateEntityId,
+  // Data extraction
+  extractDataFields,
+  // Binary encoding helpers
+  bytesToBase64,
+  base64ToBytes,
+} from './parquet-utils'
+
+// =============================================================================
 // Factory Function
 // =============================================================================
 

@@ -29,6 +29,16 @@ import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptio
 import type { Update } from '../types/update'
 import type { StorageBackend } from '../types/storage'
 
+// Import shared Parquet utilities
+import {
+  entityToRow,
+  rowToEntity,
+  buildEntityParquetSchema,
+  matchesFilter,
+  generateEntityId,
+  extractDataFields,
+} from './parquet-utils'
+
 // Import from @dotdo/iceberg
 import {
   // Metadata operations
@@ -61,8 +71,6 @@ import {
 // Import Parquet utilities
 import { ParquetWriter } from '../parquet/writer'
 import { readParquet } from '../parquet/reader'
-import { encodeVariant, decodeVariant } from '../parquet/variant'
-import type { ParquetSchema } from '../parquet/types'
 
 // =============================================================================
 // Iceberg Backend Implementation
@@ -96,6 +104,13 @@ export class IcebergBackend implements EntityBackend {
 
   // Cache of loaded table metadata per namespace
   private tableCache = new Map<string, TableMetadata>()
+
+  // Mutex locks for concurrent write operations per namespace
+  private writeLocks = new Map<string, Promise<void>>()
+
+  // Counter for ensuring unique snapshot IDs within the same millisecond
+  private snapshotIdCounter = 0
+  private lastSnapshotIdMs = 0
 
   constructor(config: IcebergBackendConfig) {
     this.storage = config.storage
@@ -197,7 +212,7 @@ export class IcebergBackend implements EntityBackend {
     // Generate entity
     const now = new Date()
     const actor = options?.actor ?? 'system/parquedb' as EntityId
-    const id = this.generateId()
+    const id = generateEntityId()
 
     const entity: Entity<T> = {
       $id: `${ns}/${id}` as EntityId,
@@ -208,7 +223,7 @@ export class IcebergBackend implements EntityBackend {
       updatedAt: now,
       updatedBy: actor,
       version: 1,
-      ...this.extractDataFields(input),
+      ...extractDataFields(input),
     } as Entity<T>
 
     // Write to Iceberg table
@@ -301,7 +316,7 @@ export class IcebergBackend implements EntityBackend {
     const actor = options?.actor ?? 'system/parquedb' as EntityId
 
     const entities = inputs.map(input => {
-      const id = this.generateId()
+      const id = generateEntityId()
       return {
         $id: `${ns}/${id}` as EntityId,
         $type: input.$type,
@@ -311,7 +326,7 @@ export class IcebergBackend implements EntityBackend {
         updatedAt: now,
         updatedBy: actor,
         version: 1,
-        ...this.extractDataFields(input),
+        ...extractDataFields(input),
       } as Entity<T>
     })
 
@@ -589,6 +604,61 @@ export class IcebergBackend implements EntityBackend {
   // ===========================================================================
 
   /**
+   * Generate a unique snapshot ID
+   * Uses millisecond timestamp but ensures uniqueness when called in same ms
+   */
+  private generateSnapshotId(): number {
+    const now = Date.now()
+    if (now === this.lastSnapshotIdMs) {
+      this.snapshotIdCounter++
+    } else {
+      this.lastSnapshotIdMs = now
+      this.snapshotIdCounter = 0
+    }
+    // Combine timestamp with counter to ensure uniqueness
+    // Counter goes in the lower bits (max ~1000 ops/ms is safe)
+    return now * 1000 + this.snapshotIdCounter
+  }
+
+  /**
+   * Acquire a write lock for a namespace
+   * Ensures concurrent writes to the same namespace are serialized
+   */
+  private async acquireWriteLock(ns: string): Promise<() => void> {
+    // Wait for any existing lock to be released
+    const existingLock = this.writeLocks.get(ns)
+    if (existingLock) {
+      await existingLock
+    }
+
+    // Create a new lock
+    let releaseLock: () => void
+    const lockPromise = new Promise<void>(resolve => {
+      releaseLock = resolve
+    })
+    this.writeLocks.set(ns, lockPromise)
+
+    return () => {
+      releaseLock!()
+      this.writeLocks.delete(ns)
+    }
+  }
+
+  /**
+   * Public accessor for reading entities from a snapshot (used by IcebergSnapshotBackend)
+   */
+  async readEntitiesFromSnapshotPublic<T>(
+    ns: string,
+    snapshot: Snapshot,
+    filter?: Filter,
+    options?: FindOptions
+  ): Promise<Entity<T>[]> {
+    const metadata = await this.getTableMetadata(ns)
+    if (!metadata) return []
+    return this.readEntitiesFromSnapshot<T>(ns, metadata, snapshot, filter, options)
+  }
+
+  /**
    * Get the table location for a namespace
    */
   private getTableLocation(ns: string): string {
@@ -668,8 +738,8 @@ export class IcebergBackend implements EntityBackend {
     const dataFilePath = `${location}/data/${dataFileId}.parquet`
 
     // Build parquet schema and data
-    const parquetSchema = this.buildParquetSchema()
-    const rows = entities.map(entity => this.entityToRow(entity))
+    const parquetSchema = buildEntityParquetSchema()
+    const rows = entities.map(entity => entityToRow(entity))
 
     // Write parquet file
     const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
@@ -786,104 +856,6 @@ export class IcebergBackend implements EntityBackend {
   }
 
   /**
-   * Convert an entity to a Parquet row
-   */
-  private entityToRow<T>(entity: Entity<T>): Record<string, unknown> {
-    // Extract core fields
-    const {
-      $id,
-      $type,
-      name,
-      createdAt,
-      createdBy,
-      updatedAt,
-      updatedBy,
-      deletedAt,
-      deletedBy,
-      version,
-      ...dataFields
-    } = entity as Entity<T> & { deletedAt?: Date; deletedBy?: string }
-
-    // Filter out undefined values (null should be preserved)
-    const filteredDataFields: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(dataFields)) {
-      if (value !== undefined) {
-        filteredDataFields[key] = value
-      }
-    }
-
-    // Encode remaining fields as Variant $data, then base64 encode to avoid binary issues
-    const variantBytes = encodeVariant(filteredDataFields)
-    const $data = this.bytesToBase64(variantBytes)
-
-    return {
-      $id,
-      $type,
-      name,
-      createdAt: createdAt.toISOString(),
-      createdBy,
-      updatedAt: updatedAt.toISOString(),
-      updatedBy,
-      deletedAt: deletedAt?.toISOString() ?? null,
-      deletedBy: deletedBy ?? null,
-      version,
-      $data,
-    }
-  }
-
-  /**
-   * Convert bytes to base64 string
-   */
-  private bytesToBase64(bytes: Uint8Array): string {
-    // Use btoa if available (browser/modern Node.js)
-    if (typeof btoa === 'function') {
-      let binary = ''
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]!)
-      }
-      return btoa(binary)
-    }
-    // Fallback for older Node.js
-    return Buffer.from(bytes).toString('base64')
-  }
-
-  /**
-   * Convert base64 string to bytes
-   */
-  private base64ToBytes(base64: string): Uint8Array {
-    // Use atob if available (browser/modern Node.js)
-    if (typeof atob === 'function') {
-      const binary = atob(base64)
-      const bytes = new Uint8Array(binary.length)
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i)
-      }
-      return bytes
-    }
-    // Fallback for older Node.js
-    return new Uint8Array(Buffer.from(base64, 'base64'))
-  }
-
-  /**
-   * Build ParquetSchema for entity storage
-   */
-  private buildParquetSchema(): ParquetSchema {
-    return {
-      $id: { type: 'UTF8', optional: false },
-      $type: { type: 'UTF8', optional: false },
-      name: { type: 'UTF8', optional: false },
-      createdAt: { type: 'UTF8', optional: false }, // ISO timestamp string
-      createdBy: { type: 'UTF8', optional: false },
-      updatedAt: { type: 'UTF8', optional: false },
-      updatedBy: { type: 'UTF8', optional: false },
-      deletedAt: { type: 'UTF8', optional: true },
-      deletedBy: { type: 'UTF8', optional: true },
-      version: { type: 'INT32', optional: false },
-      $data: { type: 'UTF8', optional: true }, // Base64-encoded Variant
-    }
-  }
-
-  /**
    * Hard delete entities using Iceberg delete files
    */
   private async hardDeleteEntities(_ns: string, _ids: (string | EntityId)[]): Promise<void> {
@@ -948,10 +920,10 @@ export class IcebergBackend implements EntityBackend {
         const rows = await readParquet<Record<string, unknown>>(this.storage, dataFilePath)
 
         for (const row of rows) {
-          const entity = this.rowToEntity<T>(row)
+          const entity = rowToEntity<T>(row)
 
           // Apply filter if provided
-          if (filter && !this.matchesFilter(entity, filter)) {
+          if (filter && !matchesFilter(entity, filter)) {
             continue
           }
 
@@ -1005,160 +977,6 @@ export class IcebergBackend implements EntityBackend {
     }
 
     return result
-  }
-
-  /**
-   * Convert a Parquet row back to an Entity
-   */
-  private rowToEntity<T>(row: Record<string, unknown>): Entity<T> {
-    const {
-      $id,
-      $type,
-      name,
-      createdAt,
-      createdBy,
-      updatedAt,
-      updatedBy,
-      deletedAt,
-      deletedBy,
-      version,
-      $data,
-    } = row
-
-    // Decode Variant $data (stored as base64-encoded string)
-    let dataFields: Record<string, unknown> = {}
-    if (typeof $data === 'string' && $data.length > 0) {
-      // $data is base64 encoded - decode to bytes then decode variant
-      const bytes = this.base64ToBytes($data)
-      dataFields = decodeVariant(bytes) as Record<string, unknown>
-    } else if ($data instanceof Uint8Array && $data.length > 0) {
-      // Direct Uint8Array (unlikely with hyparquet)
-      dataFields = decodeVariant($data) as Record<string, unknown>
-    } else if ($data && typeof $data === 'object') {
-      // If $data came back as an object (some parquet readers might do this)
-      dataFields = $data as Record<string, unknown>
-    }
-
-    return {
-      $id: $id as EntityId,
-      $type: $type as string,
-      name: name as string,
-      createdAt: typeof createdAt === 'string' ? new Date(createdAt) : createdAt as Date,
-      createdBy: createdBy as EntityId,
-      updatedAt: typeof updatedAt === 'string' ? new Date(updatedAt) : updatedAt as Date,
-      updatedBy: updatedBy as EntityId,
-      ...(deletedAt ? { deletedAt: typeof deletedAt === 'string' ? new Date(deletedAt) : deletedAt as Date } : {}),
-      ...(deletedBy ? { deletedBy: deletedBy as EntityId } : {}),
-      version: version as number,
-      ...dataFields,
-    } as Entity<T>
-  }
-
-  /**
-   * Check if an entity matches a filter
-   */
-  private matchesFilter(entity: Record<string, unknown>, filter: Filter): boolean {
-    for (const [key, condition] of Object.entries(filter)) {
-      // Handle logical operators
-      if (key === '$and') {
-        const conditions = condition as Filter[]
-        if (!conditions.every(c => this.matchesFilter(entity, c))) {
-          return false
-        }
-        continue
-      }
-      if (key === '$or') {
-        const conditions = condition as Filter[]
-        if (!conditions.some(c => this.matchesFilter(entity, c))) {
-          return false
-        }
-        continue
-      }
-      if (key === '$nor') {
-        const conditions = condition as Filter[]
-        if (conditions.some(c => this.matchesFilter(entity, c))) {
-          return false
-        }
-        continue
-      }
-      if (key === '$not') {
-        if (this.matchesFilter(entity, condition as Filter)) {
-          return false
-        }
-        continue
-      }
-
-      const value = entity[key]
-
-      // Simple equality check
-      if (condition === null || typeof condition !== 'object') {
-        if (value !== condition) {
-          return false
-        }
-        continue
-      }
-
-      // Handle comparison operators
-      const ops = condition as Record<string, unknown>
-      for (const [op, expected] of Object.entries(ops)) {
-        switch (op) {
-          case '$eq':
-            if (value !== expected) return false
-            break
-          case '$ne':
-            if (value === expected) return false
-            break
-          case '$gt':
-            if (!(typeof value === 'number' && value > (expected as number))) return false
-            break
-          case '$gte':
-            if (!(typeof value === 'number' && value >= (expected as number))) return false
-            break
-          case '$lt':
-            if (!(typeof value === 'number' && value < (expected as number))) return false
-            break
-          case '$lte':
-            if (!(typeof value === 'number' && value <= (expected as number))) return false
-            break
-          case '$in':
-            if (!(expected as unknown[]).includes(value)) return false
-            break
-          case '$nin':
-            if ((expected as unknown[]).includes(value)) return false
-            break
-          case '$exists':
-            if (expected && value === undefined) return false
-            if (!expected && value !== undefined) return false
-            break
-          case '$regex': {
-            const regex = expected instanceof RegExp ? expected : new RegExp(expected as string)
-            if (!regex.test(String(value))) return false
-            break
-          }
-        }
-      }
-    }
-
-    return true
-  }
-
-  /**
-   * Generate a unique entity ID
-   */
-  private generateId(): string {
-    // ULID-like ID: timestamp + random
-    const timestamp = Date.now().toString(36)
-    const random = Math.random().toString(36).substring(2, 10)
-    return `${timestamp}${random}`
-  }
-
-  /**
-   * Extract data fields from create input (exclude special fields)
-   */
-  private extractDataFields<T>(input: CreateInput<T>): Partial<T> {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { $type, name, ...data } = input
-    return data as Partial<T>
   }
 
   /**
@@ -1429,14 +1247,14 @@ class IcebergSnapshotBackend implements EntityBackend {
 
   async find<T = Record<string, unknown>>(
     ns: string,
-    _filter?: Filter,
-    _options?: FindOptions
+    filter?: Filter,
+    options?: FindOptions
   ): Promise<Entity<T>[]> {
     if (ns !== this.ns) {
       throw new Error(`Snapshot backend only supports namespace: ${this.ns}`)
     }
-    // TODO: Read from specific snapshot
-    return []
+    // Delegate to parent's readEntitiesFromSnapshot with our snapshot
+    return this.parent.readEntitiesFromSnapshotPublic<T>(ns, this.snapshotData, filter, options)
   }
 
   async count(ns: string, filter?: Filter): Promise<number> {

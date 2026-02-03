@@ -340,6 +340,147 @@ describe('Transactions', () => {
       const createdResult = await db.get('posts', createdId)
       expect(createdResult).toBeNull()
     })
+
+    it('restores entity state after update rollback', async () => {
+      // Pre-create entity
+      const existing = await db.create('posts', {
+        $type: 'Post',
+        name: 'Existing',
+        title: 'Original Title',
+        content: 'Original Content',
+        views: 100,
+      })
+
+      const originalVersion = existing.version
+
+      const tx = db.beginTransaction()
+
+      // Update in transaction
+      await tx.update('posts', existing.$id as string, {
+        $set: {
+          title: 'Modified Title',
+          content: 'Modified Content',
+        },
+        $inc: { views: 50 },
+      })
+
+      await tx.rollback()
+
+      // Entity should have original values
+      const retrieved = await db.get('posts', existing.$id as string)
+      expect(retrieved).not.toBeNull()
+      expect(retrieved!.title).toBe('Original Title')
+      expect(retrieved!.content).toBe('Original Content')
+      expect(retrieved!.views).toBe(100)
+      expect(retrieved!.version).toBe(originalVersion)
+    })
+
+    it('restores deleted entity on rollback', async () => {
+      // Pre-create entity
+      const existing = await db.create('posts', {
+        $type: 'Post',
+        name: 'To Delete',
+        title: 'Original Title',
+        content: 'Content',
+      })
+
+      const tx = db.beginTransaction()
+
+      // Delete in transaction
+      await tx.delete('posts', existing.$id as string)
+
+      await tx.rollback()
+
+      // Entity should still exist with original data
+      const retrieved = await db.get('posts', existing.$id as string)
+      expect(retrieved).not.toBeNull()
+      expect(retrieved!.title).toBe('Original Title')
+      expect(retrieved!.content).toBe('Content')
+    })
+
+    it('restores state after multiple updates to same entity', async () => {
+      // Pre-create entity
+      const existing = await db.create('posts', {
+        $type: 'Post',
+        name: 'Test',
+        title: 'Original',
+        views: 0,
+      })
+
+      const tx = db.beginTransaction()
+
+      // Multiple updates to same entity
+      await tx.update('posts', existing.$id as string, {
+        $set: { title: 'First Update' },
+      })
+
+      await tx.update('posts', existing.$id as string, {
+        $set: { title: 'Second Update' },
+      })
+
+      await tx.update('posts', existing.$id as string, {
+        $inc: { views: 10 },
+      })
+
+      await tx.rollback()
+
+      // Entity should have original values
+      const retrieved = await db.get('posts', existing.$id as string)
+      expect(retrieved).not.toBeNull()
+      expect(retrieved!.title).toBe('Original')
+      expect(retrieved!.views).toBe(0)
+    })
+
+    it('handles complex rollback with creates, updates, and deletes', async () => {
+      // Pre-create entities
+      const toUpdate = await db.create('posts', {
+        $type: 'Post',
+        name: 'To Update',
+        title: 'Original Title',
+        content: 'Original Content',
+      })
+
+      const toDelete = await db.create('posts', {
+        $type: 'Post',
+        name: 'To Delete',
+        title: 'Will Be Deleted',
+        content: 'Content',
+      })
+
+      const tx = db.beginTransaction()
+
+      // Create new entity
+      const created = await tx.create('posts', {
+        $type: 'Post',
+        name: 'New',
+        title: 'Created in Tx',
+        content: 'Content',
+      })
+
+      // Update existing entity
+      await tx.update('posts', toUpdate.$id as string, {
+        $set: { title: 'Updated Title' },
+      })
+
+      // Delete existing entity
+      await tx.delete('posts', toDelete.$id as string)
+
+      await tx.rollback()
+
+      // Created entity should not exist
+      const createdResult = await db.get('posts', created.$id as string)
+      expect(createdResult).toBeNull()
+
+      // Updated entity should have original state
+      const updatedResult = await db.get('posts', toUpdate.$id as string)
+      expect(updatedResult).not.toBeNull()
+      expect(updatedResult!.title).toBe('Original Title')
+
+      // Deleted entity should still exist
+      const deletedResult = await db.get('posts', toDelete.$id as string)
+      expect(deletedResult).not.toBeNull()
+      expect(deletedResult!.title).toBe('Will Be Deleted')
+    })
   })
 
   // ===========================================================================

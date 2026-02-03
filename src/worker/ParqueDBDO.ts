@@ -201,6 +201,9 @@ export class ParqueDBDO extends DurableObject<Env> {
   /** Event buffers per namespace for WAL batching with sequence tracking */
   private nsEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }> = new Map()
 
+  /** Relationship event buffers per namespace for WAL batching (Phase 4) */
+  private relEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }> = new Map()
+
   /** Whether counters have been initialized from SQLite */
   private countersInitialized = false
 
@@ -279,6 +282,19 @@ export class ParqueDBDO extends DurableObject<Env> {
       )
     `)
 
+    // NEW: rels_wal table for relationship event batching (Phase 4)
+    // Similar to events_wal but for relationship operations
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS rels_wal (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ns TEXT NOT NULL,
+        first_seq INTEGER NOT NULL,
+        last_seq INTEGER NOT NULL,
+        events BLOB NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `)
+
     // Legacy event_batches table - kept for backward compatibility
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS event_batches (
@@ -340,6 +356,7 @@ export class ParqueDBDO extends DurableObject<Env> {
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_rels_from ON relationships(from_ns, from_id, predicate)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_rels_to ON relationships(to_ns, to_id, reverse)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_wal_ns ON events_wal(ns, last_seq)')
+    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_rels_wal_ns ON rels_wal(ns, last_seq)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_event_batches_flushed ON event_batches(flushed, min_ts)')
     // Legacy index kept for backward compatibility
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_unflushed ON events(flushed, ts)')
@@ -354,7 +371,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   }
 
   /**
-   * Initialize namespace counters from events_wal table
+   * Initialize namespace counters from events_wal and rels_wal tables
    * On DO startup, load the max sequence for each namespace
    */
   private async initializeCounters(): Promise<void> {
@@ -366,7 +383,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       max_seq: number
     }
 
-    // Get max sequence for each namespace
+    // Get max sequence for each namespace from events_wal
     const rows = [...this.sql.exec<CounterRow>(
       `SELECT ns, MAX(last_seq) as max_seq FROM events_wal GROUP BY ns`
     )]
@@ -374,6 +391,18 @@ export class ParqueDBDO extends DurableObject<Env> {
     for (const row of rows) {
       // Next ID starts after max_seq
       this.counters.set(row.ns, row.max_seq + 1)
+    }
+
+    // Also initialize from rels_wal for relationship sequences
+    // Use separate counter namespace to avoid conflicts
+    const relRows = [...this.sql.exec<CounterRow>(
+      `SELECT ns, MAX(last_seq) as max_seq FROM rels_wal GROUP BY ns`
+    )]
+
+    for (const row of relRows) {
+      // Store relationship counters with 'rel:' prefix to avoid conflicts
+      const relCounterKey = `rel:${row.ns}`
+      this.counters.set(relCounterKey, row.max_seq + 1)
     }
 
     this.countersInitialized = true
@@ -1095,9 +1124,8 @@ export class ParqueDBDO extends DurableObject<Env> {
       )
     }
 
-    // Append relationship event
-    await this.appendEvent({
-      id: generateULID(),
+    // Phase 4: Append relationship event to rels_wal for batching
+    await this.appendRelEvent(fromNs, {
       ts: Date.now(),
       op: 'CREATE',
       target: relTarget(entityTarget(fromNs, fromEntityId), predicate, entityTarget(toNs, toEntityId)),
@@ -1147,9 +1175,8 @@ export class ParqueDBDO extends DurableObject<Env> {
       now, actor, fromNs, fromEntityId, predicate, toNs, toEntityId
     )
 
-    // Append relationship event
-    await this.appendEvent({
-      id: generateULID(),
+    // Phase 4: Append relationship event to rels_wal for batching
+    await this.appendRelEvent(fromNs, {
       ts: Date.now(),
       op: 'DELETE',
       target: relTarget(entityTarget(fromNs, fromEntityId), predicate, entityTarget(toNs, toEntityId)),
@@ -1761,6 +1788,246 @@ export class ParqueDBDO extends DurableObject<Env> {
     }
   }
 
+  // ===========================================================================
+  // Relationship Event Batching (Phase 4)
+  // ===========================================================================
+
+  /**
+   * Get next relationship sequence for a namespace
+   */
+  private getNextRelSeq(ns: string): number {
+    const relCounterKey = `rel:${ns}`
+    const seq = this.counters.get(relCounterKey) || 1
+    this.counters.set(relCounterKey, seq + 1)
+    return seq
+  }
+
+  /**
+   * Append a relationship event with namespace-based batching
+   */
+  async appendRelEvent(ns: string, event: Omit<Event, 'id'>): Promise<string> {
+    await this.ensureInitialized()
+
+    // Get or create buffer for this namespace
+    let buffer = this.relEventBuffers.get(ns)
+    if (!buffer) {
+      const relCounterKey = `rel:${ns}`
+      const seq = this.counters.get(relCounterKey) || 1
+      buffer = { events: [], firstSeq: seq, lastSeq: seq, sizeBytes: 0 }
+      this.relEventBuffers.set(ns, buffer)
+    }
+
+    // Generate event ID using sequence
+    const eventId = `rel_${buffer.lastSeq}`
+    const fullEvent: Event = { ...event, id: eventId }
+
+    buffer.events.push(fullEvent)
+    buffer.lastSeq++
+    this.counters.set(`rel:${ns}`, buffer.lastSeq)
+
+    // Estimate size
+    const eventJson = JSON.stringify(fullEvent)
+    buffer.sizeBytes += eventJson.length
+
+    // Check if we should flush
+    if (
+      buffer.events.length >= EVENT_BATCH_COUNT_THRESHOLD ||
+      buffer.sizeBytes >= EVENT_BATCH_SIZE_THRESHOLD
+    ) {
+      await this.flushRelEventBatch(ns)
+    }
+
+    return eventId
+  }
+
+  /**
+   * Flush buffered relationship events for a namespace to rels_wal
+   */
+  async flushRelEventBatch(ns: string): Promise<void> {
+    const buffer = this.relEventBuffers.get(ns)
+    if (!buffer || buffer.events.length === 0) return
+
+    await this.ensureInitialized()
+
+    // Serialize events to blob
+    const json = JSON.stringify(buffer.events)
+    const data = new TextEncoder().encode(json)
+    const now = new Date().toISOString()
+
+    this.sql.exec(
+      `INSERT INTO rels_wal (ns, first_seq, last_seq, events, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      ns,
+      buffer.firstSeq,
+      buffer.lastSeq - 1, // last_seq is inclusive
+      data,
+      now
+    )
+
+    // Reset buffer for next batch
+    this.relEventBuffers.set(ns, {
+      events: [],
+      firstSeq: buffer.lastSeq,
+      lastSeq: buffer.lastSeq,
+      sizeBytes: 0,
+    })
+  }
+
+  /**
+   * Flush all namespace relationship event buffers
+   */
+  async flushAllRelEventBatches(): Promise<void> {
+    for (const ns of this.relEventBuffers.keys()) {
+      await this.flushRelEventBatch(ns)
+    }
+  }
+
+  /**
+   * Get unflushed WAL relationship event count for a namespace
+   */
+  async getUnflushedRelEventCount(ns: string): Promise<number> {
+    await this.ensureInitialized()
+
+    interface WalRow extends Record<string, SqlStorageValue> {
+      events: ArrayBuffer
+    }
+
+    const rows = [...this.sql.exec<WalRow>(
+      `SELECT events FROM rels_wal WHERE ns = ?`,
+      ns
+    )]
+
+    let count = 0
+    for (const row of rows) {
+      const events = this.deserializeEventBatch(row.events)
+      count += events.length
+    }
+
+    // Add buffered events not yet written
+    const buffer = this.relEventBuffers.get(ns)
+    count += buffer?.events.length || 0
+
+    return count
+  }
+
+  /**
+   * Get total unflushed WAL relationship event count across all namespaces
+   */
+  async getTotalUnflushedRelEventCount(): Promise<number> {
+    await this.ensureInitialized()
+
+    interface WalRow extends Record<string, SqlStorageValue> {
+      events: ArrayBuffer
+    }
+
+    const rows = [...this.sql.exec<WalRow>(`SELECT events FROM rels_wal`)]
+
+    let total = 0
+    for (const row of rows) {
+      const events = this.deserializeEventBatch(row.events)
+      total += events.length
+    }
+
+    // Add all buffered events
+    for (const buffer of this.relEventBuffers.values()) {
+      total += buffer.events.length
+    }
+
+    return total
+  }
+
+  /**
+   * Get unflushed WAL batch count for relationships
+   */
+  async getUnflushedRelBatchCount(ns?: string): Promise<number> {
+    await this.ensureInitialized()
+
+    let query = 'SELECT COUNT(*) as count FROM rels_wal'
+    const params: unknown[] = []
+
+    if (ns) {
+      query += ' WHERE ns = ?'
+      params.push(ns)
+    }
+
+    const rows = [...this.sql.exec<{ count: number }>(query, ...params)]
+    return rows[0]?.count || 0
+  }
+
+  /**
+   * Read all unflushed relationship WAL events for a namespace
+   */
+  async readUnflushedRelEvents(ns: string): Promise<Event[]> {
+    await this.ensureInitialized()
+
+    const allEvents: Event[] = []
+
+    interface WalRow extends Record<string, SqlStorageValue> {
+      id: number
+      events: ArrayBuffer
+      first_seq: number
+      last_seq: number
+    }
+
+    const rows = [...this.sql.exec<WalRow>(
+      `SELECT id, events, first_seq, last_seq FROM rels_wal WHERE ns = ? ORDER BY first_seq ASC`,
+      ns
+    )]
+
+    for (const row of rows) {
+      const batchEvents = this.deserializeEventBatch(row.events)
+      allEvents.push(...batchEvents)
+    }
+
+    // Add buffer events
+    const buffer = this.relEventBuffers.get(ns)
+    if (buffer) {
+      allEvents.push(...buffer.events)
+    }
+
+    return allEvents
+  }
+
+  /**
+   * Delete relationship WAL batches for a namespace (after archiving to R2)
+   */
+  async deleteRelWalBatches(ns: string, upToSeq: number): Promise<void> {
+    await this.ensureInitialized()
+
+    this.sql.exec(
+      `DELETE FROM rels_wal WHERE ns = ? AND last_seq <= ?`,
+      ns,
+      upToSeq
+    )
+  }
+
+  /**
+   * Get relationship sequence counter for a namespace
+   */
+  getRelSequenceCounter(ns: string): number {
+    const relCounterKey = `rel:${ns}`
+    return this.counters.get(relCounterKey) || 1
+  }
+
+  /**
+   * Get relationship buffer state for a namespace (for testing)
+   */
+  getRelBufferState(ns: string): {
+    eventCount: number
+    firstSeq: number
+    lastSeq: number
+    sizeBytes: number
+  } | null {
+    const buffer = this.relEventBuffers.get(ns)
+    if (!buffer) return null
+    return {
+      eventCount: buffer.events.length,
+      firstSeq: buffer.firstSeq,
+      lastSeq: buffer.lastSeq,
+      sizeBytes: buffer.sizeBytes,
+    }
+  }
+
   /**
    * Deserialize a batch blob back to events
    */
@@ -1870,6 +2137,9 @@ export class ParqueDBDO extends DurableObject<Env> {
 
     // First flush any buffered events to a batch
     await this.flushEventBatch()
+
+    // Phase 4: Also flush relationship event batches
+    await this.flushAllRelEventBatches()
 
     // Then flush batches to Parquet/R2
     await this.flushToParquet()

@@ -301,13 +301,57 @@ export class ParqueDBImpl {
         }
       }
     } else {
+      // Try to use indexes if filter is present
+      let candidateDocIds: Set<string> | null = null
+
+      if (filter) {
+        const selectedIndex = await this.indexManager.selectIndex(namespace, filter)
+
+        if (selectedIndex) {
+          // Index found - use it to narrow down candidate documents
+          if (selectedIndex.type === 'fts' && filter.$text) {
+            // Use FTS index for full-text search
+            const ftsResults = await this.indexManager.ftsSearch(
+              namespace,
+              filter.$text.$search,
+              {
+                language: filter.$text.$language,
+                limit: options?.limit,
+                minScore: filter.$text.$minScore,
+              }
+            )
+            candidateDocIds = new Set(ftsResults.map(r => `${namespace}/${r.docId}`))
+          } else if (selectedIndex.type === 'vector' && filter.$vector) {
+            // Use vector index for similarity search
+            const vectorResults = await this.indexManager.vectorSearch(
+              namespace,
+              selectedIndex.index.name,
+              filter.$vector.$near,
+              filter.$vector.$k,
+              {
+                minScore: filter.$vector.$minScore,
+              }
+            )
+            candidateDocIds = new Set(vectorResults.docIds.map(id => `${namespace}/${id}`))
+          }
+        }
+      }
+
+      // Filter entities - either from index candidates or full scan
       this.entities.forEach((entity, id) => {
         if (id.startsWith(`${namespace}/`)) {
+          // If we have candidate IDs from index, only consider those
+          if (candidateDocIds !== null && !candidateDocIds.has(id)) {
+            return
+          }
+
           // Check if entity is deleted (unless includeDeleted is true)
           if (entity.deletedAt && !options?.includeDeleted) {
             return
           }
-          // Simple filter matching for common cases
+
+          // Apply remaining filter conditions
+          // For indexed queries, we still need to apply non-indexed filter conditions
           if (!filter || canonicalMatchesFilter(entity, filter)) {
             items.push(entity as Entity<T>)
           }
@@ -736,6 +780,11 @@ export class ParqueDBImpl {
     // Store in memory
     this.entities.set(fullId, entity as Entity)
 
+    // Update indexes - add new document
+    // Note: rowGroup and rowOffset are placeholders for in-memory operations
+    // They become meaningful when writing to Parquet files
+    await this.indexManager.onDocumentAdded(namespace, id, entity as Record<string, unknown>, 0, 0)
+
     // Record CREATE event and await flush
     await this.recordEvent('CREATE', entityTarget(namespace, id), null, entity as Entity, actor)
 
@@ -833,6 +882,19 @@ export class ParqueDBImpl {
 
     // Store updated entity
     this.entities.set(fullId, entity)
+
+    // Update indexes
+    const [entityNs, entityIdStr] = fullId.split('/')
+    if (entityNs && entityIdStr) {
+      await this.indexManager.onDocumentUpdated(
+        entityNs,
+        entityIdStr,
+        beforeEntity as Record<string, unknown>,
+        entity as Record<string, unknown>,
+        0, // rowGroup placeholder
+        0  // rowOffset placeholder
+      )
+    }
 
     // Record UPDATE event
     const [eventNs, ...eventIdParts] = fullId.split('/')
@@ -939,6 +1001,16 @@ export class ParqueDBImpl {
     if (options?.hard) {
       // Hard delete - remove from storage
       this.entities.delete(fullId)
+
+      // Remove from indexes
+      const [entityNs, entityIdStr] = fullId.split('/')
+      if (entityNs && entityIdStr) {
+        await this.indexManager.onDocumentRemoved(
+          entityNs,
+          entityIdStr,
+          entity as Record<string, unknown>
+        )
+      }
     } else {
       // Check if entity is already soft-deleted
       if (entity.deletedAt) {
@@ -953,6 +1025,19 @@ export class ParqueDBImpl {
       cloned.updatedBy = actor
       cloned.version = (cloned.version || 1) + 1
       this.entities.set(fullId, cloned)
+
+      // Update indexes (soft delete is treated as an update)
+      const [entityNs, entityIdStr] = fullId.split('/')
+      if (entityNs && entityIdStr) {
+        await this.indexManager.onDocumentUpdated(
+          entityNs,
+          entityIdStr,
+          entity as Record<string, unknown>,
+          cloned as Record<string, unknown>,
+          0, // rowGroup placeholder
+          0  // rowOffset placeholder
+        )
+      }
     }
 
     // Record DELETE event - always use null for after since entity is being deleted
@@ -2179,6 +2264,7 @@ export class ParqueDBImpl {
       update?: UpdateInput
       options?: CreateOptions | UpdateOptions | DeleteOptions
       entity?: Entity
+      beforeState?: Entity // Capture state before mutation for rollback
     }> = []
 
     const self = this
@@ -2190,7 +2276,13 @@ export class ParqueDBImpl {
         options?: CreateOptions
       ): Promise<Entity<T>> {
         const entity = await self.create(namespace, data, options)
-        pendingOps.push({ type: 'create', namespace, data, options, entity: entity as Entity })
+        pendingOps.push({
+          type: 'create',
+          namespace,
+          data,
+          options,
+          entity: entity as Entity
+        })
         return entity
       },
 
@@ -2200,17 +2292,47 @@ export class ParqueDBImpl {
         update: UpdateInput<T>,
         options?: UpdateOptions
       ): Promise<Entity<T> | null> {
+        // Capture state before update for rollback
+        // The id parameter might be just the ID part or the full "ns/id"
+        // Check if it already contains the namespace
+        const fullId = id.includes('/') ? id : `${namespace}/${id}`
+        const beforeState = self.entities.get(fullId)
+        // Deep copy to prevent mutation
+        const beforeStateCopy = beforeState ? JSON.parse(JSON.stringify(beforeState)) : undefined
+
         const entity = await self.update(namespace, id, update, options)
         if (entity) {
-          pendingOps.push({ type: 'update', namespace, id, update, options, entity: entity as Entity })
+          pendingOps.push({
+            type: 'update',
+            namespace,
+            id,
+            update,
+            options,
+            entity: entity as Entity,
+            beforeState: beforeStateCopy
+          })
         }
         return entity
       },
 
       async delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult> {
+        // Capture state before delete for rollback
+        // The id parameter might be just the ID part or the full "ns/id"
+        // Check if it already contains the namespace
+        const fullId = id.includes('/') ? id : `${namespace}/${id}`
+        const beforeState = self.entities.get(fullId)
+        // Deep copy to prevent mutation
+        const beforeStateCopy = beforeState ? JSON.parse(JSON.stringify(beforeState)) : undefined
+
         const result = await self.delete(namespace, id, options)
         if (result.deletedCount > 0) {
-          pendingOps.push({ type: 'delete', namespace, id, options })
+          pendingOps.push({
+            type: 'delete',
+            namespace,
+            id,
+            options,
+            beforeState: beforeStateCopy
+          })
         }
         return result
       },
@@ -2225,23 +2347,50 @@ export class ParqueDBImpl {
       async rollback(): Promise<void> {
         // End transaction without flushing
         self.inTransaction = false
-        // Also clear pending events from buffer
+        // Clear pending events from buffer
         self.pendingEvents = []
 
         // Rollback by undoing operations in reverse order
         for (const op of pendingOps.reverse()) {
+          // Calculate fullId consistently with how it was captured
+          let fullId: string
+          if (op.entity?.$id) {
+            fullId = op.entity.$id as string
+          } else if (op.id) {
+            fullId = op.id.includes('/') ? op.id : `${op.namespace}/${op.id}`
+          } else {
+            continue // Skip if we can't determine the ID
+          }
+          const expectedTarget = fullId.replace('/', ':')
+
           if (op.type === 'create' && op.entity) {
-            self.entities.delete(op.entity.$id as string)
-            // Remove the CREATE event
-            const entityIdStr = op.entity!.$id as string
-            const expectedTarget = entityIdStr.replace('/', ':')
+            // Remove created entity from entity store
+            self.entities.delete(fullId)
+
+            // Remove the CREATE event from event log
             const idx = self.events.findIndex(
               e => e.op === 'CREATE' && e.target === expectedTarget
             )
             if (idx >= 0) self.events.splice(idx, 1)
+          } else if (op.type === 'update' && op.beforeState) {
+            // Restore entity to before state
+            self.entities.set(fullId, op.beforeState)
+
+            // Remove the UPDATE event from event log
+            const idx = self.events.findIndex(
+              e => e.op === 'UPDATE' && e.target === expectedTarget
+            )
+            if (idx >= 0) self.events.splice(idx, 1)
+          } else if (op.type === 'delete' && op.beforeState) {
+            // Restore deleted entity
+            self.entities.set(fullId, op.beforeState)
+
+            // Remove the DELETE event from event log
+            const idx = self.events.findIndex(
+              e => e.op === 'DELETE' && e.target === expectedTarget
+            )
+            if (idx >= 0) self.events.splice(idx, 1)
           }
-          // For update/delete, we'd need to restore from before state
-          // This is a simplified implementation
         }
         pendingOps.length = 0
       },
