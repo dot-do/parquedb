@@ -26,6 +26,10 @@ import type {
   HybridSearchResult,
   HybridSearchStrategy,
 } from '../types'
+
+/** Precision for vector serialization */
+type VectorPrecision = 'float32' | 'float64'
+
 import { getDistanceFunction, distanceToScore } from './distance'
 import { logger } from '../../utils/logger'
 import { LRUCache, type LRUCacheOptions } from './lru-cache'
@@ -51,7 +55,8 @@ export const _ML = 1 / Math.log(DEFAULT_M)
 
 // File format magic and version
 const MAGIC = new Uint8Array([0x50, 0x51, 0x56, 0x49]) // "PQVI"
-const VERSION = 2 // Bumped for incremental update support
+const VERSION = 3 // Bumped for configurable precision support
+const DEFAULT_PRECISION: VectorPrecision = 'float32'
 
 /**
  * Error thrown when index configuration doesn't match serialized data.
@@ -73,11 +78,11 @@ export class VectorIndexConfigError extends Error {
  */
 export interface VectorIndexMemoryOptions {
   /** Maximum number of nodes to keep in memory */
-  maxNodes?: number
+  maxNodes?: number | undefined
   /** Maximum memory in bytes */
-  maxBytes?: number
+  maxBytes?: number | undefined
   /** Callback when a node is evicted from cache */
-  onEvict?: (nodeId: number) => void
+  onEvict?: (nodeId: number) => void | undefined | undefined
 }
 
 /**
@@ -93,7 +98,7 @@ export interface RowGroupMetadata {
   /** Maximum row offset indexed */
   maxRowOffset: number
   /** Checksum/hash of the row group content for change detection */
-  checksum?: string
+  checksum?: string | undefined
   /** Timestamp when this row group was indexed */
   indexedAt: number
 }
@@ -113,7 +118,7 @@ export interface IncrementalUpdateResult {
   /** Whether the update was successful */
   success: boolean
   /** Error message if update failed */
-  error?: string
+  error?: string | undefined
 }
 
 /**
@@ -121,13 +126,13 @@ export interface IncrementalUpdateResult {
  */
 export interface IncrementalUpdateOptions {
   /** Row group checksums for change detection (rowGroup -> checksum) */
-  checksums?: Map<number, string>
+  checksums?: Map<number, string> | undefined
   /** Specific row groups to update (if not provided, auto-detect changes) */
-  rowGroupsToUpdate?: number[]
+  rowGroupsToUpdate?: number[] | undefined
   /** Row group number remapping after compaction (oldRowGroup -> newRowGroup) */
-  rowGroupRemapping?: Map<number, number>
+  rowGroupRemapping?: Map<number, number> | undefined
   /** Progress callback */
-  onProgress?: (processed: number, total: number) => void
+  onProgress?: (processed: number, total: number) => void | undefined | undefined
 }
 
 interface HNSWNode {
@@ -337,6 +342,8 @@ export class VectorIndex {
   private readonly dimensions: number
   private readonly metric: VectorMetric
   private readonly distanceFn: (a: number[], b: number[]) => number
+  private readonly precision: VectorPrecision
+  private readonly bytesPerDimension: number
 
   // ===========================================================================
   // Incremental Update Tracking
@@ -364,6 +371,8 @@ export class VectorIndex {
     this.m = options.m ?? DEFAULT_M
     this.efConstruction = options.efConstruction ?? DEFAULT_EF_CONSTRUCTION
     this.distanceFn = getDistanceFunction(this.metric)
+    this.precision = (options.precision ?? DEFAULT_PRECISION) as VectorPrecision
+    this.bytesPerDimension = this.precision === 'float64' ? 8 : 4
 
     // Configure memory limits
     this.memoryOptions = {
@@ -1770,7 +1779,9 @@ export class VectorIndex {
     // Calculate size
     // Header: magic(4) + version(1) + dimensions(4) + m(4) + nodeCount(4) + entryPoint(4) + maxLayer(1) + metric(1)
     // V2 additions: indexVersion(4) + lastUpdatedAt(8) + rowGroupMetadataCount(4) + nodeIdToRowGroupCount(4)
-    let totalSize = 4 + 1 + 4 + 4 + 4 + 4 + 1 + 1 + 4 + 8 + 4 + 4
+    // V3 additions: precision(1)
+    const bpd = this.bytesPerDimension
+    let totalSize = 4 + 1 + 4 + 4 + 4 + 4 + 1 + 1 + 4 + 8 + 4 + 4 + 1
 
     // Row group metadata
     for (const metadata of this.rowGroupMetadata.values()) {
@@ -1788,7 +1799,7 @@ export class VectorIndex {
     for (const node of this.iterateNodes()) {
       totalSize += 4 // node ID
       totalSize += 4 + node.docId.length // docId length + docId
-      totalSize += node.vector.length * 8 // vector
+      totalSize += node.vector.length * bpd // vector (precision-dependent)
       totalSize += 4 + 4 // rowGroup, rowOffset
       totalSize += 1 // maxLayer
       totalSize += 4 // number of layers with connections
@@ -1876,6 +1887,11 @@ export class VectorIndex {
       offset += 4
     }
 
+    // V3: Precision (0 = float32, 1 = float64)
+    const precisionCode = this.precision === 'float64' ? 1 : 0
+    view.setUint8(offset, precisionCode)
+    offset += 1
+
     // Nodes
     for (const node of this.iterateNodes()) {
       view.setUint32(offset, node.id, false)
@@ -1887,9 +1903,16 @@ export class VectorIndex {
       bytes.set(docIdBytes, offset)
       offset += docIdBytes.length
 
-      for (let i = 0; i < node.vector.length; i++) {
-        view.setFloat64(offset, node.vector[i]!, false)
-        offset += 8
+      if (this.precision === 'float64') {
+        for (let i = 0; i < node.vector.length; i++) {
+          view.setFloat64(offset, node.vector[i]!, false)
+          offset += 8
+        }
+      } else {
+        for (let i = 0; i < node.vector.length; i++) {
+          view.setFloat32(offset, node.vector[i]!, false)
+          offset += 4
+        }
       }
 
       view.setUint32(offset, node.rowGroup, false)
@@ -1923,7 +1946,7 @@ export class VectorIndex {
 
   /**
    * Deserialize the index from bytes
-   * Supports both v1 (no incremental metadata) and v2 (with incremental metadata)
+   * Supports v1 (no incremental metadata), v2 (with incremental metadata), and v3 (with precision)
    */
   private deserialize(data: Uint8Array): void {
     this.clear()
@@ -1943,8 +1966,8 @@ export class VectorIndex {
     const version = view.getUint8(offset)
     offset += 1
 
-    // Support both v1 and v2
-    if (version !== 1 && version !== VERSION) {
+    // Support v1, v2, and v3
+    if (version !== 1 && version !== 2 && version !== VERSION) {
       throw new Error(`Unsupported vector index version: ${version}`)
     }
 
@@ -2037,6 +2060,23 @@ export class VectorIndex {
       }
     }
 
+    // V3: Read precision
+    let serializedPrecision: VectorPrecision
+    if (version >= 3) {
+      const serializedPrecisionCode = view.getUint8(offset)
+      offset += 1
+      serializedPrecision = serializedPrecisionCode === 1 ? 'float64' : 'float32'
+      if (serializedPrecision !== this.precision) {
+        throw new VectorIndexConfigError(
+          `Precision mismatch: index was serialized with '${serializedPrecision}' but loaded with '${this.precision}'`
+        )
+      }
+    } else {
+      // v1 and v2 always used float64
+      serializedPrecision = 'float64'
+    }
+    const serializedBpd = serializedPrecision === 'float64' ? 8 : 4
+
     // Read nodes
     for (let i = 0; i < nodeCount; i++) {
       const nodeId = view.getUint32(offset, false)
@@ -2048,9 +2088,16 @@ export class VectorIndex {
       offset += docIdLen
 
       const vector: number[] = []
-      for (let j = 0; j < dimensions; j++) {
-        vector.push(view.getFloat64(offset, false))
-        offset += 8
+      if (serializedBpd === 8) {
+        for (let j = 0; j < dimensions; j++) {
+          vector.push(view.getFloat64(offset, false))
+          offset += 8
+        }
+      } else {
+        for (let j = 0; j < dimensions; j++) {
+          vector.push(view.getFloat32(offset, false))
+          offset += 4
+        }
       }
 
       const rowGroup = view.getUint32(offset, false)

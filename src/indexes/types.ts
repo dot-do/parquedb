@@ -22,9 +22,9 @@ export interface IndexField {
   /** Field path (supports dot notation for nested fields) */
   path: string
   /** Sort order (kept for backward compatibility) */
-  order?: 'asc' | 'desc'
+  order?: 'asc' | 'desc' | undefined
   /** Weight for FTS indexes (default: 1.0) */
-  weight?: number
+  weight?: number | undefined
 }
 
 /**
@@ -38,19 +38,19 @@ export interface IndexDefinition {
   /** Fields to index */
   fields: IndexField[]
   /** Whether index is unique (for hash index) */
-  unique?: boolean
+  unique?: boolean | undefined
   /** Sparse index - only index documents where field exists */
-  sparse?: boolean
+  sparse?: boolean | undefined
   /** TTL in seconds (for automatic expiration) */
-  ttlSeconds?: number
+  ttlSeconds?: number | undefined
   /** FTS-specific options */
-  ftsOptions?: FTSIndexOptions
+  ftsOptions?: FTSIndexOptions | undefined
   /** Vector-specific options */
-  vectorOptions?: VectorIndexOptions
+  vectorOptions?: VectorIndexOptions | undefined
   /** Geo-specific options */
-  geoOptions?: GeoIndexOptions
+  geoOptions?: GeoIndexOptions | undefined
   /** Index metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -58,15 +58,15 @@ export interface IndexDefinition {
  */
 export interface FTSIndexOptions {
   /** Language for stemming/stopwords */
-  language?: string
+  language?: string | undefined
   /** Minimum word length to index */
-  minWordLength?: number
+  minWordLength?: number | undefined
   /** Maximum word length to index */
-  maxWordLength?: number
+  maxWordLength?: number | undefined
   /** Custom stopwords to exclude */
-  stopwords?: string[]
+  stopwords?: string[] | undefined
   /** Enable position indexing for phrase queries */
-  indexPositions?: boolean
+  indexPositions?: boolean | undefined
 }
 
 /**
@@ -81,11 +81,11 @@ export interface VectorIndexOptions {
   /** Number of dimensions in the vectors */
   dimensions: number
   /** Distance metric to use */
-  metric?: VectorMetric
+  metric?: VectorMetric | undefined
   /** HNSW M parameter - number of connections per layer (default: 16) */
-  m?: number
+  m?: number | undefined
   /** HNSW efConstruction parameter - size of dynamic candidate list during construction (default: 200) */
-  efConstruction?: number
+  efConstruction?: number | undefined
 }
 
 /**
@@ -93,7 +93,7 @@ export interface VectorIndexOptions {
  */
 export interface GeoIndexOptions {
   /** Geohash precision for bucketing (1-12, default: 6 = ~1.2km cells) */
-  bucketPrecision?: number
+  bucketPrecision?: number | undefined
 }
 
 // =============================================================================
@@ -113,7 +113,7 @@ export interface IndexEntry {
   /** Row offset within the row group */
   rowOffset: number
   /** Additional metadata (e.g., score for FTS) */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -159,7 +159,7 @@ export interface FTSIndexEntry {
   /** Term frequency in this document */
   frequency: number
   /** Positions of the token in the field (if indexPositions enabled) */
-  positions?: number[]
+  positions?: number[] | undefined
 }
 
 // =============================================================================
@@ -183,7 +183,7 @@ export interface IndexMetadata {
   /** Whether the index is currently being built */
   building: boolean
   /** Build progress (0-1) */
-  buildProgress?: number
+  buildProgress?: number | undefined
   /** Version for optimistic concurrency */
   version: number
 }
@@ -213,13 +213,13 @@ export interface IndexLookupResult {
  */
 export interface RangeQuery {
   /** Greater than */
-  $gt?: unknown
+  $gt?: unknown | undefined
   /** Greater than or equal */
-  $gte?: unknown
+  $gte?: unknown | undefined
   /** Less than */
-  $lt?: unknown
+  $lt?: unknown | undefined
   /** Less than or equal */
-  $lte?: unknown
+  $lte?: unknown | undefined
 }
 
 /**
@@ -227,13 +227,13 @@ export interface RangeQuery {
  */
 export interface FTSFuzzyOptions {
   /** Enable fuzzy matching (default: false) */
-  enabled?: boolean
+  enabled?: boolean | undefined
   /** Maximum edit distance allowed (default: 2) */
-  maxDistance?: number
+  maxDistance?: number | undefined
   /** Minimum term length to apply fuzzy matching (default: 4) */
-  minTermLength?: number
+  minTermLength?: number | undefined
   /** Number of characters that must match exactly at start (default: 1) */
-  prefixLength?: number
+  prefixLength?: number | undefined
 }
 
 /**
@@ -241,13 +241,13 @@ export interface FTSFuzzyOptions {
  */
 export interface FTSHighlightOptions {
   /** HTML tag to insert before matches (default: '<mark>') */
-  preTag?: string
+  preTag?: string | undefined
   /** HTML tag to insert after matches (default: '</mark>') */
-  postTag?: string
+  postTag?: string | undefined
   /** Maximum number of snippets per field (default: 3) */
-  maxSnippets?: number
+  maxSnippets?: number | undefined
   /** Maximum length of each snippet in characters (default: 150) */
-  maxSnippetLength?: number
+  maxSnippetLength?: number | undefined
 }
 
 /**
@@ -255,15 +255,15 @@ export interface FTSHighlightOptions {
  */
 export interface FTSSearchOptions {
   /** Maximum results to return */
-  limit?: number
+  limit?: number | undefined
   /** Minimum score threshold */
-  minScore?: number
+  minScore?: number | undefined
   /** Language for query analysis */
-  language?: string
+  language?: string | undefined
   /** Highlight matching terms (true for defaults, or options object) */
-  highlight?: boolean | FTSHighlightOptions
+  highlight?: boolean | FTSHighlightOptions | undefined
   /** Fuzzy matching options for typo tolerance */
-  fuzzy?: FTSFuzzyOptions | boolean
+  fuzzy?: FTSFuzzyOptions | boolean | undefined
 }
 
 /**
@@ -277,7 +277,7 @@ export interface FTSSearchResult {
   /** Matching tokens */
   matchedTokens: string[]
   /** Highlighted snippets (if highlight enabled) */
-  highlights?: Record<string, string[]>
+  highlights?: Record<string, string[]> | undefined
 }
 
 // =============================================================================
@@ -320,17 +320,17 @@ export interface IndexStats {
   /** Size in bytes */
   sizeBytes: number
   /** Unique keys (for hash index) */
-  uniqueKeys?: number
+  uniqueKeys?: number | undefined
   /** Levels (kept for backward compatibility) */
-  levels?: number
+  levels?: number | undefined
   /** Vocabulary size (for FTS index) */
-  vocabularySize?: number
+  vocabularySize?: number | undefined
   /** Average document length (for FTS index) */
-  avgDocLength?: number
+  avgDocLength?: number | undefined
   /** Vector dimensions (for vector index) */
-  dimensions?: number
+  dimensions?: number | undefined
   /** Max layer in HNSW graph (for vector index) */
-  maxLayer?: number
+  maxLayer?: number | undefined
 }
 
 // =============================================================================
@@ -356,9 +356,9 @@ export interface VectorIndexEntry {
  */
 export interface VectorSearchOptions {
   /** Minimum similarity score (0-1 for cosine, depends on metric) */
-  minScore?: number
+  minScore?: number | undefined
   /** HNSW efSearch parameter - size of dynamic candidate list during search */
-  efSearch?: number
+  efSearch?: number | undefined
 }
 
 /**
@@ -370,7 +370,7 @@ export interface VectorSearchResult {
   /** Row group hints for efficient reading */
   rowGroups: number[]
   /** Similarity scores for each result */
-  scores?: number[]
+  scores?: number[] | undefined
   /** Whether the result is exact or approximate */
   exact: boolean
   /** Number of entries scanned */
@@ -391,16 +391,16 @@ export type HybridSearchStrategy = 'pre-filter' | 'post-filter' | 'auto'
  */
 export interface HybridSearchOptions extends VectorSearchOptions {
   /** Search strategy for combining vector search with filtering */
-  strategy?: HybridSearchStrategy
+  strategy?: HybridSearchStrategy | undefined
   /** Candidate IDs to restrict vector search to (for pre-filter strategy) */
-  candidateIds?: Set<string>
+  candidateIds?: Set<string> | undefined
   /**
    * Over-fetch multiplier for post-filter strategy.
    * When using post-filter, we fetch topK * multiplier candidates
    * to ensure we have enough results after filtering.
    * Default: 3
    */
-  overFetchMultiplier?: number
+  overFetchMultiplier?: number | undefined
 }
 
 /**
@@ -410,9 +410,9 @@ export interface HybridSearchResult extends VectorSearchResult {
   /** Strategy that was used */
   strategyUsed: HybridSearchStrategy
   /** Number of candidates after pre-filtering (if pre-filter strategy) */
-  preFilterCount?: number
+  preFilterCount?: number | undefined
   /** Number of results before post-filtering (if post-filter strategy) */
-  postFilterCount?: number
+  postFilterCount?: number | undefined
 }
 
 // =============================================================================
@@ -462,11 +462,11 @@ export interface GeoIndexEntry {
  */
 export interface GeoSearchOptions {
   /** Maximum distance in meters */
-  maxDistance?: number
+  maxDistance?: number | undefined
   /** Minimum distance in meters */
-  minDistance?: number
+  minDistance?: number | undefined
   /** Maximum results to return */
-  limit?: number
+  limit?: number | undefined
 }
 
 /**
