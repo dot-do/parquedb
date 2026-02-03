@@ -26,6 +26,9 @@ importers:
       '@types/pluralize':
         specifier: ^0.0.33
         version: 0.0.33
+      fflate:
+        specifier: ^0.8.2
+        version: 0.8.2
       hyparquet:
         specifier: github:dot-do/hyparquet#variant-shredding
         version: https://codeload.github.com/dot-do/hyparquet/tar.gz/cc15ee2004294f1e661b92f0e03e6bcbb07f9f1d
@@ -2267,6 +2270,9 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fflate@0.8.2:
+    resolution: {integrity: sha512-cPJU47OaAoCbg0pBvzsgpTPhmhqI5eJjh/JIu8tPj5q+T7iLvW/JAYUqmE7KOB4R1ZyEhzBaIQpQpardBF5z8A==}
 
   file-type@19.3.0:
     resolution: {integrity: sha512-mROwiKLZf/Kwa/2Rol+OOZQn1eyTkPB3ZTwC0ExY6OLFCbgxHYZvBm7xI77NvfZFMKBsmuXfmLJnD4eEftEhrA==}
@@ -5881,6 +5887,8 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.3):
     optionalDependencies:
       picomatch: 4.0.3
+
+  fflate@0.8.2: {}
 
   file-type@19.3.0:
     dependencies:
