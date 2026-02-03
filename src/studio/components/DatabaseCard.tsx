@@ -20,6 +20,10 @@ export interface DatabaseCardProps {
   onDelete?: (database: DatabaseInfo) => Promise<void>
   /** Whether delete is in progress */
   deleting?: boolean
+  /** Callback when clone is requested */
+  onClone?: (database: DatabaseInfo) => void
+  /** Whether this card is keyboard-focused */
+  focused?: boolean
 }
 
 /**
@@ -59,6 +63,8 @@ export function DatabaseCard({
   onSelect,
   onDelete,
   deleting = false,
+  onClone,
+  focused = false,
 }: DatabaseCardProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const href = `${basePath}/${database.id}`
@@ -76,6 +82,12 @@ export function DatabaseCard({
     setShowDeleteConfirm(true)
   }
 
+  const handleCloneClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    onClone?.(database)
+  }
+
   const handleDeleteConfirm = async () => {
     if (onDelete) {
       await onDelete(database)
@@ -89,29 +101,38 @@ export function DatabaseCard({
         href={href}
         onClick={handleClick}
         className="database-card"
+        data-focused={focused || undefined}
         style={{
           display: 'block',
           padding: '1.5rem',
           background: 'var(--theme-elevation-50, #fff)',
           borderRadius: '8px',
-          border: '1px solid var(--theme-elevation-100, #e5e5e5)',
+          border: focused
+            ? '2px solid var(--theme-elevation-800, #333)'
+            : '1px solid var(--theme-elevation-100, #e5e5e5)',
           textDecoration: 'none',
           color: 'inherit',
           transition: 'all 0.2s ease',
           position: 'relative',
+          outline: 'none',
+          boxShadow: focused ? '0 0 0 2px var(--theme-elevation-200, #e0e0e0)' : undefined,
         }}
         onMouseEnter={(e) => {
-          e.currentTarget.style.borderColor = 'var(--theme-elevation-400, #0066cc)'
-          e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)'
+          if (!focused) {
+            e.currentTarget.style.borderColor = 'var(--theme-elevation-400, #0066cc)'
+            e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)'
+          }
         }}
         onMouseLeave={(e) => {
-          e.currentTarget.style.borderColor = 'var(--theme-elevation-100, #e5e5e5)'
-          e.currentTarget.style.boxShadow = 'none'
+          if (!focused) {
+            e.currentTarget.style.borderColor = 'var(--theme-elevation-100, #e5e5e5)'
+            e.currentTarget.style.boxShadow = 'none'
+          }
         }}
       >
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-          <div style={{ flex: 1 }}>
+        <div className="card-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <h3 style={{
               margin: 0,
               fontSize: '1.125rem',
@@ -131,6 +152,37 @@ export function DatabaseCard({
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {/* Clone button */}
+            {onClone && (
+              <button
+                onClick={handleCloneClick}
+                title="Clone database"
+                aria-label={`Clone ${database.name}`}
+                style={{
+                  padding: '0.375rem',
+                  background: 'transparent',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  color: 'var(--theme-elevation-400, #999)',
+                  transition: 'color 0.2s, background 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = 'var(--theme-elevation-700, #444)'
+                  e.currentTarget.style.background = 'var(--theme-elevation-100, #f5f5f5)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = 'var(--theme-elevation-400, #999)'
+                  e.currentTarget.style.background = 'transparent'
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              </button>
+            )}
+
             {/* Delete button */}
             {onDelete && (
               <button
@@ -204,7 +256,7 @@ export function DatabaseCard({
         )}
 
         {/* Stats */}
-        <div style={{
+        <div className="card-stats" style={{
           display: 'flex',
           gap: '1.5rem',
           fontSize: '0.8125rem',

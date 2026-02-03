@@ -31,15 +31,19 @@
 
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import type { DatabaseInfo } from '../../worker/DatabaseIndexDO'
 import { DatabaseCard } from './DatabaseCard'
 import { CreateDatabaseModal } from './CreateDatabaseModal'
+import { CloneDatabaseModal } from './CloneDatabaseModal'
+import { QuickSwitcher } from './QuickSwitcher'
 import { ConfirmationDialog } from './ConfirmationDialog'
 import { ErrorDisplay } from './ErrorDisplay'
 import { LoadingSpinner } from './LoadingSpinner'
 import { ErrorBoundary } from './ErrorBoundary'
 import { useRetry } from './hooks/useRetry'
+import { useKeyboardNavigation } from './hooks/useKeyboardNavigation'
+import { ResponsiveStyles } from './ResponsiveStyles'
 
 export interface DatabaseDashboardProps {
   /** Base path for admin routes (default: '/admin') */
@@ -81,6 +85,9 @@ export function DatabaseDashboard({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false)
   const [batchDeleting, setBatchDeleting] = useState(false)
+
+  // Clone state
+  const [cloneSource, setCloneSource] = useState<DatabaseInfo | null>(null)
 
   // Use retry hook for fetching databases with exponential backoff
   const {
@@ -293,6 +300,52 @@ export function DatabaseDashboard({
     }
   }
 
+  // Handle database clone
+  const handleCloneDatabase = useCallback((database: DatabaseInfo) => {
+    setCloneSource(database)
+  }, [])
+
+  const handleDatabaseCloned = useCallback((newDatabase: DatabaseInfo) => {
+    setLocalDatabases(prev => [newDatabase, ...prev])
+    setCloneSource(null)
+    if (onSelectDatabase) {
+      onSelectDatabase(newDatabase)
+    } else {
+      window.location.href = `${basePath}/${newDatabase.id}`
+    }
+  }, [onSelectDatabase, basePath])
+
+  // Keyboard navigation for database grid
+  const {
+    focusedIndex,
+    setFocusedIndex,
+    handleKeyDown: gridKeyDown,
+    containerRef: gridRef,
+  } = useKeyboardNavigation({
+    itemCount: filteredDatabases.length,
+    columns: 3, // Approximate grid columns
+    onSelect: (index) => {
+      const db = filteredDatabases[index]
+      if (db) {
+        if (onSelectDatabase) {
+          onSelectDatabase(db)
+        } else {
+          window.location.href = `${basePath}/${db.id}`
+        }
+      }
+    },
+    onEscape: () => {
+      setSearchQuery('')
+    },
+    onDelete: (index) => {
+      const db = filteredDatabases[index]
+      if (db && showDelete) {
+        handleDeleteDatabase(db)
+      }
+    },
+    enabled: !showCreateModal && !cloneSource && !showBatchDeleteConfirm,
+  })
+
   return (
     <ErrorBoundary
       onError={(err, info) => {
@@ -302,9 +355,10 @@ export function DatabaseDashboard({
       showDetails={process.env.NODE_ENV === 'development'}
     >
     <div className="database-dashboard" style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
+      <ResponsiveStyles />
       {/* Header */}
       {header || (
-        <div style={{ marginBottom: '2rem' }}>
+        <div className="dashboard-header" style={{ marginBottom: '2rem' }}>
           <h1 style={{
             margin: 0,
             fontSize: '1.75rem',
@@ -334,7 +388,7 @@ export function DatabaseDashboard({
       )}
 
       {/* Toolbar */}
-      <div style={{
+      <div className="dashboard-toolbar" style={{
         display: 'flex',
         gap: '1rem',
         marginBottom: '1.5rem',
@@ -343,7 +397,7 @@ export function DatabaseDashboard({
       }}>
         {/* Batch selection controls */}
         {showDelete && filteredDatabases.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div className="batch-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <input
               type="checkbox"
               checked={selectedIds.size === filteredDatabases.length && filteredDatabases.length > 0}
@@ -379,7 +433,7 @@ export function DatabaseDashboard({
         )}
 
         {/* Search */}
-        <div style={{ position: 'relative', flex: '1 1 300px' }}>
+        <div className="toolbar-search" style={{ position: 'relative', flex: '1 1 300px' }}>
           <input
             type="text"
             placeholder="Search databases..."
@@ -415,53 +469,57 @@ export function DatabaseDashboard({
           </svg>
         </div>
 
-        {/* Sort dropdown */}
-        <select
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-          style={{
-            padding: '0.625rem 1rem',
-            border: '1px solid var(--theme-elevation-150, #ddd)',
-            borderRadius: '6px',
-            fontSize: '0.875rem',
-            background: 'var(--theme-input-bg, #fff)',
-            color: 'var(--theme-text, #333)',
-            cursor: 'pointer',
-          }}
-        >
-          <option value="lastAccessed">Last Accessed</option>
-          <option value="name">Name</option>
-          <option value="created">Date Created</option>
-        </select>
-
-        {/* Create button */}
-        {showCreate && (
-          <button
-            onClick={() => setShowCreateModal(true)}
+        {/* Sort and Create */}
+        <div className="toolbar-actions" style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          {/* Sort dropdown */}
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              padding: '0.625rem 1.25rem',
-              background: 'var(--theme-elevation-900, #111)',
-              color: 'var(--theme-elevation-0, #fff)',
-              border: 'none',
+              padding: '0.625rem 1rem',
+              border: '1px solid var(--theme-elevation-150, #ddd)',
               borderRadius: '6px',
               fontSize: '0.875rem',
-              fontWeight: 500,
+              background: 'var(--theme-input-bg, #fff)',
+              color: 'var(--theme-text, #333)',
               cursor: 'pointer',
-              transition: 'background 0.2s',
             }}
-            onMouseEnter={(e) => e.currentTarget.style.background = 'var(--theme-elevation-700, #333)'}
-            onMouseLeave={(e) => e.currentTarget.style.background = 'var(--theme-elevation-900, #111)'}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-            New Database
-          </button>
-        )}
+            <option value="lastAccessed">Last Accessed</option>
+            <option value="name">Name</option>
+            <option value="created">Date Created</option>
+          </select>
+
+          {/* Create button */}
+          {showCreate && (
+            <button
+              className="btn-create"
+              onClick={() => setShowCreateModal(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                padding: '0.625rem 1.25rem',
+                background: 'var(--theme-elevation-900, #111)',
+                color: 'var(--theme-elevation-0, #fff)',
+                border: 'none',
+                borderRadius: '6px',
+                fontSize: '0.875rem',
+                fontWeight: 500,
+                cursor: 'pointer',
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--theme-elevation-700, #333)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'var(--theme-elevation-900, #111)'}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              New Database
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Loading state (initial load) */}
@@ -535,14 +593,24 @@ export function DatabaseDashboard({
       {!loading && !isRetrying && !error && (
         <>
           {filteredDatabases.length > 0 ? (
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-              gap: '1rem',
-            }}>
-              {filteredDatabases.map((database) => (
+            <div
+              ref={gridRef}
+              className="database-grid"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+                gap: '1rem',
+                outline: 'none',
+              }}
+              onKeyDown={gridKeyDown}
+              tabIndex={0}
+              role="grid"
+              aria-label="Database list"
+            >
+              {filteredDatabases.map((database, index) => (
                 <div
                   key={database.id}
+                  onMouseEnter={() => setFocusedIndex(index)}
                   style={{
                     position: 'relative',
                     ...(selectedIds.has(database.id) ? {
@@ -576,13 +644,15 @@ export function DatabaseDashboard({
                     basePath={basePath}
                     onSelect={onSelectDatabase}
                     onDelete={showDelete ? handleDeleteDatabase : undefined}
+                    onClone={handleCloneDatabase}
                     deleting={deletingId === database.id}
+                    focused={index === focusedIndex}
                   />
                 </div>
               ))}
             </div>
           ) : (
-            <div style={{
+            <div className="dashboard-empty" style={{
               textAlign: 'center',
               padding: '4rem',
               color: 'var(--theme-elevation-500, #888)',
@@ -647,7 +717,7 @@ export function DatabaseDashboard({
 
       {/* Stats footer */}
       {!loading && databases.length > 0 && (
-        <div style={{
+        <div className="dashboard-footer" style={{
           marginTop: '2rem',
           paddingTop: '1rem',
           borderTop: '1px solid var(--theme-elevation-100, #eee)',
@@ -671,6 +741,23 @@ export function DatabaseDashboard({
           apiEndpoint={`${apiEndpoint}/create`}
         />
       )}
+
+      {/* Clone modal */}
+      {cloneSource && (
+        <CloneDatabaseModal
+          sourceDatabase={cloneSource}
+          onClose={() => setCloneSource(null)}
+          onClone={handleDatabaseCloned}
+          apiEndpoint={apiEndpoint}
+        />
+      )}
+
+      {/* Quick database switcher (Cmd+K / Ctrl+K) */}
+      <QuickSwitcher
+        databases={databases}
+        basePath={basePath}
+        onSelect={onSelectDatabase}
+      />
 
       {/* Batch delete confirmation dialog */}
       <ConfirmationDialog

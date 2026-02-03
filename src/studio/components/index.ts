@@ -48,12 +48,17 @@
 export { DatabaseCard, type DatabaseCardProps } from './DatabaseCard'
 export { DatabaseDashboard, type DatabaseDashboardProps } from './DatabaseDashboard'
 export { CreateDatabaseModal, type CreateDatabaseModalProps } from './CreateDatabaseModal'
+export { CloneDatabaseModal, type CloneDatabaseModalProps } from './CloneDatabaseModal'
+export { QuickSwitcher, type QuickSwitcherProps } from './QuickSwitcher'
 export {
   ConfirmationDialog,
   type ConfirmationDialogProps,
   type ConfirmationVariant,
 } from './ConfirmationDialog'
 export { SettingsPage, type SettingsPageProps, type StudioSettings } from './SettingsPage'
+
+// Responsive styles
+export { ResponsiveStyles } from './ResponsiveStyles'
 
 // Error handling components
 export { ErrorBoundary, type ErrorBoundaryProps, type ErrorFallbackProps } from './ErrorBoundary'
@@ -62,6 +67,11 @@ export { LoadingSpinner, type LoadingSpinnerProps, type SpinnerSize } from './Lo
 
 // Hooks
 export { useRetry, type UseRetryOptions, type UseRetryResult } from './hooks/useRetry'
+export {
+  useKeyboardNavigation,
+  type UseKeyboardNavigationOptions,
+  type UseKeyboardNavigationResult,
+} from './hooks/useKeyboardNavigation'
 
 // Payload-specific views
 export { DatabaseDashboardView, type DatabaseDashboardViewProps } from './views/DatabaseDashboardView'

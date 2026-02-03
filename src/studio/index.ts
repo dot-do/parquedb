@@ -153,6 +153,8 @@ export {
   DatabaseCard,
   DatabaseDashboard,
   CreateDatabaseModal,
+  CloneDatabaseModal,
+  QuickSwitcher,
   ConfirmationDialog,
   SettingsPage,
   DatabaseDashboardView,
@@ -161,6 +163,8 @@ export {
   type DatabaseCardProps,
   type DatabaseDashboardProps,
   type CreateDatabaseModalProps,
+  type CloneDatabaseModalProps,
+  type QuickSwitcherProps,
   type ConfirmationDialogProps,
   type ConfirmationVariant,
   type SettingsPageProps,
@@ -168,6 +172,10 @@ export {
   type DatabaseDashboardViewProps,
   type DatabaseSelectViewProps,
   type SettingsViewProps,
+  // Hooks
+  useKeyboardNavigation,
+  type UseKeyboardNavigationOptions,
+  type UseKeyboardNavigationResult,
 } from './components'
 
 // Payload Configuration Factory
