@@ -86,9 +86,9 @@ export interface PricingFetchResult {
   /** Duration of the fetch in milliseconds */
   durationMs: number
   /** Error message if failed */
-  error?: string
+  error?: string | undefined
   /** Version of the fetched pricing */
-  version?: number
+  version?: number | undefined
 }
 
 /**
@@ -99,7 +99,7 @@ export interface ModelPricingServiceConfig {
    * Auto-refresh interval in milliseconds
    * Default: 24 hours (86400000ms)
    */
-  refreshIntervalMs?: number
+  refreshIntervalMs?: number | undefined
 
   /**
    * URL for the pricing API endpoint
@@ -107,42 +107,42 @@ export interface ModelPricingServiceConfig {
    *
    * The API should return an array of ModelPricing objects
    */
-  pricingApiUrl?: string
+  pricingApiUrl?: string | undefined
 
   /**
    * Custom fetch function for API calls
    * Useful for testing or custom auth
    */
-  fetchFn?: typeof fetch
+  fetchFn?: typeof fetch | undefined
 
   /**
    * Enterprise/custom price overrides
    * These take precedence over API and default pricing
    */
-  enterpriseOverrides?: ModelPricing[]
+  enterpriseOverrides?: ModelPricing[] | undefined
 
   /**
    * Maximum age of cached pricing before refresh is required (ms)
    * Default: 7 days
    */
-  cacheMaxAgeMs?: number
+  cacheMaxAgeMs?: number | undefined
 
   /**
    * Whether to use default pricing as fallback
    * Default: true
    */
-  useDefaultFallback?: boolean
+  useDefaultFallback?: boolean | undefined
 
   /**
    * Callback when pricing is updated
    */
-  onPricingUpdated?: (result: PricingFetchResult) => void
+  onPricingUpdated?: ((result: PricingFetchResult) => void) | undefined
 
   /**
    * Enable debug logging
    * Default: false
    */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 /**
@@ -155,7 +155,7 @@ export interface ResolvedPricingServiceConfig {
   enterpriseOverrides: ModelPricing[]
   cacheMaxAgeMs: number
   useDefaultFallback: boolean
-  onPricingUpdated?: (result: PricingFetchResult) => void
+  onPricingUpdated?: ((result: PricingFetchResult) => void) | undefined
   debug: boolean
 }
 
@@ -166,15 +166,15 @@ export interface PricingServiceStatus {
   /** Whether auto-refresh is currently running */
   isAutoRefreshActive: boolean
   /** Last successful refresh time */
-  lastRefresh?: Date
+  lastRefresh?: Date | undefined
   /** Last refresh result */
-  lastRefreshResult?: PricingFetchResult
+  lastRefreshResult?: PricingFetchResult | undefined
   /** Current cache version */
   cacheVersion: number
   /** Number of pricing entries */
   entryCount: number
   /** Next scheduled refresh time */
-  nextRefresh?: Date
+  nextRefresh?: Date | undefined
 }
 
 // =============================================================================
@@ -612,7 +612,7 @@ export class ModelPricingService {
   /**
    * Fetch pricing from the API
    */
-  private async fetchFromApi(): Promise<{ success: boolean; entries?: PricingWithMetadata[]; error?: string }> {
+  private async fetchFromApi(): Promise<{ success: boolean; entries?: PricingWithMetadata[] | undefined; error?: string | undefined }> {
     try {
       // Create abort controller for timeout
       const controller = new AbortController()

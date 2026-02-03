@@ -24,7 +24,7 @@ export interface ManifestManagerOptions {
   /** Dataset name */
   dataset: string
   /** Path prefix for events (default: 'events') */
-  prefix?: string
+  prefix?: string | undefined
 }
 
 /**

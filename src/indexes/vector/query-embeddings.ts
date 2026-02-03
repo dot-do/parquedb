@@ -40,13 +40,13 @@ import type { EmbeddingProvider } from '../../embeddings/provider'
  */
 export interface QueryEmbeddingGeneratorOptions {
   /** Enable caching of query embeddings (default: false) */
-  cacheEnabled?: boolean
+  cacheEnabled?: boolean | undefined
   /** Maximum number of cached embeddings (default: 1000) */
-  maxCacheSize?: number
+  maxCacheSize?: number | undefined
   /** TTL for cached embeddings in milliseconds (default: 5 minutes) */
-  cacheTtlMs?: number
+  cacheTtlMs?: number | undefined
   /** Whether to validate vector dimensions when passing through (default: true) */
-  validateDimensions?: boolean
+  validateDimensions?: boolean | undefined
 }
 
 /**
@@ -74,9 +74,9 @@ export interface VectorQueryInput {
   /** Number of results to return */
   topK: number
   /** Minimum score threshold */
-  minScore?: number
+  minScore?: number | undefined
   /** HNSW ef_search parameter */
-  efSearch?: number
+  efSearch?: number | undefined
 }
 
 /**
@@ -90,9 +90,9 @@ export interface PreparedVectorQuery {
   /** Number of results */
   topK: number
   /** Minimum score */
-  minScore?: number
+  minScore?: number | undefined
   /** ef_search parameter */
-  efSearch?: number
+  efSearch?: number | undefined
   /** Whether the text was embedded */
   textEmbedded: boolean
   /** The original query input */

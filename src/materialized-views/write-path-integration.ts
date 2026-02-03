@@ -53,11 +53,11 @@ export type MVEventSubscriber = (event: Event) => Promise<void> | void
  */
 export interface MVEventEmitterOptions {
   /** Whether to emit events synchronously (default: false - async) */
-  synchronous?: boolean
+  synchronous?: boolean | undefined
   /** Maximum queue size before applying backpressure (default: 10000) */
-  maxQueueSize?: number
+  maxQueueSize?: number | undefined
   /** Error handler for subscriber failures */
-  onError?: (error: Error, event: Event) => void
+  onError?: ((error: Error, event: Event) => void) | undefined
 }
 
 /**
@@ -447,7 +447,7 @@ export class MVEventSourceAdapter {
   private emitter: MVEventEmitter
   private unsubscribe: (() => void) | null = null
 
-  constructor(emitter: MVEventEmitter, options?: { maxEvents?: number }) {
+  constructor(emitter: MVEventEmitter, options?: { maxEvents?: number | undefined }) {
     this.emitter = emitter
     this.maxEvents = options?.maxEvents ?? 100000
   }
@@ -551,7 +551,7 @@ export function createMVIntegrationBridge(
  */
 export function createMVEventSourceAdapter(
   emitter: MVEventEmitter,
-  options?: { maxEvents?: number }
+  options?: { maxEvents?: number | undefined }
 ): MVEventSourceAdapter {
   return new MVEventSourceAdapter(emitter, options)
 }
@@ -588,8 +588,8 @@ export function createMVEventSourceAdapter(
  * ```
  */
 export function createMVIntegration(options?: {
-  emitterOptions?: MVEventEmitterOptions
-  engineOptions?: Parameters<typeof StreamingRefreshEngine>[0]
+  emitterOptions?: MVEventEmitterOptions | undefined
+  engineOptions?: Parameters<typeof StreamingRefreshEngine>[0] | undefined
 }): {
   emitter: MVEventEmitter
   engine: StreamingRefreshEngine
@@ -668,8 +668,8 @@ export interface AttachMVResult {
 export function attachMVIntegration(
   db: { setEventCallback: (cb: ((event: Event) => void | Promise<void>) | null) => void },
   options?: {
-    emitterOptions?: MVEventEmitterOptions
-    engineOptions?: Parameters<typeof StreamingRefreshEngine>[0]
+    emitterOptions?: MVEventEmitterOptions | undefined
+    engineOptions?: Parameters<typeof StreamingRefreshEngine>[0] | undefined
   }
 ): AttachMVResult {
   const integration = createMVIntegration(options)

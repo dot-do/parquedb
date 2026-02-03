@@ -69,7 +69,7 @@ export interface EventManifest {
     commit: string
     /** Last segment from that branch that was included */
     upToSegment: string
-  }>
+  }> | undefined
 }
 
 // =============================================================================
@@ -113,7 +113,7 @@ export async function loadManifest(
   } catch (err: unknown) {
     // If file doesn't exist, return empty manifest
     if (err && typeof err === 'object' && 'code' in err) {
-      if ((err as { code?: string }).code === 'ENOENT') {
+      if ((err as { code?: string | undefined }).code === 'ENOENT') {
         return createEmptyManifest('main')
       }
     }

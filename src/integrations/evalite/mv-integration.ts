@@ -57,25 +57,25 @@ export interface EvaliteMVConfig {
    * Batch size for processing entries
    * @default 50
    */
-  batchSize?: number
+  batchSize?: number | undefined
 
   /**
    * Batch timeout in milliseconds
    * @default 1000
    */
-  batchTimeoutMs?: number
+  batchTimeoutMs?: number | undefined
 
   /**
    * Enable built-in analytics views
    * @default true
    */
-  enableBuiltinViews?: boolean
+  enableBuiltinViews?: boolean | undefined
 
   /**
    * Retention period for raw data in milliseconds
    * @default 30 * 24 * 60 * 60 * 1000 (30 days)
    */
-  retentionMs?: number
+  retentionMs?: number | undefined
 }
 
 /**
@@ -101,7 +101,7 @@ export interface EvaliteAnalyticsView<T = unknown> {
   name: string
 
   /** Description of what the view computes */
-  description?: string
+  description?: string | undefined
 
   /** Which entity types this view processes */
   entityTypes: EvaliteEntityType[]
@@ -115,7 +115,7 @@ export interface EvaliteAnalyticsView<T = unknown> {
   /**
    * Optional reduce function to merge partial aggregations
    */
-  reduce?: (states: T[]) => T
+  reduce?: ((states: T[]) => T) | undefined
 }
 
 /**
@@ -157,7 +157,7 @@ export interface RunStatisticsData {
   avgScoreOverall: number
   successRate: number
   runsByType: Record<string, number>
-  lastRunAt?: Date
+  lastRunAt?: Date | undefined
 }
 
 /**
@@ -169,7 +169,7 @@ export interface SuitePerformanceData {
   avgDuration: number
   successRate: number
   avgScores: Record<string, number>
-  lastRunAt?: Date
+  lastRunAt?: Date | undefined
 }
 
 /**
@@ -233,7 +233,7 @@ export interface EvaliteMVState {
   viewNames: string[]
 
   /** Streaming engine statistics */
-  engineStats?: StreamingStats
+  engineStats?: StreamingStats | undefined
 }
 
 /**
@@ -243,32 +243,32 @@ export interface EvaliteQueryOptions {
   /**
    * Time range start (inclusive)
    */
-  since?: Date
+  since?: Date | undefined
 
   /**
    * Time range end (exclusive)
    */
-  until?: Date
+  until?: Date | undefined
 
   /**
    * Filter by suite name
    */
-  suiteName?: string
+  suiteName?: string | undefined
 
   /**
    * Filter by scorer name
    */
-  scorerName?: string
+  scorerName?: string | undefined
 
   /**
    * Filter by run ID
    */
-  runId?: number
+  runId?: number | undefined
 
   /**
    * Limit results
    */
-  limit?: number
+  limit?: number | undefined
 }
 
 // =============================================================================
@@ -649,7 +649,7 @@ export class EvaliteMVIntegration {
       id: `evalite_${entityType}_${Date.now()}_${Math.random().toString(36).slice(2)}`,
       ts: Date.now(),
       op: opMap[operation] as EventOp,
-      target: `evalite_${entityType}:${(data as { id?: number }).id || 'unknown'}`,
+      target: `evalite_${entityType}:${(data as { id?: number | undefined }).id || 'unknown'}`,
       after: {
         entityType,
         operation,
@@ -1285,7 +1285,7 @@ export class EvaliteMVIntegration {
   /**
    * Filter array data by query options
    */
-  private filterData<T extends { timestamp?: Date; suiteName?: string; scorerName?: string; runId?: number }>(
+  private filterData<T extends { timestamp?: Date | undefined; suiteName?: string | undefined; scorerName?: string | undefined; runId?: number | undefined }>(
     data: T[],
     options: EvaliteQueryOptions
   ): T[] {

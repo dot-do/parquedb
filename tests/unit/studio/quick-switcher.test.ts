@@ -50,11 +50,11 @@ function fuzzyScore(query: string, target: string): number {
 interface MockDatabase {
   id: string
   name: string
-  slug?: string
-  description?: string
-  lastAccessedAt?: Date
-  visibility?: string
-  entityCount?: number
+  slug?: string | undefined
+  description?: string | undefined
+  lastAccessedAt?: Date | undefined
+  visibility?: string | undefined
+  entityCount?: number | undefined
 }
 
 function searchDatabases(

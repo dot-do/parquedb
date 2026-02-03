@@ -150,7 +150,7 @@ export async function deleteGlobalVersions(
   args: {
     slug: string
     where: PayloadWhere
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
   }
 ): Promise<DeleteResult> {
   const { slug, where, req } = args
@@ -197,7 +197,7 @@ export async function deleteGlobalVersions(
  * Get actor from request context
  */
 function getActor(
-  req: { user?: Record<string, unknown> } | undefined,
+  req: { user?: Record<string, unknown> | undefined } | undefined,
   config: ResolvedAdapterConfig
 ): EntityId {
   if (req?.user && typeof req.user === 'object' && 'id' in req.user) {

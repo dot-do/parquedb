@@ -74,59 +74,59 @@ export interface StreamProcessorConfig<T> {
    * Number of records to batch before writing
    * @default 1000
    */
-  batchSize?: number
+  batchSize?: number | undefined
 
   /**
    * Maximum time (ms) to wait before flushing a partial batch
    * @default 5000
    */
-  flushIntervalMs?: number
+  flushIntervalMs?: number | undefined
 
   /**
    * Maximum number of pending writes before applying backpressure
    * @default 3
    */
-  maxPendingWrites?: number
+  maxPendingWrites?: number | undefined
 
   /**
    * Maximum in-memory buffer size (records) before applying backpressure
    * @default 10000
    */
-  maxBufferSize?: number
+  maxBufferSize?: number | undefined
 
   /**
    * Row group size for Parquet files
    * @default 5000
    */
-  rowGroupSize?: number
+  rowGroupSize?: number | undefined
 
   /**
    * Compression codec for Parquet files
    * @default 'lz4'
    */
-  compression?: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd'
+  compression?: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd' | undefined
 
   /**
    * Transform function to apply to each record before writing
    */
-  transform?: (record: T) => Record<string, unknown>
+  transform?: ((record: T) => Record<string, unknown>) | undefined
 
   /**
    * Callback when a batch is successfully written
    */
-  onBatchWritten?: (result: BatchWriteResult) => void
+  onBatchWritten?: ((result: BatchWriteResult) => void) | undefined
 
   /**
    * Callback when an error occurs
    */
-  onError?: (error: Error, context: ErrorContext<T>) => void
+  onError?: ((error: Error, context: ErrorContext<T>) => void) | undefined
 
   /**
    * Callback specifically for write failures after all retries exhausted.
    * This receives the full failed batch with all records for replay capability.
    * Required when writeFailureBehavior is 'callback'.
    */
-  onWriteError?: (failedBatch: FailedBatch<T>) => void | Promise<void>
+  onWriteError?: ((failedBatch: FailedBatch<T>) => void | Promise<void>) | undefined
 
   /**
    * Behavior when a write fails after all retries.
@@ -136,18 +136,18 @@ export interface StreamProcessorConfig<T> {
    * - 'callback': Call onWriteError (required when using this option)
    * @default 'queue'
    */
-  writeFailureBehavior?: WriteFailureBehavior
+  writeFailureBehavior?: WriteFailureBehavior | undefined
 
   /**
    * Maximum size of the dead-letter queue before applying backpressure
    * @default 1000
    */
-  maxDeadLetterQueueSize?: number
+  maxDeadLetterQueueSize?: number | undefined
 
   /**
    * Retry configuration for failed writes
    */
-  retry?: RetryConfig
+  retry?: RetryConfig | undefined
 
   /**
    * Persistence configuration for crash recovery
@@ -159,7 +159,7 @@ export interface StreamProcessorConfig<T> {
    *
    * @default { enabled: false }
    */
-  persistence?: PersistenceConfig
+  persistence?: PersistenceConfig | undefined
 }
 
 /**
@@ -167,16 +167,16 @@ export interface StreamProcessorConfig<T> {
  */
 export interface RetryConfig {
   /** Maximum retry attempts */
-  maxAttempts?: number
+  maxAttempts?: number | undefined
 
   /** Initial delay between retries (ms) */
-  initialDelayMs?: number
+  initialDelayMs?: number | undefined
 
   /** Maximum delay between retries (ms) */
-  maxDelayMs?: number
+  maxDelayMs?: number | undefined
 
   /** Multiplier for exponential backoff */
-  backoffMultiplier?: number
+  backoffMultiplier?: number | undefined
 }
 
 /**
@@ -193,30 +193,30 @@ export interface PersistenceConfig {
    * Maximum WAL segment size in bytes before rotation
    * @default 10MB
    */
-  maxWalSegmentSize?: number
+  maxWalSegmentSize?: number | undefined
 
   /**
    * Maximum age of WAL segments before archiving (ms)
    * @default 1 hour
    */
-  maxWalSegmentAge?: number
+  maxWalSegmentAge?: number | undefined
 
   /**
    * How often to save checkpoints (in batches)
    * @default 10 (save checkpoint every 10 batches)
    */
-  checkpointInterval?: number
+  checkpointInterval?: number | undefined
 
   /**
    * Whether to sync WAL writes immediately (durability vs performance)
    * @default true
    */
-  syncWal?: boolean
+  syncWal?: boolean | undefined
 
   /**
    * Callback when recovery completes
    */
-  onRecovery?: (result: RecoveryResult) => void
+  onRecovery?: ((result: RecoveryResult) => void) | undefined
 }
 
 // Re-export FailedBatch from types.ts for backward compatibility
@@ -262,16 +262,16 @@ export interface ErrorContext<T> {
   phase: 'transform' | 'write' | 'flush'
 
   /** Records involved (if available) */
-  records?: T[]
+  records?: T[] | undefined
 
   /** Batch number (if applicable) */
-  batchNumber?: number
+  batchNumber?: number | undefined
 
   /** File path (if applicable) */
-  filePath?: string
+  filePath?: string | undefined
 
   /** Number of retry attempts made (for write phase) */
-  attempts?: number
+  attempts?: number | undefined
 }
 
 /**
@@ -336,7 +336,7 @@ export interface StreamProcessorStats {
   dlqEntriesRecovered: number
 
   /** Last checkpoint sequence (if using persistence) */
-  lastCheckpointSequence?: string | number
+  lastCheckpointSequence?: string | number | undefined
 }
 
 /**
@@ -386,11 +386,11 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
   private config: Required<
     Omit<StreamProcessorConfig<T>, 'transform' | 'onBatchWritten' | 'onError' | 'onWriteError'>
   > & {
-    transform?: StreamProcessorConfig<T>['transform']
-    onBatchWritten?: StreamProcessorConfig<T>['onBatchWritten']
-    onError?: StreamProcessorConfig<T>['onError']
-    onWriteError?: StreamProcessorConfig<T>['onWriteError']
-    persistence: Required<Omit<PersistenceConfig, 'onRecovery'>> & { onRecovery?: PersistenceConfig['onRecovery'] }
+    transform?: StreamProcessorConfig<T>['transform'] | undefined
+    onBatchWritten?: StreamProcessorConfig<T>['onBatchWritten'] | undefined
+    onError?: StreamProcessorConfig<T>['onError'] | undefined
+    onWriteError?: StreamProcessorConfig<T>['onWriteError'] | undefined
+    persistence: Required<Omit<PersistenceConfig, 'onRecovery'>> & { onRecovery?: PersistenceConfig['onRecovery'] | undefined }
   }
 
   private state: ProcessorState = 'idle'
@@ -1306,44 +1306,44 @@ export interface MVStreamProcessorConfig<T> {
    * Number of records to batch before writing
    * @default 1000
    */
-  batchSize?: number
+  batchSize?: number | undefined
 
   /**
    * Maximum time (ms) to wait before flushing a partial batch
    * @default 5000
    */
-  flushIntervalMs?: number
+  flushIntervalMs?: number | undefined
 
   /**
    * Filter to apply to incoming records
    */
-  filter?: Filter
+  filter?: Filter | undefined
 
   /**
    * Projection to apply to incoming records
    */
-  project?: Projection
+  project?: Projection | undefined
 
   /**
    * Update metadata after each batch write
    * @default false
    */
-  updateMetadataOnBatch?: boolean
+  updateMetadataOnBatch?: boolean | undefined
 
   /**
    * Callback when a batch is written
    */
-  onBatchWritten?: (result: MVBatchWriteResult) => void
+  onBatchWritten?: ((result: MVBatchWriteResult) => void) | undefined
 
   /**
    * Callback when state changes
    */
-  onStateChange?: (newState: ViewState, oldState: ViewState) => void
+  onStateChange?: ((newState: ViewState, oldState: ViewState) => void) | undefined
 
   /**
    * Callback when an error occurs
    */
-  onError?: (error: Error, context: MVErrorContext<T>) => void
+  onError?: ((error: Error, context: MVErrorContext<T>) => void) | undefined
 }
 
 /**
@@ -1398,10 +1398,10 @@ export interface MVBatchWriteResult {
   viewName: string
 
   /** Error if write failed */
-  error?: Error
+  error?: Error | undefined
 
   /** Path where data was written */
-  path?: string
+  path?: string | undefined
 }
 
 /**

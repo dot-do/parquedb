@@ -48,12 +48,12 @@ export interface MockR2BucketOptions {
    * If true, returns a functional in-memory implementation.
    * If false (default), returns spy-only mocks that return sensible defaults.
    */
-  functional?: boolean
+  functional?: boolean | undefined
 
   /**
    * Initial data to populate the bucket with
    */
-  initialData?: Map<string, Uint8Array>
+  initialData?: Map<string, Uint8Array> | undefined
 }
 
 // =============================================================================

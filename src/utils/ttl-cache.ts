@@ -57,17 +57,17 @@ interface CacheEntry<K, V> {
  */
 export interface LRUCacheOptions<K = string, V = unknown> {
   /** Maximum number of entries (0 or undefined = unlimited) */
-  maxEntries?: number
+  maxEntries?: number | undefined
   /** Maximum total size in bytes (0 or undefined = unlimited). Requires sizeCalculator. */
-  maxBytes?: number
+  maxBytes?: number | undefined
   /** Callback when entry is evicted due to capacity limits */
-  onEvict?: (key: K, value: V) => void
+  onEvict?: ((key: K, value: V) => void) | undefined
   /** Function to calculate the byte size of a value. Required when maxBytes is set. */
-  sizeCalculator?: (value: V) => number
+  sizeCalculator?: ((value: V) => number) | undefined
   /** Time-to-live in milliseconds (0 or undefined = no expiration) */
-  ttlMs?: number
+  ttlMs?: number | undefined
   /** Cache identifier for telemetry tracking */
-  cacheId?: string
+  cacheId?: string | undefined
 }
 
 /**
@@ -477,11 +477,11 @@ export interface TTLCacheOptions {
   /** Time-to-live in milliseconds */
   ttlMs: number
   /** Maximum number of entries (0 or undefined = unlimited) */
-  maxEntries?: number
+  maxEntries?: number | undefined
   /** Callback when entry is evicted */
-  onEvict?: (key: string, value: unknown) => void
+  onEvict?: ((key: string, value: unknown) => void) | undefined
   /** Cache identifier for telemetry tracking */
-  cacheId?: string
+  cacheId?: string | undefined
 }
 
 /**

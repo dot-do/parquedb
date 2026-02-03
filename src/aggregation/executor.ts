@@ -556,8 +556,8 @@ function executeSample(data: Document[], size: number): Document[] {
 interface BucketConfig {
   groupBy: string
   boundaries: unknown[]
-  default?: string
-  output?: Record<string, unknown>
+  default?: string | undefined
+  output?: Record<string, unknown> | undefined
 }
 
 /**
@@ -883,17 +883,17 @@ async function executeIndexedMatch(
  * @internal Reserved for future range query optimization
  */
 export function _extractRangeQuery(condition: unknown): {
-  $gt?: unknown
-  $gte?: unknown
-  $lt?: unknown
-  $lte?: unknown
+  $gt?: unknown | undefined
+  $gte?: unknown | undefined
+  $lt?: unknown | undefined
+  $lte?: unknown | undefined
 } | null {
   if (typeof condition !== 'object' || condition === null) {
     return null
   }
 
   const obj = condition as Record<string, unknown>
-  const range: { $gt?: unknown; $gte?: unknown; $lt?: unknown; $lte?: unknown } = {}
+  const range: { $gt?: unknown | undefined; $gte?: unknown | undefined; $lt?: unknown | undefined; $lte?: unknown | undefined } = {}
 
   if ('$gt' in obj) range.$gt = obj.$gt
   if ('$gte' in obj) range.$gte = obj.$gte

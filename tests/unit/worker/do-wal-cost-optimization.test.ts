@@ -332,9 +332,9 @@ interface Event {
   ts: number
   op: 'CREATE' | 'UPDATE' | 'DELETE'
   target: string
-  before?: unknown
-  after?: unknown
-  actor?: string
+  before?: unknown | undefined
+  after?: unknown | undefined
+  actor?: string | undefined
 }
 
 interface EventBuffer {

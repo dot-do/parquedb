@@ -13,7 +13,7 @@ import type { SchemaChanges, SchemaChange } from './schema-snapshot'
 export interface BreakingChange extends SchemaChange {
   severity: 'critical' | 'high' | 'medium'
   impact: string
-  migrationHint?: string
+  migrationHint?: string | undefined
 }
 
 /**

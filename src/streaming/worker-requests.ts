@@ -105,49 +105,49 @@ export interface WorkerRequest {
   cached: boolean
 
   /** Cache tier that served the response (if cached) */
-  cacheTier?: 'edge' | 'cdn' | 'primary'
+  cacheTier?: 'edge' | 'cdn' | 'primary' | undefined
 
   /** Cloudflare colo code (e.g., 'SJC', 'LHR') */
-  colo?: string
+  colo?: string | undefined
 
   /** ISO country code */
-  country?: string
+  country?: string | undefined
 
   /** City name */
-  city?: string
+  city?: string | undefined
 
   /** Region/state code */
-  region?: string
+  region?: string | undefined
 
   /** User's timezone */
-  timezone?: string
+  timezone?: string | undefined
 
   /** Request content length in bytes */
-  requestSize?: number
+  requestSize?: number | undefined
 
   /** Response content length in bytes */
-  responseSize?: number
+  responseSize?: number | undefined
 
   /** User agent string */
-  userAgent?: string
+  userAgent?: string | undefined
 
   /** Dataset being accessed (if applicable) */
-  dataset?: string
+  dataset?: string | undefined
 
   /** Collection being accessed (if applicable) */
-  collection?: string
+  collection?: string | undefined
 
   /** Resource type being accessed */
-  resourceType?: 'entity' | 'collection' | 'dataset' | 'relationship' | 'api' | 'health'
+  resourceType?: 'entity' | 'collection' | 'dataset' | 'relationship' | 'api' | 'health' | undefined
 
   /** Error message (if status >= 400) */
-  error?: string
+  error?: string | undefined
 
   /** Error code (if applicable) */
-  errorCode?: string
+  errorCode?: string | undefined
 
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -167,58 +167,58 @@ export interface RecordRequestInput {
   latencyMs: number
 
   /** Whether the response was served from cache */
-  cached?: boolean
+  cached?: boolean | undefined
 
   /** Cache tier that served the response */
-  cacheTier?: 'edge' | 'cdn' | 'primary'
+  cacheTier?: 'edge' | 'cdn' | 'primary' | undefined
 
   /** Cloudflare colo code */
-  colo?: string
+  colo?: string | undefined
 
   /** ISO country code */
-  country?: string
+  country?: string | undefined
 
   /** City name */
-  city?: string
+  city?: string | undefined
 
   /** Region/state code */
-  region?: string
+  region?: string | undefined
 
   /** User's timezone */
-  timezone?: string
+  timezone?: string | undefined
 
   /** Request content length in bytes */
-  requestSize?: number
+  requestSize?: number | undefined
 
   /** Response content length in bytes */
-  responseSize?: number
+  responseSize?: number | undefined
 
   /** User agent string */
-  userAgent?: string
+  userAgent?: string | undefined
 
   /** Dataset being accessed */
-  dataset?: string
+  dataset?: string | undefined
 
   /** Collection being accessed */
-  collection?: string
+  collection?: string | undefined
 
   /** Resource type being accessed */
-  resourceType?: 'entity' | 'collection' | 'dataset' | 'relationship' | 'api' | 'health'
+  resourceType?: 'entity' | 'collection' | 'dataset' | 'relationship' | 'api' | 'health' | undefined
 
   /** Error message */
-  error?: string
+  error?: string | undefined
 
   /** Error code */
-  errorCode?: string
+  errorCode?: string | undefined
 
   /** Custom request ID (auto-generated if not provided) */
-  requestId?: string
+  requestId?: string | undefined
 
   /** Custom timestamp (defaults to now) */
-  timestamp?: Date
+  timestamp?: Date | undefined
 
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -244,10 +244,10 @@ export interface RequestMetrics {
   timeBucket: TimeBucket
 
   /** Grouping key (path, colo, country, etc.) */
-  groupBy?: string
+  groupBy?: string | undefined
 
   /** Group value */
-  groupValue?: string
+  groupValue?: string | undefined
 
   /** Total request count */
   totalRequests: number
@@ -307,40 +307,40 @@ export interface RequestMetrics {
  */
 export interface GetMetricsOptions {
   /** Collection name for raw requests */
-  collection?: string
+  collection?: string | undefined
 
   /** Start time for query (inclusive) */
-  since?: Date
+  since?: Date | undefined
 
   /** End time for query (exclusive) */
-  until?: Date
+  until?: Date | undefined
 
   /** Time bucket for aggregation */
-  timeBucket?: TimeBucket
+  timeBucket?: TimeBucket | undefined
 
   /** Field to group by */
-  groupBy?: 'path' | 'method' | 'status' | 'colo' | 'country' | 'dataset' | 'collection' | 'resourceType'
+  groupBy?: 'path' | 'method' | 'status' | 'colo' | 'country' | 'dataset' | 'collection' | 'resourceType' | undefined
 
   /** Filter by specific path pattern */
-  pathPattern?: string
+  pathPattern?: string | undefined
 
   /** Filter by status category */
-  statusCategory?: StatusCategory
+  statusCategory?: StatusCategory | undefined
 
   /** Filter by method */
-  method?: HttpMethod
+  method?: HttpMethod | undefined
 
   /** Filter by colo */
-  colo?: string
+  colo?: string | undefined
 
   /** Filter by country */
-  country?: string
+  country?: string | undefined
 
   /** Limit number of results */
-  limit?: number
+  limit?: number | undefined
 
   /** Include only cached/uncached requests */
-  cachedOnly?: boolean
+  cachedOnly?: boolean | undefined
 }
 
 // =============================================================================
@@ -473,7 +473,7 @@ export async function recordRequest(
   db: ParqueDB,
   input: RecordRequestInput,
   options?: {
-    collection?: string
+    collection?: string | undefined
   }
 ): Promise<WorkerRequest> {
   const collection = options?.collection ?? DEFAULT_REQUESTS_COLLECTION
@@ -525,7 +525,7 @@ export async function recordRequests(
   db: ParqueDB,
   inputs: RecordRequestInput[],
   options?: {
-    collection?: string
+    collection?: string | undefined
   }
 ): Promise<WorkerRequest[]> {
   const collection = options?.collection ?? DEFAULT_REQUESTS_COLLECTION
@@ -812,9 +812,9 @@ export async function getRequestMetrics(
 export async function getCurrentMetrics(
   db: ParqueDB,
   options?: {
-    collection?: string
-    timeBucket?: TimeBucket
-    groupBy?: GetMetricsOptions['groupBy']
+    collection?: string | undefined
+    timeBucket?: TimeBucket | undefined
+    groupBy?: GetMetricsOptions['groupBy'] | undefined
   }
 ): Promise<RequestMetrics[]> {
   const timeBucket = options?.timeBucket ?? 'minute'
@@ -841,10 +841,10 @@ export async function getPathLatency(
   db: ParqueDB,
   path: string,
   options?: {
-    collection?: string
-    since?: Date
-    until?: Date
-    limit?: number
+    collection?: string | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
   }
 ): Promise<RequestMetrics['latency']> {
   const collection = options?.collection ?? DEFAULT_REQUESTS_COLLECTION
@@ -879,10 +879,10 @@ export async function getPathLatency(
 export async function getErrorSummary(
   db: ParqueDB,
   options?: {
-    collection?: string
-    since?: Date
-    until?: Date
-    limit?: number
+    collection?: string | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
   }
 ): Promise<{
   totalErrors: number
@@ -894,7 +894,7 @@ export async function getErrorSummary(
     timestamp: Date
     path: string
     status: number
-    error?: string
+    error?: string | undefined
   }>
 }> {
   const collection = options?.collection ?? DEFAULT_REQUESTS_COLLECTION
@@ -965,9 +965,9 @@ export async function getErrorSummary(
  */
 export interface WorkerRequestsMVOptions extends Omit<ViewOptions, 'populateOnCreate'> {
   /** Collection name for raw requests */
-  requestsCollection?: string
+  requestsCollection?: string | undefined
   /** Collection name for aggregated metrics */
-  metricsCollection?: string
+  metricsCollection?: string | undefined
 }
 
 /**
@@ -1077,9 +1077,9 @@ export class RequestBuffer {
   constructor(
     private db: ParqueDB,
     private options: {
-      collection?: string
-      maxBufferSize?: number
-      flushIntervalMs?: number
+      collection?: string | undefined
+      maxBufferSize?: number | undefined
+      flushIntervalMs?: number | undefined
     } = {}
   ) {
     this.options.maxBufferSize = options.maxBufferSize ?? DEFAULT_BUFFER_SIZE
@@ -1172,10 +1172,10 @@ export class RequestBuffer {
 export function createRequestBuffer(
   db: ParqueDB,
   options?: {
-    collection?: string
-    maxBufferSize?: number
-    flushIntervalMs?: number
-    autoStart?: boolean
+    collection?: string | undefined
+    maxBufferSize?: number | undefined
+    flushIntervalMs?: number | undefined
+    autoStart?: boolean | undefined
   }
 ): RequestBuffer {
   const buffer = new RequestBuffer(db, options)

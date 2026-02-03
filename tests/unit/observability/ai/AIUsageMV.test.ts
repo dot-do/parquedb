@@ -26,13 +26,13 @@ interface MockLog {
   providerId: string
   requestType: 'generate' | 'stream'
   usage?: {
-    promptTokens?: number
-    completionTokens?: number
-    totalTokens?: number
+    promptTokens?: number | undefined
+    completionTokens?: number | undefined
+    totalTokens?: number | undefined
   }
   latencyMs: number
   cached: boolean
-  error?: { name: string; message: string }
+  error?: { name: string; message: string } | undefined
 }
 
 interface MockAggregate {

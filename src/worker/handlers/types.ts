@@ -33,11 +33,11 @@ export interface WorkerInterface {
     ns: string,
     entityId: string,
     predicate?: string,
-    options?: { direction?: 'outbound' | 'inbound' | 'both'; limit?: number; offset?: number }
+    options?: { direction?: 'outbound' | 'inbound' | 'both' | undefined; limit?: number | undefined; offset?: number | undefined }
   ): Promise<Array<{
     predicate: string
-    reverse?: string
-    target: { $id: string; $type: string; name?: string }
+    reverse?: string | undefined
+    target: { $id: string; $type: string; name?: string | undefined }
     direction: 'outbound' | 'inbound'
   }>>
   /** Get storage statistics */

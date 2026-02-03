@@ -55,7 +55,7 @@ export interface LockState {
   expiresAt: string
 
   /** Optional metadata about the lock holder */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -63,19 +63,19 @@ export interface LockState {
  */
 export interface LockAcquireOptions {
   /** Lock timeout in milliseconds (default: 30000 = 30 seconds) */
-  timeout?: number
+  timeout?: number | undefined
 
   /** How long to wait to acquire the lock in milliseconds (default: 5000 = 5 seconds) */
-  waitTimeout?: number
+  waitTimeout?: number | undefined
 
   /** Retry interval when waiting in milliseconds (default: 100) */
-  retryInterval?: number
+  retryInterval?: number | undefined
 
   /** Lock holder identifier (auto-generated if not provided) */
-  holder?: string
+  holder?: string | undefined
 
   /** Optional metadata to store with the lock */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -86,10 +86,10 @@ export interface LockAcquireResult {
   acquired: boolean
 
   /** The lock handle if acquired */
-  lock?: Lock
+  lock?: Lock | undefined
 
   /** If not acquired, information about the current lock holder */
-  currentHolder?: LockState
+  currentHolder?: LockState | undefined
 }
 
 /**

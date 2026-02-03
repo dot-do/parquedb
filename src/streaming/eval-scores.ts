@@ -36,11 +36,11 @@ export interface EvalScoreRecord {
   /** Score value (typically 0-1 range) */
   score: number
   /** Optional description from the scorer */
-  description?: string
+  description?: string | undefined
   /** Eval ID this score is for */
   evalId: number
   /** Additional metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -119,13 +119,13 @@ export interface EvalScoresStats {
  */
 export interface EvalScoresConfig {
   /** Maximum scores to retain in memory (default: 50000) */
-  maxScores?: number
+  maxScores?: number | undefined
   /** Window size for rolling stats in ms (default: 3600000 = 1 hour) */
-  statsWindowMs?: number
+  statsWindowMs?: number | undefined
   /** Namespaces to listen for score events (default: ['evalite_scores', 'scores']) */
-  sourceNamespaces?: string[]
+  sourceNamespaces?: string[] | undefined
   /** Number of distribution buckets (default: 10) */
-  distributionBuckets?: number
+  distributionBuckets?: number | undefined
 }
 
 const DEFAULT_CONFIG: Required<EvalScoresConfig> = {
@@ -255,10 +255,10 @@ export class EvalScoresMV implements MVHandler {
    */
   getScoreTrends(
     options: {
-      scorerName?: string
-      suiteName?: string
-      limit?: number
-      bucketSizeMs?: number
+      scorerName?: string | undefined
+      suiteName?: string | undefined
+      limit?: number | undefined
+      bucketSizeMs?: number | undefined
     } = {}
   ): ScoreTrendPoint[] {
     const { scorerName, suiteName, limit = 100, bucketSizeMs = 3600000 } = options

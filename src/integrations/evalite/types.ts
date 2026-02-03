@@ -16,9 +16,9 @@ import type { StorageBackend, EntityId } from '../../types'
 // These are defined later in this file
 type EvalRunForInterface = { id: number; runType: 'full' | 'partial'; createdAt: string }
 type EvalSuiteForInterface = { id: number; runId: number; name: string; status: 'running' | 'success' | 'fail'; duration: number; createdAt: string }
-type EvalResultForInterface = { id: number; suiteId: number; duration: number; input: unknown; output: unknown; expected?: unknown; status: 'running' | 'success' | 'fail'; colOrder: number; renderedColumns?: unknown; createdAt: string; averageScore?: number }
-type EvalScoreForInterface = { id: number; evalId: number; name: string; score: number; description?: string; metadata?: unknown; createdAt: string }
-type EvalTraceForInterface = { id: number; evalId: number; input: unknown; output: unknown; startTime: number; endTime: number; inputTokens?: number; outputTokens?: number; totalTokens?: number; colOrder: number; createdAt: string }
+type EvalResultForInterface = { id: number; suiteId: number; duration: number; input: unknown; output: unknown; expected?: unknown | undefined; status: 'running' | 'success' | 'fail'; colOrder: number; renderedColumns?: unknown | undefined; createdAt: string; averageScore?: number | undefined }
+type EvalScoreForInterface = { id: number; evalId: number; name: string; score: number; description?: string | undefined; metadata?: unknown | undefined; createdAt: string }
+type EvalTraceForInterface = { id: number; evalId: number; input: unknown; output: unknown; startTime: number; endTime: number; inputTokens?: number | undefined; outputTokens?: number | undefined; totalTokens?: number | undefined; colOrder: number; createdAt: string }
 
 /**
  * Materialized views integration interface for Evalite adapter.
@@ -64,7 +64,7 @@ export interface EvalRun {
  */
 export interface CreateRunOptions {
   /** Run type (default: 'full') */
-  runType?: RunType
+  runType?: RunType | undefined
 }
 
 /**
@@ -72,13 +72,13 @@ export interface CreateRunOptions {
  */
 export interface GetRunsOptions {
   /** Maximum number of runs to return */
-  limit?: number
+  limit?: number | undefined
   /** Offset for pagination */
-  offset?: number
+  offset?: number | undefined
   /** Filter by run type */
-  runType?: RunType
+  runType?: RunType | undefined
   /** Order by (default: createdAt descending) */
-  orderBy?: 'createdAt' | '-createdAt'
+  orderBy?: 'createdAt' | '-createdAt' | undefined
 }
 
 // =============================================================================
@@ -117,7 +117,7 @@ export interface CreateSuiteOptions {
   /** Suite name */
   name: string
   /** Initial status (default: 'running') */
-  status?: SuiteStatus
+  status?: SuiteStatus | undefined
 }
 
 /**
@@ -127,9 +127,9 @@ export interface UpdateSuiteOptions {
   /** Suite ID to update */
   id: number
   /** New status */
-  status?: SuiteStatus
+  status?: SuiteStatus | undefined
   /** Duration in milliseconds */
-  duration?: number
+  duration?: number | undefined
 }
 
 /**
@@ -137,13 +137,13 @@ export interface UpdateSuiteOptions {
  */
 export interface GetSuitesOptions {
   /** Filter by run ID */
-  runId?: number
+  runId?: number | undefined
   /** Filter by status */
-  status?: SuiteStatus
+  status?: SuiteStatus | undefined
   /** Maximum number of suites to return */
-  limit?: number
+  limit?: number | undefined
   /** Offset for pagination */
-  offset?: number
+  offset?: number | undefined
 }
 
 // =============================================================================
@@ -170,21 +170,21 @@ export interface EvalResult {
   /** Output produced by the task */
   output: unknown
   /** Expected output (if provided) */
-  expected?: unknown
+  expected?: unknown | undefined
   /** Evaluation status */
   status: EvalStatus
   /** Column ordering for display */
   colOrder: number
   /** Custom rendered columns */
-  renderedColumns?: unknown
+  renderedColumns?: unknown | undefined
   /** When the eval was created */
   createdAt: string
   /** Average score across all scorers */
-  averageScore?: number
+  averageScore?: number | undefined
   /** All scores for this eval (populated on read) */
-  scores?: EvalScore[]
+  scores?: EvalScore[] | undefined
   /** All traces for this eval (populated on read) */
-  traces?: EvalTrace[]
+  traces?: EvalTrace[] | undefined
 }
 
 /**
@@ -196,13 +196,13 @@ export interface CreateEvalOptions {
   /** Input data */
   input: unknown
   /** Output data */
-  output?: unknown
+  output?: unknown | undefined
   /** Expected output */
-  expected?: unknown
+  expected?: unknown | undefined
   /** Initial status (default: 'running') */
-  status?: EvalStatus
+  status?: EvalStatus | undefined
   /** Column order */
-  colOrder?: number
+  colOrder?: number | undefined
 }
 
 /**
@@ -212,13 +212,13 @@ export interface UpdateEvalOptions {
   /** Eval ID to update */
   id: number
   /** Output data */
-  output?: unknown
+  output?: unknown | undefined
   /** Status */
-  status?: EvalStatus
+  status?: EvalStatus | undefined
   /** Duration in milliseconds */
-  duration?: number
+  duration?: number | undefined
   /** Rendered columns */
-  renderedColumns?: unknown
+  renderedColumns?: unknown | undefined
 }
 
 /**
@@ -226,17 +226,17 @@ export interface UpdateEvalOptions {
  */
 export interface GetEvalsOptions {
   /** Filter by suite ID */
-  suiteId?: number
+  suiteId?: number | undefined
   /** Filter by status */
-  status?: EvalStatus
+  status?: EvalStatus | undefined
   /** Include scores in results */
-  includeScores?: boolean
+  includeScores?: boolean | undefined
   /** Include traces in results */
-  includeTraces?: boolean
+  includeTraces?: boolean | undefined
   /** Maximum number of evals to return */
-  limit?: number
+  limit?: number | undefined
   /** Offset for pagination */
-  offset?: number
+  offset?: number | undefined
 }
 
 // =============================================================================
@@ -256,9 +256,9 @@ export interface EvalScore {
   /** Score value (0-1 range) */
   score: number
   /** Optional description */
-  description?: string
+  description?: string | undefined
   /** Additional metadata */
-  metadata?: unknown
+  metadata?: unknown | undefined
   /** When the score was created */
   createdAt: string
 }
@@ -274,9 +274,9 @@ export interface CreateScoreOptions {
   /** Score value (0-1 range) */
   score: number
   /** Description */
-  description?: string
+  description?: string | undefined
   /** Metadata */
-  metadata?: unknown
+  metadata?: unknown | undefined
 }
 
 /**
@@ -284,13 +284,13 @@ export interface CreateScoreOptions {
  */
 export interface GetScoresOptions {
   /** Filter by eval ID */
-  evalId?: number
+  evalId?: number | undefined
   /** Filter by scorer name */
-  name?: string
+  name?: string | undefined
   /** Maximum number of scores to return */
-  limit?: number
+  limit?: number | undefined
   /** Offset for pagination */
-  offset?: number
+  offset?: number | undefined
 }
 
 // =============================================================================
@@ -314,11 +314,11 @@ export interface EvalTrace {
   /** End time (ms since epoch) */
   endTime: number
   /** Input tokens used */
-  inputTokens?: number
+  inputTokens?: number | undefined
   /** Output tokens generated */
-  outputTokens?: number
+  outputTokens?: number | undefined
   /** Total tokens (input + output) */
-  totalTokens?: number
+  totalTokens?: number | undefined
   /** Column ordering for display */
   colOrder: number
   /** When the trace was created */
@@ -340,13 +340,13 @@ export interface CreateTraceOptions {
   /** End time */
   endTime: number
   /** Input tokens */
-  inputTokens?: number
+  inputTokens?: number | undefined
   /** Output tokens */
-  outputTokens?: number
+  outputTokens?: number | undefined
   /** Total tokens */
-  totalTokens?: number
+  totalTokens?: number | undefined
   /** Column order */
-  colOrder?: number
+  colOrder?: number | undefined
 }
 
 /**
@@ -354,11 +354,11 @@ export interface CreateTraceOptions {
  */
 export interface GetTracesOptions {
   /** Filter by eval ID */
-  evalId?: number
+  evalId?: number | undefined
   /** Maximum number of traces to return */
-  limit?: number
+  limit?: number | undefined
   /** Offset for pagination */
-  offset?: number
+  offset?: number | undefined
 }
 
 // =============================================================================
@@ -378,24 +378,24 @@ export interface EvaliteAdapterConfig {
    * Collection prefix for Evalite data
    * @default 'evalite'
    */
-  collectionPrefix?: string
+  collectionPrefix?: string | undefined
 
   /**
    * Default actor for audit fields
    * @default 'system/evalite'
    */
-  defaultActor?: EntityId
+  defaultActor?: EntityId | undefined
 
   /**
    * Enable debug logging
    * @default false
    */
-  debug?: boolean
+  debug?: boolean | undefined
 
   /**
    * Materialized views integration for analytics
    */
-  mvIntegration?: IEvaliteMVIntegration
+  mvIntegration?: IEvaliteMVIntegration | undefined
 }
 
 /**
@@ -406,7 +406,7 @@ export interface ResolvedEvaliteConfig {
   collectionPrefix: string
   defaultActor: EntityId
   debug: boolean
-  mvIntegration?: IEvaliteMVIntegration
+  mvIntegration?: IEvaliteMVIntegration | undefined
 }
 
 // =============================================================================
@@ -418,13 +418,13 @@ export interface ResolvedEvaliteConfig {
  */
 export interface ScoreHistoryOptions {
   /** Maximum number of data points */
-  limit?: number
+  limit?: number | undefined
   /** Start date */
-  from?: Date
+  from?: Date | undefined
   /** End date */
-  to?: Date
+  to?: Date | undefined
   /** Filter by scorer name */
-  scorerName?: string
+  scorerName?: string | undefined
 }
 
 /**

@@ -72,15 +72,15 @@ export interface StudioSettings {
 
 export interface SettingsPageProps {
   /** Initial settings (from server or localStorage) */
-  initialSettings?: Partial<StudioSettings>
+  initialSettings?: Partial<StudioSettings> | undefined
   /** API endpoint for saving settings to backend */
-  apiEndpoint?: string
+  apiEndpoint?: string | undefined
   /** Callback when settings are saved */
-  onSave?: (settings: StudioSettings) => void
+  onSave?: ((settings: StudioSettings) => void) | undefined
   /** Storage key for localStorage */
-  storageKey?: string
+  storageKey?: string | undefined
   /** Base path for navigation */
-  basePath?: string
+  basePath?: string | undefined
 }
 
 // =============================================================================
@@ -401,7 +401,7 @@ export function SettingsPage({
         })
 
         if (!response.ok) {
-          const data = (await response.json().catch(() => ({}))) as { error?: string }
+          const data = (await response.json().catch(() => ({}))) as { error?: string | undefined }
           throw new Error(data.error || 'Failed to save settings')
         }
       }

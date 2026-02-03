@@ -39,11 +39,11 @@ interface TraceItem {
 }
 
 interface TraceItemFetchEventInfo {
-  readonly response?: { readonly status: number }
+  readonly response?: { readonly status: number } | undefined
   readonly request: {
     readonly cf?: {
-      readonly colo?: string
-      readonly country?: string
+      readonly colo?: string | undefined
+      readonly country?: string | undefined
     }
     readonly headers: Record<string, string>
     readonly method: string
@@ -75,7 +75,7 @@ interface TraceException {
   readonly timestamp: number
   readonly message: string
   readonly name: string
-  readonly stack?: string
+  readonly stack?: string | undefined
 }
 
 // =============================================================================
@@ -86,11 +86,11 @@ interface StreamViewDefinition<TInput, TOutput> {
   $type: string
   $stream: string
   $schema: Record<string, string>
-  $filter?: (event: TInput) => boolean
+  $filter?: ((event: TInput) => boolean) | undefined
   $transform: (event: TInput) => TOutput | TOutput[]
   $refresh: {
     mode: 'streaming'
-    backend?: 'native' | 'iceberg' | 'delta'
+    backend?: 'native' | 'iceberg' | 'delta' | undefined
   }
 }
 

@@ -26,10 +26,10 @@ import { entityTarget } from '../types/entity'
  */
 export interface DeleteOperationOptions {
   /** Expected version for optimistic concurrency */
-  expectedVersion?: number
+  expectedVersion?: number | undefined
 
   /** Hard delete (permanent) instead of soft delete */
-  hard?: boolean
+  hard?: boolean | undefined
 }
 
 /**

@@ -29,9 +29,9 @@ import { DEFAULT_ARCHIVE_AFTER_DAYS, DEFAULT_RETENTION_DAYS } from '../constants
  */
 export interface ArchivalPolicy {
   /** Days after which segments are eligible for archival (default: 7) */
-  archiveAfterDays?: number
+  archiveAfterDays?: number | undefined
   /** Days to retain archived segments before purging (default: 365) */
-  retentionDays?: number
+  retentionDays?: number | undefined
 }
 
 /**
@@ -45,9 +45,9 @@ export interface ArchiverOptions {
   /** Manifest manager */
   manifest: ManifestManager
   /** Archival policy */
-  policy?: ArchivalPolicy
+  policy?: ArchivalPolicy | undefined
   /** Path prefix for events (default: 'events') */
-  prefix?: string
+  prefix?: string | undefined
 }
 
 /**
@@ -55,9 +55,9 @@ export interface ArchiverOptions {
  */
 export interface ArchiveOptions {
   /** Maximum number of segments to archive in one operation */
-  maxSegments?: number
+  maxSegments?: number | undefined
   /** If true, only report what would be archived without making changes */
-  dryRun?: boolean
+  dryRun?: boolean | undefined
 }
 
 /**
@@ -75,7 +75,7 @@ export interface ArchivalResult {
   /** Duration in milliseconds */
   durationMs: number
   /** Whether this was a dry run */
-  dryRun?: boolean
+  dryRun?: boolean | undefined
 }
 
 /**
@@ -83,9 +83,9 @@ export interface ArchivalResult {
  */
 export interface ListArchivedOptions {
   /** Filter by year */
-  year?: number
+  year?: number | undefined
   /** Filter by month (1-12) */
-  month?: number
+  month?: number | undefined
 }
 
 /**
@@ -99,7 +99,7 @@ export interface PurgeResult {
   /** Duration in milliseconds */
   durationMs: number
   /** Whether this was a dry run */
-  dryRun?: boolean
+  dryRun?: boolean | undefined
 }
 
 /**
@@ -306,7 +306,7 @@ export class EventArchiver {
   /**
    * Purge archived segments older than retention period
    */
-  async purgeOldArchives(options: { dryRun?: boolean } = {}): Promise<PurgeResult> {
+  async purgeOldArchives(options: { dryRun?: boolean | undefined } = {}): Promise<PurgeResult> {
     const startTime = Date.now()
     const { dryRun = false } = options
 

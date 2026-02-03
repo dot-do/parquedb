@@ -29,17 +29,17 @@ import type { DatabaseInfo } from '../../../worker/DatabaseIndexDO'
 
 export interface DatabaseDashboardViewProps {
   /** Databases passed from server component */
-  databases?: DatabaseInfo[]
+  databases?: DatabaseInfo[] | undefined
   /** User info for personalization */
   user?: {
     id: string
     email: string
-    name?: string
-  }
+    name?: string | undefined
+  } | undefined
   /** Base path for admin routes */
-  basePath?: string
+  basePath?: string | undefined
   /** API endpoint for database operations */
-  apiEndpoint?: string
+  apiEndpoint?: string | undefined
 }
 
 /**

@@ -60,8 +60,8 @@ interface ConflictInfo {
   entityId: string
   collection: string
   type: string
-  ourValue?: unknown
-  theirValue?: unknown
+  ourValue?: unknown | undefined
+  theirValue?: unknown | undefined
 }
 
 interface MergeCheckResult {

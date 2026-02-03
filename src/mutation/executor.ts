@@ -49,19 +49,19 @@ import {
  */
 export interface MutationExecutorConfig {
   /** Schema for validation */
-  schema?: Schema
+  schema?: Schema | undefined
 
   /** Schema validator instance */
-  schemaValidator?: SchemaValidatorInterface | null
+  schemaValidator?: SchemaValidatorInterface | null | undefined
 
   /** Hooks for mutation lifecycle */
-  hooks?: MutationHooks
+  hooks?: MutationHooks | undefined
 
   /** Default actor for operations */
-  defaultActor?: EntityId
+  defaultActor?: EntityId | undefined
 
   /** Function to record events */
-  recordEvent?: (event: MutationEvent) => Promise<void>
+  recordEvent?: ((event: MutationEvent) => Promise<void>) | undefined
 }
 
 /**
@@ -417,7 +417,7 @@ export class MutationExecutor {
     namespace: string,
     id: string,
     store: EntityStore,
-    options?: { actor?: EntityId }
+    options?: { actor?: EntityId | undefined }
   ): Promise<Entity<T> | null> {
     validateNamespace(namespace)
 

@@ -59,20 +59,20 @@ export interface CircuitBreakerBackendOptions extends CircuitBreakerOptions {
    * When true, read failures won't affect write availability and vice versa
    * @default true
    */
-  separateReadWriteCircuits?: boolean
+  separateReadWriteCircuits?: boolean | undefined
 
   /**
    * Lightweight operations (exists, stat) bypass the circuit breaker
    * These operations are typically cheap and don't stress the backend
    * @default true
    */
-  bypassLightweightOps?: boolean
+  bypassLightweightOps?: boolean | undefined
 
   /**
    * Optional fallback backend for reads when circuit is open
    * Useful for implementing read replicas or cached fallbacks
    */
-  fallbackBackend?: StorageBackend
+  fallbackBackend?: StorageBackend | undefined
 }
 
 /**

@@ -20,39 +20,39 @@ import type { EmbeddingProvider } from '../../embeddings/provider'
  * List options for querying entities
  */
 export interface ListOptions {
-  where?: Record<string, unknown>
-  orderBy?: string
-  order?: 'asc' | 'desc'
-  limit?: number
-  offset?: number
+  where?: Record<string, unknown> | undefined
+  orderBy?: string | undefined
+  order?: 'asc' | 'desc' | undefined
+  limit?: number | undefined
+  offset?: number | undefined
 }
 
 /**
  * Search options extending list options
  */
 export interface SearchOptions extends ListOptions {
-  fields?: string[]
-  minScore?: number
+  fields?: string[] | undefined
+  minScore?: number | undefined
 }
 
 /**
  * Semantic search options
  */
 export interface SemanticSearchOptions {
-  minScore?: number
-  limit?: number
+  minScore?: number | undefined
+  limit?: number | undefined
 }
 
 /**
  * Hybrid search options
  */
 export interface HybridSearchOptions {
-  minScore?: number
-  limit?: number
-  offset?: number
-  rrfK?: number
-  ftsWeight?: number
-  semanticWeight?: number
+  minScore?: number | undefined
+  limit?: number | undefined
+  offset?: number | undefined
+  rrfK?: number | undefined
+  ftsWeight?: number | undefined
+  semanticWeight?: number | undefined
 }
 
 /**
@@ -78,9 +78,9 @@ export interface HybridSearchResult extends SemanticSearchResult {
  * Relationship metadata
  */
 export interface RelationMetadata {
-  matchMode?: 'exact' | 'fuzzy'
-  similarity?: number
-  matchedType?: string
+  matchMode?: 'exact' | 'fuzzy' | undefined
+  similarity?: number | undefined
+  matchedType?: string | undefined
   [key: string]: unknown
 }
 
@@ -91,11 +91,11 @@ export interface DBEvent {
   id: string
   actor: string
   event: string
-  object?: string
-  objectData?: Record<string, unknown>
-  result?: string
-  resultData?: Record<string, unknown>
-  meta?: Record<string, unknown>
+  object?: string | undefined
+  objectData?: Record<string, unknown> | undefined
+  result?: string | undefined
+  resultData?: Record<string, unknown> | undefined
+  meta?: Record<string, unknown> | undefined
   timestamp: Date
 }
 
@@ -108,17 +108,17 @@ export interface DBAction {
   act: string
   action: string
   activity: string
-  object?: string
-  objectData?: Record<string, unknown>
+  object?: string | undefined
+  objectData?: Record<string, unknown> | undefined
   status: 'pending' | 'active' | 'completed' | 'failed' | 'cancelled'
-  progress?: number
-  total?: number
-  result?: Record<string, unknown>
-  error?: string
-  meta?: Record<string, unknown>
+  progress?: number | undefined
+  total?: number | undefined
+  result?: Record<string, unknown> | undefined
+  error?: string | undefined
+  meta?: Record<string, unknown> | undefined
   createdAt: Date
-  startedAt?: Date
-  completedAt?: Date
+  startedAt?: Date | undefined
+  completedAt?: Date | undefined
 }
 
 /**
@@ -129,7 +129,7 @@ export interface DBArtifact {
   type: string
   sourceHash: string
   content: unknown
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   createdAt: Date
 }
 
@@ -139,11 +139,11 @@ export interface DBArtifact {
 export interface CreateEventOptions {
   actor: string
   event: string
-  object?: string
-  objectData?: Record<string, unknown>
-  result?: string
-  resultData?: Record<string, unknown>
-  meta?: Record<string, unknown>
+  object?: string | undefined
+  objectData?: Record<string, unknown> | undefined
+  result?: string | undefined
+  resultData?: Record<string, unknown> | undefined
+  meta?: Record<string, unknown> | undefined
 }
 
 /**
@@ -152,23 +152,23 @@ export interface CreateEventOptions {
 export interface CreateActionOptions {
   actor: string
   action: string
-  object?: string
-  objectData?: Record<string, unknown>
-  total?: number
-  meta?: Record<string, unknown>
+  object?: string | undefined
+  objectData?: Record<string, unknown> | undefined
+  total?: number | undefined
+  meta?: Record<string, unknown> | undefined
 }
 
 /**
  * Embeddings configuration
  */
 export interface EmbeddingsConfig {
-  provider?: string
-  model?: string
-  dimensions?: number
+  provider?: string | undefined
+  model?: string | undefined
+  dimensions?: number | undefined
   /** Fields to embed per entity type: { Post: ['title', 'content'] } */
-  fields?: Record<string, string[]>
+  fields?: Record<string, string[]> | undefined
   /** Target field to store embeddings (default: 'embedding') */
-  vectorField?: string
+  vectorField?: string | undefined
 }
 
 /**
@@ -233,35 +233,35 @@ export interface DBProviderExtended extends DBProvider {
   emit(options: CreateEventOptions): Promise<DBEvent>
   emit(type: string, data: unknown): Promise<DBEvent>
   listEvents(options?: {
-    event?: string
-    actor?: string
-    object?: string
-    since?: Date
-    until?: Date
-    limit?: number
+    event?: string | undefined
+    actor?: string | undefined
+    object?: string | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
   }): Promise<DBEvent[]>
   replayEvents(options: {
-    event?: string
-    actor?: string
-    since?: Date
+    event?: string | undefined
+    actor?: string | undefined
+    since?: Date | undefined
     handler: (event: DBEvent) => void | Promise<void>
   }): Promise<void>
 
   // Actions API
-  createAction(options: CreateActionOptions | { type: string; data: unknown; total?: number }): Promise<DBAction>
+  createAction(options: CreateActionOptions | { type: string; data: unknown; total?: number | undefined }): Promise<DBAction>
   getAction(id: string): Promise<DBAction | null>
   updateAction(
     id: string,
     updates: Partial<Pick<DBAction, 'status' | 'progress' | 'result' | 'error'>>
   ): Promise<DBAction>
   listActions(options?: {
-    status?: DBAction['status']
-    action?: string
-    actor?: string
-    object?: string
-    since?: Date
-    until?: Date
-    limit?: number
+    status?: DBAction['status'] | undefined
+    action?: string | undefined
+    actor?: string | undefined
+    object?: string | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
   }): Promise<DBAction[]>
   retryAction(id: string): Promise<DBAction>
   cancelAction(id: string): Promise<void>
@@ -271,7 +271,7 @@ export interface DBProviderExtended extends DBProvider {
   setArtifact(
     url: string,
     type: string,
-    data: { content: unknown; sourceHash: string; metadata?: Record<string, unknown> }
+    data: { content: unknown; sourceHash: string; metadata?: Record<string, unknown> | undefined }
   ): Promise<void>
   deleteArtifact(url: string, type?: string): Promise<void>
   listArtifacts(url: string): Promise<DBArtifact[]>
@@ -302,7 +302,7 @@ function generateId(): string {
 /**
  * Convert ai-database ListOptions to ParqueDB FindOptions
  */
-function convertListOptions(options?: ListOptions): { filter?: Filter; findOptions?: Record<string, unknown> } {
+function convertListOptions(options?: ListOptions): { filter?: Filter | undefined; findOptions?: Record<string, unknown> | undefined } {
   if (!options) return {}
 
   const filter: Filter = options.where ? { ...options.where } : {}
@@ -387,13 +387,13 @@ export interface ParqueDBAdapterOptions {
    * Enable batch loading for relationships to eliminate N+1 queries.
    * Default: true
    */
-  enableBatchLoader?: boolean
+  enableBatchLoader?: boolean | undefined
 
   /**
    * Options for the relationship batch loader.
    * Only used if enableBatchLoader is true.
    */
-  batchLoaderOptions?: BatchLoaderOptions
+  batchLoaderOptions?: BatchLoaderOptions | undefined
 
   /**
    * Embedding provider for auto-generating embeddings on create/update.
@@ -421,7 +421,7 @@ export interface ParqueDBAdapterOptions {
    * })
    * ```
    */
-  embeddingProvider?: EmbeddingProvider
+  embeddingProvider?: EmbeddingProvider | undefined
 }
 
 export class ParqueDBAdapter implements DBProviderExtended {
@@ -1234,12 +1234,12 @@ export class ParqueDBAdapter implements DBProviderExtended {
    * List events with optional filters
    */
   async listEvents(options?: {
-    event?: string
-    actor?: string
-    object?: string
-    since?: Date
-    until?: Date
-    limit?: number
+    event?: string | undefined
+    actor?: string | undefined
+    object?: string | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
   }): Promise<DBEvent[]> {
     const eventsNamespace = 'sysevents'
 
@@ -1286,9 +1286,9 @@ export class ParqueDBAdapter implements DBProviderExtended {
    * Replay events through a handler
    */
   async replayEvents(options: {
-    event?: string
-    actor?: string
-    since?: Date
+    event?: string | undefined
+    actor?: string | undefined
+    since?: Date | undefined
     handler: (event: DBEvent) => void | Promise<void>
   }): Promise<void> {
     const events = await this.listEvents({
@@ -1313,7 +1313,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
    * Create a new action
    */
   async createAction(
-    options: CreateActionOptions | { type: string; data: unknown; total?: number }
+    options: CreateActionOptions | { type: string; data: unknown; total?: number | undefined }
   ): Promise<DBAction> {
     const actionsNamespace = 'sysactions'
 
@@ -1406,13 +1406,13 @@ export class ParqueDBAdapter implements DBProviderExtended {
    * List actions with optional filters
    */
   async listActions(options?: {
-    status?: DBAction['status']
-    action?: string
-    actor?: string
-    object?: string
-    since?: Date
-    until?: Date
-    limit?: number
+    status?: DBAction['status'] | undefined
+    action?: string | undefined
+    actor?: string | undefined
+    object?: string | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
   }): Promise<DBAction[]> {
     const actionsNamespace = 'sysactions'
 
@@ -1515,7 +1515,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
   async setArtifact(
     url: string,
     type: string,
-    data: { content: unknown; sourceHash: string; metadata?: Record<string, unknown> }
+    data: { content: unknown; sourceHash: string; metadata?: Record<string, unknown> | undefined }
   ): Promise<void> {
     const artifactsNamespace = 'sysartifacts'
 

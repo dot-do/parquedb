@@ -116,24 +116,24 @@ export interface SchemaValidatorOptions {
    * - 'permissive': Only validates required fields and types
    * - 'warn': Logs warnings instead of throwing errors
    */
-  mode?: ValidationMode
+  mode?: ValidationMode | undefined
 
   /**
    * Allow unknown fields not defined in schema
    * Default: true (permissive by default for document flexibility)
    */
-  allowUnknownFields?: boolean
+  allowUnknownFields?: boolean | undefined
 
   /**
    * Validate relationship references exist
    * Default: false (expensive operation)
    */
-  validateRelationships?: boolean
+  validateRelationships?: boolean | undefined
 
   /**
    * Custom type validators
    */
-  customValidators?: Map<string, (value: unknown) => boolean>
+  customValidators?: Map<string, (value: unknown) => boolean> | undefined
 }
 
 // =============================================================================

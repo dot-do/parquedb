@@ -31,7 +31,7 @@ interface Post {
   content: string
   status: 'draft' | 'published' | 'archived'
   views: number
-  publishedAt?: Date | null
+  publishedAt?: Date | null | undefined
   createdAt: Date
   author?: {
     name: string
@@ -40,7 +40,7 @@ interface Post {
   metadata?: {
     wordCount: number
     readTime: number
-    tags?: string[]
+    tags?: string[] | undefined
   }
 }
 

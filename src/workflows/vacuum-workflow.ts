@@ -50,19 +50,19 @@ export interface VacuumWorkflowParams {
   namespace: string
 
   /** Table format ('iceberg' | 'delta' | 'auto' to detect) */
-  format?: 'iceberg' | 'delta' | 'auto'
+  format?: 'iceberg' | 'delta' | 'auto' | undefined
 
   /** Retention period in milliseconds (default: 24 hours) */
-  retentionMs?: number
+  retentionMs?: number | undefined
 
   /** Only report what would be deleted (default: false) */
-  dryRun?: boolean
+  dryRun?: boolean | undefined
 
   /** Warehouse/location prefix (default: '') */
-  warehouse?: string
+  warehouse?: string | undefined
 
   /** Database name for Iceberg tables (default: '') */
-  database?: string
+  database?: string | undefined
 }
 
 export interface VacuumResult {
@@ -268,7 +268,7 @@ export class VacuumWorkflow extends WorkflowEntrypoint<Env, VacuumWorkflowParams
         const batch = batches[i]!
         const batchResult = await step.do(`delete-batch-${i}`, async () => {
           const storage = new R2Backend(toInternalR2Bucket(this.env.BUCKET))
-          const results: Array<{ file: OrphanedFileInfo; deleted: boolean; error?: string }> = []
+          const results: Array<{ file: OrphanedFileInfo; deleted: boolean; error?: string | undefined }> = []
 
           for (const file of batch) {
             try {
@@ -377,7 +377,7 @@ export class VacuumWorkflow extends WorkflowEntrypoint<Env, VacuumWorkflowParams
     try {
       const metadataData = await storage.read(currentMetadataPath)
       const metadata = JSON.parse(new TextDecoder().decode(metadataData)) as {
-        snapshots?: Array<{ 'manifest-list'?: string }>
+        snapshots?: Array<{ 'manifest-list'?: string | undefined }> | undefined
       }
 
       // Process each snapshot's manifest list
@@ -556,9 +556,9 @@ export class VacuumWorkflow extends WorkflowEntrypoint<Env, VacuumWorkflowParams
   private parseDeltaCommit(content: string): Array<{
     type: 'add' | 'remove'
     path: string
-    timestamp?: number
+    timestamp?: number | undefined
   }> {
-    const actions: Array<{ type: 'add' | 'remove'; path: string; timestamp?: number }> = []
+    const actions: Array<{ type: 'add' | 'remove'; path: string; timestamp?: number | undefined }> = []
     const lines = content.trim().split('\n')
 
     for (const line of lines) {
@@ -568,7 +568,7 @@ export class VacuumWorkflow extends WorkflowEntrypoint<Env, VacuumWorkflowParams
           const add = action.add as { path: string }
           actions.push({ type: 'add', path: add.path })
         } else if ('remove' in action) {
-          const remove = action.remove as { path: string; deletionTimestamp?: number }
+          const remove = action.remove as { path: string; deletionTimestamp?: number | undefined }
           actions.push({
             type: 'remove',
             path: remove.path,

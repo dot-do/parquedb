@@ -35,7 +35,7 @@ interface UpdateCommentParams {
 interface Comment {
   readonly id: number
   readonly user: { readonly login: string } | null
-  readonly body?: string
+  readonly body?: string | undefined
 }
 
 export interface CollectionDiffCounts {
@@ -56,7 +56,7 @@ export interface PreviewUrlOptions {
 
 export interface MergeStatusOptions {
   readonly status: 'clean' | 'conflicts' | 'warnings'
-  readonly conflictCount?: number
+  readonly conflictCount?: number | undefined
 }
 
 export interface Conflict {

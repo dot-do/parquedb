@@ -57,14 +57,14 @@ export interface TransactionalBackendOptions {
    * Prevents memory pressure from extremely large transactions.
    * @default 10000
    */
-  maxTransactionOperations?: number
+  maxTransactionOperations?: number | undefined
 
   /**
    * Maximum total bytes of write data allowed per transaction.
    * Prevents memory exhaustion from large payloads.
    * @default 104857600 (100MB)
    */
-  maxTransactionBytes?: number
+  maxTransactionBytes?: number | undefined
 }
 
 // =============================================================================
@@ -75,7 +75,7 @@ export interface TransactionalBackendOptions {
 interface PendingWrite {
   type: 'write'
   data: Uint8Array
-  options?: WriteOptions
+  options?: WriteOptions | undefined
 }
 
 /** Pending delete operation */
@@ -287,7 +287,7 @@ class TransactionImpl implements Transaction {
 
     // Collect deletes and writes
     const deletes: string[] = []
-    const writes: Array<{ path: string; data: Uint8Array; options?: WriteOptions }> = []
+    const writes: Array<{ path: string; data: Uint8Array; options?: WriteOptions | undefined }> = []
 
     this.state.pending.forEach((op, path) => {
       if (op.type === 'delete') {

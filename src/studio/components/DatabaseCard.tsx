@@ -14,16 +14,16 @@ import { ConfirmationDialog } from './ConfirmationDialog'
 
 export interface DatabaseCardProps {
   database: DatabaseInfo
-  basePath?: string
-  onSelect?: (database: DatabaseInfo) => void
+  basePath?: string | undefined
+  onSelect?: ((database: DatabaseInfo) => void) | undefined
   /** Callback when delete is confirmed */
-  onDelete?: (database: DatabaseInfo) => Promise<void>
+  onDelete?: ((database: DatabaseInfo) => Promise<void>) | undefined
   /** Whether delete is in progress */
-  deleting?: boolean
+  deleting?: boolean | undefined
   /** Callback when clone is requested */
-  onClone?: (database: DatabaseInfo) => void
+  onClone?: ((database: DatabaseInfo) => void) | undefined
   /** Whether this card is keyboard-focused */
-  focused?: boolean
+  focused?: boolean | undefined
 }
 
 /**

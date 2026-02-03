@@ -56,43 +56,43 @@ export interface CircuitBreakerOptions {
    * Number of consecutive failures before opening the circuit
    * @default 5
    */
-  failureThreshold?: number
+  failureThreshold?: number | undefined
 
   /**
    * Number of consecutive successes in HALF_OPEN state before closing
    * @default 2
    */
-  successThreshold?: number
+  successThreshold?: number | undefined
 
   /**
    * Time in milliseconds before attempting to recover (OPEN -> HALF_OPEN)
    * @default 30000 (30 seconds)
    */
-  resetTimeoutMs?: number
+  resetTimeoutMs?: number | undefined
 
   /**
    * Optional name for logging and metrics
    */
-  name?: string
+  name?: string | undefined
 
   /**
    * Callback when circuit state changes
    */
-  onStateChange?: (from: CircuitState, to: CircuitState, name?: string) => void
+  onStateChange?: ((from: CircuitState, to: CircuitState, name?: string) => void) | undefined
 
   /**
    * Function to determine if an error should count as a failure
    * By default, all errors count as failures except NotFoundError
    * @default (error) => !isNotFoundError(error)
    */
-  isFailure?: (error: Error) => boolean
+  isFailure?: ((error: Error) => boolean) | undefined
 
   /**
    * Time window in milliseconds for counting failures
    * Failures older than this window are ignored
    * @default 60000 (60 seconds)
    */
-  failureWindowMs?: number
+  failureWindowMs?: number | undefined
 }
 
 /**
@@ -112,11 +112,11 @@ export interface CircuitBreakerMetrics {
   /** Total number of successful requests */
   totalSuccesses: number
   /** Time when circuit last opened */
-  lastFailureTime?: number
+  lastFailureTime?: number | undefined
   /** Time when circuit last transitioned to HALF_OPEN */
-  lastHalfOpenTime?: number
+  lastHalfOpenTime?: number | undefined
   /** Time of the last state change */
-  lastStateChangeTime?: number
+  lastStateChangeTime?: number | undefined
 }
 
 // =============================================================================

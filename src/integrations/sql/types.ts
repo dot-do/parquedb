@@ -14,14 +14,14 @@ export type SQLOperator = '=' | '!=' | '<>' | '>' | '>=' | '<' | '<=' | 'LIKE' |
 
 export interface SQLColumn {
   name: string
-  table?: string
-  alias?: string
+  table?: string | undefined
+  alias?: string | undefined
 }
 
 export interface SQLValue {
   type: 'string' | 'number' | 'boolean' | 'null' | 'parameter'
   value: unknown
-  paramIndex?: number
+  paramIndex?: number | undefined
 }
 
 export interface SQLCondition {
@@ -32,8 +32,8 @@ export interface SQLCondition {
 
 export interface SQLWhere {
   type: 'and' | 'or' | 'condition'
-  conditions?: SQLWhere[]
-  condition?: SQLCondition
+  conditions?: SQLWhere[] | undefined
+  condition?: SQLCondition | undefined
 }
 
 export interface SQLOrderBy {
@@ -45,10 +45,10 @@ export interface SQLSelect {
   type: 'SELECT'
   columns: SQLColumn[] | '*'
   from: string
-  where?: SQLWhere
-  orderBy?: SQLOrderBy[]
-  limit?: number
-  offset?: number
+  where?: SQLWhere | undefined
+  orderBy?: SQLOrderBy[] | undefined
+  limit?: number | undefined
+  offset?: number | undefined
 }
 
 export interface SQLInsert {
@@ -56,22 +56,22 @@ export interface SQLInsert {
   into: string
   columns: string[]
   values: SQLValue[][]
-  returning?: SQLColumn[] | '*'
+  returning?: SQLColumn[] | '*' | undefined
 }
 
 export interface SQLUpdate {
   type: 'UPDATE'
   table: string
   set: Record<string, SQLValue>
-  where?: SQLWhere
-  returning?: SQLColumn[] | '*'
+  where?: SQLWhere | undefined
+  returning?: SQLColumn[] | '*' | undefined
 }
 
 export interface SQLDelete {
   type: 'DELETE'
   from: string
-  where?: SQLWhere
-  returning?: SQLColumn[] | '*'
+  where?: SQLWhere | undefined
+  returning?: SQLColumn[] | '*' | undefined
 }
 
 export type SQLStatement = SQLSelect | SQLInsert | SQLUpdate | SQLDelete
@@ -82,9 +82,9 @@ export type SQLStatement = SQLSelect | SQLInsert | SQLUpdate | SQLDelete
 
 export interface SQLQueryOptions {
   /** Parameter values for prepared statements ($1, $2, etc.) */
-  params?: unknown[]
+  params?: unknown[] | undefined
   /** Variant shredding configuration for nested field pushdown */
-  variantConfig?: VariantShredConfig[]
+  variantConfig?: VariantShredConfig[] | undefined
 }
 
 export interface VariantShredConfig {
@@ -100,7 +100,7 @@ export interface SQLQueryResult<T = Record<string, unknown>> {
   rows: T[]
   rowCount: number
   /** For INSERT/UPDATE/DELETE with RETURNING */
-  command?: 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE'
+  command?: 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | undefined
 }
 
 // ============================================================================
@@ -110,19 +110,19 @@ export interface SQLQueryResult<T = Record<string, unknown>> {
 export interface TranslatedQuery {
   collection: string
   filter: Filter
-  columns?: string[]
-  orderBy?: string
-  desc?: boolean
-  limit?: number
-  offset?: number
+  columns?: string[] | undefined
+  orderBy?: string | undefined
+  desc?: boolean | undefined
+  limit?: number | undefined
+  offset?: number | undefined
 }
 
 export interface TranslatedMutation {
   collection: string
   type: 'create' | 'update' | 'delete'
-  filter?: Filter
-  data?: Record<string, unknown>
-  returning?: string[] | '*'
+  filter?: Filter | undefined
+  data?: Record<string, unknown> | undefined
+  returning?: string[] | '*' | undefined
 }
 
 // ============================================================================

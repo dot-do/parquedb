@@ -106,7 +106,7 @@ export class TransactionManager {
     ns: string,
     id: string,
     beforeState?: StoredEntity | StoredRelationship | null,
-    extra?: { predicate?: string; toNs?: string; toId?: string }
+    extra?: { predicate?: string | undefined; toNs?: string | undefined; toId?: string | undefined }
   ): void {
     if (!this.inTransaction || !this.transactionSnapshot) return
     this.transactionSnapshot.sqlRollbackOps.push({ type, ns, id, beforeState, ...extra })

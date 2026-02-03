@@ -92,8 +92,8 @@ export interface LastExpr {
  * - { $stdDevSamp: '$fieldName' } - Sample standard deviation
  */
 export interface StdDevExpr {
-  $stdDev?: string
-  $stdDevSamp?: string
+  $stdDev?: string | undefined
+  $stdDevSamp?: string | undefined
 }
 
 /**
@@ -127,7 +127,7 @@ export interface TimeGrouping {
   /** Part to extract: year, month, day, hour, etc. */
   $datePart: 'year' | 'month' | 'day' | 'hour' | 'minute' | 'dayOfWeek' | 'week'
   /** Alias for the grouped field */
-  $as?: string
+  $as?: string | undefined
 }
 
 /**
@@ -139,9 +139,9 @@ export interface BucketGrouping {
   /** Bucket boundaries */
   $boundaries: number[]
   /** Default bucket name for values outside boundaries */
-  $default?: string
+  $default?: string | undefined
   /** Alias for the grouped field */
-  $as?: string
+  $as?: string | undefined
 }
 
 /**
@@ -176,7 +176,7 @@ export interface MVAggregationDefinition {
    * @example ['status', 'customer.tier']
    * @example [{ $dateField: '$createdAt', $datePart: 'day', $as: 'date' }]
    */
-  groupBy?: GroupBySpec[]
+  groupBy?: GroupBySpec[] | undefined
 
   /**
    * Computed aggregate fields
@@ -187,22 +187,22 @@ export interface MVAggregationDefinition {
   /**
    * Filter applied before aggregation (WHERE clause equivalent)
    */
-  match?: Filter
+  match?: Filter | undefined
 
   /**
    * Filter applied after aggregation (HAVING clause equivalent)
    */
-  having?: HavingClause
+  having?: HavingClause | undefined
 
   /**
    * Sort the aggregated results
    */
-  sort?: Record<string, 1 | -1>
+  sort?: Record<string, 1 | -1> | undefined
 
   /**
    * Limit number of results
    */
-  limit?: number
+  limit?: number | undefined
 }
 
 // =============================================================================

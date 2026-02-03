@@ -41,15 +41,15 @@
  */
 export interface ListOptions {
   /** Filter criteria */
-  where?: Record<string, unknown>
+  where?: Record<string, unknown> | undefined
   /** Field to order by */
-  orderBy?: string
+  orderBy?: string | undefined
   /** Sort order */
-  order?: 'asc' | 'desc'
+  order?: 'asc' | 'desc' | undefined
   /** Maximum number of results */
-  limit?: number
+  limit?: number | undefined
   /** Number of results to skip */
-  offset?: number
+  offset?: number | undefined
 }
 
 /**
@@ -57,9 +57,9 @@ export interface ListOptions {
  */
 export interface SearchOptions extends ListOptions {
   /** Fields to search in (default: all text fields) */
-  fields?: string[]
+  fields?: string[] | undefined
   /** Minimum relevance score (0.0 to 1.0) */
-  minScore?: number
+  minScore?: number | undefined
 }
 
 /**
@@ -67,9 +67,9 @@ export interface SearchOptions extends ListOptions {
  */
 export interface SemanticSearchOptions {
   /** Minimum similarity score (0.0 to 1.0) */
-  minScore?: number
+  minScore?: number | undefined
   /** Maximum number of results */
-  limit?: number
+  limit?: number | undefined
 }
 
 /**
@@ -77,17 +77,17 @@ export interface SemanticSearchOptions {
  */
 export interface HybridSearchOptions {
   /** Minimum combined score (0.0 to 1.0) */
-  minScore?: number
+  minScore?: number | undefined
   /** Maximum number of results */
-  limit?: number
+  limit?: number | undefined
   /** Number of results to skip */
-  offset?: number
+  offset?: number | undefined
   /** RRF k parameter (default: 60) */
-  rrfK?: number
+  rrfK?: number | undefined
   /** Weight for FTS component (default: 0.5) */
-  ftsWeight?: number
+  ftsWeight?: number | undefined
   /** Weight for semantic component (default: 0.5) */
-  semanticWeight?: number
+  semanticWeight?: number | undefined
 }
 
 /**
@@ -121,11 +121,11 @@ export interface HybridSearchResult extends SemanticSearchResult {
  */
 export interface RelationMetadata {
   /** How the relationship was matched */
-  matchMode?: 'exact' | 'fuzzy'
+  matchMode?: 'exact' | 'fuzzy' | undefined
   /** Similarity score for fuzzy matches */
-  similarity?: number
+  similarity?: number | undefined
   /** Matched entity type (for polymorphic relationships) */
-  matchedType?: string
+  matchedType?: string | undefined
   /** Additional edge properties */
   [key: string]: unknown
 }
@@ -141,15 +141,15 @@ export interface DBEvent {
   /** Event type (e.g., "user.created", "post.published") */
   event: string
   /** Object identifier (e.g., "users/alice") */
-  object?: string
+  object?: string | undefined
   /** Object data snapshot */
-  objectData?: Record<string, unknown>
+  objectData?: Record<string, unknown> | undefined
   /** Result identifier */
-  result?: string
+  result?: string | undefined
   /** Result data */
-  resultData?: Record<string, unknown>
+  resultData?: Record<string, unknown> | undefined
   /** Additional metadata */
-  meta?: Record<string, unknown>
+  meta?: Record<string, unknown> | undefined
   /** When the event occurred */
   timestamp: Date
 }
@@ -174,27 +174,27 @@ export interface DBAction {
   /** Present participle (e.g., "processing") */
   activity: string
   /** Object being acted upon */
-  object?: string
+  object?: string | undefined
   /** Object data */
-  objectData?: Record<string, unknown>
+  objectData?: Record<string, unknown> | undefined
   /** Current status */
   status: ActionStatus
   /** Progress count (0 to total) */
-  progress?: number
+  progress?: number | undefined
   /** Total items to process */
-  total?: number
+  total?: number | undefined
   /** Result data on completion */
-  result?: Record<string, unknown>
+  result?: Record<string, unknown> | undefined
   /** Error message on failure */
-  error?: string
+  error?: string | undefined
   /** Additional metadata */
-  meta?: Record<string, unknown>
+  meta?: Record<string, unknown> | undefined
   /** When the action was created */
   createdAt: Date
   /** When the action started processing */
-  startedAt?: Date
+  startedAt?: Date | undefined
   /** When the action completed (success or failure) */
-  completedAt?: Date
+  completedAt?: Date | undefined
 }
 
 /**
@@ -210,7 +210,7 @@ export interface DBArtifact {
   /** Transformed/cached content */
   content: unknown
   /** Additional metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /** When the artifact was created/updated */
   createdAt: Date
 }
@@ -224,15 +224,15 @@ export interface CreateEventOptions {
   /** Event type */
   event: string
   /** Object identifier */
-  object?: string
+  object?: string | undefined
   /** Object data snapshot */
-  objectData?: Record<string, unknown>
+  objectData?: Record<string, unknown> | undefined
   /** Result identifier */
-  result?: string
+  result?: string | undefined
   /** Result data */
-  resultData?: Record<string, unknown>
+  resultData?: Record<string, unknown> | undefined
   /** Additional metadata */
-  meta?: Record<string, unknown>
+  meta?: Record<string, unknown> | undefined
 }
 
 /**
@@ -244,13 +244,13 @@ export interface CreateActionOptions {
   /** Action verb (e.g., "process", "generate", "export") */
   action: string
   /** Object being acted upon */
-  object?: string
+  object?: string | undefined
   /** Object data */
-  objectData?: Record<string, unknown>
+  objectData?: Record<string, unknown> | undefined
   /** Total items to process (for progress tracking) */
-  total?: number
+  total?: number | undefined
   /** Additional metadata */
-  meta?: Record<string, unknown>
+  meta?: Record<string, unknown> | undefined
 }
 
 /**
@@ -258,13 +258,13 @@ export interface CreateActionOptions {
  */
 export interface EmbeddingsConfig {
   /** Embedding provider (e.g., "openai", "cohere") */
-  provider?: string
+  provider?: string | undefined
   /** Model name (e.g., "text-embedding-3-small") */
-  model?: string
+  model?: string | undefined
   /** Embedding dimensions */
-  dimensions?: number
+  dimensions?: number | undefined
   /** Fields to embed per entity type */
-  fields?: Record<string, string[]>
+  fields?: Record<string, string[]> | undefined
 }
 
 /**
@@ -607,12 +607,12 @@ export interface DBEvents {
    * @returns Array of events
    */
   listEvents(options?: {
-    event?: string
-    actor?: string
-    object?: string
-    since?: Date
-    until?: Date
-    limit?: number
+    event?: string | undefined
+    actor?: string | undefined
+    object?: string | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
   }): Promise<DBEvent[]>
 
   /**
@@ -620,9 +620,9 @@ export interface DBEvents {
    * @param options - Replay options
    */
   replayEvents(options: {
-    event?: string
-    actor?: string
-    since?: Date
+    event?: string | undefined
+    actor?: string | undefined
+    since?: Date | undefined
     handler: (event: DBEvent) => void | Promise<void>
   }): Promise<void>
 }
@@ -669,7 +669,7 @@ export interface DBActions {
    * @param options - Action options
    * @returns The created action
    */
-  createAction(options: CreateActionOptions | { type: string; data: unknown; total?: number }): Promise<DBAction>
+  createAction(options: CreateActionOptions | { type: string; data: unknown; total?: number | undefined }): Promise<DBAction>
 
   /**
    * Get an action by ID
@@ -695,13 +695,13 @@ export interface DBActions {
    * @returns Array of actions
    */
   listActions(options?: {
-    status?: ActionStatus
-    action?: string
-    actor?: string
-    object?: string
-    since?: Date
-    until?: Date
-    limit?: number
+    status?: ActionStatus | undefined
+    action?: string | undefined
+    actor?: string | undefined
+    object?: string | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
   }): Promise<DBAction[]>
 
   /**
@@ -771,7 +771,7 @@ export interface DBArtifacts {
   setArtifact(
     url: string,
     type: string,
-    data: { content: unknown; sourceHash: string; metadata?: Record<string, unknown> }
+    data: { content: unknown; sourceHash: string; metadata?: Record<string, unknown> | undefined }
   ): Promise<void>
 
   /**

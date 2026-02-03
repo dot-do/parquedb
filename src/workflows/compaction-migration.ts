@@ -65,7 +65,7 @@ export interface CompactionMigrationParams {
    * Durable Object ID for CompactionStateDO notifications.
    * If not provided, defaults to namespace.
    */
-  doId?: string
+  doId?: string | undefined
 
   /** Time window start (ms since epoch) */
   windowStart: number
@@ -83,33 +83,33 @@ export interface CompactionMigrationParams {
   targetFormat: BackendType
 
   /** Maximum files to read per step (default: 50) */
-  maxFilesPerStep?: number
+  maxFilesPerStep?: number | undefined
 
   /** Delete source files after successful compaction */
-  deleteSource?: boolean
+  deleteSource?: boolean | undefined
 
   /** Target output file size in bytes (default: 128MB) */
-  targetFileSize?: number
+  targetFileSize?: number | undefined
 
   /**
    * Use streaming merge for large windows.
    * When true, uses memory-bounded k-way merge instead of loading all rows.
    * @default 'auto' - automatically detect based on file count and estimated size
    */
-  useStreamingMerge?: boolean | 'auto'
+  useStreamingMerge?: boolean | 'auto' | undefined
 
   /**
    * Maximum memory to use for streaming merge in bytes.
    * Only applies when streaming merge is used.
    * @default 128MB
    */
-  maxStreamingMemoryBytes?: number
+  maxStreamingMemoryBytes?: number | undefined
 
   /**
    * Estimated average row size in bytes for memory calculations.
    * @default 500
    */
-  estimatedAvgRowBytes?: number
+  estimatedAvgRowBytes?: number | undefined
 }
 
 interface CompactionState {
@@ -806,9 +806,9 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
     dataFile: { path: string; size: number }
   }): Promise<{
     success: boolean
-    version?: number
-    logPath?: string
-    error?: string
+    version?: number | undefined
+    logPath?: string | undefined
+    error?: string | undefined
   }> {
     const { storage, tableLocation, dataFile } = params
 

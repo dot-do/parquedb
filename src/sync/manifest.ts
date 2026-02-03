@@ -26,10 +26,10 @@ export interface SyncManifest {
   name: string
 
   /** Owner username (for public URL) */
-  owner?: string
+  owner?: string | undefined
 
   /** URL-friendly slug (for public URL) */
-  slug?: string
+  slug?: string | undefined
 
   /** Database visibility level */
   visibility: Visibility
@@ -38,13 +38,13 @@ export interface SyncManifest {
   lastSyncedAt: string
 
   /** Sync source identifier (e.g., 'local', 'r2:bucket/prefix') */
-  syncedFrom?: string
+  syncedFrom?: string | undefined
 
   /** All tracked files */
   files: Record<string, SyncFileEntry>
 
   /** Optional database metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -67,10 +67,10 @@ export interface SyncFileEntry {
   modifiedAt: string
 
   /** ETag from storage (for conditional updates) */
-  etag?: string
+  etag?: string | undefined
 
   /** Content type */
-  contentType?: string
+  contentType?: string | undefined
 }
 
 // =============================================================================
@@ -131,19 +131,19 @@ export type ConflictStrategy =
  */
 export interface SyncOptions {
   /** Conflict resolution strategy */
-  conflictStrategy?: ConflictStrategy
+  conflictStrategy?: ConflictStrategy | undefined
 
   /** Whether to perform a dry run (no actual changes) */
-  dryRun?: boolean
+  dryRun?: boolean | undefined
 
   /** Callback for progress updates */
-  onProgress?: (progress: SyncProgress) => void
+  onProgress?: ((progress: SyncProgress) => void) | undefined
 
   /** Files to include (glob patterns) */
-  include?: string[]
+  include?: string[] | undefined
 
   /** Files to exclude (glob patterns) */
-  exclude?: string[]
+  exclude?: string[] | undefined
 }
 
 /**
@@ -154,7 +154,7 @@ export interface SyncProgress {
   operation: 'comparing' | 'uploading' | 'downloading' | 'deleting'
 
   /** Current file being processed */
-  currentFile?: string
+  currentFile?: string | undefined
 
   /** Files processed so far */
   processed: number
@@ -212,7 +212,7 @@ export interface SyncError {
   message: string
 
   /** Original error */
-  cause?: Error
+  cause?: Error | undefined
 }
 
 // =============================================================================
@@ -226,10 +226,10 @@ export function createManifest(
   databaseId: string,
   name: string,
   options?: {
-    owner?: string
-    slug?: string
-    visibility?: Visibility
-    metadata?: Record<string, unknown>
+    owner?: string | undefined
+    slug?: string | undefined
+    visibility?: Visibility | undefined
+    metadata?: Record<string, unknown> | undefined
   }
 ): SyncManifest {
   return {

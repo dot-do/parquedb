@@ -128,7 +128,7 @@ export class NativeBackend implements EntityBackend {
 
     // Apply soft delete filter unless includeDeleted
     if (!options?.includeDeleted) {
-      entities = entities.filter(e => !(e as Entity<T> & { deletedAt?: Date }).deletedAt)
+      entities = entities.filter(e => !(e as Entity<T> & { deletedAt?: Date | undefined }).deletedAt)
     }
 
     // Apply filter
@@ -489,7 +489,7 @@ export class NativeBackend implements EntityBackend {
 
       const entityMap = await this.loadEntities(ns)
       const activeEntities = Array.from(entityMap.values()).filter(
-        e => !(e as Entity & { deletedAt?: Date }).deletedAt
+        e => !(e as Entity & { deletedAt?: Date | undefined }).deletedAt
       )
 
       return {

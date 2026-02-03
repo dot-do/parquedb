@@ -50,18 +50,18 @@ export type IndexManagerErrorHandler = (error: Error, event: IndexEvent, listene
  */
 export interface IndexManagerOptions {
   /** Base path for index storage */
-  basePath?: string
+  basePath?: string | undefined
   /**
    * Error handler for listener errors.
    * If provided, called when a listener throws an error.
    * If not provided, errors are logged via console.warn.
    */
-  onError?: IndexManagerErrorHandler
+  onError?: IndexManagerErrorHandler | undefined
   /**
    * If true, collect all listener errors and throw an AggregateError after all listeners have been called.
    * Default: false
    */
-  throwOnListenerError?: boolean
+  throwOnListenerError?: boolean | undefined
 }
 
 // =============================================================================
@@ -1095,7 +1095,7 @@ export class IndexManager {
           if (firstField) {
             const location = this.getFieldValue(doc, firstField.path)
             if (location && typeof location === 'object') {
-              const loc = location as { lat?: number; lng?: number; latitude?: number; longitude?: number }
+              const loc = location as { lat?: number | undefined; lng?: number | undefined; latitude?: number | undefined; longitude?: number | undefined }
               const lat = loc.lat ?? loc.latitude
               const lng = loc.lng ?? loc.longitude
               if (typeof lat === 'number' && typeof lng === 'number') {
@@ -1274,7 +1274,7 @@ export interface SelectedIndex {
   /** Index type */
   type: 'fts' | 'vector' | 'geo'
   /** Field being queried (for secondary indexes) */
-  field?: string
+  field?: string | undefined
   /** Query condition */
   condition: unknown
 }

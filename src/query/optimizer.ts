@@ -164,9 +164,9 @@ export interface OptimizedQueryPlan {
   /** Column pruning analysis */
   columnPruning: ColumnPruningResult
   /** Index recommendation (if applicable) */
-  indexRecommendation?: IndexRecommendation
+  indexRecommendation?: IndexRecommendation | undefined
   /** Vector search plan (if $vector query) */
-  vectorSearchPlan?: VectorSearchPlan
+  vectorSearchPlan?: VectorSearchPlan | undefined
   /** Estimated cost */
   estimatedCost: QueryCost
   /** Optimization suggestions */
@@ -212,30 +212,30 @@ export interface VectorSearchPlan {
   /** Number of results requested */
   topK: number
   /** Minimum similarity score threshold */
-  minScore?: number
+  minScore?: number | undefined
   /** efSearch parameter for HNSW */
   efSearch: number
   /** Estimated index size (number of vectors) */
-  estimatedIndexSize?: number
+  estimatedIndexSize?: number | undefined
   /** Vector dimensions */
-  dimensions?: number
+  dimensions?: number | undefined
   /** Distance metric used */
-  metric?: 'cosine' | 'euclidean' | 'dot'
+  metric?: 'cosine' | 'euclidean' | 'dot' | undefined
   /** Hybrid search details (if applicable) */
   hybridSearch?: {
     /** Strategy used */
     strategy: 'pre-filter' | 'post-filter' | 'auto'
     /** Actual strategy selected (if auto) */
-    selectedStrategy?: 'pre-filter' | 'post-filter'
+    selectedStrategy?: 'pre-filter' | 'post-filter' | undefined
     /** Reason for strategy selection */
     strategyReason: string
     /** Estimated filter selectivity (0-1) */
-    filterSelectivity?: number
+    filterSelectivity?: number | undefined
     /** Estimated candidate count after pre-filter */
-    preFilterCandidates?: number
+    preFilterCandidates?: number | undefined
     /** Over-fetch multiplier for post-filter */
-    overFetchMultiplier?: number
-  }
+    overFetchMultiplier?: number | undefined
+  } | undefined
   /** Cost breakdown */
   costBreakdown: {
     /** Cost for HNSW traversal */
@@ -266,7 +266,7 @@ export interface TableStatistics {
   /** Available indexes */
   indexes: IndexDefinition[]
   /** Row group statistics */
-  rowGroupStats?: RowGroupStats[]
+  rowGroupStats?: RowGroupStats[] | undefined
 }
 
 // =============================================================================
@@ -517,17 +517,17 @@ export class QueryOptimizer {
 
     const vq = filter.$vector as {
       // New format
-      query?: number[] | string
-      field?: string
-      topK?: number
-      minScore?: number
-      efSearch?: number
-      strategy?: 'pre-filter' | 'post-filter' | 'auto'
+      query?: number[] | string | undefined
+      field?: string | undefined
+      topK?: number | undefined
+      minScore?: number | undefined
+      efSearch?: number | undefined
+      strategy?: 'pre-filter' | 'post-filter' | 'auto' | undefined
       // Legacy format
-      $near?: number[]
-      $k?: number
-      $field?: string
-      $minScore?: number
+      $near?: number[] | undefined
+      $k?: number | undefined
+      $field?: string | undefined
+      $minScore?: number | undefined
     }
 
     // Extract parameters from both new and legacy formats
@@ -1036,8 +1036,8 @@ export class QueryOptimizer {
       }
       if (selectedIndex.type === 'vector') {
         // Vector search selectivity depends on k parameter
-        const k = (selectedIndex.condition as { topK?: number; $k?: number })?.topK
-          ?? (selectedIndex.condition as { topK?: number; $k?: number })?.$k
+        const k = (selectedIndex.condition as { topK?: number | undefined; $k?: number | undefined })?.topK
+          ?? (selectedIndex.condition as { topK?: number | undefined; $k?: number | undefined })?.$k
           ?? 10
         return Math.min(k / 1000, 0.1) // Assume 1000 documents min
       }
@@ -1046,8 +1046,8 @@ export class QueryOptimizer {
 
     // Calculate based on statistics
     if (selectedIndex.type === 'vector') {
-      const k = (selectedIndex.condition as { topK?: number; $k?: number })?.topK
-        ?? (selectedIndex.condition as { topK?: number; $k?: number })?.$k
+      const k = (selectedIndex.condition as { topK?: number | undefined; $k?: number | undefined })?.topK
+        ?? (selectedIndex.condition as { topK?: number | undefined; $k?: number | undefined })?.$k
         ?? 10
       return Math.min(k / statistics.totalRows, 1)
     }
@@ -1314,22 +1314,22 @@ export interface MVRoutingResult {
   canUseMV: boolean
 
   /** The MV to use (if canUseMV is true) */
-  mvName?: string
+  mvName?: string | undefined
 
   /** The MV definition */
-  mvDefinition?: MVDefinition
+  mvDefinition?: MVDefinition | undefined
 
   /** Reason for the routing decision */
   reason: string
 
   /** Staleness state of the MV (if using an MV) */
-  stalenessState?: StalenessState
+  stalenessState?: StalenessState | undefined
 
   /** Whether the query needs additional filtering after MV */
   needsPostFilter: boolean
 
   /** Any additional filter to apply after MV results */
-  postFilter?: Filter
+  postFilter?: Filter | undefined
 
   /** Estimated cost savings from using the MV (0-1) */
   costSavings: number
@@ -1352,7 +1352,7 @@ export interface MVRoutingMetadata {
   usable: boolean
 
   /** Row count (for cost estimation) */
-  rowCount?: number
+  rowCount?: number | undefined
 }
 
 /**
@@ -1556,7 +1556,7 @@ export class MVRouter {
   private analyzeFilterCompatibility(
     mvFilter: Filter | undefined,
     queryFilter: Filter
-  ): { compatible: boolean; needsPostFilter: boolean; postFilter?: Filter; reason: string } {
+  ): { compatible: boolean; needsPostFilter: boolean; postFilter?: Filter | undefined; reason: string } {
     // If no query filter, MV can be used (with any filter)
     if (!queryFilter || Object.keys(queryFilter).length === 0) {
       if (mvFilter && Object.keys(mvFilter).length > 0) {

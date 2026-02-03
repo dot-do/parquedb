@@ -307,7 +307,7 @@ export class InvertedIndex {
    */
   async build(
     data: AsyncIterable<{ docId: string; doc: Record<string, unknown> }>,
-    options?: { onProgress?: (processed: number) => void }
+    options?: { onProgress?: ((processed: number) => void) | undefined }
   ): Promise<void> {
     this.clear()
 

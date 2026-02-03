@@ -56,19 +56,19 @@ export interface WorkerError {
   /** Error message */
   message: string
   /** Stack trace (if available) */
-  stack?: string
+  stack?: string | undefined
   /** Request path that caused the error */
-  path?: string
+  path?: string | undefined
   /** HTTP method */
-  method?: string
+  method?: string | undefined
   /** Request ID for correlation */
-  requestId?: string
+  requestId?: string | undefined
   /** Worker script name */
-  workerName?: string
+  workerName?: string | undefined
   /** Datacenter/colo location */
-  colo?: string
+  colo?: string | undefined
   /** Additional metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -109,7 +109,7 @@ export interface ErrorPattern {
   /** Severity to assign */
   severity: ErrorSeverity
   /** Optional code override */
-  code?: string
+  code?: string | undefined
 }
 
 /**

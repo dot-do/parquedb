@@ -246,7 +246,7 @@ export interface RegexOperator {
    * Regex options (i=insensitive, m=multiline, s=dotall)
    * Only used when $regex is a string
    */
-  $options?: string
+  $options?: string | undefined
 }
 
 /**
@@ -472,25 +472,25 @@ export interface TextOperator {
      * Language for stemming and stopword removal
      * @default 'english'
      */
-    $language?: string
+    $language?: string | undefined
 
     /**
      * Whether to perform case-sensitive matching
      * @default false
      */
-    $caseSensitive?: boolean
+    $caseSensitive?: boolean | undefined
 
     /**
      * Whether to treat diacritical marks as distinct
      * @default false
      */
-    $diacriticSensitive?: boolean
+    $diacriticSensitive?: boolean | undefined
 
     /**
      * Minimum relevance score threshold (0-1)
      * Results with scores below this are filtered out
      */
-    $minScore?: number
+    $minScore?: number | undefined
   }
 }
 
@@ -553,30 +553,30 @@ export interface VectorOperator {
      * Minimum similarity score threshold (0-1)
      * Results with lower similarity are filtered out
      */
-    minScore?: number
+    minScore?: number | undefined
 
     /**
      * Strategy for combining with metadata filters
      * @default 'auto'
      */
-    strategy?: HybridSearchStrategy
+    strategy?: HybridSearchStrategy | undefined
 
     /**
      * HNSW efSearch parameter for quality/speed tradeoff
      * Higher values = better recall but slower search
      * @default 100
      */
-    efSearch?: number
+    efSearch?: number | undefined
 
     // Legacy format support (deprecated, use query/field/topK instead)
     /** @deprecated Use `query` instead */
-    $near?: number[]
+    $near?: number[] | undefined
     /** @deprecated Use `topK` instead */
-    $k?: number
+    $k?: number | undefined
     /** @deprecated Use `field` instead */
-    $field?: string
+    $field?: string | undefined
     /** @deprecated Use `minScore` instead */
-    $minScore?: number
+    $minScore?: number | undefined
   }
 }
 
@@ -613,11 +613,11 @@ export interface GeoOperator {
     /**
      * Maximum distance from center point in meters
      */
-    $maxDistance?: number
+    $maxDistance?: number | undefined
     /**
      * Minimum distance from center point in meters
      */
-    $minDistance?: number
+    $minDistance?: number | undefined
   }
 }
 
@@ -645,17 +645,17 @@ export interface GeoOperator {
 export interface ExprOperator {
   $expr: {
     /** Field equality comparison */
-    $eq?: [unknown, unknown]
+    $eq?: [unknown, unknown] | undefined
     /** Not equal comparison */
-    $ne?: [unknown, unknown]
+    $ne?: [unknown, unknown] | undefined
     /** Greater than comparison */
-    $gt?: [unknown, unknown]
+    $gt?: [unknown, unknown] | undefined
     /** Greater than or equal comparison */
-    $gte?: [unknown, unknown]
+    $gte?: [unknown, unknown] | undefined
     /** Less than comparison */
-    $lt?: [unknown, unknown]
+    $lt?: [unknown, unknown] | undefined
     /** Less than or equal comparison */
-    $lte?: [unknown, unknown]
+    $lte?: [unknown, unknown] | undefined
   }
 }
 
@@ -860,31 +860,31 @@ export interface Filter {
   [field: string]: FieldFilter | undefined
 
   /** Logical AND */
-  $and?: Filter[]
+  $and?: Filter[] | undefined
 
   /** Logical OR */
-  $or?: Filter[]
+  $or?: Filter[] | undefined
 
   /** Logical NOT */
-  $not?: Filter
+  $not?: Filter | undefined
 
   /** Logical NOR */
-  $nor?: Filter[]
+  $nor?: Filter[] | undefined
 
   /** Full-text search */
-  $text?: TextOperator['$text']
+  $text?: TextOperator['$text'] | undefined
 
   /** Vector similarity */
-  $vector?: VectorOperator['$vector']
+  $vector?: VectorOperator['$vector'] | undefined
 
   /** Geospatial */
-  $geo?: GeoOperator['$geo']
+  $geo?: GeoOperator['$geo'] | undefined
 
   /** Expression evaluation (compare fields within document) */
-  $expr?: ExprOperator['$expr']
+  $expr?: ExprOperator['$expr'] | undefined
 
   /** Query comment for logging/debugging (no effect on matching) */
-  $comment?: string
+  $comment?: string | undefined
 }
 
 // =============================================================================

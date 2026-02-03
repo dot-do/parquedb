@@ -32,8 +32,8 @@ export interface GraphDLRelation {
   direction: import('@graphdl/core').RelationshipDirection
   matchMode: import('@graphdl/core').RelationshipMatchMode
   targetType: string
-  backref?: string
-  threshold?: number  // For fuzzy matches
+  backref?: string | undefined
+  threshold?: number | undefined  // For fuzzy matches
   isArray: boolean
 }
 
@@ -127,12 +127,12 @@ export interface IceTypeField {
   name: string
   type: string
   required: boolean
-  default?: unknown
+  default?: unknown | undefined
   relation?: {
     operator: import('@icetype/core').RelationOperator
     targetType: string
-    inverse?: string
-  }
+    inverse?: string | undefined
+  } | undefined
 }
 
 /**
@@ -174,12 +174,12 @@ export function fromIceType(
 
   // Extended IceTypeSchema type for legacy properties
   type ExtendedIceSchema = import('@icetype/core').IceTypeSchema & {
-    $type?: string
-    $description?: string
-    $index?: unknown[]
-    $unique?: string[][]
-    $fts?: (string | { field: string; language?: string; weight?: number })[]
-    $vector?: { field: string; dimensions: number; metric?: string }[]
+    $type?: string | undefined
+    $description?: string | undefined
+    $index?: unknown[] | undefined
+    $unique?: string[][] | undefined
+    $fts?: (string | { field: string; language?: string | undefined; weight?: number | undefined })[] | undefined
+    $vector?: { field: string; dimensions: number; metric?: string | undefined }[] | undefined
   }
 
   for (const [name, iceSchema] of schemas) {
@@ -216,7 +216,7 @@ export function fromIceType(
             fields: indexDef.map((f: string) => ({ field: f })),
           })
         } else if (typeof indexDef === 'object' && indexDef !== null) {
-          const def = indexDef as { name?: string; fields?: unknown[]; unique?: boolean; sparse?: boolean }
+          const def = indexDef as { name?: string | undefined; fields?: unknown[] | undefined; unique?: boolean | undefined; sparse?: boolean | undefined }
           const idx: import('./schema').IndexDefinition = {
             name: def.name || `idx_${name}_${i}`,
             fields: (def.fields || []).map((f: unknown) =>
@@ -259,19 +259,19 @@ export function fromIceType(
     for (const [fieldName, field] of iceSchema.fields) {
       // In the new API, field is FieldDefinition from @icetype/core
       const iceField = field as import('@icetype/core').FieldDefinition & {
-        description?: string
+        description?: string | undefined
         validation?: {
-          min?: number
-          max?: number
-          minLength?: number
-          maxLength?: number
-          pattern?: string
-        }
+          min?: number | undefined
+          max?: number | undefined
+          minLength?: number | undefined
+          maxLength?: number | undefined
+          pattern?: string | undefined
+        } | undefined
       }
 
       if (iceField.relation) {
         // Relationship field
-        const rel = iceField.relation as import('@icetype/core').RelationDefinition & { threshold?: number }
+        const rel = iceField.relation as import('@icetype/core').RelationDefinition & { threshold?: number | undefined }
         const inverse = rel.inverse || fieldName
         const arraySuffix = iceField.isArray ? '[]' : ''
         const relString = `${rel.operator} ${rel.targetType}.${inverse}${arraySuffix}`
@@ -329,10 +329,10 @@ export function fromIceType(
           }
         } else if (typeof ftsEntry === 'object') {
           // Extended object format: { field: 'content', language: 'english', weight: 1.0 }
-          const ftsObj = ftsEntry as { field: string; language?: string; weight?: number }
+          const ftsObj = ftsEntry as { field: string; language?: string | undefined; weight?: number | undefined }
           const existing = typeDef[ftsObj.field]
           const type = typeof existing === 'string' ? existing :
-                       typeof existing === 'object' && existing !== null ? (existing as { type?: string }).type || 'text' : 'text'
+                       typeof existing === 'object' && existing !== null ? (existing as { type?: string | undefined }).type || 'text' : 'text'
           const ftsFieldDef: import('./schema').FieldDefinition = {
             type,
             index: 'fts',
@@ -475,7 +475,7 @@ export interface ShredConfig {
   auto: boolean
 
   /** Threshold for auto-shredding (cardinality) */
-  autoThreshold?: number
+  autoThreshold?: number | undefined
 
   /** Types that should always be shredded */
   shredTypes: string[]

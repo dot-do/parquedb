@@ -48,7 +48,7 @@ export interface CsrfOptions {
    *
    * @example ['https://app.example.com', 'https://admin.example.com']
    */
-  allowedOrigins?: string[]
+  allowedOrigins?: string[] | undefined
 
   /**
    * Require X-Requested-With header for mutation requests.
@@ -57,19 +57,19 @@ export interface CsrfOptions {
    *
    * @default true
    */
-  requireCustomHeader?: boolean
+  requireCustomHeader?: boolean | undefined
 
   /**
    * Expected value for X-Requested-With header.
    * @default 'ParqueDB'
    */
-  customHeaderValue?: string
+  customHeaderValue?: string | undefined
 
   /**
    * HTTP methods considered "safe" (read-only) that don't need CSRF validation.
    * @default ['GET', 'HEAD', 'OPTIONS']
    */
-  safeMethods?: string[]
+  safeMethods?: string[] | undefined
 
   /**
    * Paths to exclude from CSRF protection.
@@ -77,19 +77,19 @@ export interface CsrfOptions {
    *
    * @example ['/health', '/api/public/*']
    */
-  excludePaths?: string[]
+  excludePaths?: string[] | undefined
 
   /**
    * Custom error handler for CSRF validation failures.
    * If not provided, returns a 403 Forbidden response.
    */
-  onError?: (c: Context, reason: string) => Response | Promise<Response>
+  onError?: ((c: Context, reason: string) => Response | Promise<Response>) | undefined
 
   /**
    * Enable verbose logging for debugging CSRF issues.
    * @default false
    */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 /**
@@ -97,7 +97,7 @@ export interface CsrfOptions {
  */
 export interface CsrfValidationResult {
   valid: boolean
-  reason?: string
+  reason?: string | undefined
 }
 
 /**
@@ -218,9 +218,9 @@ export function csrf(options: CsrfOptions = {}): MiddlewareHandler {
 export function validateCsrf(
   c: Context,
   options: {
-    allowedOrigins?: string[]
-    requireCustomHeader?: boolean
-    customHeaderValue?: string
+    allowedOrigins?: string[] | undefined
+    requireCustomHeader?: boolean | undefined
+    customHeaderValue?: string | undefined
   } = {}
 ): CsrfValidationResult {
   const {
@@ -415,7 +415,7 @@ export async function verifyCsrfToken(
   secret: string,
   token: string,
   subject: string
-): Promise<CsrfValidationResult & { payload?: CsrfTokenPayload }> {
+): Promise<CsrfValidationResult & { payload?: CsrfTokenPayload | undefined }> {
   if (!token) {
     return { valid: false, reason: 'Missing CSRF token' }
   }
@@ -467,7 +467,7 @@ export async function verifyCsrfToken(
  */
 export function csrfToken(options: {
   secret: string
-  tokenField?: string
+  tokenField?: string | undefined
   getSubject: (c: Context) => string | null
 }): MiddlewareHandler {
   const { secret, tokenField = 'csrf_token', getSubject } = options
@@ -564,11 +564,11 @@ async function signHmac(secret: string, data: string): Promise<string> {
  */
 export function buildSecureCorsHeaders(options: {
   allowedOrigins: string[]
-  allowedMethods?: string[]
-  allowedHeaders?: string[]
-  exposeHeaders?: string[]
-  credentials?: boolean
-  maxAge?: number
+  allowedMethods?: string[] | undefined
+  allowedHeaders?: string[] | undefined
+  exposeHeaders?: string[] | undefined
+  credentials?: boolean | undefined
+  maxAge?: number | undefined
 }): Record<string, string> {
   const {
     allowedOrigins: _allowedOrigins,

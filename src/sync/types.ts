@@ -14,7 +14,7 @@
  */
 export interface SchemaFieldRelationship {
   readonly target: string          // Target collection name
-  readonly reverse?: string        // Reverse relationship name
+  readonly reverse?: string | undefined        // Reverse relationship name
   readonly direction: 'outbound' | 'inbound'  // -> or <-
 }
 
@@ -28,15 +28,15 @@ export interface SchemaFieldSnapshot {
   readonly indexed: boolean          // true if field has '#' modifier
   readonly unique: boolean           // true if field has '@' modifier
   readonly array: boolean            // true if field has '[]'
-  readonly default?: unknown
-  readonly relationship?: SchemaFieldRelationship
+  readonly default?: unknown | undefined
+  readonly relationship?: SchemaFieldRelationship | undefined
 }
 
 /**
  * Collection schema options
  */
 export interface CollectionSchemaOptions {
-  readonly includeDataVariant?: boolean
+  readonly includeDataVariant?: boolean | undefined
 }
 
 /**
@@ -47,7 +47,7 @@ export interface CollectionSchemaSnapshot {
   readonly hash: string              // SHA256 of collection schema
   readonly fields: readonly SchemaFieldSnapshot[]
   readonly version: number           // Incrementing version for this collection
-  readonly options?: CollectionSchemaOptions
+  readonly options?: CollectionSchemaOptions | undefined
 }
 
 /**
@@ -58,7 +58,7 @@ export interface SchemaSnapshot {
   readonly configHash: string        // SHA256 of parquedb.config.ts content (if available)
   readonly collections: Readonly<Record<string, CollectionSchemaSnapshot>>
   readonly capturedAt: number        // Timestamp
-  commitHash?: string                // Associated commit hash (mutable for backward compatibility)
+  commitHash?: string | undefined                // Associated commit hash (mutable for backward compatibility)
 }
 
 // =============================================================================
@@ -97,7 +97,7 @@ export interface CommitState {
   readonly collections: Readonly<Record<string, CollectionState>>
   readonly relationships: RelationshipState
   readonly eventLogPosition: EventLogPosition
-  readonly schema?: SchemaSnapshot   // Schema snapshot at this commit
+  readonly schema?: SchemaSnapshot | undefined   // Schema snapshot at this commit
 }
 
 /**
@@ -117,8 +117,8 @@ export interface DatabaseCommit {
  */
 export interface CommitOptions {
   readonly message: string
-  readonly author?: string
-  readonly parents?: readonly string[]
+  readonly author?: string | undefined
+  readonly parents?: readonly string[] | undefined
 }
 
 /**
@@ -129,5 +129,5 @@ export interface DatabaseState {
   collections: Record<string, CollectionState>
   relationships: RelationshipState
   eventLogPosition: EventLogPosition
-  schema?: SchemaSnapshot   // Optional schema snapshot
+  schema?: SchemaSnapshot | undefined   // Optional schema snapshot
 }

@@ -26,9 +26,9 @@ export interface BackendBenchmarkConfig {
   /** Verbose logging */
   verbose: boolean
   /** R2 bucket (for R2 tests) */
-  r2Bucket?: string
+  r2Bucket?: string | undefined
   /** R2 endpoint (for R2 tests) */
-  r2Endpoint?: string
+  r2Endpoint?: string | undefined
 }
 
 export const DEFAULT_BACKEND_CONFIG: BackendBenchmarkConfig = {
@@ -89,10 +89,10 @@ export interface OperationResult {
   backend: BackendType
   datasetSize: number
   stats: BenchmarkStats
-  bytesRead?: number
-  bytesWritten?: number
-  rowsAffected?: number
-  metadata?: Record<string, unknown>
+  bytesRead?: number | undefined
+  bytesWritten?: number | undefined
+  rowsAffected?: number | undefined
+  metadata?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -195,8 +195,8 @@ export interface DeltaBenchmarkMetrics {
 export interface R2BenchmarkConfig extends BackendBenchmarkConfig {
   r2Bucket: string
   r2Endpoint: string
-  r2AccessKeyId?: string
-  r2SecretAccessKey?: string
+  r2AccessKeyId?: string | undefined
+  r2SecretAccessKey?: string | undefined
 }
 
 export interface R2BenchmarkMetrics {

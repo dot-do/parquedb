@@ -36,9 +36,9 @@ import type {
  */
 interface HyparquetReadOptions {
   file: AsyncBuffer
-  compressors?: Compressors
-  columns?: string[]
-  rowGroups?: number[]
+  compressors?: Compressors | undefined
+  columns?: string[] | undefined
+  rowGroups?: number[] | undefined
 }
 
 // =============================================================================

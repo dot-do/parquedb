@@ -39,8 +39,8 @@ import type { TailWorkerMessage, RawEventsFile } from '../../src/worker/TailDO'
 interface MockFile {
   data: Uint8Array
   size: number
-  metadata?: Record<string, string>
-  contentType?: string
+  metadata?: Record<string, string> | undefined
+  contentType?: string | undefined
 }
 
 /**

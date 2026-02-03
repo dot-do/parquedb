@@ -112,31 +112,31 @@ export interface RefreshConfig {
    * @example '0 * * * *' - Every hour
    * @example '0 0 * * *' - Daily at midnight
    */
-  schedule?: string
+  schedule?: string | undefined
 
   /**
    * Refresh strategy
    * @default 'replace'
    */
-  strategy?: RefreshStrategy
+  strategy?: RefreshStrategy | undefined
 
   /**
    * Grace period for stale data (allows querying stale MV)
    * @example '15m' - Allow 15 minutes of staleness
    */
-  gracePeriod?: string
+  gracePeriod?: string | undefined
 
   /**
    * Timezone for cron schedule
    * @default 'UTC'
    */
-  timezone?: string
+  timezone?: string | undefined
 
   /**
    * Override storage backend for the MV
    * By default, uses the same backend as source tables
    */
-  backend?: 'native' | 'iceberg' | 'delta'
+  backend?: 'native' | 'iceberg' | 'delta' | undefined
 }
 
 // =============================================================================
@@ -147,13 +147,13 @@ export interface RefreshConfig {
  * Aggregate function expressions for $compute
  */
 export interface AggregateExpr {
-  $count?: '*' | string
-  $sum?: string | ConditionalExpr
-  $avg?: string | ConditionalExpr
-  $min?: string
-  $max?: string
-  $first?: string
-  $last?: string
+  $count?: '*' | string | undefined
+  $sum?: string | ConditionalExpr | undefined
+  $avg?: string | ConditionalExpr | undefined
+  $min?: string | undefined
+  $max?: string | undefined
+  $first?: string | undefined
+  $last?: string | undefined
 }
 
 /**
@@ -186,13 +186,13 @@ export interface ConditionalExpr {
  */
 export interface CollectionDefinition {
   /** Entity type name */
-  $type?: string
+  $type?: string | undefined
 
   /** Field definitions (IceType format) */
   [field: string]: unknown
 
   /** Stream ingest source (makes this a stream collection) */
-  $ingest?: IngestSource
+  $ingest?: IngestSource | undefined
 }
 
 // =============================================================================
@@ -253,45 +253,45 @@ export interface MVDefinition {
    * Relations to expand (denormalize) into the view
    * @example ['customer', 'items.product']
    */
-  $expand?: string[]
+  $expand?: string[] | undefined
 
   /**
    * Rename expanded field prefixes
    * @example { 'customer': 'buyer' } // customer_name → buyer_name
    */
-  $flatten?: Record<string, string>
+  $flatten?: Record<string, string> | undefined
 
   /**
    * Filter to apply to source data
    */
-  $filter?: Filter
+  $filter?: Filter | undefined
 
   /**
    * Fields to select (for projection views)
    * Maps output field names to source expressions
    */
-  $select?: Record<string, string>
+  $select?: Record<string, string> | undefined
 
   /**
    * Group by dimensions (for aggregation views)
    */
-  $groupBy?: GroupBySpec[]
+  $groupBy?: GroupBySpec[] | undefined
 
   /**
    * Computed aggregates
    */
-  $compute?: Record<string, AggregateExpr>
+  $compute?: Record<string, AggregateExpr> | undefined
 
   /**
    * Unnest an array field (flatten array to rows)
    */
-  $unnest?: string
+  $unnest?: string | undefined
 
   /**
    * Refresh configuration
    * @default { mode: 'streaming' }
    */
-  $refresh?: RefreshConfig
+  $refresh?: RefreshConfig | undefined
 }
 
 /**
@@ -400,19 +400,19 @@ export interface MVMetadata {
   createdAt: Date
 
   /** When the view was last refreshed */
-  lastRefreshedAt?: Date
+  lastRefreshedAt?: Date | undefined
 
   /** Duration of the last refresh in milliseconds */
-  lastRefreshDurationMs?: number
+  lastRefreshDurationMs?: number | undefined
 
   /** Next scheduled refresh time (for scheduled views) */
-  nextRefreshAt?: Date
+  nextRefreshAt?: Date | undefined
 
   /** Number of rows in the view */
-  rowCount?: number
+  rowCount?: number | undefined
 
   /** Size of the view in bytes */
-  sizeBytes?: number
+  sizeBytes?: number | undefined
 
   /** Version number (incremented on each refresh) */
   version: number
@@ -421,10 +421,10 @@ export interface MVMetadata {
   lineage: MVLineage
 
   /** Error message if status is 'error' */
-  errorMessage?: string
+  errorMessage?: string | undefined
 
   /** Custom metadata */
-  meta?: Record<string, unknown>
+  meta?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -468,12 +468,12 @@ export type ViewStats = MVStats
  */
 export interface PipelineStage {
   /** Stage type */
-  $match?: Filter
-  $group?: Record<string, unknown>
-  $project?: Record<string, unknown>
-  $sort?: Record<string, 1 | -1>
-  $limit?: number
-  $skip?: number
+  $match?: Filter | undefined
+  $group?: Record<string, unknown> | undefined
+  $project?: Record<string, unknown> | undefined
+  $sort?: Record<string, 1 | -1> | undefined
+  $limit?: number | undefined
+  $skip?: number | undefined
 }
 
 /**
@@ -483,16 +483,16 @@ export interface PipelineStage {
  */
 export interface ViewQuery {
   /** Filter to apply to source data */
-  filter?: Filter
+  filter?: Filter | undefined
 
   /** Projection/field selection (1 = include, 0 = exclude) */
-  project?: Record<string, 0 | 1>
+  project?: Record<string, 0 | 1> | undefined
 
   /** Sort specification (1 = ascending, -1 = descending) */
-  sort?: Record<string, 1 | -1>
+  sort?: Record<string, 1 | -1> | undefined
 
   /** Aggregation pipeline (for complex transformations) */
-  pipeline?: PipelineStage[]
+  pipeline?: PipelineStage[] | undefined
 }
 
 /**
@@ -513,28 +513,28 @@ export interface ViewOptions {
   refreshMode: 'manual' | 'streaming' | 'scheduled'
 
   /** Schedule configuration (required for scheduled mode) */
-  schedule?: ViewSchedule | { cron?: string; intervalMs?: number; timezone?: string }
+  schedule?: ViewSchedule | { cron?: string | undefined; intervalMs?: number | undefined; timezone?: string | undefined } | undefined
 
   /** Maximum staleness in milliseconds (for streaming mode) */
-  maxStalenessMs?: number
+  maxStalenessMs?: number | undefined
 
   /** Refresh strategy: 'full' or 'incremental' */
-  refreshStrategy?: 'full' | 'incremental' | 'streaming'
+  refreshStrategy?: 'full' | 'incremental' | 'streaming' | undefined
 
   /** Whether to populate view data on creation */
-  populateOnCreate?: boolean
+  populateOnCreate?: boolean | undefined
 
   /** Indexes to create on the view */
-  indexes?: string[]
+  indexes?: string[] | undefined
 
   /** Description of the view */
-  description?: string
+  description?: string | undefined
 
   /** Tags for categorization */
-  tags?: string[]
+  tags?: string[] | undefined
 
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -573,25 +573,25 @@ export interface ViewMetadata {
   createdAt: Date
 
   /** When the view was last refreshed */
-  lastRefreshedAt?: Date
+  lastRefreshedAt?: Date | undefined
 
   /** Duration of the last refresh in milliseconds */
-  lastRefreshDurationMs?: number
+  lastRefreshDurationMs?: number | undefined
 
   /** Next scheduled refresh time */
-  nextRefreshAt?: Date
+  nextRefreshAt?: Date | undefined
 
   /** Version number (incremented on each refresh) */
   version: number
 
   /** Number of documents in the view */
-  documentCount?: number
+  documentCount?: number | undefined
 
   /** Size of the view in bytes */
-  sizeBytes?: number
+  sizeBytes?: number | undefined
 
   /** Error message if state is 'error' */
-  error?: string
+  error?: string | undefined
 }
 
 // =============================================================================
@@ -943,11 +943,11 @@ export function applyMVDefaults(def: MVDefinition): MVDefinition {
  */
 export interface ScheduleOptions {
   /** Cron expression for scheduling */
-  cron?: string
+  cron?: string | undefined
   /** Interval in milliseconds (alternative to cron) */
-  intervalMs?: number
+  intervalMs?: number | undefined
   /** Timezone for cron schedule */
-  timezone?: string
+  timezone?: string | undefined
 }
 
 /**
@@ -955,15 +955,15 @@ export interface ScheduleOptions {
  */
 export interface ExtendedViewOptions extends ViewOptions {
   /** View description */
-  description?: string
+  description?: string | undefined
   /** Tags for categorization */
-  tags?: string[]
+  tags?: string[] | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /** Indexes to create on the view */
-  indexes?: string[]
+  indexes?: string[] | undefined
   /** Whether to populate view on creation */
-  populateOnCreate?: boolean
+  populateOnCreate?: boolean | undefined
 }
 
 /**
@@ -990,7 +990,7 @@ export interface DefineViewInput {
   /** Query specification */
   query: ViewQuery
   /** View options */
-  options?: Partial<ExtendedViewOptions>
+  options?: Partial<ExtendedViewOptions> | undefined
 }
 
 /**
@@ -1000,15 +1000,15 @@ export interface DefineViewResult {
   /** Whether the view definition is valid */
   success: boolean
   /** The validated view definition (if successful) */
-  definition?: ViewDefinition & { options: ExtendedViewOptions }
+  definition?: ViewDefinition & { options: ExtendedViewOptions } | undefined
   /** Validation errors (if unsuccessful) */
-  errors?: ViewValidationError[]
+  errors?: ViewValidationError[] | undefined
 }
 
 /**
  * Validate a ViewDefinition and return errors
  */
-export function validateViewDefinition(def: Partial<ViewDefinition & { options?: Partial<ExtendedViewOptions> }>): ViewValidationError[] {
+export function validateViewDefinition(def: Partial<ViewDefinition & { options?: Partial<ExtendedViewOptions> | undefined }>): ViewValidationError[] {
   const errors: ViewValidationError[] = []
 
   // Validate name
@@ -1135,33 +1135,33 @@ export interface MaterializedViewDefinition {
   /** View name */
   name: string
   /** Description */
-  description?: string
+  description?: string | undefined
   /** Source collection */
   source: string
   /** Filter to apply */
-  filter?: Filter
+  filter?: Filter | undefined
   /** Projection/field selection */
-  project?: Record<string, 0 | 1>
+  project?: Record<string, 0 | 1> | undefined
   /** Sort specification */
-  sort?: Record<string, 1 | -1>
+  sort?: Record<string, 1 | -1> | undefined
   /** Aggregation pipeline */
-  pipeline?: PipelineStage[]
+  pipeline?: PipelineStage[] | undefined
   /** Refresh strategy */
   refreshStrategy: 'full' | 'incremental' | 'streaming'
   /** Refresh mode */
-  refreshMode?: RefreshMode
+  refreshMode?: RefreshMode | undefined
   /** Schedule for refresh */
-  schedule?: ScheduleOptions
+  schedule?: ScheduleOptions | undefined
   /** Maximum staleness in milliseconds */
-  maxStalenessMs?: number
+  maxStalenessMs?: number | undefined
   /** Whether to populate on create */
-  populateOnCreate?: boolean
+  populateOnCreate?: boolean | undefined
   /** Indexes to create */
-  indexes?: string[]
+  indexes?: string[] | undefined
   /** Dependencies (other views this depends on) */
-  dependencies?: string[]
+  dependencies?: string[] | undefined
   /** Custom metadata */
-  meta?: Record<string, unknown>
+  meta?: Record<string, unknown> | undefined
 }
 
 /**
@@ -1220,7 +1220,7 @@ export function toViewDefinition(mvDef: MaterializedViewDefinition): ViewDefinit
 /**
  * Convert ViewDefinition (storage format) to MaterializedViewDefinition
  */
-export function fromViewDefinition(viewDef: ViewDefinition & { options?: Partial<ExtendedViewOptions> }): MaterializedViewDefinition {
+export function fromViewDefinition(viewDef: ViewDefinition & { options?: Partial<ExtendedViewOptions> | undefined }): MaterializedViewDefinition {
   const mvDef: MaterializedViewDefinition = {
     name: viewDef.name as string,
     source: viewDef.source,

@@ -21,7 +21,7 @@ export interface ParsedArgs {
     version: boolean
     directory: string
     format: 'json' | 'ndjson' | 'csv'
-    limit?: number
+    limit?: number | undefined
     pretty: boolean
     quiet: boolean
   }

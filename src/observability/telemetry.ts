@@ -23,19 +23,19 @@ import { logger } from '../utils/logger'
  */
 export interface TelemetryConfig {
   /** Enable telemetry collection (default: true) */
-  enabled?: boolean
+  enabled?: boolean | undefined
   /** Flush interval for accumulated metrics in ms (default: 10000) */
-  flushIntervalMs?: number
+  flushIntervalMs?: number | undefined
   /** Maximum number of metric data points to retain per series (default: 500) */
-  maxDataPoints?: number
+  maxDataPoints?: number | undefined
   /** Shard identifier for DO-based metrics */
-  shardId?: string
+  shardId?: string | undefined
   /** Environment label (e.g., 'production', 'staging') */
-  environment?: string
+  environment?: string | undefined
   /** Service name for tracing (default: 'parquedb') */
-  serviceName?: string
+  serviceName?: string | undefined
   /** Custom labels applied to all metrics */
-  labels?: Record<string, string>
+  labels?: Record<string, string> | undefined
 }
 
 /**
@@ -154,7 +154,7 @@ export interface CacheMetrics {
   /** Utilization (size / maxSize) */
   utilization: number
   /** Bytes stored (if available) */
-  bytesStored?: number
+  bytesStored?: number | undefined
 }
 
 // =============================================================================
@@ -227,15 +227,15 @@ export interface TraceContext {
   /** Span ID (64-bit hex string) */
   spanId: string
   /** Parent span ID (if this is a child span) */
-  parentSpanId?: string
+  parentSpanId?: string | undefined
   /** Operation name */
   operationName: string
   /** Start timestamp (ms since epoch) */
   startTime: number
   /** End timestamp (if span is complete) */
-  endTime?: number
+  endTime?: number | undefined
   /** Duration in milliseconds */
-  durationMs?: number
+  durationMs?: number | undefined
   /** Span status */
   status: 'ok' | 'error' | 'unset'
   /** Span attributes (key-value pairs) */
@@ -244,7 +244,7 @@ export interface TraceContext {
   events: Array<{
     name: string
     timestamp: number
-    attributes?: Record<string, string | number | boolean>
+    attributes?: Record<string, string | number | boolean> | undefined
   }>
 }
 
@@ -265,23 +265,23 @@ export interface StructuredLogEntry {
   /** Component generating the log */
   component: string
   /** Operation context */
-  operation?: string
+  operation?: string | undefined
   /** Namespace (if applicable) */
-  namespace?: string
+  namespace?: string | undefined
   /** Trace context (if available) */
-  traceId?: string
+  traceId?: string | undefined
   /** Span context (if available) */
-  spanId?: string
+  spanId?: string | undefined
   /** Additional structured fields */
   fields: Record<string, unknown>
   /** Duration (if this is a completion log) */
-  durationMs?: number
+  durationMs?: number | undefined
   /** Error details */
   error?: {
     name: string
     message: string
-    stack?: string
-  }
+    stack?: string | undefined
+  } | undefined
 }
 
 // =============================================================================
@@ -820,12 +820,12 @@ export class TelemetryCollector {
     component: string,
     fields: Record<string, unknown> = {},
     options?: {
-      operation?: string
-      namespace?: string
-      traceId?: string
-      spanId?: string
-      durationMs?: number
-      error?: Error
+      operation?: string | undefined
+      namespace?: string | undefined
+      traceId?: string | undefined
+      spanId?: string | undefined
+      durationMs?: number | undefined
+      error?: Error | undefined
     }
   ): void {
     if (!this.config.enabled) return

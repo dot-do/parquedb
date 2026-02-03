@@ -117,11 +117,11 @@ export class R2NotFoundError extends NotFoundError {
  */
 export interface R2BackendOptions {
   /** Prefix for all keys (optional) */
-  prefix?: string
+  prefix?: string | undefined
   /** TTL for multipart uploads in milliseconds (default: 30 minutes). Uploads older than this are cleaned up automatically. */
-  multipartUploadTTL?: number
+  multipartUploadTTL?: number | undefined
   /** Maximum number of concurrent multipart uploads to track (default: 100). Prevents unbounded memory growth. */
-  maxActiveUploads?: number
+  maxActiveUploads?: number | undefined
 }
 
 /**
@@ -265,10 +265,10 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     try {
       const r2Options: {
         prefix: string
-        limit?: number
-        cursor?: string
-        delimiter?: string
-        include?: ('httpMetadata' | 'customMetadata')[]
+        limit?: number | undefined
+        cursor?: string | undefined
+        delimiter?: string | undefined
+        include?: ('httpMetadata' | 'customMetadata')[] | undefined
       } = {
         prefix: fullPrefix,
       }
@@ -509,7 +509,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       let cursor: string | undefined
 
       do {
-        const listOptions: { prefix: string; cursor?: string } = { prefix: fullPrefix }
+        const listOptions: { prefix: string; cursor?: string | undefined } = { prefix: fullPrefix }
         if (cursor) {
           listOptions.cursor = cursor
         }
@@ -676,7 +676,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
     try {
       // Build multipart options
-      let r2Options: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> } | undefined
+      let r2Options: { httpMetadata?: { contentType?: string | undefined } | undefined; customMetadata?: Record<string, string> | undefined } | undefined
       if (options?.contentType || options?.metadata) {
         r2Options = {}
         if (options.contentType) {
@@ -932,7 +932,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
   async writeStreaming(
     path: string,
     data: Uint8Array,
-    options?: WriteOptions & { partSize?: number }
+    options?: WriteOptions & { partSize?: number | undefined }
   ): Promise<WriteResult> {
     const partSize = options?.partSize ?? R2Backend.DEFAULT_PART_SIZE
 
@@ -964,7 +964,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
     try {
       // Build multipart options
-      let r2Options: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> } | undefined
+      let r2Options: { httpMetadata?: { contentType?: string | undefined } | undefined; customMetadata?: Record<string, string> | undefined } | undefined
       if (options?.contentType || options?.metadata) {
         r2Options = {}
         if (options.contentType) {

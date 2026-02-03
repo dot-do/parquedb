@@ -143,17 +143,17 @@ export interface StorageRouterOptions {
    * Default storage mode for collections not in schema
    * @default 'flexible'
    */
-  defaultMode?: StorageMode
+  defaultMode?: StorageMode | undefined
 
   /**
    * Namespace sharding configuration
    */
-  sharding?: ShardingConfig
+  sharding?: ShardingConfig | undefined
 
   /**
    * Thresholds for automatic sharding decisions
    */
-  shardingThresholds?: ShardingThresholds
+  shardingThresholds?: ShardingThresholds | undefined
 }
 
 /**

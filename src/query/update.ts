@@ -44,7 +44,7 @@ export interface UpdateApplyOptions {
   /**
    * Whether this is an insert operation (for $setOnInsert)
    */
-  isInsert?: boolean
+  isInsert?: boolean | undefined
 }
 
 // =============================================================================

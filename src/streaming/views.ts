@@ -263,15 +263,15 @@ export function streamViewName(name: string): StreamViewName {
  */
 export interface WindowDuration {
   /** Milliseconds */
-  ms?: number
+  ms?: number | undefined
   /** Seconds */
-  seconds?: number
+  seconds?: number | undefined
   /** Minutes */
-  minutes?: number
+  minutes?: number | undefined
   /** Hours */
-  hours?: number
+  hours?: number | undefined
   /** Days */
-  days?: number
+  days?: number | undefined
 }
 
 /**
@@ -288,7 +288,7 @@ export interface TumblingWindow {
   /** Window size */
   size: WindowDuration
   /** Optional offset for window alignment */
-  offset?: WindowDuration
+  offset?: WindowDuration | undefined
 }
 
 /**
@@ -324,7 +324,7 @@ export interface SessionWindow {
   /** Maximum gap between events in the same session */
   gap: WindowDuration
   /** Maximum session duration (optional) */
-  maxDuration?: WindowDuration
+  maxDuration?: WindowDuration | undefined
 }
 
 /**
@@ -357,13 +357,13 @@ export interface StreamSourceConfig {
    * Optional filter to apply to source events
    * Only events matching this filter will be processed
    */
-  filter?: Filter
+  filter?: Filter | undefined
 
   /**
    * Event types to process
    * @default ['CREATE', 'UPDATE', 'DELETE']
    */
-  eventTypes?: Array<'CREATE' | 'UPDATE' | 'DELETE'>
+  eventTypes?: Array<'CREATE' | 'UPDATE' | 'DELETE'> | undefined
 
   /**
    * Start position for processing events
@@ -372,7 +372,7 @@ export interface StreamSourceConfig {
    * - timestamp: Start from specific timestamp (ms since epoch)
    * @default 'latest'
    */
-  startPosition?: 'earliest' | 'latest' | number
+  startPosition?: 'earliest' | 'latest' | number | undefined
 }
 
 // =============================================================================
@@ -411,7 +411,7 @@ export interface TransformContext {
   /** View name */
   viewName: StreamViewName
   /** Current window key (for keyed aggregations) */
-  windowKey?: string
+  windowKey?: string | undefined
 }
 
 /**
@@ -422,28 +422,28 @@ export interface TransformConfig<TInput = unknown, TOutput = unknown> {
    * Aggregation pipeline (MongoDB-style)
    * Applied to events in each window
    */
-  pipeline?: AggregationStage[]
+  pipeline?: AggregationStage[] | undefined
 
   /**
    * Built-in transform shorthand
    */
-  builtin?: BuiltInTransform
+  builtin?: BuiltInTransform | undefined
 
   /**
    * Field for builtin aggregations (required for sum, avg, min, max)
    */
-  field?: string
+  field?: string | undefined
 
   /**
    * Custom transform function
    */
-  fn?: TransformFunction<TInput, TOutput>
+  fn?: TransformFunction<TInput, TOutput> | undefined
 
   /**
    * Field to group by before applying transform
    * Creates separate windows per group
    */
-  groupBy?: string | string[]
+  groupBy?: string | string[] | undefined
 }
 
 // =============================================================================
@@ -463,9 +463,9 @@ export interface CollectionSink {
   /** Target collection name */
   collection: string
   /** How to write results: 'upsert' | 'append' */
-  mode?: 'upsert' | 'append'
+  mode?: 'upsert' | 'append' | undefined
   /** Fields to use as key for upsert */
-  keyFields?: string[]
+  keyFields?: string[] | undefined
 }
 
 /**
@@ -476,11 +476,11 @@ export interface WebhookSink {
   /** Webhook URL */
   url: string
   /** HTTP method */
-  method?: 'POST' | 'PUT'
+  method?: 'POST' | 'PUT' | undefined
   /** Custom headers */
-  headers?: Record<string, string>
+  headers?: Record<string, string> | undefined
   /** Batch size for webhook calls */
-  batchSize?: number
+  batchSize?: number | undefined
 }
 
 /**
@@ -491,7 +491,7 @@ export interface QueueSink {
   /** Queue name/binding */
   queue: string
   /** Message format */
-  format?: 'json' | 'msgpack'
+  format?: 'json' | 'msgpack' | undefined
 }
 
 /**
@@ -500,7 +500,7 @@ export interface QueueSink {
 export interface ConsoleSink {
   type: 'console'
   /** Log level */
-  level?: 'log' | 'info' | 'debug'
+  level?: 'log' | 'info' | 'debug' | undefined
 }
 
 /**
@@ -515,17 +515,17 @@ export interface OutputConfig {
   /**
    * Output sink (defaults to collection with same name as view)
    */
-  sink?: OutputSink
+  sink?: OutputSink | undefined
 
   /**
    * Batch results before writing
    */
-  batchSize?: number
+  batchSize?: number | undefined
 
   /**
    * Maximum delay before flushing batch (ms)
    */
-  batchTimeoutMs?: number
+  batchTimeoutMs?: number | undefined
 }
 
 // =============================================================================
@@ -540,7 +540,7 @@ export interface WatermarkConfig {
    * Maximum allowed lateness for events
    * Events arriving later than this are dropped
    */
-  maxLateness?: WindowDuration
+  maxLateness?: WindowDuration | undefined
 
   /**
    * How to handle late events
@@ -549,12 +549,12 @@ export interface WatermarkConfig {
    * - 'sideOutput': Send to separate collection
    * @default 'drop'
    */
-  lateEventPolicy?: 'drop' | 'update' | 'sideOutput'
+  lateEventPolicy?: 'drop' | 'update' | 'sideOutput' | undefined
 
   /**
    * Collection name for side output (required if lateEventPolicy is 'sideOutput')
    */
-  sideOutputCollection?: string
+  sideOutputCollection?: string | undefined
 }
 
 // =============================================================================
@@ -578,44 +578,44 @@ export interface StreamViewDefinition<TInput = unknown, TOutput = unknown> {
   /**
    * Transform configuration
    */
-  transform?: TransformConfig<TInput, TOutput>
+  transform?: TransformConfig<TInput, TOutput> | undefined
 
   /**
    * Window configuration
    * @default { type: 'global' }
    */
-  window?: WindowConfig
+  window?: WindowConfig | undefined
 
   /**
    * Output configuration
    */
-  output?: OutputConfig
+  output?: OutputConfig | undefined
 
   /**
    * Watermark configuration for late event handling
    */
-  watermark?: WatermarkConfig
+  watermark?: WatermarkConfig | undefined
 
   /**
    * Whether the view is enabled
    * @default true
    */
-  enabled?: boolean
+  enabled?: boolean | undefined
 
   /**
    * Description for documentation
    */
-  description?: string
+  description?: string | undefined
 
   /**
    * Tags for organizing views
    */
-  tags?: string[]
+  tags?: string[] | undefined
 
   /**
    * Custom metadata
    */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -683,9 +683,9 @@ export interface StreamPosition {
   /** Last processed event timestamp */
   timestamp: number
   /** Last processed event ID */
-  eventId?: string
+  eventId?: string | undefined
   /** Sequence number */
-  sequence?: number
+  sequence?: number | undefined
 }
 
 /**
@@ -705,9 +705,9 @@ export interface StreamViewStats {
   /** Average processing latency (ms) */
   avgLatencyMs: number
   /** Last event timestamp */
-  lastEventTimestamp?: number
+  lastEventTimestamp?: number | undefined
   /** Last output timestamp */
-  lastOutputTimestamp?: number
+  lastOutputTimestamp?: number | undefined
 }
 
 // =============================================================================

@@ -21,7 +21,7 @@ import type {
 // =============================================================================
 
 /** Map ParqueDB types to Parquet types */
-const TYPE_MAP: Record<string, { type: ParquetPrimitiveType | ParquetLogicalType; optional?: boolean }> = {
+const TYPE_MAP: Record<string, { type: ParquetPrimitiveType | ParquetLogicalType; optional?: boolean | undefined }> = {
   // String types
   string: { type: 'STRING' },
   text: { type: 'STRING' },
@@ -136,7 +136,7 @@ export function toParquetSchema(typeDef: TypeDefinition): ParquetSchema {
       const parquetType = inferParquetType(fieldDef)
       schema[fieldName] = parquetType
     } else if (typeof fieldDef === 'object' && fieldDef !== null && 'type' in fieldDef) {
-      const def = fieldDef as { type: string; required?: boolean }
+      const def = fieldDef as { type: string; required?: boolean | undefined }
       const parquetType = inferParquetType(def.type)
       if (def.required !== undefined) {
         parquetType.optional = !def.required
@@ -163,7 +163,7 @@ export function _parseFieldDef(fieldName: string, fieldDef: FieldDef): ParquetFi
 
   if (typeof fieldDef === 'object' && fieldDef !== null && 'type' in fieldDef) {
     // Full field definition object
-    const def = fieldDef as { type: string; required?: boolean; index?: unknown }
+    const def = fieldDef as { type: string; required?: boolean | undefined; index?: unknown | undefined }
     const parquetType = inferParquetType(def.type)
 
     // Override optional if explicitly set
@@ -250,7 +250,7 @@ export function createEntitySchema(options: CreateEntitySchemaOptions = {}): Par
       if (fieldDef && typeof fieldDef === 'string' && !isRelationString(fieldDef)) {
         schema[fieldName] = inferParquetType(fieldDef)
       } else if (fieldDef && typeof fieldDef === 'object' && 'type' in (fieldDef as object)) {
-        const def = fieldDef as { type: string; required?: boolean }
+        const def = fieldDef as { type: string; required?: boolean | undefined }
         const parquetType = inferParquetType(def.type)
         if (def.required !== undefined) {
           parquetType.optional = !def.required

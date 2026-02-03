@@ -41,13 +41,13 @@ export interface StreamingTailEnv {
   TAIL_DO: DurableObjectNamespace
 
   /** Optional: Instance ID for this worker (for debugging) */
-  INSTANCE_ID?: string
+  INSTANCE_ID?: string | undefined
 
   /** Optional: Batch size before sending (default: 50) */
-  BATCH_SIZE?: string
+  BATCH_SIZE?: string | undefined
 
   /** Optional: Max wait time before sending batch in ms (default: 1000) */
-  BATCH_WAIT_MS?: string
+  BATCH_WAIT_MS?: string | undefined
 }
 
 /**
@@ -65,16 +65,16 @@ export interface TailMessage {
  */
 export interface StreamingTailConfig {
   /** Validation configuration */
-  validation?: TailValidationConfig
+  validation?: TailValidationConfig | undefined
 
   /** Batch size before sending to TailDO */
-  batchSize?: number
+  batchSize?: number | undefined
 
   /** Max wait time before sending batch in ms */
-  batchWaitMs?: number
+  batchWaitMs?: number | undefined
 
   /** DO ID strategy: 'global' (single DO) or 'hourly' (one per hour) */
-  doIdStrategy?: 'global' | 'hourly'
+  doIdStrategy?: 'global' | 'hourly' | undefined
 }
 
 /**

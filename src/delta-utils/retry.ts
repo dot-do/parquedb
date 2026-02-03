@@ -78,31 +78,31 @@ export interface RetryMetrics {
  */
 export interface RetryConfig {
   /** Maximum number of retry attempts (default: 3) */
-  maxRetries?: number
+  maxRetries?: number | undefined
   /** Base delay in milliseconds (default: 100) */
-  baseDelay?: number
+  baseDelay?: number | undefined
   /** Maximum delay in milliseconds (default: 10000) */
-  maxDelay?: number
+  maxDelay?: number | undefined
   /** Multiplier for exponential backoff (default: 2) */
-  multiplier?: number
+  multiplier?: number | undefined
   /** Whether to add random jitter to delays (default: true) */
-  jitter?: boolean
+  jitter?: boolean | undefined
   /** Jitter factor (default: 0.5, meaning +/- 50%) */
-  jitterFactor?: number
+  jitterFactor?: number | undefined
   /** Custom predicate to determine if error is retryable */
-  isRetryable?: (error: Error) => boolean
+  isRetryable?: ((error: Error) => boolean) | undefined
   /** Called before each retry attempt. Return false to abort retries. */
-  onRetry?: (info: RetryInfo) => boolean | void
+  onRetry?: ((info: RetryInfo) => boolean | void) | undefined
   /** Called on successful completion */
-  onSuccess?: (info: SuccessInfo) => void
+  onSuccess?: ((info: SuccessInfo) => void) | undefined
   /** Called when all retries are exhausted */
-  onFailure?: (info: FailureInfo) => void
+  onFailure?: ((info: FailureInfo) => void) | undefined
   /** Whether to return metrics with result */
-  returnMetrics?: boolean
+  returnMetrics?: boolean | undefined
   /** AbortController signal to cancel retries */
-  signal?: AbortSignal
+  signal?: AbortSignal | undefined
   /** Internal: custom delay function for testing */
-  _delayFn?: (ms: number) => Promise<void>
+  _delayFn?: ((ms: number) => Promise<void>) | undefined
 }
 
 /**
@@ -175,7 +175,7 @@ export function isRetryableError(error: unknown): boolean {
   }
 
   // Check for explicit retryable property
-  if ((error as { retryable?: boolean }).retryable === true) {
+  if ((error as { retryable?: boolean | undefined }).retryable === true) {
     return true
   }
 
@@ -271,7 +271,7 @@ export async function withRetry<T>(
 
 export async function withRetry<T>(
   fn: () => T | Promise<T>,
-  config?: RetryConfig & { returnMetrics?: false }
+  config?: RetryConfig & { returnMetrics?: false | undefined }
 ): Promise<T>
 
 export async function withRetry<T>(
@@ -356,7 +356,7 @@ export async function withRetry<T>(
 
         // Attach metrics to error if returnMetrics is enabled
         if (returnMetrics) {
-          (err as Error & { metrics?: RetryMetrics }).metrics = metrics
+          (err as Error & { metrics?: RetryMetrics | undefined }).metrics = metrics
         }
 
         throw err
@@ -399,7 +399,7 @@ export async function withRetry<T>(
 
           // Attach metrics to error if returnMetrics is enabled
           if (returnMetrics) {
-            (err as Error & { metrics?: RetryMetrics }).metrics = metrics
+            (err as Error & { metrics?: RetryMetrics | undefined }).metrics = metrics
           }
 
           throw err

@@ -348,9 +348,9 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     fromId: string,
     predicate?: string,
     options?: {
-      matchMode?: 'exact' | 'fuzzy'
-      minSimilarity?: number
-      maxSimilarity?: number
+      matchMode?: 'exact' | 'fuzzy' | undefined
+      minSimilarity?: number | undefined
+      maxSimilarity?: number | undefined
     }
   ): Promise<Array<{
     to_ns: string
@@ -1000,12 +1000,12 @@ export default {
 
         try {
           const body = await request.json() as {
-            namespace?: string
-            format?: 'iceberg' | 'delta' | 'auto'
-            retentionMs?: number
-            dryRun?: boolean
-            warehouse?: string
-            database?: string
+            namespace?: string | undefined
+            format?: 'iceberg' | 'delta' | 'auto' | undefined
+            retentionMs?: number | undefined
+            dryRun?: boolean | undefined
+            warehouse?: string | undefined
+            database?: string | undefined
           }
 
           if (!body.namespace) {
@@ -1124,11 +1124,11 @@ export default {
             summary: {
               totalNamespaces: results.length,
               totalActiveWindows: results.reduce((sum, r) => {
-                const windows = (r as { activeWindows?: number }).activeWindows ?? 0
+                const windows = (r as { activeWindows?: number | undefined }).activeWindows ?? 0
                 return sum + windows
               }, 0),
               totalKnownWriters: [...new Set(results.flatMap(r => {
-                const writers = (r as { knownWriters?: string[] }).knownWriters ?? []
+                const writers = (r as { knownWriters?: string[] | undefined }).knownWriters ?? []
                 return writers
               }))],
             },

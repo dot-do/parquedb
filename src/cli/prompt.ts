@@ -17,9 +17,9 @@ import { isTTY, colors, isColorEnabled } from './utils'
  */
 export interface TextPromptOptions {
   /** Default value if user presses Enter */
-  default?: string
+  default?: string | undefined
   /** Validate the input, return error message or undefined/true for valid */
-  validate?: (value: string) => string | undefined | true
+  validate?: ((value: string) => string | undefined | true) | undefined
 }
 
 /**
@@ -27,9 +27,9 @@ export interface TextPromptOptions {
  */
 export interface SelectPromptOptions<T extends string = string> {
   /** Available choices */
-  choices: Array<{ value: T; label: string; description?: string }>
+  choices: Array<{ value: T; label: string; description?: string | undefined }>
   /** Default selected value */
-  default?: T
+  default?: T | undefined
 }
 
 /**
@@ -37,7 +37,7 @@ export interface SelectPromptOptions<T extends string = string> {
  */
 export interface ConfirmPromptOptions {
   /** Default value (true = yes, false = no) */
-  default?: boolean
+  default?: boolean | undefined
 }
 
 /**
@@ -271,7 +271,7 @@ export async function promptSelect<T extends string>(
  */
 export async function promptList(
   message: string,
-  options: { default?: string[]; validate?: (values: string[]) => string | undefined | true } = {},
+  options: { default?: string[] | undefined; validate?: ((values: string[]) => string | undefined | true) | undefined } = {},
   io?: PromptIO
 ): Promise<string[]> {
   const defaultText = options.default?.length

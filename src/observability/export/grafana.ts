@@ -459,8 +459,8 @@ export function handleAnnotationsQuery(
     timestamp: Date
     severity: string
     title: string
-    message?: string
-    namespace?: string
+    message?: string | undefined
+    namespace?: string | undefined
   }>
 ): GrafanaAnnotation[] {
   if (!alerts) {

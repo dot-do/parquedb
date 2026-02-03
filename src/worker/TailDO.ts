@@ -53,19 +53,19 @@ export interface TailDOEnv {
   LOGS_BUCKET: R2Bucket
 
   /** Optional: Flush interval in ms (default: 30000) */
-  FLUSH_INTERVAL_MS?: string
+  FLUSH_INTERVAL_MS?: string | undefined
 
   /**
    * Prefix for raw event files in R2
    * @default "raw-events"
    */
-  RAW_EVENTS_PREFIX?: string
+  RAW_EVENTS_PREFIX?: string | undefined
 
   /**
    * Batch size before writing raw events file
    * @default 100
    */
-  RAW_EVENTS_BATCH_SIZE?: string
+  RAW_EVENTS_BATCH_SIZE?: string | undefined
 }
 
 /**

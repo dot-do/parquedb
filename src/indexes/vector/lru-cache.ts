@@ -20,11 +20,11 @@ interface CacheEntry<V> {
  */
 export interface LRUCacheOptions {
   /** Maximum number of entries */
-  maxEntries?: number
+  maxEntries?: number | undefined
   /** Maximum size in bytes */
-  maxBytes?: number
+  maxBytes?: number | undefined
   /** Callback when entry is evicted */
-  onEvict?: (key: number, value: unknown) => void
+  onEvict?: ((key: number, value: unknown) => void) | undefined
 }
 
 /**

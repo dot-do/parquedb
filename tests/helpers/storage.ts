@@ -45,9 +45,9 @@ import type { R2Bucket } from '../../src/storage/types/r2'
  */
 export interface TestStorageConfig {
   /** Optional prefix for test data isolation */
-  prefix?: string
+  prefix?: string | undefined
   /** Whether to automatically cleanup on afterAll (default: true) */
-  autoCleanup?: boolean
+  autoCleanup?: boolean | undefined
 }
 
 /**

@@ -53,8 +53,8 @@ export async function createGlobal(
   args: {
     slug: string
     data: Record<string, unknown>
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
-    draft?: boolean
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
+    draft?: boolean | undefined
   }
 ): Promise<Record<string, unknown>> {
   const { slug, data, req, draft } = args
@@ -119,12 +119,12 @@ export async function createVersion(
     collection: string
     parent: string | number
     versionData: Record<string, unknown>
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
-    autosave?: boolean
-    createdAt?: string
-    publishedLocale?: string
-    snapshot?: boolean
-    updatedAt?: string
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
+    autosave?: boolean | undefined
+    createdAt?: string | undefined
+    publishedLocale?: string | undefined
+    snapshot?: boolean | undefined
+    updatedAt?: string | undefined
   }
 ): Promise<Record<string, unknown>> {
   const {
@@ -197,12 +197,12 @@ export async function createGlobalVersion(
     slug: string
     parent: string | number
     versionData: Record<string, unknown>
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
-    autosave?: boolean
-    createdAt?: string
-    publishedLocale?: string
-    snapshot?: boolean
-    updatedAt?: string
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
+    autosave?: boolean | undefined
+    createdAt?: string | undefined
+    publishedLocale?: string | undefined
+    snapshot?: boolean | undefined
+    updatedAt?: string | undefined
   }
 ): Promise<Record<string, unknown>> {
   const {
@@ -274,7 +274,7 @@ export async function createGlobalVersion(
  * Get actor from request context
  */
 function getActor(
-  req: { user?: Record<string, unknown> } | undefined,
+  req: { user?: Record<string, unknown> | undefined } | undefined,
   config: ResolvedAdapterConfig
 ): EntityId {
   if (req?.user && typeof req.user === 'object' && 'id' in req.user) {

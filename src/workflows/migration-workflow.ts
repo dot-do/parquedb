@@ -50,13 +50,13 @@ export interface MigrationWorkflowParams {
   /** Target format */
   to: BackendType
   /** Source format (or 'auto' to detect) */
-  from?: BackendType | 'auto'
+  from?: BackendType | 'auto' | undefined
   /** Specific namespaces to migrate (empty = discover all) */
-  namespaces?: string[]
+  namespaces?: string[] | undefined
   /** Batch size per step (default: 400, max ~450 to stay under 1000 subrequests) */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Delete source data after migration */
-  deleteSource?: boolean
+  deleteSource?: boolean | undefined
 }
 
 interface MigrationState {

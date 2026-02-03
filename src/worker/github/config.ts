@@ -60,11 +60,11 @@ export interface ParqueDBGitHubConfig {
  * Partial config type for parsing
  */
 interface PartialConfig {
-  database?: Partial<ParqueDBGitHubConfig['database']>
-  branches?: Partial<ParqueDBGitHubConfig['branches']>
-  preview?: Partial<ParqueDBGitHubConfig['preview']>
-  merge?: Partial<ParqueDBGitHubConfig['merge']>
-  diff?: Partial<ParqueDBGitHubConfig['diff']>
+  database?: Partial<ParqueDBGitHubConfig['database']> | undefined
+  branches?: Partial<ParqueDBGitHubConfig['branches']> | undefined
+  preview?: Partial<ParqueDBGitHubConfig['preview']> | undefined
+  merge?: Partial<ParqueDBGitHubConfig['merge']> | undefined
+  diff?: Partial<ParqueDBGitHubConfig['diff']> | undefined
 }
 
 /**

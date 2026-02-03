@@ -64,7 +64,7 @@ export interface RetentionPolicy {
   /** Maximum age in milliseconds for data of this granularity */
   maxAgeMs: number
   /** Whether this granularity is enabled for cleanup */
-  enabled?: boolean
+  enabled?: boolean | undefined
 }
 
 /**
@@ -72,15 +72,15 @@ export interface RetentionPolicy {
  */
 export interface TieredRetentionPolicies {
   /** Retention for hourly granularity data */
-  hourly?: RetentionPolicy
+  hourly?: RetentionPolicy | undefined
   /** Retention for daily granularity data */
-  daily?: RetentionPolicy
+  daily?: RetentionPolicy | undefined
   /** Retention for weekly granularity data */
-  weekly?: RetentionPolicy
+  weekly?: RetentionPolicy | undefined
   /** Retention for monthly granularity data */
-  monthly?: RetentionPolicy
+  monthly?: RetentionPolicy | undefined
   /** Default retention for records without granularity */
-  default?: RetentionPolicy
+  default?: RetentionPolicy | undefined
 }
 
 /**
@@ -90,17 +90,17 @@ export interface RetentionManagerConfig {
   /** Collection name to manage retention for */
   collection: string
   /** Tiered retention policies */
-  policies?: TieredRetentionPolicies
+  policies?: TieredRetentionPolicies | undefined
   /** Simple max age (applies to all records if policies not set) */
-  maxAgeMs?: number
+  maxAgeMs?: number | undefined
   /** Batch size for delete operations */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Field name containing the timestamp (default: 'timestamp') */
-  timestampField?: string
+  timestampField?: string | undefined
   /** Field name containing the granularity (default: 'granularity') */
-  granularityField?: string
+  granularityField?: string | undefined
   /** Enable debug logging */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 /**
@@ -128,7 +128,7 @@ export interface CleanupProgress {
   /** Percentage complete (0-100) */
   percentage: number
   /** Current granularity being processed */
-  currentGranularity?: TimeGranularity | 'default'
+  currentGranularity?: TimeGranularity | 'default' | undefined
   /** Elapsed time in milliseconds */
   elapsedMs: number
 }
@@ -146,7 +146,7 @@ export interface CleanupResult {
   /** Duration of cleanup in milliseconds */
   durationMs: number
   /** Error message if failed */
-  error?: string
+  error?: string | undefined
 }
 
 /**
@@ -154,15 +154,15 @@ export interface CleanupResult {
  */
 export interface ScheduleOptions {
   /** Interval between cleanups in milliseconds */
-  intervalMs?: number
+  intervalMs?: number | undefined
   /** Progress callback */
-  onProgress?: (progress: CleanupProgress) => void
+  onProgress?: ((progress: CleanupProgress) => void) | undefined
   /** Completion callback */
-  onComplete?: (result: CleanupResult) => void
+  onComplete?: ((result: CleanupResult) => void) | undefined
   /** Error callback */
-  onError?: (error: Error) => void
+  onError?: ((error: Error) => void) | undefined
   /** Run immediately on start */
-  runImmediately?: boolean
+  runImmediately?: boolean | undefined
 }
 
 /**

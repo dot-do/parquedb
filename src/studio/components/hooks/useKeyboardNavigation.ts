@@ -39,21 +39,21 @@ export interface UseKeyboardNavigationOptions {
   /** Total number of navigable items */
   itemCount: number
   /** Callback when an item is selected (Enter key) */
-  onSelect?: (index: number) => void
+  onSelect?: ((index: number) => void) | undefined
   /** Callback when Escape is pressed */
-  onEscape?: () => void
+  onEscape?: (() => void) | undefined
   /** Number of columns for grid navigation (default: 1 for list) */
-  columns?: number
+  columns?: number | undefined
   /** Whether to wrap around at boundaries (default: true) */
-  wrap?: boolean
+  wrap?: boolean | undefined
   /** Whether navigation is enabled (default: true) */
-  enabled?: boolean
+  enabled?: boolean | undefined
   /** Initial focused index (default: -1, no focus) */
-  initialIndex?: number
+  initialIndex?: number | undefined
   /** Callback when focus changes */
-  onFocusChange?: (index: number) => void
+  onFocusChange?: ((index: number) => void) | undefined
   /** Callback when Delete/Backspace is pressed on a focused item */
-  onDelete?: (index: number) => void
+  onDelete?: ((index: number) => void) | undefined
 }
 
 /**

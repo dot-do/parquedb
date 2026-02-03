@@ -34,7 +34,7 @@ interface MockFile {
 interface WriteCall {
   path: string
   data: Uint8Array
-  options?: FsxWriteOptions
+  options?: FsxWriteOptions | undefined
 }
 
 /**

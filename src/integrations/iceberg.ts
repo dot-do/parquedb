@@ -50,15 +50,15 @@ export interface IcebergMetadataOptions {
   /** Table location (e.g., 's3://bucket/warehouse/db/table' or './data/warehouse/table') */
   location: string
   /** Namespace (database name) */
-  namespace?: string
+  namespace?: string | undefined
   /** Table name (defaults to collection namespace) */
-  tableName?: string
+  tableName?: string | undefined
   /** Partition fields (column names to partition by) */
-  partitionBy?: string[]
+  partitionBy?: string[] | undefined
   /** Sort order for data files */
-  sortBy?: string[]
+  sortBy?: string[] | undefined
   /** Properties for the table */
-  properties?: Record<string, string>
+  properties?: Record<string, string> | undefined
 }
 
 /**
@@ -98,10 +98,10 @@ export interface IcebergDataFile {
   /** Column statistics */
   columnStats?: Record<string, {
     nullCount: number
-    distinctCount?: number
-    lowerBound?: unknown
-    upperBound?: unknown
-  }>
+    distinctCount?: number | undefined
+    lowerBound?: unknown | undefined
+    upperBound?: unknown | undefined
+  }> | undefined
 }
 
 /**
@@ -127,7 +127,7 @@ export interface IcebergField {
   /** Field type */
   type: IcebergType
   /** Documentation */
-  doc?: string
+  doc?: string | undefined
 }
 
 /**
@@ -165,7 +165,7 @@ export interface IcebergCommitResult {
   /** Whether commit succeeded */
   success: boolean
   /** Error message if failed */
-  error?: string
+  error?: string | undefined
 }
 
 // =============================================================================

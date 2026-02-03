@@ -49,7 +49,7 @@ export interface ParquetMergeResult {
   readonly success: boolean
 
   /** Updated manifest (only if success) */
-  readonly manifest?: EventManifest
+  readonly manifest?: EventManifest | undefined
 
   /** Conflicts detected during merge */
   readonly conflicts: readonly MergeConflict[]
@@ -82,7 +82,7 @@ export interface ParquetMergeResult {
   }
 
   /** Detailed merge result from event-merge engine */
-  mergeResult?: EventMergeResult
+  mergeResult?: EventMergeResult | undefined
 }
 
 // =============================================================================

@@ -59,11 +59,11 @@ interface ProtocolAction {
 interface MetaDataAction {
   metaData: {
     id: string
-    name?: string
+    name?: string | undefined
     schemaString: string
     partitionColumns: string[]
-    configuration?: Record<string, string>
-    createdTime?: number
+    configuration?: Record<string, string> | undefined
+    createdTime?: number | undefined
   }
 }
 
@@ -74,9 +74,9 @@ interface AddAction {
     size: number
     modificationTime: number
     dataChange: boolean
-    stats?: string
-    partitionValues?: Record<string, string>
-    tags?: Record<string, string>
+    stats?: string | undefined
+    partitionValues?: Record<string, string> | undefined
+    tags?: Record<string, string> | undefined
   }
 }
 
@@ -84,10 +84,10 @@ interface AddAction {
 interface RemoveAction {
   remove: {
     path: string
-    deletionTimestamp?: number
+    deletionTimestamp?: number | undefined
     dataChange: boolean
-    extendedFileMetadata?: boolean
-    partitionValues?: Record<string, string>
+    extendedFileMetadata?: boolean | undefined
+    partitionValues?: Record<string, string> | undefined
   }
 }
 
@@ -96,12 +96,12 @@ interface CommitInfoAction {
   commitInfo: {
     timestamp: number
     operation: string
-    operationParameters?: Record<string, unknown>
-    readVersion?: number
-    isolationLevel?: string
-    isBlindAppend?: boolean
-    operationMetrics?: Record<string, string>
-    engineInfo?: string
+    operationParameters?: Record<string, unknown> | undefined
+    readVersion?: number | undefined
+    isolationLevel?: string | undefined
+    isBlindAppend?: boolean | undefined
+    operationMetrics?: Record<string, string> | undefined
+    engineInfo?: string | undefined
   }
 }
 
@@ -112,7 +112,7 @@ type DeltaAction = ProtocolAction | MetaDataAction | AddAction | RemoveAction | 
 interface LastCheckpoint {
   version: number
   size: number
-  parts?: number
+  parts?: number | undefined
 }
 
 // =============================================================================

@@ -132,42 +132,42 @@ export interface DatabaseContextConfig {
    * Path prefix for admin routes
    * @default '/admin'
    */
-  pathPrefix?: string
+  pathPrefix?: string | undefined
 
   /**
    * Cookie name for storing active database
    * @default 'PAYLOAD_DATABASE'
    */
-  cookieName?: string
+  cookieName?: string | undefined
 
   /**
    * Cookie max age in seconds
    * @default 2592000 (30 days)
    */
-  cookieMaxAge?: number
+  cookieMaxAge?: number | undefined
 
   /**
    * Cookie domain (if not set, uses current domain)
    */
-  cookieDomain?: string
+  cookieDomain?: string | undefined
 
   /**
    * Cookie path
    * @default '/'
    */
-  cookiePath?: string
+  cookiePath?: string | undefined
 
   /**
    * Use secure cookies (HTTPS only)
    * @default true in production
    */
-  cookieSecure?: boolean
+  cookieSecure?: boolean | undefined
 
   /**
    * SameSite cookie attribute
    * @default 'lax'
    */
-  cookieSameSite?: 'strict' | 'lax' | 'none'
+  cookieSameSite?: 'strict' | 'lax' | 'none' | undefined
 }
 
 /**
@@ -175,17 +175,17 @@ export interface DatabaseContextConfig {
  */
 export interface CookieOptions {
   /** Cookie max age in seconds */
-  maxAge?: number
+  maxAge?: number | undefined
   /** Cookie domain */
-  domain?: string
+  domain?: string | undefined
   /** Cookie path */
-  path?: string
+  path?: string | undefined
   /** Secure flag (HTTPS only) */
-  secure?: boolean
+  secure?: boolean | undefined
   /** SameSite attribute */
-  sameSite?: 'strict' | 'lax' | 'none'
+  sameSite?: 'strict' | 'lax' | 'none' | undefined
   /** HttpOnly flag (not accessible to JavaScript) */
-  httpOnly?: boolean
+  httpOnly?: boolean | undefined
 }
 
 // =============================================================================
@@ -692,25 +692,25 @@ export function requireDatabaseContext(
      * URL to redirect to when no database context
      * @default '/admin'
      */
-    redirectTo?: string
+    redirectTo?: string | undefined
 
     /**
      * Path prefix for admin routes
      * @default '/admin'
      */
-    pathPrefix?: string
+    pathPrefix?: string | undefined
 
     /**
      * Custom handler when database context is missing
      * If provided, overrides redirectTo behavior
      */
-    onMissing?: (c: Context, databaseId: string | null) => Response | Promise<Response>
+    onMissing?: ((c: Context, databaseId: string | null) => Response | Promise<Response>) | undefined
 
     /**
      * Whether to show HTML error page for invalid database
      * @default true
      */
-    showErrorPage?: boolean
+    showErrorPage?: boolean | undefined
   } = {}
 ): MiddlewareHandler {
   const {
@@ -776,19 +776,19 @@ export function autoSelectDatabase(
      * Cookie name for stored database ID
      * @default 'PAYLOAD_DATABASE'
      */
-    cookieName?: string
+    cookieName?: string | undefined
 
     /**
      * Path prefix for admin routes
      * @default '/admin'
      */
-    pathPrefix?: string
+    pathPrefix?: string | undefined
 
     /**
      * Default path when no database in cookie
      * If not set, continues to next handler (shows selector)
      */
-    defaultPath?: string
+    defaultPath?: string | undefined
   } = {}
 ): MiddlewareHandler {
   const {

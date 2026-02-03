@@ -271,7 +271,7 @@ export function applyOperators<T extends Record<string, unknown>>(
   // $bit - Bitwise operations
   if (update.$bit) {
     for (const [key, operations] of Object.entries(update.$bit)) {
-      const ops = operations as { and?: number; or?: number; xor?: number }
+      const ops = operations as { and?: number | undefined; or?: number | undefined; xor?: number | undefined }
       let current = (getField(result, key) as number) ?? 0
 
       if (typeof current !== 'number') {
@@ -499,9 +499,9 @@ export function unsetField<T>(obj: T, path: string): T {
 
 interface PushModifier {
   $each: unknown[]
-  $position?: number
-  $slice?: number
-  $sort?: 1 | -1 | Record<string, 1 | -1>
+  $position?: number | undefined
+  $slice?: number | undefined
+  $sort?: 1 | -1 | Record<string, 1 | -1> | undefined
 }
 
 function isPushModifier(value: unknown): value is PushModifier {

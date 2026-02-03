@@ -29,7 +29,7 @@
  */
 export interface CollectionOptions {
   /** Include $data variant column for fast full-row reads (default: true) */
-  includeDataVariant?: boolean
+  includeDataVariant?: boolean | undefined
   // Future options can be added here:
   // compression?: 'snappy' | 'gzip' | 'zstd' | 'none'
   // partitionBy?: string[]

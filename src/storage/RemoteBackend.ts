@@ -39,16 +39,16 @@ export interface RemoteBackendOptions {
   baseUrl: string
 
   /** Authentication token (for private databases) */
-  token?: string
+  token?: string | undefined
 
   /** Custom headers */
-  headers?: Record<string, string>
+  headers?: Record<string, string> | undefined
 
   /** Timeout in milliseconds (default: 30000) */
-  timeout?: number
+  timeout?: number | undefined
 
   /** Custom fetch implementation (for testing) */
-  fetch?: typeof globalThis.fetch
+  fetch?: typeof globalThis.fetch | undefined
 }
 
 /**
@@ -257,7 +257,7 @@ export class RemoteBackend implements StorageBackend {
         return { files: [], hasMore: false }
       }
 
-      const manifest = await response.json() as { files?: Record<string, { path: string }> }
+      const manifest = await response.json() as { files?: Record<string, { path: string }> | undefined }
       const files = Object.values(manifest.files ?? {})
         .map(f => f.path)
         .filter(p => p.startsWith(prefix))

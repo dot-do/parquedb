@@ -34,23 +34,23 @@ export interface NativeIcebergOptions {
   /** Table location (e.g., 's3://bucket/warehouse/db/table') */
   location: string
   /** Namespace (database name) */
-  namespace?: string
+  namespace?: string | undefined
   /** Custom schema definition */
-  schema?: IcebergNativeSchema
+  schema?: IcebergNativeSchema | undefined
   /** Partition spec */
-  partitionSpec?: PartitionSpecDefinition
+  partitionSpec?: PartitionSpecDefinition | undefined
   /** Sort order */
-  sortOrder?: SortOrderDefinition
+  sortOrder?: SortOrderDefinition | undefined
   /** Table properties */
-  properties?: Record<string, string>
+  properties?: Record<string, string> | undefined
   /** Enable bloom filters */
-  enableBloomFilters?: boolean
+  enableBloomFilters?: boolean | undefined
   /** Commit retry options */
   commitRetry?: {
-    maxRetries?: number
-    baseDelayMs?: number
-    maxDelayMs?: number
-  }
+    maxRetries?: number | undefined
+    baseDelayMs?: number | undefined
+    maxDelayMs?: number | undefined
+  } | undefined
 }
 
 /**
@@ -60,8 +60,8 @@ export interface IcebergNativeSchema {
   fields: Array<{
     name: string
     type: string
-    required?: boolean
-    doc?: string
+    required?: boolean | undefined
+    doc?: string | undefined
   }>
 }
 
@@ -72,8 +72,8 @@ export interface PartitionSpecDefinition {
   fields: Array<{
     sourceColumn: string
     transform: 'identity' | 'year' | 'month' | 'day' | 'hour' | 'bucket' | 'truncate'
-    name?: string
-    param?: number
+    name?: string | undefined
+    param?: number | undefined
   }>
 }
 
@@ -96,16 +96,16 @@ export interface NativeDataFile {
   format: 'parquet'
   recordCount: number
   fileSizeBytes: number
-  partition?: Record<string, unknown>
-  columnSizes?: Record<number, number>
-  valueCounts?: Record<number, number>
-  nullValueCounts?: Record<number, number>
-  nanValueCounts?: Record<number, number>
-  lowerBounds?: Record<number, Uint8Array>
-  upperBounds?: Record<number, Uint8Array>
-  keyMetadata?: Uint8Array
-  splitOffsets?: number[]
-  sortOrderId?: number
+  partition?: Record<string, unknown> | undefined
+  columnSizes?: Record<number, number> | undefined
+  valueCounts?: Record<number, number> | undefined
+  nullValueCounts?: Record<number, number> | undefined
+  nanValueCounts?: Record<number, number> | undefined
+  lowerBounds?: Record<number, Uint8Array> | undefined
+  upperBounds?: Record<number, Uint8Array> | undefined
+  keyMetadata?: Uint8Array | undefined
+  splitOffsets?: number[] | undefined
+  sortOrderId?: number | undefined
 }
 
 /**
@@ -117,8 +117,8 @@ export interface NativeCommitResult {
   metadataPath: string
   manifestListPath: string
   success: boolean
-  error?: string
-  retryCount?: number
+  error?: string | undefined
+  retryCount?: number | undefined
 }
 
 /**
@@ -127,9 +127,9 @@ export interface NativeCommitResult {
 export interface IcebergSnapshot {
   'snapshot-id': bigint | number | string
   'timestamp-ms': number
-  'parent-snapshot-id'?: bigint | number | string
+  'parent-snapshot-id'?: bigint | number | string | undefined
   'manifest-list': string
-  summary?: Record<string, string>
+  summary?: Record<string, string> | undefined
 }
 
 /**
@@ -143,7 +143,7 @@ export interface IcebergSchemaLocal {
     name: string
     required: boolean
     type: string
-    doc?: string
+    doc?: string | undefined
   }>
 }
 
@@ -161,9 +161,9 @@ export type SchemaEvolutionOperationType =
 export interface SchemaEvolutionOp {
   type: SchemaEvolutionOperationType
   name: string
-  newName?: string
-  fieldType?: string
-  newType?: string
+  newName?: string | undefined
+  fieldType?: string | undefined
+  newType?: string | undefined
 }
 
 // =============================================================================
@@ -174,11 +174,11 @@ export interface SchemaEvolutionOp {
 interface IcebergTableMetadata {
   'table-uuid': string
   'format-version': number
-  'current-snapshot-id'?: number | bigint
-  'last-sequence-number'?: number
-  'current-schema-id'?: number
-  schemas?: IcebergSchemaLocal[]
-  snapshots?: IcebergSnapshot[]
+  'current-snapshot-id'?: number | bigint | undefined
+  'last-sequence-number'?: number | undefined
+  'current-schema-id'?: number | undefined
+  schemas?: IcebergSchemaLocal[] | undefined
+  snapshots?: IcebergSnapshot[] | undefined
   [key: string]: unknown
 }
 
@@ -201,12 +201,12 @@ interface CreateTableResult {
 interface CommitResult {
   metadata: IcebergTableMetadata
   metadataPath: string
-  retryCount?: number
+  retryCount?: number | undefined
 }
 
 /** Options for commit retry */
 interface CommitOptions {
-  maxRetries?: number
+  maxRetries?: number | undefined
 }
 
 interface IcebergLibrary {
@@ -307,7 +307,7 @@ export class NativeIcebergStorageAdapter {
     return this.storage.delete(path)
   }
 
-  async stat(path: string): Promise<{ size: number; etag?: string } | null> {
+  async stat(path: string): Promise<{ size: number; etag?: string | undefined } | null> {
     const stat = await this.storage.stat(path)
     return stat ? { size: stat.size, etag: stat.etag } : null
   }
@@ -445,7 +445,7 @@ export class NativeIcebergMetadataManager {
       const result = await iceberg.commitWithCleanup(
         this.storageAdapter,
         this.options.location,
-        async (currentMetadata: { 'last-sequence-number'?: number; 'current-snapshot-id'?: number | bigint }) => {
+        async (currentMetadata: { 'last-sequence-number'?: number | undefined; 'current-snapshot-id'?: number | bigint | undefined }) => {
           // Build new snapshot
           const snapshotBuilder = new iceberg.SnapshotBuilder({
             sequenceNumber: (currentMetadata['last-sequence-number'] || 0) + 1,
@@ -575,8 +575,8 @@ export class NativeIcebergMetadataManager {
    * Expire old snapshots
    */
   async expireSnapshots(options: {
-    olderThanMs?: number
-    retainLast?: number
+    olderThanMs?: number | undefined
+    retainLast?: number | undefined
   }): Promise<{ expired: number; retained: number }> {
     const iceberg = await loadIcebergLib()
 
@@ -636,7 +636,7 @@ export class NativeIcebergMetadataManager {
       updateColumnType: (name: string, newType: string) => void
       makeColumnOptional: (name: string) => void
       makeColumnRequired: (name: string) => void
-      build: () => { valid: boolean; errors: string[]; schema?: IcebergSchemaLocal }
+      build: () => { valid: boolean; errors: string[]; schema?: IcebergSchemaLocal | undefined }
     }
 
     for (const op of operations) {
@@ -686,7 +686,7 @@ export class NativeIcebergMetadataManager {
     await iceberg.commitWithCleanup(
       this.storageAdapter,
       this.options.location,
-      async (currentMetadata: { schemas?: IcebergSchemaLocal[] }) => {
+      async (currentMetadata: { schemas?: IcebergSchemaLocal[] | undefined }) => {
         const builder = new iceberg.TableMetadataBuilder({
           location: this.options.location,
           currentMetadata,

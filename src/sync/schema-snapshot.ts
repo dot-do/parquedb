@@ -185,7 +185,7 @@ export async function loadSchemaAtCommit(
     // Check if commit has schema in state
     // The state may have an optional schema field in newer commits
     interface CommitStateWithSchema {
-      schema?: SchemaSnapshot
+      schema?: SchemaSnapshot | undefined
     }
     const state = commit.state as typeof commit.state & CommitStateWithSchema
     if (state.schema) {
@@ -446,9 +446,9 @@ export type SchemaChangeType =
 export interface SchemaChange {
   readonly type: SchemaChangeType
   readonly collection: string
-  readonly field?: string
-  readonly before?: unknown
-  readonly after?: unknown
+  readonly field?: string | undefined
+  readonly before?: unknown | undefined
+  readonly after?: unknown | undefined
   readonly breaking: boolean
   readonly description: string
 }

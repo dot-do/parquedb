@@ -20,14 +20,14 @@ function generateSlug(name: string): string {
 interface MockDatabaseInfo {
   id: string
   name: string
-  description?: string
-  slug?: string
-  visibility?: string
-  metadata?: Record<string, unknown>
-  collectionCount?: number
-  entityCount?: number
+  description?: string | undefined
+  slug?: string | undefined
+  visibility?: string | undefined
+  metadata?: Record<string, unknown> | undefined
+  collectionCount?: number | undefined
+  entityCount?: number | undefined
   bucket: string
-  prefix?: string
+  prefix?: string | undefined
   createdAt: Date
   createdBy: string
 }

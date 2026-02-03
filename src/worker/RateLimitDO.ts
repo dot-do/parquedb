@@ -263,7 +263,7 @@ export class RateLimitDO extends DurableObject<RateLimitEnv> {
 
       // POST /reset - Reset rate limits
       if (request.method === 'POST' && path === '/reset') {
-        const body = await request.json().catch(() => ({})) as { endpointType?: string }
+        const body = await request.json().catch(() => ({})) as { endpointType?: string | undefined }
         await this.reset(body.endpointType)
         return Response.json({ success: true })
       }

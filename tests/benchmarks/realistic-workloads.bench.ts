@@ -35,7 +35,7 @@ interface User {
   displayName: string
   role: 'admin' | 'editor' | 'user' | 'guest'
   active: boolean
-  lastLoginAt?: Date
+  lastLoginAt?: Date | undefined
   loginCount: number
   preferences: {
     theme: 'light' | 'dark' | 'auto'
@@ -50,13 +50,13 @@ interface Article {
   content: string
   excerpt: string
   status: 'draft' | 'review' | 'published' | 'archived'
-  publishedAt?: Date
+  publishedAt?: Date | undefined
   views: number
   likes: number
   readTime: number
   tags: string[]
-  featuredImageUrl?: string
-  seoDescription?: string
+  featuredImageUrl?: string | undefined
+  seoDescription?: string | undefined
 }
 
 interface Comment {
@@ -70,9 +70,9 @@ interface Comment {
 interface PageView {
   path: string
   sessionId: string
-  userId?: string
+  userId?: string | undefined
   userAgent: string
-  referrer?: string
+  referrer?: string | undefined
   duration: number
   timestamp: Date
 }
@@ -82,7 +82,7 @@ interface SearchQuery {
   results: number
   duration: number
   filters: string[]
-  userId?: string
+  userId?: string | undefined
   timestamp: Date
 }
 

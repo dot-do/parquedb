@@ -38,7 +38,7 @@ export interface CloneDatabaseModalProps {
   /** Callback when database is successfully cloned */
   onClone: (database: DatabaseInfo) => void
   /** API endpoint for database operations (default: '/api/databases') */
-  apiEndpoint?: string
+  apiEndpoint?: string | undefined
 }
 
 /**
@@ -136,7 +136,7 @@ export function CloneDatabaseModal({
       })
 
       if (!createResponse.ok) {
-        const data = await createResponse.json().catch(() => ({})) as { error?: string }
+        const data = await createResponse.json().catch(() => ({})) as { error?: string | undefined }
         const createError = new Error(data.error || `Failed to create database (${createResponse.status})`)
 
         // Retry on server errors
@@ -170,7 +170,7 @@ export function CloneDatabaseModal({
         if (!cloneResponse.ok) {
           // Clone endpoint may not be implemented yet - that's okay
           // The database was still created, just without cloned data
-          const cloneData = await cloneResponse.json().catch(() => ({})) as { error?: string }
+          const cloneData = await cloneResponse.json().catch(() => ({})) as { error?: string | undefined }
           console.warn('[CloneDatabase] Data clone failed:', cloneData.error || cloneResponse.status)
           // Don't throw - the database was created successfully
         }

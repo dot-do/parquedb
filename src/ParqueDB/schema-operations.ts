@@ -217,7 +217,7 @@ export function isRelationshipField(
     return isRelationString(fieldDef)
   }
   if (typeof fieldDef === 'object' && fieldDef !== null) {
-    const def = fieldDef as { type?: string }
+    const def = fieldDef as { type?: string | undefined }
     if (def.type) {
       return isRelationString(def.type)
     }

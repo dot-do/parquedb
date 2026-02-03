@@ -239,7 +239,7 @@ export function pruneArchivedEvents(
  * @returns Result of the archival operation
  */
 export function archiveEvents(
-  options: { olderThan?: Date; maxEvents?: number } | undefined,
+  options: { olderThan?: Date | undefined; maxEvents?: number | undefined } | undefined,
   events: Event[],
   archivedEvents: Event[],
   eventLogConfig: Required<EventLogConfig>
@@ -319,13 +319,13 @@ export class EventLogImpl implements EventLog {
   private readonly events: Event[]
   private readonly archivedEvents: Event[]
   private readonly eventLogConfig: Required<EventLogConfig>
-  private readonly archiveEventsFn: (options?: { olderThan?: Date; maxEvents?: number }) => ArchiveEventsResult
+  private readonly archiveEventsFn: (options?: { olderThan?: Date | undefined; maxEvents?: number | undefined }) => ArchiveEventsResult
 
   constructor(
     events: Event[],
     archivedEvents: Event[],
     eventLogConfig: Required<EventLogConfig>,
-    archiveEventsFn: (options?: { olderThan?: Date; maxEvents?: number }) => ArchiveEventsResult
+    archiveEventsFn: (options?: { olderThan?: Date | undefined; maxEvents?: number | undefined }) => ArchiveEventsResult
   ) {
     this.events = events
     this.archivedEvents = archivedEvents
@@ -456,7 +456,7 @@ export class EventLogImpl implements EventLog {
   /**
    * Archive old events based on configuration or manual threshold
    */
-  async archiveEvents(options?: { olderThan?: Date; maxEvents?: number }): Promise<ArchiveEventsResult> {
+  async archiveEvents(options?: { olderThan?: Date | undefined; maxEvents?: number | undefined }): Promise<ArchiveEventsResult> {
     return this.archiveEventsFn(options)
   }
 
@@ -477,7 +477,7 @@ export function createEventLog(
   events: Event[],
   archivedEvents: Event[],
   eventLogConfig: Required<EventLogConfig>,
-  archiveEventsFn: (options?: { olderThan?: Date; maxEvents?: number }) => ArchiveEventsResult
+  archiveEventsFn: (options?: { olderThan?: Date | undefined; maxEvents?: number | undefined }) => ArchiveEventsResult
 ): EventLog {
   return new EventLogImpl(events, archivedEvents, eventLogConfig, archiveEventsFn)
 }
@@ -812,7 +812,7 @@ export async function revertEntity<T = Record<string, unknown>>(
   snapshots: Snapshot[],
   queryStats: Map<string, SnapshotQueryStats>,
   recordEventFn: (op: EventOp, target: string, before: Entity | null, after: Entity | null, actor?: EntityId, meta?: Record<string, unknown>) => Promise<void>,
-  options?: { actor?: EntityId }
+  options?: { actor?: EntityId | undefined }
 ): Promise<Entity<T>> {
   const fullId = entityId as string
   const [ns, ...idParts] = fullId.split('/')
@@ -880,7 +880,7 @@ export function shouldAutoSnapshot(
   snapshotConfig: SnapshotConfig,
   events: Event[],
   snapshots: Snapshot[]
-): { shouldSnapshot: boolean; fullEntityId?: string } {
+): { shouldSnapshot: boolean; fullEntityId?: string | undefined } {
   if (!snapshotConfig.autoSnapshotThreshold || !after || isRelationshipTarget(target)) {
     return { shouldSnapshot: false }
   }

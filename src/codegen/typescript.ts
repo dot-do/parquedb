@@ -12,15 +12,15 @@ import type { SchemaSnapshot, CollectionSchemaSnapshot, SchemaFieldSnapshot } fr
  */
 export interface TypeScriptGenerationOptions {
   /** Wrap types in a namespace */
-  namespace?: string
+  namespace?: string | undefined
   /** Export db instance as default */
-  exportDefault?: boolean
+  exportDefault?: boolean | undefined
   /** Include schema metadata in output */
-  includeMetadata?: boolean
+  includeMetadata?: boolean | undefined
   /** Include import statements */
-  includeImports?: boolean
+  includeImports?: boolean | undefined
   /** Import path for ParqueDB (default: 'parquedb') */
-  importPath?: string
+  importPath?: string | undefined
 }
 
 /**

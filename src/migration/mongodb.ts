@@ -618,13 +618,13 @@ export interface MongoStreamingOptions extends StreamingOptions {
    * Whether to convert MongoDB ObjectIds to strings
    * @default true
    */
-  convertObjectIds?: boolean
+  convertObjectIds?: boolean | undefined
 
   /**
    * Whether to convert MongoDB dates to JS Date objects
    * @default true
    */
-  convertDates?: boolean
+  convertDates?: boolean | undefined
 }
 
 /**

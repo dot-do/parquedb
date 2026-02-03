@@ -100,7 +100,7 @@ export interface EventLogEntry {
   ns: string
   before: Record<string, unknown> | null
   after: Record<string, unknown> | null
-  actor?: EntityId
+  actor?: EntityId | undefined
 }
 
 /**
@@ -227,12 +227,12 @@ class BoundedEventLog {
  * Allows runtime configuration of storage limits
  */
 export interface GlobalStorageConfig {
-  maxNamespaces?: number
-  maxEntitiesPerNs?: number
-  maxRelsPerNs?: number
-  maxEventLogEntries?: number
-  eventLogTtlMs?: number
-  cleanupIntervalMs?: number
+  maxNamespaces?: number | undefined
+  maxEntitiesPerNs?: number | undefined
+  maxRelsPerNs?: number | undefined
+  maxEventLogEntries?: number | undefined
+  eventLogTtlMs?: number | undefined
+  cleanupIntervalMs?: number | undefined
 }
 
 // Current configuration (can be updated via configureGlobalStorage)
@@ -384,7 +384,7 @@ function recordEvent(event: Omit<EventLogEntry, 'id' | 'ts'>): void {
  */
 export function getEventsForEntity(
   entityId: string,
-  options?: { from?: Date; to?: Date; limit?: number }
+  options?: { from?: Date | undefined; to?: Date | undefined; limit?: number | undefined }
 ): EventLogEntry[] {
   let events = globalEventLog.filter(e => e.entityId === entityId)
 
@@ -878,11 +878,11 @@ export class Collection<T extends EntityData = EntityData> {
 
     // Add traversal methods
     const traversableEntity = result as Entity<T> & {
-      related<R>(predicate: string, opts?: { filter?: Filter; sort?: SortSpec; limit?: number; cursor?: string; includeDeleted?: boolean; asOf?: Date; project?: Projection }): Promise<{ items: Entity<R>[]; total?: number; nextCursor?: string; hasMore: boolean }>
-      referencedBy<R>(reverse: string, opts?: { filter?: Filter; sort?: SortSpec; limit?: number; cursor?: string; includeDeleted?: boolean; asOf?: Date }): Promise<{ items: Entity<R>[]; total?: number; nextCursor?: string; hasMore: boolean }>
+      related<R>(predicate: string, opts?: { filter?: Filter | undefined; sort?: SortSpec | undefined; limit?: number | undefined; cursor?: string | undefined; includeDeleted?: boolean | undefined; asOf?: Date | undefined; project?: Projection | undefined }): Promise<{ items: Entity<R>[]; total?: number | undefined; nextCursor?: string | undefined; hasMore: boolean }>
+      referencedBy<R>(reverse: string, opts?: { filter?: Filter | undefined; sort?: SortSpec | undefined; limit?: number | undefined; cursor?: string | undefined; includeDeleted?: boolean | undefined; asOf?: Date | undefined }): Promise<{ items: Entity<R>[]; total?: number | undefined; nextCursor?: string | undefined; hasMore: boolean }>
     }
 
-    traversableEntity.related = async function<R>(predicate: string, opts?: { filter?: Filter; sort?: SortSpec; limit?: number; cursor?: string; includeDeleted?: boolean; asOf?: Date; project?: Projection }): Promise<{ items: Entity<R>[]; total?: number; nextCursor?: string; hasMore: boolean }> {
+    traversableEntity.related = async function<R>(predicate: string, opts?: { filter?: Filter | undefined; sort?: SortSpec | undefined; limit?: number | undefined; cursor?: string | undefined; includeDeleted?: boolean | undefined; asOf?: Date | undefined; project?: Projection | undefined }): Promise<{ items: Entity<R>[]; total?: number | undefined; nextCursor?: string | undefined; hasMore: boolean }> {
       if (!predicate) throw new Error('Predicate is required')
 
       const rels = allRels.filter(r => r.from === entityId && r.predicate === predicate)
@@ -928,7 +928,7 @@ export class Collection<T extends EntityData = EntityData> {
       return { items: paginated, total, hasMore: filtered.length > limit, nextCursor: filtered.length > limit ? `cursor:${limit}` : undefined }
     }
 
-    traversableEntity.referencedBy = async function<R>(reverse: string, opts?: { filter?: Filter; sort?: SortSpec; limit?: number; cursor?: string; includeDeleted?: boolean; asOf?: Date }): Promise<{ items: Entity<R>[]; total?: number; nextCursor?: string; hasMore: boolean }> {
+    traversableEntity.referencedBy = async function<R>(reverse: string, opts?: { filter?: Filter | undefined; sort?: SortSpec | undefined; limit?: number | undefined; cursor?: string | undefined; includeDeleted?: boolean | undefined; asOf?: Date | undefined }): Promise<{ items: Entity<R>[]; total?: number | undefined; nextCursor?: string | undefined; hasMore: boolean }> {
       if (!reverse) throw new Error('Reverse name is required')
 
       // Map reverse names to source namespace and predicate

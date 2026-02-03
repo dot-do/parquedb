@@ -40,9 +40,9 @@ export interface CronValidationResult {
   /** Whether the cron expression is valid */
   valid: boolean
   /** Error message if invalid */
-  error?: string
+  error?: string | undefined
   /** Field that caused the error (if applicable) */
-  field?: string
+  field?: string | undefined
 }
 
 // =============================================================================

@@ -32,7 +32,7 @@ export interface SyncClientConfig {
   token: string
 
   /** Request timeout in milliseconds */
-  timeout?: number
+  timeout?: number | undefined
 }
 
 /**
@@ -43,16 +43,16 @@ export interface RegisterResult {
   success: boolean
 
   /** Database ID if successful */
-  databaseId?: string
+  databaseId?: string | undefined
 
   /** R2 bucket name */
-  bucket?: string
+  bucket?: string | undefined
 
   /** Path prefix in bucket */
-  prefix?: string
+  prefix?: string | undefined
 
   /** Error message if failed */
-  error?: string
+  error?: string | undefined
 }
 
 /**
@@ -109,13 +109,13 @@ export interface DatabaseInfo {
   bucket: string
 
   /** Path prefix in bucket */
-  prefix?: string
+  prefix?: string | undefined
 
   /** Collection count */
-  collectionCount?: number
+  collectionCount?: number | undefined
 
   /** Entity count */
-  entityCount?: number
+  entityCount?: number | undefined
 }
 
 // =============================================================================
@@ -146,7 +146,7 @@ export class SyncClient {
   async registerDatabase(options: {
     name: string
     visibility: Visibility
-    slug?: string
+    slug?: string | undefined
     owner: string
   }): Promise<RegisterResult> {
     try {
@@ -209,7 +209,7 @@ export class SyncClient {
    */
   async getUploadUrls(
     databaseId: string,
-    files: Array<{ path: string; size: number; contentType?: string }>
+    files: Array<{ path: string; size: number; contentType?: string | undefined }>
   ): Promise<PresignedUploadUrl[]> {
     const response = await this.fetch('/api/sync/upload-urls', {
       method: 'POST',

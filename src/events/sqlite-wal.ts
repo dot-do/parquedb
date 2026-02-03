@@ -28,9 +28,9 @@ export interface SqliteInterface {
  */
 export interface SqliteWalOptions {
   /** Table name (default: 'events_wal') */
-  tableName?: string
+  tableName?: string | undefined
   /** Maximum blob size in bytes (default: 2MB) */
-  maxBlobSize?: number
+  maxBlobSize?: number | undefined
 }
 
 /**

@@ -18,7 +18,7 @@
  */
 export interface CsrfValidationResult {
   valid: boolean
-  reason?: string
+  reason?: string | undefined
 }
 
 /**

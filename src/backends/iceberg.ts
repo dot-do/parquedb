@@ -1870,9 +1870,9 @@ export function createR2IcebergBackend(
   options: {
     accountId: string
     apiToken: string
-    bucketName?: string
-    warehouse?: string
-    database?: string
+    bucketName?: string | undefined
+    warehouse?: string | undefined
+    database?: string | undefined
   }
 ): IcebergBackend {
   return new IcebergBackend({

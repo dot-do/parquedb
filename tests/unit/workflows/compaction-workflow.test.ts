@@ -21,7 +21,7 @@ interface MockR2Object {
   size: number
   eTag: string
   uploaded: Date
-  body?: ReadableStream
+  body?: ReadableStream | undefined
   arrayBuffer(): Promise<ArrayBuffer>
   text(): Promise<string>
 }
@@ -29,7 +29,7 @@ interface MockR2Object {
 interface MockR2ListResult {
   objects: MockR2Object[]
   truncated: boolean
-  cursor?: string
+  cursor?: string | undefined
 }
 
 interface MockMessage<T> {

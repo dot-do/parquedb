@@ -80,7 +80,7 @@ export interface DeadLetterItem {
   lastError: string
 
   /** Priority of the original item */
-  priority?: number
+  priority?: number | undefined
 }
 
 /**
@@ -135,22 +135,22 @@ export interface BackgroundEmbeddingConfig {
   vectorField: string
 
   /** Number of items to process per batch (default: 10) */
-  batchSize?: number
+  batchSize?: number | undefined
 
   /** Maximum retry attempts for failed embeddings (default: 3) */
-  retryAttempts?: number
+  retryAttempts?: number | undefined
 
   /** Delay in ms before processing queue (default: 1000) */
-  processDelay?: number
+  processDelay?: number | undefined
 
   /** Separator for concatenating multiple fields (default: '\n\n') */
-  fieldSeparator?: string
+  fieldSeparator?: string | undefined
 
   /** Callback for error notifications */
-  onError?: ErrorCallback
+  onError?: ErrorCallback | undefined
 
   /** Whether to enable dead letter queue (default: true) */
-  enableDeadLetter?: boolean
+  enableDeadLetter?: boolean | undefined
 }
 
 /**
@@ -170,10 +170,10 @@ export interface EmbeddingQueueItem {
   attempts: number
 
   /** Last error message if any */
-  lastError?: string
+  lastError?: string | undefined
 
   /** Priority (lower = higher priority) */
-  priority?: number
+  priority?: number | undefined
 }
 
 /**
@@ -211,7 +211,7 @@ export interface QueueStats {
   retrying: number
 
   /** Oldest item timestamp */
-  oldestItem?: number
+  oldestItem?: number | undefined
 }
 
 /**

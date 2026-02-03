@@ -397,10 +397,10 @@ export function matchGroupsAs<T extends string[]>(groups: string[]): T {
  * Context variables type for database routes.
  */
 export interface DatabaseContextVariables {
-  databaseContext?: unknown
-  cookieDatabaseId?: string
-  actor?: string
-  user?: { id: string }
+  databaseContext?: unknown | undefined
+  cookieDatabaseId?: string | undefined
+  actor?: string | undefined
+  user?: { id: string } | undefined
 }
 
 /**

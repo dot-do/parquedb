@@ -59,10 +59,10 @@ interface MockEvent {
   ts: number
   op: 'CREATE' | 'UPDATE' | 'DELETE'
   target: string
-  before?: Record<string, unknown>
-  after?: Record<string, unknown>
-  actor?: string
-  metadata?: Record<string, unknown>
+  before?: Record<string, unknown> | undefined
+  after?: Record<string, unknown> | undefined
+  actor?: string | undefined
+  metadata?: Record<string, unknown> | undefined
 }
 
 // =============================================================================

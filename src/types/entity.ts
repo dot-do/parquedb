@@ -240,13 +240,13 @@ export interface AuditFields {
    * Soft delete timestamp (undefined if not deleted)
    * When set, the entity is considered deleted but retained for audit purposes
    */
-  deletedAt?: Date
+  deletedAt?: Date | undefined
 
   /**
    * EntityId of the actor who deleted the entity
    * Only set when deletedAt is set
    */
-  deletedBy?: EntityId
+  deletedBy?: EntityId | undefined
 
   /**
    * Optimistic concurrency version number
@@ -297,13 +297,13 @@ export interface RelSet extends RelLink {
    * Total count of relationships (when requested)
    * May be present even when not all relationships are loaded
    */
-  $count?: number
+  $count?: number | undefined
 
   /**
    * Cursor for fetching the next page of relationships
    * Use with the cursor option in related() or find() calls
    */
-  $next?: string
+  $next?: string | undefined
 }
 
 /**
@@ -403,7 +403,7 @@ export interface Relationship {
    *
    * SHREDDED: Stored as top-level Parquet column for predicate pushdown.
    */
-  matchMode?: MatchMode
+  matchMode?: MatchMode | undefined
 
   /**
    * Similarity score for fuzzy matches (0.0 to 1.0)
@@ -411,7 +411,7 @@ export interface Relationship {
    * SHREDDED: Stored as top-level Parquet column for predicate pushdown.
    * Only meaningful when matchMode is 'fuzzy'.
    */
-  similarity?: number
+  similarity?: number | undefined
 
   // ===========================================================================
   // Audit Fields
@@ -422,14 +422,14 @@ export interface Relationship {
   /** Who created the relationship */
   createdBy: EntityId
   /** Soft delete timestamp */
-  deletedAt?: Date
+  deletedAt?: Date | undefined
   /** Who deleted the relationship */
-  deletedBy?: EntityId
+  deletedBy?: EntityId | undefined
   /** Optimistic concurrency version */
   version: number
 
   /** Optional edge properties (Variant) - remaining metadata after shredding */
-  data?: Record<string, unknown>
+  data?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -608,9 +608,9 @@ export interface EntityRecord {
   /** Last updater EntityId */
   updatedBy: EntityId
   /** Soft deletion timestamp */
-  deletedAt?: Date
+  deletedAt?: Date | undefined
   /** Deleter EntityId */
-  deletedBy?: EntityId
+  deletedBy?: EntityId | undefined
   /** Optimistic concurrency version */
   version: number
 
@@ -744,7 +744,7 @@ export interface ReplaceInput<T = EntityData> extends CreateInput<T> {
    * Expected version for optimistic concurrency control
    * If specified and doesn't match current version, the operation fails
    */
-  version?: number
+  version?: number | undefined
 }
 
 // =============================================================================
@@ -870,7 +870,7 @@ export interface RelationshipEventData {
   toId: string
 
   /** Optional edge properties/metadata */
-  data?: Record<string, unknown>
+  data?: Record<string, unknown> | undefined
 }
 
 /**
@@ -897,13 +897,13 @@ export interface Event {
    */
   target: string
   /** State before change (undefined for CREATE) */
-  before?: Variant
+  before?: Variant | undefined
   /** State after change (undefined for DELETE) */
-  after?: Variant
+  after?: Variant | undefined
   /** Who made the change (e.g., "users:admin") */
-  actor?: string
+  actor?: string | undefined
   /** Additional metadata (request ID, correlation ID, etc.) */
-  metadata?: Variant
+  metadata?: Variant | undefined
 }
 
 /**
@@ -1037,13 +1037,13 @@ export interface PaginatedResult<T> {
    * Total count of matching items (if available)
    * May require additional query to compute; not always present
    */
-  total?: number
+  total?: number | undefined
 
   /**
    * Opaque cursor for fetching the next page
    * Pass to cursor option in subsequent queries
    */
-  nextCursor?: string
+  nextCursor?: string | undefined
 
   /**
    * Whether there are more results after this page

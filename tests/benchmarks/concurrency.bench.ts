@@ -41,7 +41,7 @@ interface Account {
   currency: string
   status: 'active' | 'frozen' | 'closed'
   transactions: number
-  lastTransaction?: Date
+  lastTransaction?: Date | undefined
 }
 
 interface Inventory {
@@ -49,7 +49,7 @@ interface Inventory {
   quantity: number
   reserved: number
   available: number
-  lastRestocked?: Date
+  lastRestocked?: Date | undefined
 }
 
 interface Session {
@@ -68,9 +68,9 @@ interface Task {
   status: 'pending' | 'processing' | 'completed' | 'failed'
   priority: number
   attempts: number
-  lastAttempt?: Date
-  workerId?: string
-  result?: string
+  lastAttempt?: Date | undefined
+  workerId?: string | undefined
+  result?: string | undefined
 }
 
 // =============================================================================

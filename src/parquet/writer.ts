@@ -568,7 +568,7 @@ export class ParquetWriter {
     columns: Record<string, unknown[]>,
     schema: ParquetSchema,
     options: { columnIndex: boolean; offsetIndex: boolean }
-  ): Array<{ name: string; data: unknown[]; columnIndex?: boolean; offsetIndex?: boolean }> {
+  ): Array<{ name: string; data: unknown[]; columnIndex?: boolean | undefined; offsetIndex?: boolean | undefined }> {
     return Object.entries(columns).map(([name, data]) => ({
       name,
       data,
@@ -683,7 +683,7 @@ export class ParquetWriter {
         },
       }
 
-      const metadata = await parquetMetadataAsync(asyncBuffer) as { schema?: Array<{ name?: string; type?: string; repetition_type?: string }> }
+      const metadata = await parquetMetadataAsync(asyncBuffer) as { schema?: Array<{ name?: string | undefined; type?: string | undefined; repetition_type?: string | undefined }> | undefined }
       // Include compressors for LZ4, GZIP, ZSTD, and Brotli support
       const readResult = await parquetRead({ file: asyncBuffer, compressors })
       const result = (readResult as unknown) as Record<string, unknown[]> | undefined

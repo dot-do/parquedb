@@ -40,9 +40,9 @@ export interface EmbeddingModelConfig {
   /** Vector dimensions */
   dimensions: number
   /** Maximum tokens per text */
-  maxTokens?: number
+  maxTokens?: number | undefined
   /** Whether to normalize vectors */
-  normalize?: boolean
+  normalize?: boolean | undefined
 }
 
 /**
@@ -50,9 +50,9 @@ export interface EmbeddingModelConfig {
  */
 export interface EmbedOptions {
   /** Override the default model */
-  model?: string
+  model?: string | undefined
   /** Return raw embeddings without normalization */
-  raw?: boolean
+  raw?: boolean | undefined
 }
 
 /**

@@ -30,7 +30,7 @@ export interface ParsedArgs {
     version: boolean
     directory: string
     format: OutputFormatType
-    limit?: number
+    limit?: number | undefined
     pretty: boolean
     quiet: boolean
     noColor: boolean

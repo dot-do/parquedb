@@ -31,8 +31,8 @@ export interface ParqueDBDOTestStub extends ParqueDBDOStub {
     ts: number
     op: string
     target: string
-    before?: unknown
-    after?: unknown
+    before?: unknown | undefined
+    after?: unknown | undefined
     actor: string
   }): Promise<string>
   flushNsEventBatch(ns: string): Promise<void>

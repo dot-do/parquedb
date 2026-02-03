@@ -12,45 +12,45 @@ export interface MigrationOptions {
    * Number of documents to process in each batch
    * @default 1000
    */
-  batchSize?: number
+  batchSize?: number | undefined
 
   /**
    * Progress callback called after each batch
    * @param count - Total number of documents processed so far
    */
-  onProgress?: (count: number) => void
+  onProgress?: ((count: number) => void) | undefined
 
   /**
    * Transform function applied to each document before import
    * Use this to modify document structure, add fields, or filter documents
    * Return null/undefined to skip a document
    */
-  transform?: (doc: unknown) => unknown
+  transform?: ((doc: unknown) => unknown) | undefined
 
   /**
    * Entity type ($type) to assign to imported documents
    * If not provided, will try to infer from document or use namespace
    */
-  entityType?: string
+  entityType?: string | undefined
 
   /**
    * Skip validation during import for better performance
    * @default false
    */
-  skipValidation?: boolean
+  skipValidation?: boolean | undefined
 
   /**
    * Actor to attribute the imports to
    * @default 'system/migration'
    */
-  actor?: string
+  actor?: string | undefined
 
   /**
    * Enable streaming mode for large files
    * When enabled, files are processed line by line instead of loading entirely into memory
    * @default false
    */
-  streaming?: boolean
+  streaming?: boolean | undefined
 }
 
 /**
@@ -62,7 +62,7 @@ export interface JsonImportOptions extends MigrationOptions {
    * For JSON objects with nested arrays, specify the path to the array
    * e.g., "data.items" to import from { data: { items: [...] } }
    */
-  arrayPath?: string
+  arrayPath?: string | undefined
 }
 
 /**
@@ -73,38 +73,38 @@ export interface CsvImportOptions extends MigrationOptions {
    * CSV delimiter character
    * @default ','
    */
-  delimiter?: string
+  delimiter?: string | undefined
 
   /**
    * Whether the first row contains column headers
    * @default true
    */
-  headers?: boolean | string[]
+  headers?: boolean | string[] | undefined
 
   /**
    * Skip empty lines
    * @default true
    */
-  skipEmptyLines?: boolean
+  skipEmptyLines?: boolean | undefined
 
   /**
    * Type inference for columns
    * If true, attempts to parse numbers, booleans, and dates
    * @default true
    */
-  inferTypes?: boolean
+  inferTypes?: boolean | undefined
 
   /**
    * Custom column type mappings
    * e.g., { age: 'number', active: 'boolean', createdAt: 'date' }
    */
-  columnTypes?: Record<string, 'string' | 'number' | 'boolean' | 'date' | 'json'>
+  columnTypes?: Record<string, 'string' | 'number' | 'boolean' | 'date' | 'json'> | undefined
 
   /**
    * Column to use as the entity name
    * If not provided, will generate a name or use first column
    */
-  nameColumn?: string
+  nameColumn?: string | undefined
 }
 
 /**
@@ -115,31 +115,31 @@ export interface BsonImportOptions extends MigrationOptions {
    * Field to use as the entity $id (will be prefixed with namespace)
    * If not provided, a new ID will be generated
    */
-  idField?: string
+  idField?: string | undefined
 
   /**
    * Field to use as the entity name
    * If not provided, will try common fields like 'name', 'title', '_id'
    */
-  nameField?: string
+  nameField?: string | undefined
 
   /**
    * Whether to preserve MongoDB's _id field in the document data
    * @default false
    */
-  preserveMongoId?: boolean
+  preserveMongoId?: boolean | undefined
 
   /**
    * Whether to convert MongoDB ObjectIds to strings
    * @default true
    */
-  convertObjectIds?: boolean
+  convertObjectIds?: boolean | undefined
 
   /**
    * Whether to convert MongoDB dates to JS Date objects
    * @default true
    */
-  convertDates?: boolean
+  convertDates?: boolean | undefined
 }
 
 /**
@@ -173,7 +173,7 @@ export interface MigrationError {
   message: string
 
   /** The document that failed (if available) */
-  document?: unknown
+  document?: unknown | undefined
 }
 
 /**
@@ -193,7 +193,7 @@ export interface StreamingDocument<T = Record<string, unknown>> {
   /** Line number in source file (1-indexed) */
   lineNumber: number
   /** Any parse error (document will be null) */
-  error?: string
+  error?: string | undefined
 }
 
 /**
@@ -204,13 +204,13 @@ export interface StreamingOptions {
    * Transform function applied to each document
    * Return null/undefined to skip a document
    */
-  transform?: (doc: unknown) => unknown
+  transform?: ((doc: unknown) => unknown) | undefined
 
   /**
    * Skip documents that fail to parse (instead of yielding error)
    * @default false
    */
-  skipErrors?: boolean
+  skipErrors?: boolean | undefined
 }
 
 /**
@@ -221,30 +221,30 @@ export interface CsvStreamingOptions extends StreamingOptions {
    * CSV delimiter character
    * @default ','
    */
-  delimiter?: string
+  delimiter?: string | undefined
 
   /**
    * Whether the first row contains column headers
    * @default true
    */
-  headers?: boolean | string[]
+  headers?: boolean | string[] | undefined
 
   /**
    * Skip empty lines
    * @default true
    */
-  skipEmptyLines?: boolean
+  skipEmptyLines?: boolean | undefined
 
   /**
    * Type inference for columns
    * If true, attempts to parse numbers, booleans, and dates
    * @default true
    */
-  inferTypes?: boolean
+  inferTypes?: boolean | undefined
 
   /**
    * Custom column type mappings
    * e.g., { age: 'number', active: 'boolean', createdAt: 'date' }
    */
-  columnTypes?: Record<string, 'string' | 'number' | 'boolean' | 'date' | 'json'>
+  columnTypes?: Record<string, 'string' | 'number' | 'boolean' | 'date' | 'json'> | undefined
 }

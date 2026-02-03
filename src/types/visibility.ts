@@ -89,38 +89,38 @@ export interface CorsConfig {
    * - Array of specific origins for restricted access
    * - `false` disables CORS entirely
    */
-  origins?: '*' | string[] | false
+  origins?: '*' | string[] | false | undefined
 
   /**
    * Allowed HTTP methods
    * @default ['GET', 'HEAD', 'OPTIONS']
    */
-  methods?: string[]
+  methods?: string[] | undefined
 
   /**
    * Headers the client is allowed to send
    * @default ['Content-Type', 'Range']
    */
-  allowedHeaders?: string[]
+  allowedHeaders?: string[] | undefined
 
   /**
    * Headers exposed to the client
    * @default ['Content-Range', 'Content-Length', 'ETag', 'Accept-Ranges']
    */
-  exposedHeaders?: string[]
+  exposedHeaders?: string[] | undefined
 
   /**
    * How long preflight results can be cached (in seconds)
    * @default 86400 (24 hours)
    */
-  maxAge?: number
+  maxAge?: number | undefined
 
   /**
    * Allow credentials (cookies, authorization headers)
    * Note: Cannot be true when origins is '*'
    * @default false
    */
-  credentials?: boolean
+  credentials?: boolean | undefined
 }
 
 /**

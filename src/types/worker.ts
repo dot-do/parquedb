@@ -34,25 +34,25 @@ export interface Env {
   BUCKET: R2Bucket
 
   /** R2 bucket for CDN-cached reads (cdn bucket with edge caching) */
-  CDN_BUCKET?: R2Bucket
+  CDN_BUCKET?: R2Bucket | undefined
 
   /** Optional FSX binding for POSIX-style file access */
-  FSX?: Fetcher
+  FSX?: Fetcher | undefined
 
   /** Workers AI binding for embedding generation */
-  AI?: AIBinding
+  AI?: AIBinding | undefined
 
   /** Durable Object namespace for database index (user's database registry) */
-  DATABASE_INDEX?: DurableObjectNamespace
+  DATABASE_INDEX?: DurableObjectNamespace | undefined
 
   /** Durable Object namespace for rate limiting */
-  RATE_LIMITER?: DurableObjectNamespace
+  RATE_LIMITER?: DurableObjectNamespace | undefined
 
   /** Durable Object namespace for backend migrations (batch processing) */
-  MIGRATION?: DurableObjectNamespace
+  MIGRATION?: DurableObjectNamespace | undefined
 
   /** Durable Object namespace for compaction state tracking */
-  COMPACTION_STATE?: DurableObjectNamespace
+  COMPACTION_STATE?: DurableObjectNamespace | undefined
 
   // =============================================================================
   // Cloudflare Workflows (resumable long-running tasks)
@@ -62,52 +62,52 @@ export interface Env {
   COMPACTION_WORKFLOW?: {
     create(options: { params: unknown }): Promise<{ id: string }>
     get(id: string): Promise<{ status(): Promise<unknown> }>
-  }
+  } | undefined
 
   /** Migration Workflow binding */
   MIGRATION_WORKFLOW?: {
     create(options: { params: unknown }): Promise<{ id: string }>
     get(id: string): Promise<{ status(): Promise<unknown> }>
-  }
+  } | undefined
 
   /** Vacuum Workflow binding */
   VACUUM_WORKFLOW?: {
     create(options: { params: unknown }): Promise<{ id: string }>
     get(id: string): Promise<{ status(): Promise<unknown> }>
-  }
+  } | undefined
 
   // =============================================================================
   // Queues (for R2 event notifications and compaction batching)
   // =============================================================================
 
   /** Queue producer for compaction events */
-  COMPACTION_QUEUE?: Queue<unknown>
+  COMPACTION_QUEUE?: Queue<unknown> | undefined
 
   // Note: Caching uses the free Cloudflare Cache API (caches.default), not KV.
   // Cache API provides 500MB on free accounts, 5GB+ on enterprise.
   // No binding needed - caches.default is globally available in Workers.
 
   /** Environment name (development, staging, production) */
-  ENVIRONMENT?: string
+  ENVIRONMENT?: string | undefined
 
   /** Optional secret for authentication */
-  AUTH_SECRET?: string
+  AUTH_SECRET?: string | undefined
 
   /** CDN r2.dev URL for public access, e.g. 'https://pub-xxx.r2.dev/parquedb' */
-  CDN_R2_DEV_URL?: string
+  CDN_R2_DEV_URL?: string | undefined
 
   /** Secret key for HMAC signing of sync upload/download tokens (required for sync routes) */
-  SYNC_SECRET?: string
+  SYNC_SECRET?: string | undefined
 
   /** JWKS URI for JWT token verification (e.g., 'https://api.workos.com/sso/jwks/client_xxx') */
-  JWKS_URI?: string
+  JWKS_URI?: string | undefined
 
   /**
    * KV namespace for tracking used upload token nonces (replay protection).
    * When configured, provides cross-isolate replay attack prevention.
    * Falls back to in-memory tracking (per-isolate only) when not available.
    */
-  USED_TOKENS?: KVNamespace
+  USED_TOKENS?: KVNamespace | undefined
 }
 
 // =============================================================================
@@ -129,13 +129,13 @@ export interface Env {
  */
 export interface DOCreateOptions {
   /** Actor performing the operation (string in DO context) */
-  actor?: string
+  actor?: string | undefined
   /** Skip validation entirely */
-  skipValidation?: boolean
+  skipValidation?: boolean | undefined
   /** Validation mode */
-  validateOnWrite?: boolean | 'strict' | 'permissive' | 'warn'
+  validateOnWrite?: boolean | 'strict' | 'permissive' | 'warn' | undefined
   /** Return the created entity (default: true) */
-  returnDocument?: boolean
+  returnDocument?: boolean | undefined
 }
 
 /**
@@ -144,15 +144,15 @@ export interface DOCreateOptions {
  */
 export interface DOUpdateOptions {
   /** Actor performing the operation (string in DO context) */
-  actor?: string
+  actor?: string | undefined
   /** Expected version for optimistic concurrency */
-  expectedVersion?: number
+  expectedVersion?: number | undefined
   /** Create if not exists (upsert) */
-  upsert?: boolean
+  upsert?: boolean | undefined
   /** Skip validation entirely */
-  skipValidation?: boolean
+  skipValidation?: boolean | undefined
   /** Validation mode */
-  validateOnWrite?: boolean | 'strict' | 'permissive' | 'warn'
+  validateOnWrite?: boolean | 'strict' | 'permissive' | 'warn' | undefined
 }
 
 /**
@@ -161,11 +161,11 @@ export interface DOUpdateOptions {
  */
 export interface DODeleteOptions {
   /** Actor performing the operation (string in DO context) */
-  actor?: string
+  actor?: string | undefined
   /** Hard delete (permanent, skip soft delete) */
-  hard?: boolean
+  hard?: boolean | undefined
   /** Expected version for optimistic concurrency */
-  expectedVersion?: number
+  expectedVersion?: number | undefined
 }
 
 /**
@@ -173,21 +173,21 @@ export interface DODeleteOptions {
  */
 export interface DOLinkOptions {
   /** Actor performing the operation */
-  actor?: string
+  actor?: string | undefined
   /**
    * How the relationship was matched (SHREDDED)
    * - 'exact': Precise match (user explicitly linked)
    * - 'fuzzy': Approximate match (entity resolution, text similarity)
    */
-  matchMode?: 'exact' | 'fuzzy'
+  matchMode?: 'exact' | 'fuzzy' | undefined
   /**
    * Similarity score for fuzzy matches (SHREDDED)
    * Range: 0.0 to 1.0
    * Only meaningful when matchMode is 'fuzzy'
    */
-  similarity?: number
+  similarity?: number | undefined
   /** Edge data (remaining metadata in Variant) */
-  data?: Record<string, unknown>
+  data?: Record<string, unknown> | undefined
 }
 
 /**
@@ -246,41 +246,41 @@ export interface DOCreateInput<TData extends DOEntityData = DOEntityData> {
  */
 export interface DOUpdateInput {
   /** Set field values */
-  $set?: Record<string, unknown>
+  $set?: Record<string, unknown> | undefined
   /** Remove fields */
-  $unset?: Record<string, '' | 1 | true>
+  $unset?: Record<string, '' | 1 | true> | undefined
   /** Rename fields */
-  $rename?: Record<string, string>
+  $rename?: Record<string, string> | undefined
   /** Set on insert only (for upsert) */
-  $setOnInsert?: Record<string, unknown>
+  $setOnInsert?: Record<string, unknown> | undefined
   /** Increment numeric fields */
-  $inc?: Record<string, number>
+  $inc?: Record<string, number> | undefined
   /** Multiply numeric fields */
-  $mul?: Record<string, number>
+  $mul?: Record<string, number> | undefined
   /** Set to minimum */
-  $min?: Record<string, unknown>
+  $min?: Record<string, unknown> | undefined
   /** Set to maximum */
-  $max?: Record<string, unknown>
+  $max?: Record<string, unknown> | undefined
   /** Push to array */
-  $push?: Record<string, unknown>
+  $push?: Record<string, unknown> | undefined
   /** Pull from array */
-  $pull?: Record<string, unknown>
+  $pull?: Record<string, unknown> | undefined
   /** Pull all from array */
-  $pullAll?: Record<string, unknown[]>
+  $pullAll?: Record<string, unknown[]> | undefined
   /** Add to set (unique push) */
-  $addToSet?: Record<string, unknown>
+  $addToSet?: Record<string, unknown> | undefined
   /** Pop from array */
-  $pop?: Record<string, -1 | 1>
+  $pop?: Record<string, -1 | 1> | undefined
   /** Set to current date */
-  $currentDate?: Record<string, true | { $type: 'date' | 'timestamp' }>
+  $currentDate?: Record<string, true | { $type: 'date' | 'timestamp' }> | undefined
   /** Link relationships */
-  $link?: Record<string, string | string[]>
+  $link?: Record<string, string | string[]> | undefined
   /** Unlink relationships */
-  $unlink?: Record<string, string | string[] | '$all'>
+  $unlink?: Record<string, string | string[] | '$all'> | undefined
   /** Bitwise operations */
-  $bit?: Record<string, { and?: number; or?: number; xor?: number }>
+  $bit?: Record<string, { and?: number | undefined; or?: number | undefined; xor?: number | undefined }> | undefined
   /** Generate embeddings */
-  $embed?: Record<string, string | { field: string; model?: string; overwrite?: boolean }>
+  $embed?: Record<string, string | { field: string; model?: string | undefined; overwrite?: boolean | undefined }> | undefined
 }
 
 /**
@@ -311,9 +311,9 @@ export interface DOEntity {
   /** Last updater identifier */
   updatedBy: string
   /** Soft delete timestamp (if deleted) */
-  deletedAt?: Date
+  deletedAt?: Date | undefined
   /** Deleter identifier (if deleted) */
-  deletedBy?: string
+  deletedBy?: string | undefined
   /** Optimistic concurrency version */
   version: number
   /** Additional data fields */
@@ -348,21 +348,21 @@ export interface DORelationship {
   /** Target entity name */
   toName: string
   /** Match mode (exact or fuzzy) */
-  matchMode?: 'exact' | 'fuzzy'
+  matchMode?: 'exact' | 'fuzzy' | undefined
   /** Similarity score for fuzzy matches */
-  similarity?: number
+  similarity?: number | undefined
   /** Creation timestamp */
   createdAt: Date
   /** Creator identifier */
   createdBy: string
   /** Soft delete timestamp (if deleted) */
-  deletedAt?: Date
+  deletedAt?: Date | undefined
   /** Deleter identifier (if deleted) */
-  deletedBy?: string
+  deletedBy?: string | undefined
   /** Optimistic concurrency version */
   version: number
   /** Additional edge data */
-  data?: Record<string, unknown>
+  data?: Record<string, unknown> | undefined
   /** Allow additional properties for extensibility */
   [key: string]: unknown
 }
@@ -634,13 +634,13 @@ export interface RpcContext {
   requestId: string
 
   /** Actor making the request (for audit trails) */
-  actor?: string
+  actor?: string | undefined
 
   /** Timestamp of the request */
   timestamp: Date
 
   /** Optional correlation ID for distributed tracing */
-  correlationId?: string
+  correlationId?: string | undefined
 }
 
 // =============================================================================
@@ -663,10 +663,10 @@ export interface DORoutingConfig {
   strategy: DORoutingStrategy
 
   /** Number of partitions (only used with 'partition' strategy) */
-  partitions?: number
+  partitions?: number | undefined
 
   /** Custom partition key function (for 'partition' strategy) */
-  partitionKey?: (ns: string, id?: string) => string
+  partitionKey?: ((ns: string, id?: string) => string) | undefined
 }
 
 // =============================================================================
@@ -690,7 +690,7 @@ export interface WriteTransaction {
   createdAt: Date
 
   /** Committed timestamp */
-  committedAt?: Date
+  committedAt?: Date | undefined
 }
 
 /**
@@ -704,7 +704,7 @@ export interface WriteOperation {
   ns: string
 
   /** Target entity ID (not required for create) */
-  id?: string
+  id?: string | undefined
 
   /** Operation payload */
   payload: unknown

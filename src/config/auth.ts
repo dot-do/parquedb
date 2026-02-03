@@ -136,12 +136,12 @@ export function createCombinedActorResolver(resolvers: ActorResolver[]): ActorRe
 export interface AuthContext {
   user: {
     id: string
-    email?: string
-    organizationId?: string
-    roles?: string[]
-    permissions?: string[]
+    email?: string | undefined
+    organizationId?: string | undefined
+    roles?: string[] | undefined
+    permissions?: string[] | undefined
   } | null
-  token?: string
+  token?: string | undefined
   actor: EntityId | null
 }
 

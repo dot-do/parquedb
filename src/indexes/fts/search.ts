@@ -712,10 +712,10 @@ export class FTSIndex {
     documents: Map<string, Record<string, unknown>>,
     query: string,
     options: {
-      preTag?: string
-      postTag?: string
-      maxSnippets?: number
-      maxSnippetLength?: number
+      preTag?: string | undefined
+      postTag?: string | undefined
+      maxSnippets?: number | undefined
+      maxSnippetLength?: number | undefined
     } = {}
   ): FTSSearchResult[] {
     // Get field paths from index definition
@@ -761,11 +761,11 @@ export class FTSIndex {
     getDocuments: (docIds: string[]) => Promise<Map<string, Record<string, unknown>>>,
     options: FTSSearchOptions & {
       highlightOptions?: {
-        preTag?: string
-        postTag?: string
-        maxSnippets?: number
-        maxSnippetLength?: number
-      }
+        preTag?: string | undefined
+        postTag?: string | undefined
+        maxSnippets?: number | undefined
+        maxSnippetLength?: number | undefined
+      } | undefined
     } = {}
   ): Promise<FTSSearchResult[]> {
     // Perform the search
@@ -826,7 +826,7 @@ export class FTSIndex {
    */
   async build(
     data: AsyncIterable<{ docId: string; doc: Record<string, unknown> }>,
-    options?: { onProgress?: (processed: number) => void }
+    options?: { onProgress?: ((processed: number) => void) | undefined }
   ): Promise<void> {
     await this.invertedIndex.build(data, options)
   }

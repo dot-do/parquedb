@@ -32,22 +32,22 @@ import { isRelationString, parseRelation } from '../types/schema'
  */
 export interface UpdateOperationOptions {
   /** Schema for relationship validation */
-  schema?: Schema
+  schema?: Schema | undefined
 
   /** Expected version for optimistic concurrency */
-  expectedVersion?: number
+  expectedVersion?: number | undefined
 
   /** Create if not exists */
-  upsert?: boolean
+  upsert?: boolean | undefined
 
   /** Return document before or after update */
-  returnDocument?: 'before' | 'after'
+  returnDocument?: 'before' | 'after' | undefined
 
   /** Function to get entity by ID */
-  getEntity?: (id: string) => Entity | undefined
+  getEntity?: ((id: string) => Entity | undefined) | undefined
 
   /** Function to set entity by ID */
-  setEntity?: (id: string, entity: Entity) => void
+  setEntity?: ((id: string, entity: Entity) => void) | undefined
 }
 
 /**

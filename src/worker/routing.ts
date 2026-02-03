@@ -182,15 +182,15 @@ export interface PaginationParams {
  */
 export interface ParsePaginationOptions {
   /** Default limit if not specified (default: 100) */
-  defaultLimit?: number
+  defaultLimit?: number | undefined
   /** Maximum allowed limit (default: MAX_QUERY_LIMIT = 1000) */
-  maxLimit?: number
+  maxLimit?: number | undefined
   /** Maximum allowed offset (default: MAX_QUERY_OFFSET = 100000) */
-  maxOffset?: number
+  maxOffset?: number | undefined
   /** Name of the limit parameter (default: 'limit') */
-  limitParam?: string
+  limitParam?: string | undefined
   /** Name of the offset/skip parameter (default: 'offset', also accepts 'skip') */
-  offsetParam?: string
+  offsetParam?: string | undefined
 }
 
 /**

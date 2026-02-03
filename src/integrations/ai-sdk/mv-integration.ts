@@ -191,19 +191,19 @@ export interface AIRequest {
   modelId: string
   providerId: string
   requestType: 'generate' | 'stream'
-  tokens?: number
+  tokens?: number | undefined
   latencyMs: number
   cached: boolean
   error?: {
     name: string
     message: string
-    stack?: string
-  }
+    stack?: string | undefined
+  } | undefined
   timestamp: Date
   createdAt: Date
-  createdBy?: string
-  updatedAt?: Date
-  updatedBy?: string
+  createdBy?: string | undefined
+  updatedAt?: Date | undefined
+  updatedBy?: string | undefined
 }
 
 /**
@@ -216,13 +216,13 @@ export interface Generation {
   modelId: string
   contentType: 'text' | 'object'
   content: unknown
-  prompt?: string
-  tokens?: number
+  prompt?: string | undefined
+  tokens?: number | undefined
   timestamp: Date
   createdAt: Date
-  createdBy?: string
-  updatedAt?: Date
-  updatedBy?: string
+  createdBy?: string | undefined
+  updatedAt?: Date | undefined
+  updatedBy?: string | undefined
 }
 
 // =============================================================================

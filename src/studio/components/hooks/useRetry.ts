@@ -30,23 +30,23 @@ import { useState, useCallback, useEffect, useRef } from 'react'
  */
 export interface UseRetryOptions {
   /** Maximum number of automatic retries (default: 3) */
-  maxRetries?: number
+  maxRetries?: number | undefined
   /** Base delay in ms for exponential backoff (default: 1000) */
-  baseDelay?: number
+  baseDelay?: number | undefined
   /** Maximum delay in ms (default: 30000) */
-  maxDelay?: number
+  maxDelay?: number | undefined
   /** Jitter factor to add randomness (0-1, default: 0.1) */
-  jitter?: number
+  jitter?: number | undefined
   /** Whether to automatically retry on failure (default: false) */
-  autoRetry?: boolean
+  autoRetry?: boolean | undefined
   /** Whether to fetch on mount (default: true) */
-  fetchOnMount?: boolean
+  fetchOnMount?: boolean | undefined
   /** Callback when an error occurs */
-  onError?: (error: Error, retryCount: number) => void
+  onError?: ((error: Error, retryCount: number) => void) | undefined
   /** Callback when retry succeeds */
-  onSuccess?: (data: unknown) => void
+  onSuccess?: ((data: unknown) => void) | undefined
   /** Callback when all retries exhausted */
-  onExhausted?: (error: Error) => void
+  onExhausted?: ((error: Error) => void) | undefined
 }
 
 /**

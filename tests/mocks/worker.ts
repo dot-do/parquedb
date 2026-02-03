@@ -17,8 +17,8 @@ import { createMockExecutionContext, type MockExecutionContext } from './executi
  */
 export interface MockEntity {
   $id: string
-  $type?: string
-  name?: string
+  $type?: string | undefined
+  name?: string | undefined
   [key: string]: unknown
 }
 
@@ -27,9 +27,9 @@ export interface MockEntity {
  */
 export interface MockFindResult {
   items: MockEntity[]
-  stats?: Record<string, unknown>
+  stats?: Record<string, unknown> | undefined
   hasMore: boolean
-  cursor?: string
+  cursor?: string | undefined
 }
 
 /**
@@ -54,8 +54,8 @@ export interface MockRelationship {
   from: { $id: string; name?: string }
   predicate: string
   to: { $id: string; name?: string }
-  reverse?: string
-  createdAt?: string
+  reverse?: string | undefined
+  createdAt?: string | undefined
 }
 
 /**
@@ -110,57 +110,57 @@ export interface MockWorkerOptions {
    * If true, returns a functional implementation that stores data.
    * If false (default), returns spy-only mocks.
    */
-  functional?: boolean
+  functional?: boolean | undefined
 
   /**
    * Initial entities to populate
    */
-  entities?: MockEntity[]
+  entities?: MockEntity[] | undefined
 
   /**
    * Initial relationships to populate
    */
-  relationships?: MockRelationship[]
+  relationships?: MockRelationship[] | undefined
 
   /**
    * Custom storage stats
    */
-  storageStats?: Partial<MockStorageStats>
+  storageStats?: Partial<MockStorageStats> | undefined
 
   /**
    * Override for get method
    */
-  get?: Mock
+  get?: Mock | undefined
 
   /**
    * Override for find method
    */
-  find?: Mock
+  find?: Mock | undefined
 
   /**
    * Override for create method
    */
-  create?: Mock
+  create?: Mock | undefined
 
   /**
    * Override for update method
    */
-  update?: Mock
+  update?: Mock | undefined
 
   /**
    * Override for delete method
    */
-  delete?: Mock
+  delete?: Mock | undefined
 
   /**
    * Override for getRelationships method
    */
-  getRelationships?: Mock
+  getRelationships?: Mock | undefined
 
   /**
    * Override for getStorageStats method
    */
-  getStorageStats?: Mock
+  getStorageStats?: Mock | undefined
 }
 
 // =============================================================================

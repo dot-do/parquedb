@@ -47,19 +47,19 @@ import { ResponsiveStyles } from './ResponsiveStyles'
 
 export interface DatabaseDashboardProps {
   /** Base path for admin routes (default: '/admin') */
-  basePath?: string
+  basePath?: string | undefined
   /** Initial databases (for SSR) */
-  initialDatabases?: DatabaseInfo[]
+  initialDatabases?: DatabaseInfo[] | undefined
   /** API endpoint for fetching databases */
-  apiEndpoint?: string
+  apiEndpoint?: string | undefined
   /** Callback when database is selected */
-  onSelectDatabase?: (database: DatabaseInfo) => void
+  onSelectDatabase?: ((database: DatabaseInfo) => void) | undefined
   /** Show create button */
-  showCreate?: boolean
+  showCreate?: boolean | undefined
   /** Show delete buttons on cards */
-  showDelete?: boolean
+  showDelete?: boolean | undefined
   /** Custom header component */
-  header?: React.ReactNode
+  header?: React.ReactNode | undefined
 }
 
 /**
@@ -104,7 +104,7 @@ export function DatabaseDashboard({
     async () => {
       const response = await fetch(apiEndpoint)
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({})) as { error?: string }
+        const errorData = await response.json().catch(() => ({})) as { error?: string | undefined }
         throw new Error(errorData.error || `Failed to fetch databases (${response.status})`)
       }
       return response.json()
@@ -182,7 +182,7 @@ export function DatabaseDashboard({
       })
 
       if (!response.ok) {
-        const data = await response.json().catch(() => ({})) as { error?: string }
+        const data = await response.json().catch(() => ({})) as { error?: string | undefined }
         const error = new Error(data.error || `Failed to delete database (${response.status})`)
 
         // Retry on server errors (5xx) but not on client errors (4xx)
@@ -245,7 +245,7 @@ export function DatabaseDashboard({
             success = true
             deletedIds.push(id)
           } else {
-            const data = await response.json().catch(() => ({})) as { error?: string }
+            const data = await response.json().catch(() => ({})) as { error?: string | undefined }
             lastError = data.error || `HTTP ${response.status}`
 
             // Don't retry on client errors (4xx)

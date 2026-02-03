@@ -44,19 +44,19 @@ export {
  */
 export interface TailWorkerEnv {
   /** R2 bucket for storing processed logs */
-  LOGS_BUCKET?: R2Bucket
+  LOGS_BUCKET?: R2Bucket | undefined
 
   /** Analytics Engine binding for metrics */
-  ANALYTICS?: AnalyticsEngineDataset
+  ANALYTICS?: AnalyticsEngineDataset | undefined
 
   /** KV namespace for quick lookups */
-  LOGS_KV?: KVNamespace
+  LOGS_KV?: KVNamespace | undefined
 
   /** Optional webhook URL for real-time alerts */
-  ALERT_WEBHOOK_URL?: string
+  ALERT_WEBHOOK_URL?: string | undefined
 
   /** Environment name for filtering */
-  ENVIRONMENT?: string
+  ENVIRONMENT?: string | undefined
 }
 
 /**
@@ -103,16 +103,16 @@ export interface TailRequest {
   /** Cloudflare-specific request metadata */
   cf?: {
     /** Cloudflare data center (colo) */
-    colo?: string
+    colo?: string | undefined
     /** Country code */
-    country?: string
+    country?: string | undefined
     /** City name */
-    city?: string
+    city?: string | undefined
     /** ASN */
-    asn?: number
+    asn?: number | undefined
     /** AS Organization */
-    asOrganization?: string
-  }
+    asOrganization?: string | undefined
+  } | undefined
 }
 
 /**
@@ -120,13 +120,13 @@ export interface TailRequest {
  */
 export interface TailEventInfo {
   /** Request details (for fetch events) */
-  request?: TailRequest
+  request?: TailRequest | undefined
 
   /** Scheduled event time (for cron triggers) */
-  scheduledTime?: number
+  scheduledTime?: number | undefined
 
   /** Queue name (for queue consumers) */
-  queue?: string
+  queue?: string | undefined
 }
 
 /**
@@ -160,22 +160,22 @@ export interface TraceItem {
  */
 export interface TailEventFilter {
   /** Only include events from these script names */
-  scriptNames?: string[]
+  scriptNames?: string[] | undefined
 
   /** Only include events with these outcomes */
-  outcomes?: ('ok' | 'exception' | 'exceededCpu' | 'exceededMemory' | 'unknown')[]
+  outcomes?: ('ok' | 'exception' | 'exceededCpu' | 'exceededMemory' | 'unknown')[] | undefined
 
   /** Only include events with logs at these levels */
-  logLevels?: ('log' | 'debug' | 'info' | 'warn' | 'error')[]
+  logLevels?: ('log' | 'debug' | 'info' | 'warn' | 'error')[] | undefined
 
   /** Only include events with exceptions */
-  exceptionsOnly?: boolean
+  exceptionsOnly?: boolean | undefined
 
   /** Minimum number of logs to include */
-  minLogs?: number
+  minLogs?: number | undefined
 
   /** URL patterns to include (glob-style) */
-  urlPatterns?: string[]
+  urlPatterns?: string[] | undefined
 }
 
 /**
@@ -209,16 +209,16 @@ export interface ProcessedEvent {
   outcome: string
 
   /** HTTP method (if applicable) */
-  method?: string
+  method?: string | undefined
 
   /** Request URL (if applicable) */
-  url?: string
+  url?: string | undefined
 
   /** Cloudflare colo */
-  colo?: string
+  colo?: string | undefined
 
   /** Country code */
-  country?: string
+  country?: string | undefined
 
   /** Log count */
   logCount: number
@@ -227,13 +227,13 @@ export interface ProcessedEvent {
   exceptionCount: number
 
   /** Error messages (if any) */
-  errors?: string[]
+  errors?: string[] | undefined
 
   /** Log messages (filtered) */
-  logs?: Array<{ level: string; message: string; timestamp: number }>
+  logs?: Array<{ level: string; message: string; timestamp: number }> | undefined
 
   /** Duration estimate (if available) */
-  durationMs?: number
+  durationMs?: number | undefined
 }
 
 // =============================================================================
@@ -580,25 +580,25 @@ export async function sendAlert(webhookUrl: string, events: ProcessedEvent[]): P
  */
 export interface TailWorkerConfig {
   /** Event filter */
-  filter?: TailEventFilter
+  filter?: TailEventFilter | undefined
 
   /** Batch configuration */
-  batch?: BatchConfig
+  batch?: BatchConfig | undefined
 
   /** Enable R2 storage */
-  enableR2Storage?: boolean
+  enableR2Storage?: boolean | undefined
 
   /** Enable Analytics Engine */
-  enableAnalytics?: boolean
+  enableAnalytics?: boolean | undefined
 
   /** Enable alerting */
-  enableAlerts?: boolean
+  enableAlerts?: boolean | undefined
 
   /** Input validation configuration */
-  validation?: TailValidationConfig
+  validation?: TailValidationConfig | undefined
 
   /** Callback for handling validation errors */
-  onValidationError?: (result: TraceItemsValidationResult) => void
+  onValidationError?: ((result: TraceItemsValidationResult) => void) | undefined
 }
 
 /**

@@ -45,11 +45,11 @@ export interface FireAndForgetMetrics {
   /** Total number of retries attempted */
   retries: number
   /** Last error message (if any) */
-  lastError?: string
+  lastError?: string | undefined
   /** Timestamp of last error */
-  lastErrorAt?: number
+  lastErrorAt?: number | undefined
   /** Timestamp of last success */
-  lastSuccessAt?: number
+  lastSuccessAt?: number | undefined
 }
 
 /**
@@ -82,13 +82,13 @@ export type ErrorHandler = (
  */
 export interface FireAndForgetConfig {
   /** Optional custom logger (defaults to global logger) */
-  logger?: Logger
+  logger?: Logger | undefined
   /** Additional error handler callback */
-  onError?: ErrorHandler
+  onError?: ErrorHandler | undefined
   /** Whether to enable retry for transient failures */
-  enableRetry?: boolean
+  enableRetry?: boolean | undefined
   /** Retry configuration (if enableRetry is true) */
-  retryConfig?: RetryConfig
+  retryConfig?: RetryConfig | undefined
 }
 
 // =============================================================================
@@ -114,7 +114,7 @@ export const DEFAULT_FIRE_AND_FORGET_RETRY_CONFIG: RetryConfig = {
       message.includes('econnreset') ||
       message.includes('econnrefused') ||
       message.includes('temporarily unavailable') ||
-      (error as { retryable?: boolean }).retryable === true
+      (error as { retryable?: boolean | undefined }).retryable === true
     )
   },
 }

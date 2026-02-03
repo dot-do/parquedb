@@ -23,13 +23,13 @@ import type { StorageBackend } from './storage'
  */
 export interface HonoAuthUser {
   id: string
-  email?: string
-  firstName?: string
-  lastName?: string
-  profilePictureUrl?: string
-  organizationId?: string
-  roles?: string[]
-  permissions?: string[]
+  email?: string | undefined
+  firstName?: string | undefined
+  lastName?: string | undefined
+  profilePictureUrl?: string | undefined
+  organizationId?: string | undefined
+  roles?: string[] | undefined
+  permissions?: string[] | undefined
 }
 
 /**
@@ -43,33 +43,33 @@ export interface HonoDatabaseInfo {
   /** Human-readable name */
   name: string
   /** Description */
-  description?: string
+  description?: string | undefined
   /** R2 bucket name */
   bucket: string
   /** Path prefix within bucket */
-  prefix?: string
+  prefix?: string | undefined
   /** When database was created */
   createdAt: Date
   /** Who created the database */
   createdBy: EntityId
   /** Last access time */
-  lastAccessedAt?: Date
+  lastAccessedAt?: Date | undefined
   /** Estimated size in bytes */
-  sizeBytes?: number
+  sizeBytes?: number | undefined
   /** Number of collections */
-  collectionCount?: number
+  collectionCount?: number | undefined
   /** Number of entities */
-  entityCount?: number
+  entityCount?: number | undefined
   /** Database schema version */
-  schemaVersion?: number
+  schemaVersion?: number | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /** Visibility level for the database */
   visibility: string
   /** URL-friendly slug for public access */
-  slug?: string
+  slug?: string | undefined
   /** Owner username */
-  owner?: string
+  owner?: string | undefined
 }
 
 /**

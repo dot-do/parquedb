@@ -5,8 +5,8 @@
 export interface Octokit {
   rest: {
     checks: {
-      create: (params: CreateCheckParams) => Promise<{ data: { id: number; status?: string } }>
-      update: (params: UpdateCheckParams) => Promise<{ data: { id: number; conclusion?: string } }>
+      create: (params: CreateCheckParams) => Promise<{ data: { id: number; status?: string | undefined } }>
+      update: (params: UpdateCheckParams) => Promise<{ data: { id: number; conclusion?: string | undefined } }>
     }
   }
 }
@@ -20,23 +20,23 @@ interface CreateCheckParams {
   readonly output?: {
     readonly title: string
     readonly summary: string
-    readonly text?: string
-    readonly annotations?: readonly Annotation[]
-  }
+    readonly text?: string | undefined
+    readonly annotations?: readonly Annotation[] | undefined
+  } | undefined
 }
 
 interface UpdateCheckParams {
   readonly owner: string
   readonly repo: string
   readonly check_run_id: number
-  readonly status?: 'queued' | 'in_progress' | 'completed'
-  readonly conclusion?: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required'
+  readonly status?: 'queued' | 'in_progress' | 'completed' | undefined
+  readonly conclusion?: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required' | undefined
   readonly output?: {
     readonly title: string
     readonly summary: string
-    readonly text?: string
-    readonly annotations?: readonly Annotation[]
-  }
+    readonly text?: string | undefined
+    readonly annotations?: readonly Annotation[] | undefined
+  } | undefined
 }
 
 interface Annotation {
@@ -45,7 +45,7 @@ interface Annotation {
   readonly end_line: number
   readonly annotation_level: 'notice' | 'warning' | 'failure'
   readonly message: string
-  readonly title?: string
+  readonly title?: string | undefined
 }
 
 export interface CreateMergeCheckOptions {

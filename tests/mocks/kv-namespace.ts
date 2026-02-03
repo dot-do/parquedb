@@ -20,26 +20,26 @@ export type KVValueType = 'text' | 'json' | 'arrayBuffer' | 'stream'
  * Options for KV get operations
  */
 export interface KVGetOptions<T extends KVValueType = 'text'> {
-  type?: T
-  cacheTtl?: number
+  type?: T | undefined
+  cacheTtl?: number | undefined
 }
 
 /**
  * Options for KV put operations
  */
 export interface KVPutOptions {
-  expiration?: number
-  expirationTtl?: number
-  metadata?: Record<string, unknown>
+  expiration?: number | undefined
+  expirationTtl?: number | undefined
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
  * Options for KV list operations
  */
 export interface KVListOptions {
-  prefix?: string
-  limit?: number
-  cursor?: string
+  prefix?: string | undefined
+  limit?: number | undefined
+  cursor?: string | undefined
 }
 
 /**
@@ -48,7 +48,7 @@ export interface KVListOptions {
 export interface KVListResult<T = unknown> {
   keys: Array<{ name: string; expiration?: number; metadata?: T }>
   list_complete: boolean
-  cursor?: string
+  cursor?: string | undefined
 }
 
 /**
@@ -74,7 +74,7 @@ export interface KVNamespace {
 
   getWithMetadata<M = unknown>(
     key: string,
-    options?: KVGetOptions<'text'>
+    options?: KVGetOptions<'text'> | undefined
   ): Promise<KVValueWithMetadata<string, M>>
   getWithMetadata<M = unknown>(
     key: string,
@@ -112,12 +112,12 @@ export interface MockKVNamespaceOptions {
    * If true, returns a functional in-memory implementation.
    * If false (default), returns spy-only mocks that return sensible defaults.
    */
-  functional?: boolean
+  functional?: boolean | undefined
 
   /**
    * Initial data to populate the namespace with
    */
-  initialData?: Map<string, string>
+  initialData?: Map<string, string> | undefined
 }
 
 // =============================================================================

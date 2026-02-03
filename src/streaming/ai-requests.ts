@@ -186,37 +186,37 @@ export interface AIRequest {
   success: boolean
 
   /** Finish reason (e.g., 'stop', 'length', 'tool-calls', 'error') */
-  finishReason?: string
+  finishReason?: string | undefined
 
   /** Error message (if request failed) */
-  error?: string
+  error?: string | undefined
 
   /** Error code (if applicable) */
-  errorCode?: string
+  errorCode?: string | undefined
 
   /** Temperature setting used */
-  temperature?: number
+  temperature?: number | undefined
 
   /** Max tokens setting used */
-  maxTokens?: number
+  maxTokens?: number | undefined
 
   /** Whether tools were used */
-  toolsUsed?: boolean
+  toolsUsed?: boolean | undefined
 
   /** Number of tool calls made */
-  toolCallCount?: number
+  toolCallCount?: number | undefined
 
   /** User or session identifier */
-  userId?: string
+  userId?: string | undefined
 
   /** Application or service identifier */
-  appId?: string
+  appId?: string | undefined
 
   /** Environment (e.g., 'production', 'development', 'staging') */
-  environment?: string
+  environment?: string | undefined
 
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -236,58 +236,58 @@ export interface RecordAIRequestInput {
   latencyMs: number
 
   /** Number of prompt/input tokens (optional, will be 0 if not provided) */
-  promptTokens?: number
+  promptTokens?: number | undefined
 
   /** Number of completion/output tokens (optional, will be 0 if not provided) */
-  completionTokens?: number
+  completionTokens?: number | undefined
 
   /** Whether the response was served from cache */
-  cached?: boolean
+  cached?: boolean | undefined
 
   /** Whether the request succeeded (defaults to true) */
-  success?: boolean
+  success?: boolean | undefined
 
   /** Finish reason */
-  finishReason?: string
+  finishReason?: string | undefined
 
   /** Error message (if request failed) */
-  error?: string
+  error?: string | undefined
 
   /** Error code */
-  errorCode?: string
+  errorCode?: string | undefined
 
   /** Temperature setting used */
-  temperature?: number
+  temperature?: number | undefined
 
   /** Max tokens setting used */
-  maxTokens?: number
+  maxTokens?: number | undefined
 
   /** Whether tools were used */
-  toolsUsed?: boolean
+  toolsUsed?: boolean | undefined
 
   /** Number of tool calls made */
-  toolCallCount?: number
+  toolCallCount?: number | undefined
 
   /** User or session identifier */
-  userId?: string
+  userId?: string | undefined
 
   /** Application or service identifier */
-  appId?: string
+  appId?: string | undefined
 
   /** Environment */
-  environment?: string
+  environment?: string | undefined
 
   /** Custom request ID (auto-generated if not provided) */
-  requestId?: string
+  requestId?: string | undefined
 
   /** Custom timestamp (defaults to now) */
-  timestamp?: Date
+  timestamp?: Date | undefined
 
   /** Custom cost override (otherwise calculated from tokens) */
-  costUSD?: number
+  costUSD?: number | undefined
 
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -313,10 +313,10 @@ export interface AIMetrics {
   timeBucket: AITimeBucket
 
   /** Grouping key (model, provider, etc.) */
-  groupBy?: string
+  groupBy?: string | undefined
 
   /** Group value */
-  groupValue?: string
+  groupValue?: string | undefined
 
   /** Total request count */
   totalRequests: number
@@ -399,49 +399,49 @@ export interface AIMetrics {
  */
 export interface GetAIMetricsOptions {
   /** Collection name for raw requests */
-  collection?: string
+  collection?: string | undefined
 
   /** Start time for query (inclusive) */
-  since?: Date
+  since?: Date | undefined
 
   /** End time for query (exclusive) */
-  until?: Date
+  until?: Date | undefined
 
   /** Time bucket for aggregation */
-  timeBucket?: AITimeBucket
+  timeBucket?: AITimeBucket | undefined
 
   /** Field to group by */
-  groupBy?: 'model' | 'provider' | 'requestType' | 'userId' | 'appId' | 'environment'
+  groupBy?: 'model' | 'provider' | 'requestType' | 'userId' | 'appId' | 'environment' | undefined
 
   /** Filter by specific model */
-  modelId?: string
+  modelId?: string | undefined
 
   /** Filter by provider */
-  providerId?: AIProvider | string
+  providerId?: AIProvider | string | undefined
 
   /** Filter by request type */
-  requestType?: AIRequestType
+  requestType?: AIRequestType | undefined
 
   /** Filter by user ID */
-  userId?: string
+  userId?: string | undefined
 
   /** Filter by app ID */
-  appId?: string
+  appId?: string | undefined
 
   /** Filter by environment */
-  environment?: string
+  environment?: string | undefined
 
   /** Include only cached/uncached requests */
-  cachedOnly?: boolean
+  cachedOnly?: boolean | undefined
 
   /** Include only successful/failed requests */
-  successOnly?: boolean
+  successOnly?: boolean | undefined
 
   /** Limit number of results */
-  limit?: number
+  limit?: number | undefined
 
   /** Custom model pricing (overrides defaults) */
-  pricing?: Record<string, ModelPricing>
+  pricing?: Record<string, ModelPricing> | undefined
 }
 
 // =============================================================================
@@ -603,8 +603,8 @@ export async function recordAIRequest(
   db: ParqueDB,
   input: RecordAIRequestInput,
   options?: {
-    collection?: string
-    pricing?: Record<string, ModelPricing>
+    collection?: string | undefined
+    pricing?: Record<string, ModelPricing> | undefined
   }
 ): Promise<AIRequest> {
   const collection = options?.collection ?? DEFAULT_AI_REQUESTS_COLLECTION
@@ -666,8 +666,8 @@ export async function recordAIRequests(
   db: ParqueDB,
   inputs: RecordAIRequestInput[],
   options?: {
-    collection?: string
-    pricing?: Record<string, ModelPricing>
+    collection?: string | undefined
+    pricing?: Record<string, ModelPricing> | undefined
   }
 ): Promise<AIRequest[]> {
   const collection = options?.collection ?? DEFAULT_AI_REQUESTS_COLLECTION
@@ -1046,9 +1046,9 @@ export async function getAIMetrics(
 export async function getCurrentAIMetrics(
   db: ParqueDB,
   options?: {
-    collection?: string
-    timeBucket?: AITimeBucket
-    groupBy?: GetAIMetricsOptions['groupBy']
+    collection?: string | undefined
+    timeBucket?: AITimeBucket | undefined
+    groupBy?: GetAIMetricsOptions['groupBy'] | undefined
   }
 ): Promise<AIMetrics[]> {
   const timeBucket = options?.timeBucket ?? 'minute'
@@ -1073,10 +1073,10 @@ export async function getCurrentAIMetrics(
 export async function getAICostSummary(
   db: ParqueDB,
   options?: {
-    collection?: string
-    since?: Date
-    until?: Date
-    limit?: number
+    collection?: string | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
   }
 ): Promise<{
   totalCostUSD: number
@@ -1170,10 +1170,10 @@ export async function getAICostSummary(
 export async function getAIErrorSummary(
   db: ParqueDB,
   options?: {
-    collection?: string
-    since?: Date
-    until?: Date
-    limit?: number
+    collection?: string | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
   }
 ): Promise<{
   totalErrors: number
@@ -1186,8 +1186,8 @@ export async function getAIErrorSummary(
     timestamp: Date
     modelId: string
     providerId: string
-    error?: string
-    errorCode?: string
+    error?: string | undefined
+    errorCode?: string | undefined
   }>
 }> {
   const collection = options?.collection ?? DEFAULT_AI_REQUESTS_COLLECTION
@@ -1267,11 +1267,11 @@ export async function getAIErrorSummary(
  */
 export interface AIRequestsMVOptions extends Omit<ViewOptions, 'populateOnCreate'> {
   /** Collection name for raw requests */
-  requestsCollection?: string
+  requestsCollection?: string | undefined
   /** Collection name for aggregated metrics */
-  metricsCollection?: string
+  metricsCollection?: string | undefined
   /** Custom model pricing */
-  pricing?: Record<string, ModelPricing>
+  pricing?: Record<string, ModelPricing> | undefined
 }
 
 /**
@@ -1365,7 +1365,7 @@ export function createAIRequestsMV(
  * Request with retry tracking
  */
 interface BufferedRequest extends RecordAIRequestInput {
-  _retryCount?: number
+  _retryCount?: number | undefined
 }
 
 /**
@@ -1383,14 +1383,14 @@ export class AIRequestBuffer {
   constructor(
     private db: ParqueDB,
     private options: {
-      collection?: string
-      maxBufferSize?: number
-      flushIntervalMs?: number
-      pricing?: Record<string, ModelPricing>
+      collection?: string | undefined
+      maxBufferSize?: number | undefined
+      flushIntervalMs?: number | undefined
+      pricing?: Record<string, ModelPricing> | undefined
       /** Maximum number of flush retries before dropping requests (default: 3) */
-      maxFlushRetries?: number
+      maxFlushRetries?: number | undefined
       /** Callback when requests are dropped due to max retries */
-      onDrop?: (requests: RecordAIRequestInput[], error: Error) => void
+      onDrop?: ((requests: RecordAIRequestInput[], error: Error) => void) | undefined
     } = {}
   ) {
     this.options.maxBufferSize = options.maxBufferSize ?? DEFAULT_AI_BUFFER_SIZE
@@ -1521,15 +1521,15 @@ export class AIRequestBuffer {
 export function createAIRequestBuffer(
   db: ParqueDB,
   options?: {
-    collection?: string
-    maxBufferSize?: number
-    flushIntervalMs?: number
-    pricing?: Record<string, ModelPricing>
-    autoStart?: boolean
+    collection?: string | undefined
+    maxBufferSize?: number | undefined
+    flushIntervalMs?: number | undefined
+    pricing?: Record<string, ModelPricing> | undefined
+    autoStart?: boolean | undefined
     /** Maximum number of flush retries before dropping requests (default: 3) */
-    maxFlushRetries?: number
+    maxFlushRetries?: number | undefined
     /** Callback when requests are dropped due to max retries */
-    onDrop?: (requests: RecordAIRequestInput[], error: Error) => void
+    onDrop?: ((requests: RecordAIRequestInput[], error: Error) => void) | undefined
   }
 ): AIRequestBuffer {
   const buffer = new AIRequestBuffer(db, options)

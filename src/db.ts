@@ -53,15 +53,15 @@ import { DEFAULT_COLLECTION_OPTIONS, type CollectionOptions } from './types/coll
  */
 export interface InlineFieldStudio {
   /** Display label */
-  label?: string
+  label?: string | undefined
   /** Help text */
-  description?: string
+  description?: string | undefined
   /** For select fields - simple array or label/value pairs */
-  options?: string[] | Array<{ label: string; value: string }>
+  options?: string[] | Array<{ label: string; value: string }> | undefined
   /** Hide from list */
-  hideInList?: boolean
+  hideInList?: boolean | undefined
   /** Read-only */
-  readOnly?: boolean
+  readOnly?: boolean | undefined
 }
 
 /**
@@ -69,13 +69,13 @@ export interface InlineFieldStudio {
  */
 export interface InlineStudioConfig {
   /** Collection label */
-  label?: string
+  label?: string | undefined
   /** Field to use as title */
-  useAsTitle?: string
+  useAsTitle?: string | undefined
   /** Default list columns */
-  defaultColumns?: string[]
+  defaultColumns?: string[] | undefined
   /** Admin nav group */
-  group?: string
+  group?: string | undefined
   /** Per-field UI config */
   [field: string]: string | string[] | InlineFieldStudio | undefined
 }
@@ -135,13 +135,13 @@ export type { CollectionOptions } from './types/collection-options'
  */
 export interface CollectionSchemaWithLayout {
   /** Storage and behavior options */
-  $options?: CollectionOptions
+  $options?: CollectionOptions | undefined
   /** Layout: array = rows, object = tabs with rows */
-  $layout?: LayoutConfig
+  $layout?: LayoutConfig | undefined
   /** Sidebar fields */
-  $sidebar?: string[]
+  $sidebar?: string[] | undefined
   /** UI/studio configuration */
-  $studio?: InlineStudioConfig
+  $studio?: InlineStudioConfig | undefined
   /** Field definitions (type strings like 'string!', 'int', '-> User') */
   [field: string]: string | CollectionOptions | LayoutConfig | string[] | InlineStudioConfig | undefined
 }
@@ -171,9 +171,9 @@ export interface FlexibleModeConfig {
  */
 export interface DBConfig {
   /** Storage backend (defaults to MemoryBackend) */
-  storage?: StorageBackend
+  storage?: StorageBackend | undefined
   /** Default namespace for operations */
-  defaultNamespace?: string
+  defaultNamespace?: string | undefined
 }
 
 /**

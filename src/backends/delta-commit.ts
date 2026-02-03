@@ -56,19 +56,19 @@ export interface DeltaCommitConfig {
   tableLocation: string
 
   /** Maximum OCC retries (default: 10) */
-  maxRetries?: number
+  maxRetries?: number | undefined
 
   /** Base backoff in ms (default: 100) */
-  baseBackoffMs?: number
+  baseBackoffMs?: number | undefined
 
   /** Max backoff in ms (default: 10000) */
-  maxBackoffMs?: number
+  maxBackoffMs?: number | undefined
 
   /**
    * Create checkpoint every N commits (default: 10).
    * Set to 0 to disable automatic checkpoints.
    */
-  checkpointInterval?: number
+  checkpointInterval?: number | undefined
 }
 
 /**
@@ -82,7 +82,7 @@ export interface DeltaDataFileInfo {
   size: number
 
   /** Whether this is a data change (true) or metadata change (false) */
-  dataChange?: boolean
+  dataChange?: boolean | undefined
 }
 
 /**
@@ -93,16 +93,16 @@ export interface DeltaCommitResult {
   success: boolean
 
   /** New version number (if successful) */
-  version?: number
+  version?: number | undefined
 
   /** Path to the new commit file (if successful) */
-  logPath?: string
+  logPath?: string | undefined
 
   /** Error message (if failed) */
-  error?: string
+  error?: string | undefined
 
   /** Number of retries performed */
-  retries?: number
+  retries?: number | undefined
 }
 
 /**
@@ -110,7 +110,7 @@ export interface DeltaCommitResult {
  */
 export interface CheckpointOptions {
   /** Force checkpoint creation even if not at interval boundary */
-  force?: boolean
+  force?: boolean | undefined
 }
 
 /**
@@ -124,10 +124,10 @@ export interface CheckpointResult {
   version: number
 
   /** Path to checkpoint file (if created) */
-  checkpointPath?: string
+  checkpointPath?: string | undefined
 
   /** Number of actions in the checkpoint */
-  size?: number
+  size?: number | undefined
 }
 
 /**
@@ -136,7 +136,7 @@ export interface CheckpointResult {
 interface LastCheckpoint {
   version: number
   size: number
-  parts?: number
+  parts?: number | undefined
 }
 
 // =============================================================================
@@ -766,10 +766,10 @@ export async function commitToDeltaTable(config: {
   storage: StorageBackend
   tableLocation: string
   dataFiles: DeltaDataFileInfo[]
-  maxRetries?: number
-  baseBackoffMs?: number
-  maxBackoffMs?: number
-  checkpointInterval?: number
+  maxRetries?: number | undefined
+  baseBackoffMs?: number | undefined
+  maxBackoffMs?: number | undefined
+  checkpointInterval?: number | undefined
 }): Promise<DeltaCommitResult> {
   const committer = new DeltaCommitter({
     storage: config.storage,

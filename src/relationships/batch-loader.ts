@@ -58,19 +58,19 @@ export interface BatchLoaderOptions {
    * Time window in milliseconds to collect requests before flushing.
    * Default: 10ms
    */
-  windowMs?: number
+  windowMs?: number | undefined
 
   /**
    * Maximum number of requests to batch before forcing a flush.
    * Default: 100
    */
-  maxBatchSize?: number
+  maxBatchSize?: number | undefined
 
   /**
    * Whether to deduplicate identical requests.
    * Default: true
    */
-  deduplicate?: boolean
+  deduplicate?: boolean | undefined
 }
 
 /**
@@ -79,7 +79,7 @@ export interface BatchLoaderOptions {
 interface PendingRequest extends BatchLoadRequest {
   resolve: (value: Entity[]) => void
   reject: (error: Error) => void
-  options?: GetRelatedOptions
+  options?: GetRelatedOptions | undefined
 }
 
 /**

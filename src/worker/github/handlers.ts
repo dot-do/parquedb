@@ -23,7 +23,7 @@ import { createSafeRegex } from '../../utils/safe-regex'
 export interface GitHubInstallationLinkData {
   readonly login: string
   readonly type: string
-  readonly repositories?: readonly string[]
+  readonly repositories?: readonly string[] | undefined
 }
 
 /**
@@ -44,32 +44,32 @@ export interface DatabaseIndexService {
  * Branch configuration options
  */
 export interface BranchConfig {
-  readonly auto_create?: readonly string[]
-  readonly auto_delete?: boolean
-  readonly ignore?: readonly string[]
+  readonly auto_create?: readonly string[] | undefined
+  readonly auto_delete?: boolean | undefined
+  readonly ignore?: readonly string[] | undefined
 }
 
 /**
  * Preview configuration options
  */
 export interface PreviewConfig {
-  readonly enabled?: boolean
+  readonly enabled?: boolean | undefined
 }
 
 /**
  * Merge configuration options
  */
 export interface MergeConfig {
-  readonly strategy?: string
+  readonly strategy?: string | undefined
 }
 
 /**
  * Database configuration
  */
 export interface DatabaseConfig {
-  readonly branches?: BranchConfig
-  readonly preview?: PreviewConfig
-  readonly merge?: MergeConfig
+  readonly branches?: BranchConfig | undefined
+  readonly preview?: PreviewConfig | undefined
+  readonly merge?: MergeConfig | undefined
 }
 
 /**
@@ -77,9 +77,9 @@ export interface DatabaseConfig {
  */
 export interface DatabaseInfo {
   readonly id: string
-  readonly defaultBranch?: string
-  readonly previewUrl?: string
-  readonly config?: DatabaseConfig
+  readonly defaultBranch?: string | undefined
+  readonly previewUrl?: string | undefined
+  readonly config?: DatabaseConfig | undefined
 }
 
 /**
@@ -93,7 +93,7 @@ export interface BranchCreateOptions {
  * Merge options
  */
 export interface MergeServiceOptions {
-  readonly strategy?: string
+  readonly strategy?: string | undefined
 }
 
 /**
@@ -115,9 +115,9 @@ export interface MergeServiceResult {
  * Diff change counts
  */
 export interface DiffChangeCounts {
-  readonly added?: number
-  readonly modified?: number
-  readonly deleted?: number
+  readonly added?: number | undefined
+  readonly modified?: number | undefined
+  readonly deleted?: number | undefined
 }
 
 /**
@@ -167,7 +167,7 @@ export interface CheckCreateParams {
   readonly name: string
   readonly head_sha: string
   readonly status: string
-  readonly output?: CheckOutput
+  readonly output?: CheckOutput | undefined
 }
 
 /**
@@ -177,9 +177,9 @@ export interface CheckUpdateParams {
   readonly owner: string
   readonly repo: string
   readonly check_run_id: number
-  readonly status?: string
-  readonly conclusion?: string
-  readonly output?: CheckOutput
+  readonly status?: string | undefined
+  readonly conclusion?: string | undefined
+  readonly output?: CheckOutput | undefined
 }
 
 /**
@@ -355,7 +355,7 @@ export interface RepositoryRef {
 export interface InstallationCreatedPayload {
   readonly action: 'created'
   readonly installation: InstallationInfo
-  readonly repositories?: readonly RepositoryRef[]
+  readonly repositories?: readonly RepositoryRef[] | undefined
 }
 
 /**
@@ -434,7 +434,7 @@ export interface CreatePayload {
   readonly repository: RepositoryRef
   readonly installation?: {
     readonly id: number
-  }
+  } | undefined
 }
 
 /**
@@ -488,7 +488,7 @@ export interface DeletePayload {
   readonly repository: RepositoryRef
   readonly installation?: {
     readonly id: number
-  }
+  } | undefined
 }
 
 /**
@@ -538,7 +538,7 @@ export async function handleDelete(
  */
 export interface PullRequestBranchRef {
   readonly ref: string
-  readonly sha?: string
+  readonly sha?: string | undefined
 }
 
 /**
@@ -552,10 +552,10 @@ export interface PullRequestBaseRef {
  * Pull request data
  */
 export interface PullRequestData {
-  readonly merged?: boolean
+  readonly merged?: boolean | undefined
   readonly head: PullRequestBranchRef
   readonly base: PullRequestBaseRef
-  readonly merge_commit_sha?: string
+  readonly merge_commit_sha?: string | undefined
 }
 
 /**
@@ -568,7 +568,7 @@ export interface PullRequestPayload {
   readonly repository: RepositoryRef
   readonly installation?: {
     readonly id: number
-  }
+  } | undefined
 }
 
 /**
@@ -822,8 +822,8 @@ function matchesPattern(value: string, patterns: readonly string[]): boolean {
  */
 function buildDiffComment(
   diff: {
-    entities: { added?: number; modified?: number; deleted?: number }
-    relationships: { added?: number; modified?: number; deleted?: number }
+    entities: { added?: number | undefined; modified?: number | undefined; deleted?: number | undefined }
+    relationships: { added?: number | undefined; modified?: number | undefined; deleted?: number | undefined }
   },
   previewUrl?: string,
   previewBranch?: string

@@ -76,23 +76,23 @@ export interface ComponentPaths {
    * Path to Dashboard component
    * Should export DatabaseDashboardView as default
    */
-  Dashboard?: string
+  Dashboard?: string | undefined
 
   /**
    * Path to DatabaseSelector component
    * Should export DatabaseSelectView as default
    */
-  DatabaseSelector?: string
+  DatabaseSelector?: string | undefined
 
   /**
    * Path to Logo component (optional)
    */
-  Logo?: string
+  Logo?: string | undefined
 
   /**
    * Path to Icon component (optional)
    */
-  Icon?: string
+  Icon?: string | undefined
 }
 
 export interface PayloadConfigOptions {
@@ -100,7 +100,7 @@ export interface PayloadConfigOptions {
    * Storage backend for single-database mode
    * Not required if multiDatabase is enabled
    */
-  storage?: StorageBackend
+  storage?: StorageBackend | undefined
 
   /**
    * Payload secret for encryption
@@ -111,7 +111,7 @@ export interface PayloadConfigOptions {
    * Enable multi-database mode
    * When true, shows database selector dashboard
    */
-  multiDatabase?: boolean
+  multiDatabase?: boolean | undefined
 
   /**
    * Paths to custom components (Payload v3 import map)
@@ -127,44 +127,44 @@ export interface PayloadConfigOptions {
    * }
    * ```
    */
-  componentPaths?: ComponentPaths
+  componentPaths?: ComponentPaths | undefined
 
   /**
    * OAuth.do configuration for authentication
    */
   oauth?: {
     jwksUri: string
-    clientId?: string
-    cookieName?: string
-    adminRoles?: string[]
-  }
+    clientId?: string | undefined
+    cookieName?: string | undefined
+    adminRoles?: string[] | undefined
+  } | undefined
 
   /**
    * Studio configuration
    */
-  studio?: Partial<StudioConfig>
+  studio?: Partial<StudioConfig> | undefined
 
   /**
    * Pre-discovered collections (skip discovery)
    */
-  collections?: DiscoveredCollection[]
+  collections?: DiscoveredCollection[] | undefined
 
   /**
    * Custom admin UI configuration
    */
   admin?: {
     /** Custom logo URL */
-    logoUrl?: string
+    logoUrl?: string | undefined
     /** App name */
-    appName?: string
+    appName?: string | undefined
     /** Custom theme */
-    theme?: 'light' | 'dark' | 'auto'
-  }
+    theme?: 'light' | 'dark' | 'auto' | undefined
+  } | undefined
 
   /**
    * Debug mode
    */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 // =============================================================================
@@ -417,7 +417,7 @@ export function createDevConfig(dataDir: string = '.db') {
  */
 export function generatePayloadCollections(
   collections: DiscoveredCollection[],
-  options: { readOnly?: boolean } = {}
+  options: { readOnly?: boolean | undefined } = {}
 ) {
   // Import at runtime to avoid circular dependencies
   const { generateCollections } = require('./collections')

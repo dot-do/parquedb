@@ -199,13 +199,13 @@ export interface BooleanClause {
   /** Terms in this clause (stemmed) */
   terms: string[]
   /** Phrase to match exactly (original, unstemmed) */
-  phrase?: string
+  phrase?: string | undefined
   /** Whether this clause is required (AND semantics) */
   required: boolean
   /** Whether this clause is excluded (NOT semantics) */
   excluded: boolean
   /** How to combine multiple terms within this clause (default: 'and') */
-  termCombination?: 'and' | 'or'
+  termCombination?: 'and' | 'or' | undefined
 }
 
 /**

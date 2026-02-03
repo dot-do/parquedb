@@ -68,15 +68,15 @@ export interface EntitySnapshot {
  */
 export interface EventSourcedConfig {
   /** Maximum events before auto-flush */
-  maxBufferedEvents?: number
+  maxBufferedEvents?: number | undefined
   /** Maximum bytes before auto-flush */
-  maxBufferedBytes?: number
+  maxBufferedBytes?: number | undefined
   /** Auto-snapshot after this many events per entity */
-  autoSnapshotThreshold?: number
+  autoSnapshotThreshold?: number | undefined
   /** Maximum cached entities */
-  maxCachedEntities?: number
+  maxCachedEntities?: number | undefined
   /** Cache TTL in milliseconds */
-  cacheTtlMs?: number
+  cacheTtlMs?: number | undefined
 }
 
 /**
@@ -597,8 +597,8 @@ export class EventSourcedBackend implements EventSourcedOperations {
 
     return {
       $id: `${ns}/${id}` as EntityId,
-      $type: (base as { $type?: string }).$type || 'Unknown',
-      name: (base as { name?: string }).name || '',
+      $type: (base as { $type?: string | undefined }).$type || 'Unknown',
+      name: (base as { name?: string | undefined }).name || '',
       version: 1,
       createdAt: new Date(),
       createdBy: '' as EntityId,

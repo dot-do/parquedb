@@ -13,7 +13,7 @@ import { logger } from '../utils/logger'
 
 // Use the Cloudflare R2Bucket type directly
 type R2Bucket = {
-  get(key: string, options?: { range?: { offset: number; length: number } }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
+  get(key: string, options?: { range?: { offset: number; length: number } | undefined }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
   put(key: string, value: ArrayBuffer | Uint8Array): Promise<unknown>
   delete(key: string): Promise<void>
   head(key: string): Promise<{ size: number } | null>

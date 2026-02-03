@@ -28,7 +28,7 @@ import type {
 
 interface User {
   email: string
-  bio?: string
+  bio?: string | undefined
 }
 
 interface Category {
@@ -44,7 +44,7 @@ interface Post {
   title: string
   content: string
   status: 'draft' | 'published'
-  publishedAt?: Date
+  publishedAt?: Date | undefined
 }
 
 // =============================================================================

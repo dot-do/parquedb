@@ -140,42 +140,42 @@ export interface AIRequestRecord {
   /** Whether response was cached */
   cached: boolean
   /** Finish reason */
-  finishReason?: string
+  finishReason?: string | undefined
   /** Error message (if failed) */
-  error?: string
+  error?: string | undefined
   /** Error code (if failed) */
-  errorCode?: string
+  errorCode?: string | undefined
   /** Temperature setting */
-  temperature?: number
+  temperature?: number | undefined
   /** Max tokens setting */
-  maxTokens?: number
+  maxTokens?: number | undefined
   /** Whether tools were used */
-  toolsUsed?: boolean
+  toolsUsed?: boolean | undefined
   /** Number of tool calls */
-  toolCallCount?: number
+  toolCallCount?: number | undefined
   /** User identifier */
-  userId?: string
+  userId?: string | undefined
   /** Application identifier */
-  appId?: string
+  appId?: string | undefined
   /** Environment */
-  environment?: string
+  environment?: string | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /** When the record was created */
   createdAt: Date
   // Content sampling fields
   /** Sampled prompt content (if sampling enabled) */
-  promptSample?: string
+  promptSample?: string | undefined
   /** Sampled completion content (if sampling enabled) */
-  completionSample?: string
+  completionSample?: string | undefined
   /** Prompt content fingerprint for deduplication */
-  promptFingerprint?: string
+  promptFingerprint?: string | undefined
   /** Completion content fingerprint for deduplication */
-  completionFingerprint?: string
+  completionFingerprint?: string | undefined
   /** Content ID for correlation with GeneratedContentMV */
-  contentId?: string
+  contentId?: string | undefined
   /** Tenant identifier (for multi-tenant deployments) */
-  tenantId?: string
+  tenantId?: string | undefined
 }
 
 /**
@@ -191,50 +191,50 @@ export interface RecordAIRequestInput {
   /** Total latency in milliseconds */
   latencyMs: number
   /** Number of prompt tokens (optional) */
-  promptTokens?: number
+  promptTokens?: number | undefined
   /** Number of completion tokens (optional) */
-  completionTokens?: number
+  completionTokens?: number | undefined
   /** Whether request succeeded (default: true) */
-  success?: boolean
+  success?: boolean | undefined
   /** Whether response was cached (default: false) */
-  cached?: boolean
+  cached?: boolean | undefined
   /** Finish reason */
-  finishReason?: string
+  finishReason?: string | undefined
   /** Error message */
-  error?: string
+  error?: string | undefined
   /** Error code */
-  errorCode?: string
+  errorCode?: string | undefined
   /** Temperature setting */
-  temperature?: number
+  temperature?: number | undefined
   /** Max tokens setting */
-  maxTokens?: number
+  maxTokens?: number | undefined
   /** Whether tools were used */
-  toolsUsed?: boolean
+  toolsUsed?: boolean | undefined
   /** Number of tool calls */
-  toolCallCount?: number
+  toolCallCount?: number | undefined
   /** User identifier */
-  userId?: string
+  userId?: string | undefined
   /** Application identifier */
-  appId?: string
+  appId?: string | undefined
   /** Environment */
-  environment?: string
+  environment?: string | undefined
   /** Custom request ID */
-  requestId?: string
+  requestId?: string | undefined
   /** Custom timestamp */
-  timestamp?: Date
+  timestamp?: Date | undefined
   /** Custom cost override */
-  estimatedCost?: number
+  estimatedCost?: number | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   // Content sampling fields
   /** Prompt content to sample (optional, requires sampling to be enabled) */
-  promptSample?: string
+  promptSample?: string | undefined
   /** Completion content to sample (optional, requires sampling to be enabled) */
-  completionSample?: string
+  completionSample?: string | undefined
   /** Content ID for correlation with GeneratedContentMV */
-  contentId?: string
+  contentId?: string | undefined
   /** Tenant identifier (overrides config tenantId for this record) */
-  tenantId?: string
+  tenantId?: string | undefined
 }
 
 /**
@@ -242,39 +242,39 @@ export interface RecordAIRequestInput {
  */
 export interface AIRequestsQueryOptions {
   /** Filter by model ID */
-  modelId?: string
+  modelId?: string | undefined
   /** Filter by provider ID */
-  providerId?: AIProvider
+  providerId?: AIProvider | undefined
   /** Filter by request type */
-  requestType?: AIRequestType
+  requestType?: AIRequestType | undefined
   /** Filter by status */
-  status?: AIRequestStatus
+  status?: AIRequestStatus | undefined
   /** Filter by user ID */
-  userId?: string
+  userId?: string | undefined
   /** Filter by app ID */
-  appId?: string
+  appId?: string | undefined
   /** Filter by environment */
-  environment?: string
+  environment?: string | undefined
   /** Start time (inclusive) */
-  from?: Date
+  from?: Date | undefined
   /** End time (exclusive) */
-  to?: Date
+  to?: Date | undefined
   /** Include only cached requests */
-  cachedOnly?: boolean
+  cachedOnly?: boolean | undefined
   /** Include only requests with errors */
-  errorsOnly?: boolean
+  errorsOnly?: boolean | undefined
   /** Include only requests with sampled content */
-  hasSampledContent?: boolean
+  hasSampledContent?: boolean | undefined
   /** Maximum results */
-  limit?: number
+  limit?: number | undefined
   /** Skip first N results */
-  offset?: number
+  offset?: number | undefined
   /** Sort field */
-  sort?: 'timestamp' | '-timestamp' | 'latencyMs' | '-latencyMs' | 'estimatedCost' | '-estimatedCost'
+  sort?: 'timestamp' | '-timestamp' | 'latencyMs' | '-latencyMs' | 'estimatedCost' | '-estimatedCost' | undefined
   /** Filter by tenant ID (overrides config tenantId for this query) */
-  tenantId?: string
+  tenantId?: string | undefined
   /** Query all tenants (requires allowCrossTenantQueries: true) */
-  allTenants?: boolean
+  allTenants?: boolean | undefined
 }
 
 /**
@@ -340,17 +340,17 @@ export interface ContentSamplingConfig {
   /** Whether content sampling is enabled (default: false) */
   enabled: boolean
   /** Sample rate (0-1) - fraction of requests to sample (default: 0) */
-  sampleRate?: number
+  sampleRate?: number | undefined
   /** Maximum characters for prompt sample (default: unlimited) */
-  maxPromptChars?: number
+  maxPromptChars?: number | undefined
   /** Maximum characters for completion sample (default: unlimited) */
-  maxCompletionChars?: number
+  maxCompletionChars?: number | undefined
   /** Sample all error requests regardless of sample rate (default: false) */
-  sampleAllErrors?: boolean
+  sampleAllErrors?: boolean | undefined
   /** Generate content fingerprint for deduplication (default: false) */
-  generateFingerprint?: boolean
+  generateFingerprint?: boolean | undefined
   /** Redactor function for PII detection/removal */
-  redactor?: ContentRedactor
+  redactor?: ContentRedactor | undefined
 }
 
 /**
@@ -359,11 +359,11 @@ export interface ContentSamplingConfig {
 export interface ResolvedContentSamplingConfig {
   enabled: boolean
   sampleRate: number
-  maxPromptChars?: number
-  maxCompletionChars?: number
+  maxPromptChars?: number | undefined
+  maxCompletionChars?: number | undefined
   sampleAllErrors: boolean
   generateFingerprint: boolean
-  redactor?: ContentRedactor
+  redactor?: ContentRedactor | undefined
 }
 
 /**
@@ -373,19 +373,19 @@ export interface ResolvedContentSamplingConfig {
  */
 export interface AIRequestsMVConfig extends MultiTenantConfig {
   /** Collection name for storing requests (default: 'ai_requests') */
-  collection?: string
+  collection?: string | undefined
   /** Maximum age of requests to keep (default: 30 days) */
-  maxAgeMs?: number
+  maxAgeMs?: number | undefined
   /** Batch size for operations (default: 1000) */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Custom model pricing */
-  customPricing?: ModelPricing[]
+  customPricing?: ModelPricing[] | undefined
   /** Whether to merge with default pricing (default: true) */
-  mergeWithDefaultPricing?: boolean
+  mergeWithDefaultPricing?: boolean | undefined
   /** Enable debug logging */
-  debug?: boolean
+  debug?: boolean | undefined
   /** Content sampling configuration */
-  contentSampling?: ContentSamplingConfig
+  contentSampling?: ContentSamplingConfig | undefined
 }
 
 /**
@@ -399,7 +399,7 @@ export interface ResolvedAIRequestsMVConfig {
   debug: boolean
   contentSampling: ResolvedContentSamplingConfig
   /** Tenant identifier */
-  tenantId?: string
+  tenantId?: string | undefined
   /** Whether to use tenant-scoped storage paths */
   tenantScopedStorage: boolean
   /** Whether cross-tenant queries are allowed */
@@ -417,7 +417,7 @@ export interface CleanupResult {
   /** Duration of cleanup in milliseconds */
   durationMs: number
   /** Error message if failed */
-  error?: string
+  error?: string | undefined
 }
 
 // =============================================================================
@@ -616,7 +616,7 @@ export class AIRequestsMV {
     maxChars: number | undefined,
     generateFingerprint: boolean,
     redactor?: ContentRedactor
-  ): Promise<{ sample?: string; fingerprint?: string }> {
+  ): Promise<{ sample?: string | undefined; fingerprint?: string | undefined }> {
     if (!content) return {}
 
     let processed = content
@@ -632,7 +632,7 @@ export class AIRequestsMV {
       processed = processed.substring(0, maxChars)
     }
 
-    const result: { sample?: string; fingerprint?: string } = {
+    const result: { sample?: string | undefined; fingerprint?: string | undefined } = {
       sample: processed,
     }
 
@@ -1128,8 +1128,8 @@ export class AIRequestsMV {
       timestamp: Date
       modelId: string
       providerId: string
-      error?: string
-      errorCode?: string
+      error?: string | undefined
+      errorCode?: string | undefined
     }>
   }> {
     // Get all requests for error rate calculation
@@ -1255,9 +1255,9 @@ export class AIRequestsMV {
    */
   async cleanup(options?: {
     /** Override the default max age */
-    maxAgeMs?: number
+    maxAgeMs?: number | undefined
     /** Progress callback */
-    onProgress?: (progress: { deletedSoFar: number; percentage: number }) => void
+    onProgress?: ((progress: { deletedSoFar: number; percentage: number }) => void) | undefined
   }): Promise<CleanupResult> {
     const collection = this.db.collection(this.config.collection)
     const maxAgeMs = options?.maxAgeMs ?? this.config.maxAgeMs

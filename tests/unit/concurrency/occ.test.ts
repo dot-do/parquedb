@@ -27,7 +27,7 @@ import {
 
 interface Counter {
   value: number
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 interface Account {
@@ -40,7 +40,7 @@ interface Document {
   title: string
   content: string
   revision: number
-  lastEditor?: string
+  lastEditor?: string | undefined
 }
 
 // =============================================================================

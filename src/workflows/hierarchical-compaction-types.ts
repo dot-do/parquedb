@@ -46,9 +46,9 @@ export interface HierarchicalCompactionConfig {
   /** Enable hierarchical compaction (default: false) */
   enabled: boolean
   /** Level thresholds */
-  levels?: HierarchicalCompactionLevels
+  levels?: HierarchicalCompactionLevels | undefined
   /** Target format for compacted files */
-  targetFormat?: BackendType
+  targetFormat?: BackendType | undefined
 }
 
 /**
@@ -72,7 +72,7 @@ export interface LevelFileMetadata {
   /** File size in bytes */
   size: number
   /** Row count */
-  rowCount?: number
+  rowCount?: number | undefined
   /** Time window start for this file */
   windowStart: number
   /** Time window end for this file */
@@ -122,9 +122,9 @@ export interface CompactionPromotionParams {
   /** Target format for output */
   targetFormat: BackendType
   /** Delete source files after successful promotion */
-  deleteSource?: boolean
+  deleteSource?: boolean | undefined
   /** Maximum files to process per step (default: 50) */
-  maxFilesPerStep?: number
+  maxFilesPerStep?: number | undefined
 }
 
 /**

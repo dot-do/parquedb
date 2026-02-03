@@ -44,27 +44,27 @@ export interface DatabaseInfo {
   /** Human-readable name */
   name: string
   /** Description */
-  description?: string
+  description?: string | undefined
   /** R2 bucket name */
   bucket: string
   /** Path prefix within bucket */
-  prefix?: string
+  prefix?: string | undefined
   /** When database was created */
   createdAt: Date
   /** Who created the database */
   createdBy: EntityId
   /** Last access time */
-  lastAccessedAt?: Date
+  lastAccessedAt?: Date | undefined
   /** Estimated size in bytes */
-  sizeBytes?: number
+  sizeBytes?: number | undefined
   /** Number of collections */
-  collectionCount?: number
+  collectionCount?: number | undefined
   /** Number of entities */
-  entityCount?: number
+  entityCount?: number | undefined
   /** Database schema version */
-  schemaVersion?: number
+  schemaVersion?: number | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /**
    * Visibility level for the database
    * - 'public': Discoverable and accessible by anyone
@@ -73,9 +73,9 @@ export interface DatabaseInfo {
    */
   visibility: Visibility
   /** URL-friendly slug for public access (e.g., 'my-dataset') */
-  slug?: string
+  slug?: string | undefined
   /** Owner username (for public URL: username/slug) */
-  owner?: string
+  owner?: string | undefined
 }
 
 /**
@@ -85,19 +85,19 @@ export interface RegisterDatabaseOptions {
   /** Human-readable name */
   name: string
   /** Description */
-  description?: string
+  description?: string | undefined
   /** R2 bucket name */
   bucket: string
   /** Path prefix within bucket */
-  prefix?: string
+  prefix?: string | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /** Visibility level (default: 'private') */
-  visibility?: Visibility
+  visibility?: Visibility | undefined
   /** URL-friendly slug for public access */
-  slug?: string
+  slug?: string | undefined
   /** Owner username */
-  owner?: string
+  owner?: string | undefined
 }
 
 /**
@@ -105,21 +105,21 @@ export interface RegisterDatabaseOptions {
  */
 export interface UpdateDatabaseOptions {
   /** New name */
-  name?: string
+  name?: string | undefined
   /** New description */
-  description?: string
+  description?: string | undefined
   /** Update stats */
   stats?: {
-    sizeBytes?: number
-    collectionCount?: number
-    entityCount?: number
-  }
+    sizeBytes?: number | undefined
+    collectionCount?: number | undefined
+    entityCount?: number | undefined
+  } | undefined
   /** Custom metadata to merge */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /** New visibility level */
-  visibility?: Visibility
+  visibility?: Visibility | undefined
   /** New URL-friendly slug */
-  slug?: string
+  slug?: string | undefined
 }
 
 /**
@@ -127,7 +127,7 @@ export interface UpdateDatabaseOptions {
  */
 export interface DatabaseIndexEnv {
   /** Optional: R2 bucket for storing index backups */
-  INDEX_BACKUP?: R2Bucket
+  INDEX_BACKUP?: R2Bucket | undefined
 }
 
 // =============================================================================
@@ -483,9 +483,9 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
     totalDatabases: number
     totalSizeBytes: number
     totalEntities: number
-    oldestDatabase?: Date
-    newestDatabase?: Date
-    mostRecentAccess?: Date
+    oldestDatabase?: Date | undefined
+    newestDatabase?: Date | undefined
+    mostRecentAccess?: Date | undefined
   }> {
     const rows = this.sql.exec(`
       SELECT
@@ -629,7 +629,7 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
       // PUT /databases/:id/visibility - set visibility
       if (request.method === 'PUT' && path.endsWith('/visibility')) {
         const id = path.slice('/databases/'.length, -'/visibility'.length)
-        const body = await request.json() as { visibility: Visibility; slug?: string }
+        const body = await request.json() as { visibility: Visibility; slug?: string | undefined }
         const database = await this.setVisibility(id, body.visibility, body.slug)
         if (!database) {
           return Response.json({ error: 'Database not found' }, { status: 404 })

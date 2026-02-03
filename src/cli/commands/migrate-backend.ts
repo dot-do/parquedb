@@ -30,15 +30,15 @@ export interface MigrateBackendArgs {
   /** Target format */
   to: BackendType
   /** Source format (or 'auto' to detect) */
-  from?: BackendType | 'auto'
+  from?: BackendType | 'auto' | undefined
   /** Specific namespaces to migrate (comma-separated) */
-  namespaces?: string
+  namespaces?: string | undefined
   /** Batch size for migration */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Delete source data after migration */
-  deleteSource?: boolean
+  deleteSource?: boolean | undefined
   /** Show what would be migrated without actually migrating */
-  dryRun?: boolean
+  dryRun?: boolean | undefined
   /** Storage backend */
   storage: StorageBackend
 }

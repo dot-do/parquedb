@@ -16,13 +16,13 @@ import { porterStem } from './tokenizer'
  */
 export interface HighlightOptions {
   /** HTML tag to insert before matches (default: '<mark>') */
-  preTag?: string
+  preTag?: string | undefined
   /** HTML tag to insert after matches (default: '</mark>') */
-  postTag?: string
+  postTag?: string | undefined
   /** Whether to match stemmed forms of terms (default: false) */
-  matchStemmed?: boolean
+  matchStemmed?: boolean | undefined
   /** Whether to escape HTML in the original text (default: true) */
-  escapeHtml?: boolean
+  escapeHtml?: boolean | undefined
 }
 
 /**
@@ -30,13 +30,13 @@ export interface HighlightOptions {
  */
 export interface SnippetOptions extends HighlightOptions {
   /** Maximum length of the snippet in characters (default: 150) */
-  maxLength?: number
+  maxLength?: number | undefined
   /** String to use for ellipsis (default: '...') */
-  ellipsis?: string
+  ellipsis?: string | undefined
   /** Number of characters to show before the match (default: calculated from maxLength) */
-  contextBefore?: number
+  contextBefore?: number | undefined
   /** Number of characters to show after the match (default: calculated from maxLength) */
-  contextAfter?: number
+  contextAfter?: number | undefined
 }
 
 /**
@@ -44,11 +44,11 @@ export interface SnippetOptions extends HighlightOptions {
  */
 export interface GenerateHighlightsOptions extends SnippetOptions {
   /** Maximum number of snippets per field (default: 3) */
-  maxSnippets?: number
+  maxSnippets?: number | undefined
   /** Maximum length for snippets (default: 150) */
-  maxSnippetLength?: number
+  maxSnippetLength?: number | undefined
   /** Whether to include fields with no matches (default: false) */
-  includeNonMatching?: boolean
+  includeNonMatching?: boolean | undefined
 }
 
 /**

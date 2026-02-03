@@ -530,7 +530,7 @@ export function createParqueDBMCPServer(
       async () => {
         try {
           // Get collections from schema validator if available
-          const schemaValidator = (db as unknown as { getSchemaValidator?: () => { getSchema?: () => Record<string, unknown> } | null }).getSchemaValidator?.()
+          const schemaValidator = (db as unknown as { getSchemaValidator?: (() => { getSchema?: (() => Record<string, unknown>) | undefined } | null) | undefined }).getSchemaValidator?.()
           const collections: CollectionInfo[] = []
 
           if (schemaValidator && typeof schemaValidator.getSchema === 'function') {
@@ -593,7 +593,7 @@ export function createParqueDBMCPServer(
           const collection = db.collection(collectionName)
 
           // Check if semantic search is available
-          if (typeof (collection as unknown as { semanticSearch?: unknown }).semanticSearch !== 'function') {
+          if (typeof (collection as unknown as { semanticSearch?: unknown | undefined }).semanticSearch !== 'function') {
             return {
               content: [{
                 type: 'text',
@@ -607,7 +607,7 @@ export function createParqueDBMCPServer(
           }
 
           // Call semantic search if available
-          const semanticSearchFn = (collection as unknown as { semanticSearch: (query: string, options?: { limit?: number; filter?: unknown }) => Promise<unknown[]> }).semanticSearch
+          const semanticSearchFn = (collection as unknown as { semanticSearch: (query: string, options?: { limit?: number | undefined; filter?: unknown | undefined }) => Promise<unknown[]> }).semanticSearch
           const results = await semanticSearchFn(query, {
             limit,
             filter,
@@ -658,7 +658,7 @@ export function createParqueDBMCPServer(
     },
     async () => {
       // Get schema from validator if available
-      const schemaValidator = (db as unknown as { getSchemaValidator?: () => { getSchema?: () => Record<string, unknown> } | null }).getSchemaValidator?.()
+      const schemaValidator = (db as unknown as { getSchemaValidator?: (() => { getSchema?: (() => Record<string, unknown>) | undefined } | null) | undefined }).getSchemaValidator?.()
       let schema: Record<string, unknown> = {}
       if (schemaValidator && typeof schemaValidator.getSchema === 'function') {
         schema = schemaValidator.getSchema()

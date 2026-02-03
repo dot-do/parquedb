@@ -37,9 +37,9 @@ import {
 // =============================================================================
 
 type R2Bucket = {
-  get(key: string, options?: { range?: { offset: number; length: number } }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
+  get(key: string, options?: { range?: { offset: number; length: number } | undefined }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
   head(key: string): Promise<{ size: number } | null>
-  list(options?: { prefix?: string; limit?: number; cursor?: string }): Promise<{ objects: { key: string; size: number }[]; truncated: boolean; cursor?: string }>
+  list(options?: { prefix?: string | undefined; limit?: number | undefined; cursor?: string | undefined }): Promise<{ objects: { key: string; size: number }[]; truncated: boolean; cursor?: string | undefined }>
 }
 
 interface DatasetBackendConfig {
@@ -76,7 +76,7 @@ interface BackendDatasetResult {
   queries: QueryResult[]
   totalBytesRead: number
   totalTimeMs: number
-  error?: string
+  error?: string | undefined
 }
 
 interface DatasetResult {
@@ -86,7 +86,7 @@ interface DatasetResult {
   comparison?: {
     fastestBackend: string
     speedup: string
-  }
+  } | undefined
 }
 
 interface BenchmarkResult {
@@ -101,7 +101,7 @@ interface BenchmarkResult {
   }
   metadata: {
     timestamp: string
-    colo?: string
+    colo?: string | undefined
     durationMs: number
   }
 }
@@ -119,8 +119,8 @@ const DATASETS: Record<string, {
   collections: string[]
   queries: QueryDefinition[]
   native: { prefix: string }
-  iceberg?: { prefix: string; metadataPath: string }
-  delta?: { prefix: string; logPath: string }
+  iceberg?: { prefix: string; metadataPath: string } | undefined
+  delta?: { prefix: string; logPath: string } | undefined
 }> = {
   'imdb': {
     name: 'IMDB 100K',
@@ -244,7 +244,7 @@ interface QueryDefinition {
   name: string
   file: string
   columns: string[]
-  filter?: Record<string, unknown>
+  filter?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -289,7 +289,7 @@ function createTrackedR2File(bucket: R2Bucket, key: string, size: number) {
   return file
 }
 
-async function checkDatasetAvailable(bucket: R2Bucket, prefix: string, file: string): Promise<{ available: boolean; size?: number }> {
+async function checkDatasetAvailable(bucket: R2Bucket, prefix: string, file: string): Promise<{ available: boolean; size?: number | undefined }> {
   try {
     const path = `${prefix}/${file}`
     const head = await bucket.head(path)
@@ -713,7 +713,7 @@ async function benchmarkDeltaQueries(
 async function runDatasetBackendBenchmark(
   bucket: R2Bucket,
   config: DatasetBackendConfig
-): Promise<BenchmarkResult & { migration?: MigrationResult }> {
+): Promise<BenchmarkResult & { migration?: MigrationResult | undefined }> {
   const startTime = performance.now()
   const results: DatasetResult[] = []
   let migrationResult: MigrationResult | undefined
@@ -885,7 +885,7 @@ export async function handleDatasetBackendsBenchmarkRequest(
     const result = await runDatasetBackendBenchmark(bucket, config)
 
     // Add colo info if available
-    const cf = (request as Request & { cf?: { colo?: string } }).cf
+    const cf = (request as Request & { cf?: { colo?: string | undefined } | undefined }).cf
     if (cf?.colo) {
       result.metadata.colo = cf.colo
     }

@@ -22,9 +22,9 @@ export interface AutoEmbedFieldConfig {
   /** Target field path for embedding vector */
   targetField: string
   /** Model to use for embedding */
-  model?: string
+  model?: string | undefined
   /** Whether to overwrite existing embedding */
-  overwrite?: boolean
+  overwrite?: boolean | undefined
 }
 
 /**
@@ -34,7 +34,7 @@ export interface AutoEmbedConfig {
   /** Fields to auto-embed on create/update */
   fields: AutoEmbedFieldConfig[]
   /** Default model for all fields */
-  defaultModel?: string
+  defaultModel?: string | undefined
 }
 
 /**
@@ -44,9 +44,9 @@ export interface ProcessEmbeddingsOptions {
   /** AI binding for Workers AI */
   ai: AIBinding
   /** Model to use (default: @cf/baai/bge-m3) */
-  model?: string
+  model?: string | undefined
   /** Skip embedding if target field already exists */
-  skipExisting?: boolean
+  skipExisting?: boolean | undefined
 }
 
 // =============================================================================
@@ -85,7 +85,7 @@ export async function processEmbedOperator(
     sourceField: string
     targetField: string
     text: string
-    model?: string
+    model?: string | undefined
     overwrite: boolean
   }> = []
 
@@ -275,7 +275,7 @@ export function buildAutoEmbedConfig(
   vectorIndexes: Array<{
     name: string
     fields: Array<{ path: string }>
-    sourceField?: string
+    sourceField?: string | undefined
   }>
 ): AutoEmbedConfig {
   const fields: AutoEmbedFieldConfig[] = []

@@ -21,11 +21,11 @@ import { asGlobalR2Bucket } from '../types/cast'
 
 // Use the Cloudflare R2Bucket type directly
 type R2Bucket = {
-  get(key: string, options?: { range?: { offset: number; length: number } }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
+  get(key: string, options?: { range?: { offset: number; length: number } | undefined }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
   put(key: string, value: ArrayBuffer | Uint8Array): Promise<unknown>
   delete(key: string): Promise<void>
   head(key: string): Promise<{ size: number } | null>
-  list(options?: { prefix?: string; limit?: number }): Promise<{ objects: { key: string; size: number; uploaded: Date }[]; truncated: boolean }>
+  list(options?: { prefix?: string | undefined; limit?: number | undefined }): Promise<{ objects: { key: string; size: number; uploaded: Date }[]; truncated: boolean }>
 }
 
 /**
@@ -42,23 +42,23 @@ export interface QueryBenchmarkResult {
     /** Latency percentiles */
     latencyMs: { p50: number; p95: number; avg: number }
     /** Raw latency values for debugging */
-    rawLatencies?: number[]
+    rawLatencies?: number[] | undefined
     /** Rows scanned after pushdown */
     rowsScanned: number
     /** Rows returned after filtering */
     rowsReturned: number
     /** Total row groups in the file */
-    rowGroupsTotal?: number
+    rowGroupsTotal?: number | undefined
     /** Row groups read (after statistics filtering) */
-    rowGroupsRead?: number
+    rowGroupsRead?: number | undefined
     /** Row groups skipped via statistics pushdown */
-    rowGroupsSkipped?: number
+    rowGroupsSkipped?: number | undefined
     /** Success flag */
     success: boolean
     /** Error message if failed */
-    error?: string
+    error?: string | undefined
     /** Number of iterations that completed */
-    iterations?: number
+    iterations?: number | undefined
   }
   /** Pushdown effectiveness metrics */
   pushdown: {
@@ -107,7 +107,7 @@ export interface PushdownBenchmarkResult {
     totalQueries: number
     durationMs: number
     /** Datasets skipped due to size limits */
-    skippedDatasets?: string[]
+    skippedDatasets?: string[] | undefined
   }
   /** Per-query results */
   queries: QueryBenchmarkResult[]
@@ -153,11 +153,11 @@ export interface BenchmarkConfig {
   /** Warmup iterations (not counted) */
   warmupIterations: number
   /** Maximum queries per dataset (for quick runs) */
-  maxQueriesPerDataset?: number
+  maxQueriesPerDataset?: number | undefined
   /** Specific datasets to benchmark */
-  datasets?: Array<'imdb' | 'imdb-1m' | 'onet-full' | 'unspsc-full'>
+  datasets?: Array<'imdb' | 'imdb-1m' | 'onet-full' | 'unspsc-full'> | undefined
   /** Query categories to include */
-  categories?: BenchmarkQuery['category'][]
+  categories?: BenchmarkQuery['category'][] | undefined
 }
 
 // =============================================================================

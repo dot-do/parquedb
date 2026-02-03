@@ -89,7 +89,7 @@ export function buildUpsertCreateData<T = Record<string, unknown>>(
 }
 
 export interface UpsertContext {
-  find<T>(namespace: string, filter?: Filter, options?: { limit?: number }): Promise<PaginatedResult<Entity<T>>>
+  find<T>(namespace: string, filter?: Filter, options?: { limit?: number | undefined }): Promise<PaginatedResult<Entity<T>>>
   create<T>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
   update<T>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
 }
@@ -101,7 +101,7 @@ export async function upsertEntity<T = Record<string, unknown>>(
   namespace: string,
   filter: Filter,
   update: UpdateInput<T>,
-  options: { returnDocument?: 'before' | 'after' } | undefined,
+  options: { returnDocument?: 'before' | 'after' | undefined } | undefined,
   ctx: UpsertContext
 ): Promise<Entity<T> | null> {
   // Find existing entity
@@ -170,7 +170,7 @@ export async function upsertManyEntities<T = Record<string, unknown>>(
         }
 
         // Remove $setOnInsert from update since we're updating
-        const { $setOnInsert: _, ...updateWithoutSetOnInsert } = item.update as UpdateInput<T> & { $setOnInsert?: unknown }
+        const { $setOnInsert: _, ...updateWithoutSetOnInsert } = item.update as UpdateInput<T> & { $setOnInsert?: unknown | undefined }
 
         await ctx.update<T>(namespace, entity.$id as string, updateWithoutSetOnInsert, updateOptions)
         result.modifiedCount++

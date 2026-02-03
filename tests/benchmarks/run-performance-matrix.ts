@@ -225,8 +225,8 @@ interface BenchmarkResponse {
   success: boolean
   operation: string
   durationMs: number
-  error?: string
-  serverTiming?: Record<string, number>
+  error?: string | undefined
+  serverTiming?: Record<string, number> | undefined
 }
 
 async function fetchBenchmark(

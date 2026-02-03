@@ -729,17 +729,17 @@ export class ParqueDBEvaliteAdapter {
     results: Array<{
       input: unknown
       output: unknown
-      expected?: unknown
-      scores: Array<{ name: string; score: number; description?: string }>
+      expected?: unknown | undefined
+      scores: Array<{ name: string; score: number; description?: string | undefined }>
       traces?: Array<{
         input: unknown
         output: unknown
         startTime: number
         endTime: number
-        inputTokens?: number
-        outputTokens?: number
-        totalTokens?: number
-      }>
+        inputTokens?: number | undefined
+        outputTokens?: number | undefined
+        totalTokens?: number | undefined
+      }> | undefined
     }>
   ): Promise<void> {
     await this.init()
@@ -841,10 +841,10 @@ export class ParqueDBEvaliteAdapter {
       duration: number
       input: unknown
       output: unknown
-      expected?: unknown
+      expected?: unknown | undefined
       status: EvalStatus
       colOrder: number
-      renderedColumns?: unknown
+      renderedColumns?: unknown | undefined
     }
     return {
       id: data.id,
@@ -865,8 +865,8 @@ export class ParqueDBEvaliteAdapter {
       id: number
       evalId: number
       score: number
-      description?: string
-      metadata?: unknown
+      description?: string | undefined
+      metadata?: unknown | undefined
     }
     return {
       id: data.id,
@@ -887,9 +887,9 @@ export class ParqueDBEvaliteAdapter {
       output: unknown
       startTime: number
       endTime: number
-      inputTokens?: number
-      outputTokens?: number
-      totalTokens?: number
+      inputTokens?: number | undefined
+      outputTokens?: number | undefined
+      totalTokens?: number | undefined
       colOrder: number
     }
     return {

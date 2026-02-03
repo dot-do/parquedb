@@ -68,19 +68,19 @@ export interface StreamPersistenceConfig {
    * Maximum WAL segment size in bytes before rotation
    * @default 10MB
    */
-  maxWalSegmentSize?: number
+  maxWalSegmentSize?: number | undefined
 
   /**
    * Maximum age of WAL segments before archiving (ms)
    * @default 1 hour
    */
-  maxWalSegmentAge?: number
+  maxWalSegmentAge?: number | undefined
 
   /**
    * Whether to sync WAL writes immediately (durability vs performance)
    * @default true
    */
-  syncWal?: boolean
+  syncWal?: boolean | undefined
 }
 
 /**
@@ -111,7 +111,7 @@ export interface WALEntry<T = Record<string, unknown>> {
  */
 export interface StreamCheckpoint {
   /** Last processed sequence number (e.g., event ID) */
-  sequence?: string | number
+  sequence?: string | number | undefined
 
   /** Last processed timestamp */
   timestamp: number
@@ -123,7 +123,7 @@ export interface StreamCheckpoint {
   recordsProcessed: number
 
   /** Additional metadata for recovery */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -163,7 +163,7 @@ export interface PersistedDLQEntry<T = Record<string, unknown>> {
   replayAttempts: number
 
   /** Last replay timestamp */
-  lastReplayAt?: number
+  lastReplayAt?: number | undefined
 }
 
 // =============================================================================

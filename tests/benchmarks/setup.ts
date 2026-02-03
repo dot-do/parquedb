@@ -231,17 +231,17 @@ export function formatStats(stats: BenchmarkStats): string {
  */
 export interface BenchmarkOptions {
   /** Number of iterations (default: 100) */
-  iterations?: number
+  iterations?: number | undefined
   /** Number of warmup iterations (default: 10) */
-  warmupIterations?: number
+  warmupIterations?: number | undefined
   /** Setup function called once before all iterations */
-  setup?: () => Promise<void> | void
+  setup?: (() => Promise<void> | void) | undefined
   /** Teardown function called once after all iterations */
-  teardown?: () => Promise<void> | void
+  teardown?: (() => Promise<void> | void) | undefined
   /** Function called before each iteration */
-  beforeEach?: () => Promise<void> | void
+  beforeEach?: (() => Promise<void> | void) | undefined
   /** Function called after each iteration */
-  afterEach?: () => Promise<void> | void
+  afterEach?: (() => Promise<void> | void) | undefined
 }
 
 /**

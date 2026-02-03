@@ -47,7 +47,7 @@ export interface IndexCatalogEntry {
   /** Number of entries in the index */
   entryCount: number
   /** Last updated timestamp */
-  updatedAt?: string
+  updatedAt?: string | undefined
 }
 
 /**
@@ -120,7 +120,7 @@ export class IndexCache {
 
   constructor(
     private storage: IndexStorageAdapter,
-    options?: { maxCacheBytes?: number }
+    options?: { maxCacheBytes?: number | undefined }
   ) {
     this.maxCacheBytes = options?.maxCacheBytes ?? DEFAULT_INDEX_CACHE_MAX_BYTES
   }
@@ -305,8 +305,8 @@ export class IndexCache {
   async executeFTSSearch(
     dataset: string,
     entry: IndexCatalogEntry,
-    condition: { $search: string; $language?: string },
-    options?: { limit?: number }
+    condition: { $search: string; $language?: string | undefined },
+    options?: { limit?: number | undefined }
   ): Promise<FTSSearchResult[]> {
     logger.debug(`[FTS] executeFTSSearch: dataset=${dataset}, query="${condition.$search}"`)
     const index = await this.loadFTSIndex(dataset, entry)

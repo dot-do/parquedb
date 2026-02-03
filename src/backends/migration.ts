@@ -49,13 +49,13 @@ export interface MigrationConfig {
   /** Target format */
   to: BackendType
   /** Namespaces to migrate (or '*' for all) */
-  namespaces?: string[] | '*'
+  namespaces?: string[] | '*' | undefined
   /** Batch size for migration */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Delete source data after successful migration */
-  deleteSource?: boolean
+  deleteSource?: boolean | undefined
   /** Progress callback */
-  onProgress?: (progress: MigrationProgress) => void
+  onProgress?: ((progress: MigrationProgress) => void) | undefined
 }
 
 export interface MigrationProgress {
@@ -77,7 +77,7 @@ export interface MigrationResult {
 
 export interface BackendConfigWithMigration extends BackendConfig {
   /** Automatically migrate from this format if data exists */
-  migrateFrom?: BackendType | 'auto'
+  migrateFrom?: BackendType | 'auto' | undefined
 }
 
 // =============================================================================
@@ -331,7 +331,7 @@ async function migrateNamespace(
   from: BackendType,
   to: BackendType,
   config: MigrationConfig
-): Promise<{ entitiesMigrated: number; bytesWritten: number; error?: string }> {
+): Promise<{ entitiesMigrated: number; bytesWritten: number; error?: string | undefined }> {
   const batchSize = config.batchSize ?? 1000
   let entitiesMigrated = 0
   let bytesWritten = 0

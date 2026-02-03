@@ -684,7 +684,7 @@ export class ParqueDBDO extends DurableObject<Env> {
    *
    * @returns Restored entity or null if not found
    */
-  async restore(ns: string, id: string, options: { actor?: string } = {}): Promise<Entity | null> {
+  async restore(ns: string, id: string, options: { actor?: string | undefined } = {}): Promise<Entity | null> {
     await this.ensureInitialized()
 
     const actor = options.actor || 'system/anonymous'
@@ -1047,7 +1047,7 @@ export class ParqueDBDO extends DurableObject<Env> {
 
       case 'UPDATE': {
         if (!current || !event.after) return current
-        const { $type, name, ...rest } = event.after as { $type?: string; name?: string; [key: string]: unknown }
+        const { $type, name, ...rest } = event.after as { $type?: string | undefined; name?: string | undefined; [key: string]: unknown }
         return {
           ...current,
           $type: $type || current.$type,
@@ -1346,7 +1346,7 @@ export class ParqueDBDO extends DurableObject<Env> {
     ns: string,
     id: string,
     beforeState?: StoredEntity | StoredRelationship | null,
-    extra?: { predicate?: string; toNs?: string; toId?: string }
+    extra?: { predicate?: string | undefined; toNs?: string | undefined; toId?: string | undefined }
   ): void {
     this.transactionManager.recordSqlOperation(type, ns, id, beforeState, extra)
   }

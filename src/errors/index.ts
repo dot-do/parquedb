@@ -136,11 +136,11 @@ export interface SerializedError {
   /** Human-readable error message */
   message: string
   /** Stack trace (included in development mode) */
-  stack?: string
+  stack?: string | undefined
   /** Additional context data */
-  context?: Record<string, unknown>
+  context?: Record<string, unknown> | undefined
   /** Serialized cause (if error chaining) */
-  cause?: SerializedError
+  cause?: SerializedError | undefined
 }
 
 // =============================================================================
@@ -243,12 +243,12 @@ export class ValidationError extends ParqueDBError {
   constructor(
     message: string,
     context?: {
-      field?: string
-      expectedType?: string
-      actualType?: string
-      namespace?: string
-      operation?: string
-      value?: unknown
+      field?: string | undefined
+      expectedType?: string | undefined
+      actualType?: string | undefined
+      namespace?: string | undefined
+      operation?: string | undefined
+      value?: unknown | undefined
     },
     cause?: Error
   ) {
@@ -455,7 +455,7 @@ export class VersionConflictError extends ConflictError {
   constructor(
     expectedVersion: number,
     actualVersion: number | undefined,
-    context?: { namespace?: string; entityId?: string }
+    context?: { namespace?: string | undefined; entityId?: string | undefined }
   ) {
     const entityPath = context?.namespace && context?.entityId
       ? ` for ${context.namespace}/${context.entityId}`
@@ -604,9 +604,9 @@ export class RelationshipError extends ParqueDBError {
     namespace: string,
     message: string,
     context?: {
-      entityId?: string
-      relationshipName?: string
-      targetId?: string
+      entityId?: string | undefined
+      relationshipName?: string | undefined
+      targetId?: string | undefined
     },
     cause?: Error
   ) {
@@ -664,10 +664,10 @@ export class QueryError extends ParqueDBError {
     message: string,
     code: ErrorCode = ErrorCode.QUERY_ERROR,
     context?: {
-      namespace?: string
-      filter?: unknown
-      sort?: unknown
-      projection?: unknown
+      namespace?: string | undefined
+      filter?: unknown | undefined
+      sort?: unknown | undefined
+      projection?: unknown | undefined
     },
     cause?: Error
   ) {
@@ -714,8 +714,8 @@ export class StorageError extends ParqueDBError {
     message: string,
     code: ErrorCode = ErrorCode.STORAGE_ERROR,
     context?: {
-      path?: string
-      operation?: string
+      path?: string | undefined
+      operation?: string | undefined
     },
     cause?: Error
   ) {
@@ -821,9 +821,9 @@ export class AuthorizationError extends ParqueDBError {
     message: string,
     code: ErrorCode = ErrorCode.AUTHORIZATION_ERROR,
     context?: {
-      resource?: string
-      action?: string
-      actor?: string
+      resource?: string | undefined
+      action?: string | undefined
+      actor?: string | undefined
     },
     cause?: Error
   ) {
@@ -875,9 +875,9 @@ export class ConfigurationError extends ParqueDBError {
   constructor(
     message: string,
     context?: {
-      configKey?: string
-      expectedValue?: unknown
-      actualValue?: unknown
+      configKey?: string | undefined
+      expectedValue?: unknown | undefined
+      actualValue?: unknown | undefined
     },
     cause?: Error
   ) {
@@ -933,9 +933,9 @@ export class RpcError extends ParqueDBError {
     message: string,
     status: number,
     context?: {
-      method?: string
-      endpoint?: string
-      requestId?: string
+      method?: string | undefined
+      endpoint?: string | undefined
+      requestId?: string | undefined
     },
     cause?: Error
   ) {
@@ -970,8 +970,8 @@ export class IndexError extends ParqueDBError {
     message: string,
     code: ErrorCode = ErrorCode.INDEX_ERROR,
     context?: {
-      indexName?: string
-      namespace?: string
+      indexName?: string | undefined
+      namespace?: string | undefined
     },
     cause?: Error
   ) {
@@ -1056,9 +1056,9 @@ export class EventError extends ParqueDBError {
     operation: string,
     message: string,
     context?: {
-      eventId?: string
-      snapshotId?: string
-      entityId?: string
+      eventId?: string | undefined
+      snapshotId?: string | undefined
+      entityId?: string | undefined
     },
     cause?: Error
   ) {

@@ -39,7 +39,7 @@ interface StoredWindowState {
   writers: string[]
   lastActivityAt: number
   totalSize: number
-  processingStatus?: StoredProcessingStatus
+  processingStatus?: StoredProcessingStatus | undefined
 }
 
 interface StoredState {

@@ -104,7 +104,7 @@ export interface TailEvent {
   scriptName: string
   outcome: TailOutcome
   eventTimestamp: Date
-  event?: TailEventInfo
+  event?: TailEventInfo | undefined
   logs: TailLog[]
   exceptions: TailException[]
   createdAt: Date
@@ -171,7 +171,7 @@ export interface TailRequest {
   /** Request headers */
   headers: Record<string, string>
   /** Cloudflare-specific request properties */
-  cf?: TailCfProperties
+  cf?: TailCfProperties | undefined
 }
 
 /**
@@ -179,25 +179,25 @@ export interface TailRequest {
  */
 export interface TailCfProperties {
   /** Cloudflare data center (colo) */
-  colo?: string
+  colo?: string | undefined
   /** Country code */
-  country?: string
+  country?: string | undefined
   /** City name */
-  city?: string
+  city?: string | undefined
   /** ASN */
-  asn?: number
+  asn?: number | undefined
   /** AS Organization */
-  asOrganization?: string
+  asOrganization?: string | undefined
   /** Client trust score */
-  clientTrustScore?: number
+  clientTrustScore?: number | undefined
   /** HTTP protocol version */
-  httpProtocol?: string
+  httpProtocol?: string | undefined
   /** Request priority */
-  requestPriority?: string
+  requestPriority?: string | undefined
   /** TLS cipher */
-  tlsCipher?: string
+  tlsCipher?: string | undefined
   /** TLS version */
-  tlsVersion?: string
+  tlsVersion?: string | undefined
   /** Additional properties */
   [key: string]: unknown
 }
@@ -215,19 +215,19 @@ export interface TailResponse {
  */
 export interface TailEventInfo {
   /** Request details (for fetch events) */
-  request?: TailRequest
+  request?: TailRequest | undefined
   /** Response details (for fetch events) */
-  response?: TailResponse
+  response?: TailResponse | undefined
   /** Scheduled event time (for cron triggers) */
-  scheduledTime?: number
+  scheduledTime?: number | undefined
   /** Cron expression (for cron triggers) */
-  cron?: string
+  cron?: string | undefined
   /** Queue name (for queue consumers) */
-  queue?: string
+  queue?: string | undefined
   /** Batch size (for queue consumers) */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Request duration in milliseconds */
-  durationMs?: number
+  durationMs?: number | undefined
 }
 
 /**
@@ -247,7 +247,7 @@ export interface TraceItem {
   /** Array of exceptions */
   exceptions: TailException[]
   /** Diagnostics channel events */
-  diagnosticsChannelEvents?: unknown[]
+  diagnosticsChannelEvents?: unknown[] | undefined
 }
 
 // =============================================================================
@@ -333,16 +333,16 @@ export interface TailHandlerConfig {
   /** Filter events before ingestion */
   filter?: {
     /** Only include events from these script names */
-    scriptNames?: string[]
+    scriptNames?: string[] | undefined
     /** Only include events with these outcomes */
-    outcomes?: TailOutcome[]
+    outcomes?: TailOutcome[] | undefined
     /** Only include events with exceptions */
-    exceptionsOnly?: boolean
-  }
+    exceptionsOnly?: boolean | undefined
+  } | undefined
   /** Transform events before ingestion */
-  transform?: (item: TraceItem) => TraceItem | null
+  transform?: ((item: TraceItem) => TraceItem | null) | undefined
   /** Generate custom entity name */
-  nameGenerator?: (item: TraceItem) => string
+  nameGenerator?: ((item: TraceItem) => string) | undefined
 }
 
 /**
@@ -423,17 +423,17 @@ export function createTailHandler<T extends { TailEvents: { create: (data: unkno
  */
 export interface TailEventFilter {
   /** Only include events from these script names */
-  scriptNames?: string[]
+  scriptNames?: string[] | undefined
   /** Only include events with these outcomes */
-  outcomes?: TailOutcome[]
+  outcomes?: TailOutcome[] | undefined
   /** Only include events with logs at these levels */
-  logLevels?: TailLogLevel[]
+  logLevels?: TailLogLevel[] | undefined
   /** Only include events with exceptions */
-  exceptionsOnly?: boolean
+  exceptionsOnly?: boolean | undefined
   /** Minimum number of logs to include */
-  minLogs?: number
+  minLogs?: number | undefined
   /** URL patterns to include (glob-style) */
-  urlPatterns?: string[]
+  urlPatterns?: string[] | undefined
 }
 
 /**
@@ -618,23 +618,23 @@ export interface ProcessedEvent {
   /** Execution outcome */
   outcome: string
   /** HTTP method (if applicable) */
-  method?: string
+  method?: string | undefined
   /** Request URL (if applicable) */
-  url?: string
+  url?: string | undefined
   /** Cloudflare colo */
-  colo?: string
+  colo?: string | undefined
   /** Country code */
-  country?: string
+  country?: string | undefined
   /** Log count */
   logCount: number
   /** Exception count */
   exceptionCount: number
   /** Error messages (if any) */
-  errors?: string[]
+  errors?: string[] | undefined
   /** Log messages (filtered) */
-  logs?: Array<{ level: string; message: string; timestamp: number }>
+  logs?: Array<{ level: string; message: string; timestamp: number }> | undefined
   /** Duration estimate (if available) */
-  durationMs?: number
+  durationMs?: number | undefined
 }
 
 /**

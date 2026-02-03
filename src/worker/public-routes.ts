@@ -589,7 +589,7 @@ function parseRangeHeader(header: string): R2Range | null {
 // =============================================================================
 
 interface R2Range {
-  offset?: number
-  length?: number
-  suffix?: number
+  offset?: number | undefined
+  length?: number | undefined
+  suffix?: number | undefined
 }

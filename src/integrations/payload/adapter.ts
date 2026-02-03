@@ -263,9 +263,9 @@ export class PayloadAdapter {
   async updateVersion<T = Record<string, unknown>>(args: {
     collection: string
     id: string | number
-    versionData?: Record<string, unknown>
-    locale?: string
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
+    versionData?: Record<string, unknown> | undefined
+    locale?: string | undefined
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
   }): Promise<T | null> {
     return operations.updateVersion<T>(this.db, this.config, args)
   }
@@ -280,7 +280,7 @@ export class PayloadAdapter {
   /**
    * Count versions
    */
-  async countVersions(args: { collection: string; where?: PayloadWhere }): Promise<number> {
+  async countVersions(args: { collection: string; where?: PayloadWhere | undefined }): Promise<number> {
     return operations.countVersions(this.db, this.config, args)
   }
 
@@ -301,8 +301,8 @@ export class PayloadAdapter {
   async createGlobal(args: {
     slug: string
     data: Record<string, unknown>
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
-    draft?: boolean
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
+    draft?: boolean | undefined
   }): Promise<Record<string, unknown>> {
     return operations.createGlobal(this.db, this.config, args)
   }
@@ -313,10 +313,10 @@ export class PayloadAdapter {
   async updateGlobal<T = Record<string, unknown>>(args: {
     slug: string
     data: Record<string, unknown>
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
-    draft?: boolean
-    locale?: string
-    select?: Record<string, boolean>
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
+    draft?: boolean | undefined
+    locale?: string | undefined
+    select?: Record<string, boolean> | undefined
   }): Promise<T | null> {
     return operations.updateGlobal<T>(this.db, this.config, args)
   }
@@ -341,9 +341,9 @@ export class PayloadAdapter {
   async updateGlobalVersion<T = Record<string, unknown>>(args: {
     slug: string
     id: string | number
-    versionData?: Record<string, unknown>
-    locale?: string
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
+    versionData?: Record<string, unknown> | undefined
+    locale?: string | undefined
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
   }): Promise<T | null> {
     return operations.updateGlobalVersion<T>(this.db, this.config, args)
   }
@@ -354,7 +354,7 @@ export class PayloadAdapter {
   async deleteGlobalVersions(args: {
     slug: string
     where: PayloadWhere
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
   }): Promise<DeleteResult> {
     return operations.deleteGlobalVersions(this.db, this.config, args)
   }
@@ -362,7 +362,7 @@ export class PayloadAdapter {
   /**
    * Count global versions
    */
-  async countGlobalVersions(args: { slug: string; where?: PayloadWhere }): Promise<number> {
+  async countGlobalVersions(args: { slug: string; where?: PayloadWhere | undefined }): Promise<number> {
     return operations.countGlobalVersions(this.db, this.config, args)
   }
 
@@ -373,14 +373,14 @@ export class PayloadAdapter {
   /**
    * Create a migration record
    */
-  async createMigration(args: { name: string; batch?: number }): Promise<void> {
+  async createMigration(args: { name: string; batch?: number | undefined }): Promise<void> {
     await this.migrations.createMigration(args)
   }
 
   /**
    * Run migrations
    */
-  async migrate(args?: { migrations?: unknown[] }): Promise<void> {
+  async migrate(args?: { migrations?: unknown[] | undefined }): Promise<void> {
     // Payload handles the actual migration execution
     // We just need to track which migrations have run
     if (this.config.debug) {
@@ -401,7 +401,7 @@ export class PayloadAdapter {
   /**
    * Fresh migration (drop all and re-run)
    */
-  async migrateFresh(args: { forceAcceptWarning?: boolean }): Promise<void> {
+  async migrateFresh(args: { forceAcceptWarning?: boolean | undefined }): Promise<void> {
     await this.migrations.deleteAllMigrations()
   }
 

@@ -81,7 +81,7 @@ import {
 interface StoredLevelFileMetadata {
   path: string
   size: number
-  rowCount?: number
+  rowCount?: number | undefined
   windowStart: number
   windowEnd: number
   createdAt: number

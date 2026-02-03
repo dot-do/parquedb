@@ -32,19 +32,19 @@ import type { StudioSettings } from '../SettingsPage'
 
 export interface SettingsViewProps {
   /** Initial settings (from server) */
-  settings?: Partial<StudioSettings>
+  settings?: Partial<StudioSettings> | undefined
   /** User info for personalization */
   user?: {
     id: string
     email: string
-    name?: string
-  }
+    name?: string | undefined
+  } | undefined
   /** Base path for admin routes */
-  basePath?: string
+  basePath?: string | undefined
   /** API endpoint for settings operations */
-  apiEndpoint?: string
+  apiEndpoint?: string | undefined
   /** Callback when settings are saved */
-  onSave?: (settings: StudioSettings) => void
+  onSave?: ((settings: StudioSettings) => void) | undefined
 }
 
 /**

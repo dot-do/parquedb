@@ -28,28 +28,28 @@ import { readParquet, readParquetMetadata } from '../parquet/reader'
  */
 export interface ValidationConfig {
   /** Enable row count validation (default: true) */
-  validateRowCount?: boolean
+  validateRowCount?: boolean | undefined
 
   /** Enable checksum validation (default: true) */
-  validateChecksum?: boolean
+  validateChecksum?: boolean | undefined
 
   /** Enable schema validation (default: true) */
-  validateSchema?: boolean
+  validateSchema?: boolean | undefined
 
   /** Enable data integrity checks (default: true) */
-  validateDataIntegrity?: boolean
+  validateDataIntegrity?: boolean | undefined
 
   /** Required columns that must not be null (default: ['$id']) */
-  requiredColumns?: string[]
+  requiredColumns?: string[] | undefined
 
   /** Allowed row count tolerance as a percentage (default: 0 - exact match) */
-  rowCountTolerance?: number
+  rowCountTolerance?: number | undefined
 
   /** Whether to allow new columns in output (default: true) */
-  allowNewColumns?: boolean
+  allowNewColumns?: boolean | undefined
 
   /** Whether to allow missing columns in output (default: false) */
-  allowMissingColumns?: boolean
+  allowMissingColumns?: boolean | undefined
 }
 
 /**
@@ -66,10 +66,10 @@ export interface ValidationCheck {
   description: string
 
   /** Error message if check failed */
-  error?: string
+  error?: string | undefined
 
   /** Additional details/metrics */
-  details?: Record<string, unknown>
+  details?: Record<string, unknown> | undefined
 }
 
 /**
@@ -193,7 +193,7 @@ export interface RollbackResult {
   deletedFiles: string[]
 
   /** Error message if rollback failed */
-  error?: string
+  error?: string | undefined
 
   /** Duration of rollback in milliseconds */
   durationMs: number

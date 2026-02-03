@@ -54,7 +54,7 @@ export interface ParquetMetadata {
   /** File schema */
   schema: ParquetSchema
   /** File-level key-value metadata */
-  keyValueMetadata?: Record<string, string>
+  keyValueMetadata?: Record<string, string> | undefined
 }
 
 /**
@@ -82,13 +82,13 @@ export interface ColumnStats {
   /** Column name */
   name: string
   /** Minimum value (if available) */
-  min?: unknown
+  min?: unknown | undefined
   /** Maximum value (if available) */
-  max?: unknown
+  max?: unknown | undefined
   /** Number of null values */
   nullCount: number
   /** Number of distinct values (if available) */
-  distinctCount?: number
+  distinctCount?: number | undefined
   /** Whether statistics are valid */
   hasStats: boolean
 }
@@ -102,7 +102,7 @@ export interface ColumnMetadata {
   /** Parquet physical type */
   physicalType: string
   /** Logical type */
-  logicalType?: string
+  logicalType?: string | undefined
   /** Encoding */
   encoding: string
   /** Compression codec */
@@ -128,7 +128,7 @@ export interface SchemaField {
   /** Whether field is nullable */
   nullable: boolean
   /** Nested fields (for struct types) */
-  fields?: SchemaField[]
+  fields?: SchemaField[] | undefined
 }
 
 /**
@@ -152,9 +152,9 @@ export interface FindResult<T> {
   /** Matching documents */
   items: T[]
   /** Total count (if calculated) */
-  total?: number
+  total?: number | undefined
   /** Cursor for next page */
-  nextCursor?: string
+  nextCursor?: string | undefined
   /** Whether there are more results */
   hasMore: boolean
   /** Query execution stats */
@@ -204,9 +204,9 @@ export interface QueryPlan {
     name: string
     type: 'fts'
     field: string
-  } | null
+  } | null | undefined
   /** Number of index catalog entries for this dataset */
-  indexCatalogEntries?: number
+  indexCatalogEntries?: number | undefined
 }
 
 // =============================================================================
@@ -874,11 +874,11 @@ export class QueryExecutor {
 
       // Track index usage in stats
       const extendedStats = stats as QueryStats & {
-        indexUsed?: string
-        indexType?: string
-        indexLookupMs?: number
-        rowGroupsTotal?: number
-        rowGroupsRead?: number
+        indexUsed?: string | undefined
+        indexType?: string | undefined
+        indexLookupMs?: number | undefined
+        rowGroupsTotal?: number | undefined
+        rowGroupsRead?: number | undefined
       }
       extendedStats.indexUsed = selected.entry.name
       extendedStats.indexType = selected.type
@@ -890,7 +890,7 @@ export class QueryExecutor {
       // Execute index lookup based on type
       // NOTE: Hash and SST indexes removed - equality and range queries now use native parquet predicate pushdown on $index_* columns
       if (selected.type === 'fts') {
-        const textCondition = selected.condition as { $search: string; $language?: string }
+        const textCondition = selected.condition as { $search: string; $language?: string | undefined }
         const ftsResults = await this.indexCache.executeFTSSearch(
           datasetId,
           selected.entry,
@@ -922,13 +922,13 @@ export class QueryExecutor {
 
       // Track selectivity metrics in extended stats
       const extendedStatsWithSelectivity = extendedStats as QueryStats & {
-        indexUsed?: string
-        indexType?: string
-        indexLookupMs?: number
-        rowGroupsTotal?: number
-        rowGroupsRead?: number
-        indexSelectivity?: number
-        candidateCount?: number
+        indexUsed?: string | undefined
+        indexType?: string | undefined
+        indexLookupMs?: number | undefined
+        rowGroupsTotal?: number | undefined
+        rowGroupsRead?: number | undefined
+        indexSelectivity?: number | undefined
+        candidateCount?: number | undefined
       }
       extendedStatsWithSelectivity.indexSelectivity = candidateDocIds.length / totalRows
       extendedStatsWithSelectivity.candidateCount = candidateDocIds.length
@@ -1069,8 +1069,8 @@ export class QueryExecutor {
 
       // Record that we attempted index usage but had to fall back
       const extendedStats = stats as QueryStats & {
-        indexFallback?: boolean
-        indexError?: string
+        indexFallback?: boolean | undefined
+        indexError?: string | undefined
       }
       extendedStats.indexFallback = true
       extendedStats.indexError = cause.message
@@ -1187,9 +1187,9 @@ export class QueryExecutor {
     fromId: string,
     predicate?: string,
     options?: {
-      matchMode?: 'exact' | 'fuzzy'
-      minSimilarity?: number
-      maxSimilarity?: number
+      matchMode?: 'exact' | 'fuzzy' | undefined
+      minSimilarity?: number | undefined
+      maxSimilarity?: number | undefined
     }
   ): Promise<Array<{
     to_ns: string
@@ -1211,8 +1211,8 @@ export class QueryExecutor {
     type RelRow = {
       from_id: string
       // Shredded fields (top-level columns for efficient predicate pushdown)
-      match_mode?: string | null   // 'exact' | 'fuzzy'
-      similarity?: number | null   // 0.0 to 1.0
+      match_mode?: string | null | undefined   // 'exact' | 'fuzzy'
+      similarity?: number | null | undefined   // 0.0 to 1.0
       // Remaining data in Variant/JSON
       data: {
         to: string      // Target $id
@@ -1220,8 +1220,8 @@ export class QueryExecutor {
         name: string    // Target name
         pred: string    // Predicate
         rev: string     // Reverse predicate
-        importance?: number
-        level?: number
+        importance?: number | undefined
+        level?: number | undefined
       }
     }
 
@@ -1235,8 +1235,8 @@ export class QueryExecutor {
         // Read raw rows and parse JSON data column
         type RawRelRow = {
           from_id: string
-          match_mode?: string | null
-          similarity?: number | null
+          match_mode?: string | null | undefined
+          similarity?: number | null | undefined
           data: string | RelRow['data']
         }
         const rawRels = await this.parquetReader.read<RawRelRow>(path)

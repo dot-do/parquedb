@@ -14,7 +14,7 @@ export type Runtime =
 
 export interface RuntimeInfo {
   runtime: Runtime
-  version?: string
+  version?: string | undefined
   features: {
     hasFileSystem: boolean
     hasIndexedDB: boolean

@@ -79,7 +79,7 @@ interface HealthResponse {
 interface ErrorResponse {
   error: string
   message: string
-  availableEndpoints?: string[]
+  availableEndpoints?: string[] | undefined
 }
 
 interface ApiInfo {
@@ -92,9 +92,9 @@ interface RequestResult<T = unknown> {
   success: boolean
   status: number
   latencyMs: number
-  data?: T
-  error?: string
-  headers?: Record<string, string>
+  data?: T | undefined
+  error?: string | undefined
+  headers?: Record<string, string> | undefined
 }
 
 // =============================================================================

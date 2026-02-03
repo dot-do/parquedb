@@ -12,16 +12,16 @@
 // =============================================================================
 
 export interface CfProperties {
-  colo?: string
-  country?: string
-  city?: string
-  region?: string
-  timezone?: string
-  latitude?: string
-  longitude?: string
-  asn?: number
-  asOrganization?: string
-  httpProtocol?: string
+  colo?: string | undefined
+  country?: string | undefined
+  city?: string | undefined
+  region?: string | undefined
+  timezone?: string | undefined
+  latitude?: string | undefined
+  longitude?: string | undefined
+  asn?: number | undefined
+  asOrganization?: string | undefined
+  httpProtocol?: string | undefined
 }
 
 export interface StorageStats {
@@ -100,10 +100,10 @@ export function buildServerTimingHeader(ctx: TimingContext): string {
 export interface ResponseData {
   api: Record<string, unknown>
   links: Record<string, string>
-  data?: unknown
-  items?: unknown[]
-  stats?: Record<string, unknown>
-  relationships?: Record<string, unknown>
+  data?: unknown | undefined
+  items?: unknown[] | undefined
+  stats?: Record<string, unknown> | undefined
+  relationships?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -197,8 +197,8 @@ export function buildResponse(
  * Extended error interface for errors with additional metadata
  */
 export interface ExtendedError extends Error {
-  code?: string
-  hint?: string
+  code?: string | undefined
+  hint?: string | undefined
 }
 
 /**

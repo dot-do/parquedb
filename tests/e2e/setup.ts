@@ -47,11 +47,11 @@ export interface RPCCollection<T extends object = Record<string, unknown>> {
  */
 export interface Post {
   title: string
-  content?: string
-  status?: 'draft' | 'published' | 'archived'
-  tags?: string[]
-  viewCount?: number
-  publishedAt?: Date
+  content?: string | undefined
+  status?: 'draft' | 'published' | 'archived' | undefined
+  tags?: string[] | undefined
+  viewCount?: number | undefined
+  publishedAt?: Date | undefined
 }
 
 /**
@@ -59,8 +59,8 @@ export interface Post {
  */
 export interface User {
   name: string
-  email?: string
-  role?: 'admin' | 'user' | 'guest'
+  email?: string | undefined
+  role?: 'admin' | 'user' | 'guest' | undefined
 }
 
 /**
@@ -68,7 +68,7 @@ export interface User {
  */
 export interface Comment {
   text: string
-  approved?: boolean
+  approved?: boolean | undefined
 }
 
 /**

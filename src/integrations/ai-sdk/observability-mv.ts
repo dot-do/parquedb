@@ -54,32 +54,32 @@ export interface AIObservabilityConfig {
    * Base path for optional file persistence
    * @default '.parquedb/ai-observability'
    */
-  basePath?: string
+  basePath?: string | undefined
 
   /**
    * Number of entries to batch before triggering view updates
    * @default 10
    */
-  batchSize?: number
+  batchSize?: number | undefined
 
   /**
    * Maximum time (ms) to wait before processing a partial batch
    * @default 1000
    */
-  batchTimeoutMs?: number
+  batchTimeoutMs?: number | undefined
 
   /**
    * Enable builtin analytics views
    * @default true
    */
-  enableBuiltinViews?: boolean
+  enableBuiltinViews?: boolean | undefined
 
   /**
    * Retention period for log entries (ms)
    * Entries older than this will be removed on applyRetention()
    * @default undefined (no automatic retention)
    */
-  retentionMs?: number
+  retentionMs?: number | undefined
 }
 
 /**
@@ -90,7 +90,7 @@ export interface AIAnalyticsView<T> {
   name: string
 
   /** Human-readable description */
-  description?: string
+  description?: string | undefined
 
   /**
    * Aggregate function that processes log entries
@@ -631,13 +631,13 @@ export class AIObservabilityMVIntegration {
    * @returns Filtered log entries
    */
   async queryLogs(options: {
-    modelId?: string
-    requestType?: 'generate' | 'stream'
-    since?: Date
-    until?: Date
-    limit?: number
-    errorsOnly?: boolean
-    cachedOnly?: boolean
+    modelId?: string | undefined
+    requestType?: 'generate' | 'stream' | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
+    errorsOnly?: boolean | undefined
+    cachedOnly?: boolean | undefined
   } = {}): Promise<LogEntry[]> {
     let result = [...this.logs]
 

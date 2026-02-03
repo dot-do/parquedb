@@ -65,50 +65,50 @@ type OutputFormat = 'json' | 'json5' | 'table' | 'highlighted' | 'raw'
 
 /** Configuration for output formatting */
 interface OutputConfig {
-  format?: OutputFormat
-  colors?: boolean
-  pretty?: boolean
+  format?: OutputFormat | undefined
+  colors?: boolean | undefined
+  pretty?: boolean | undefined
 }
 
 /** Table column definition */
 interface TableColumn {
   key: string
   header: string
-  width?: number
-  minWidth?: number
-  maxWidth?: number
-  align?: 'left' | 'right' | 'center'
+  width?: number | undefined
+  minWidth?: number | undefined
+  maxWidth?: number | undefined
+  align?: 'left' | 'right' | 'center' | undefined
 }
 
 /** Table configuration */
 interface TableConfig {
-  columns?: TableColumn[]
-  showHeader?: boolean
-  border?: 'ascii' | 'unicode' | 'none'
-  padding?: number
+  columns?: TableColumn[] | undefined
+  showHeader?: boolean | undefined
+  border?: 'ascii' | 'unicode' | 'none' | undefined
+  padding?: number | undefined
 }
 
 /** Spinner configuration */
 interface SpinnerConfig {
-  text?: string
-  frames?: string[]
-  interval?: number
-  color?: string
-  stream?: NodeJS.WriteStream
-  colors?: boolean
+  text?: string | undefined
+  frames?: string[] | undefined
+  interval?: number | undefined
+  color?: string | undefined
+  stream?: NodeJS.WriteStream | undefined
+  colors?: boolean | undefined
 }
 
 /** Progress bar configuration */
 interface ProgressConfig {
   total: number
-  current?: number
-  width?: number
-  complete?: string
-  incomplete?: string
-  format?: string
-  showETA?: boolean
-  stream?: NodeJS.WriteStream
-  colors?: boolean
+  current?: number | undefined
+  width?: number | undefined
+  complete?: string | undefined
+  incomplete?: string | undefined
+  format?: string | undefined
+  showETA?: boolean | undefined
+  stream?: NodeJS.WriteStream | undefined
+  colors?: boolean | undefined
 }
 
 // Re-export all utilities
@@ -222,7 +222,7 @@ export async function printTable(data: Record<string, unknown>[] | Record<string
  */
 export async function printJson(
   data: unknown,
-  options: { pretty?: boolean; highlighted?: boolean } = {}
+  options: { pretty?: boolean | undefined; highlighted?: boolean | undefined } = {}
 ): Promise<void> {
   const { pretty = true, highlighted = isTTY() } = options
 
@@ -241,9 +241,9 @@ export async function printJson(
 export async function withLoading<T>(
   fn: () => Promise<T>,
   options: {
-    text?: string
-    successText?: string
-    failText?: string
+    text?: string | undefined
+    successText?: string | undefined
+    failText?: string | undefined
   } = {}
 ): Promise<T> {
   return withSpinner(fn, {
@@ -260,8 +260,8 @@ export async function processWithProgress<T>(
   items: T[],
   fn: (item: T, index: number) => Promise<void> | void,
   options: {
-    label?: string
-    showEta?: boolean
+    label?: string | undefined
+    showEta?: boolean | undefined
   } = {}
 ): Promise<void> {
   const { label, showEta = true } = options
@@ -368,9 +368,9 @@ export async function runWithSpinner<T>(
   operation: () => Promise<T>,
   options: {
     text: string
-    successText?: string
-    failText?: string
-    silent?: boolean
+    successText?: string | undefined
+    failText?: string | undefined
+    silent?: boolean | undefined
   }
 ): Promise<T> {
   if (options.silent || !isTTY()) {
@@ -401,9 +401,9 @@ export async function processItems<T, R>(
   items: T[],
   processor: (item: T, index: number) => Promise<R>,
   options: {
-    label?: string
-    silent?: boolean
-    concurrency?: number
+    label?: string | undefined
+    silent?: boolean | undefined
+    concurrency?: number | undefined
   } = {}
 ): Promise<R[]> {
   const results: R[] = []
@@ -458,8 +458,8 @@ export async function processItems<T, R>(
 export async function printFormattedTable(
   data: Record<string, unknown>[],
   _options: {
-    columns?: TableColumn[]
-    showHeader?: boolean
+    columns?: TableColumn[] | undefined
+    showHeader?: boolean | undefined
   } = {}
 ): Promise<void> {
   if (data.length === 0) {
@@ -477,7 +477,7 @@ export async function printFormattedTable(
  */
 export async function printHighlightedJson(
   data: unknown,
-  options: { pretty?: boolean } = {}
+  options: { pretty?: boolean | undefined } = {}
 ): Promise<void> {
   const { pretty = true } = options
 
@@ -594,7 +594,7 @@ export function pad(text: string, width: number, align: 'left' | 'right' | 'cent
 export function simpleTable(
   headers: string[],
   rows: (string | number)[][],
-  options: { padding?: number } = {}
+  options: { padding?: number | undefined } = {}
 ): string {
   const { padding = 2 } = options
   const pad = ' '.repeat(padding)

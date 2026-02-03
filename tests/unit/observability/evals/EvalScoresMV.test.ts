@@ -27,19 +27,19 @@ interface MockScore {
   evalId: number
   scorerName: string
   score: number
-  description?: string
-  modelId?: string
-  promptId?: string
-  metadata?: Record<string, unknown>
+  description?: string | undefined
+  modelId?: string | undefined
+  promptId?: string | undefined
+  metadata?: Record<string, unknown> | undefined
 }
 
 interface MockAggregate {
   $id: string
   dateKey: string
   scorerName: string
-  suiteName?: string
-  modelId?: string
-  promptId?: string
+  suiteName?: string | undefined
+  modelId?: string | undefined
+  promptId?: string | undefined
   granularity: string
   scoreCount: number
   scoreSum: number

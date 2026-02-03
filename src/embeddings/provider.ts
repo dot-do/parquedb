@@ -42,9 +42,9 @@
  */
 export interface EmbedTextOptions {
   /** Model override for this specific embedding */
-  model?: string
+  model?: string | undefined
   /** Whether this is a query embedding (may use different prefixes) */
-  isQuery?: boolean
+  isQuery?: boolean | undefined
 }
 
 /**
@@ -56,7 +56,7 @@ export interface EmbeddingResult {
   /** Dimensions of the vector */
   dimensions: number
   /** Model used for embedding */
-  model?: string
+  model?: string | undefined
 }
 
 /**
@@ -106,9 +106,9 @@ export interface EmbeddingProvider {
  */
 export interface QueryEmbeddingCacheOptions {
   /** Maximum number of entries to cache (default: 1000) */
-  maxSize?: number
+  maxSize?: number | undefined
   /** TTL in milliseconds for cache entries (default: 5 minutes) */
-  ttlMs?: number
+  ttlMs?: number | undefined
 }
 
 /**
@@ -231,7 +231,7 @@ export class QueryEmbeddingCache {
  */
 export interface CachingEmbeddingProviderOptions {
   /** Cache options */
-  cache?: QueryEmbeddingCacheOptions
+  cache?: QueryEmbeddingCacheOptions | undefined
 }
 
 /**

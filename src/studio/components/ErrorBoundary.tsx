@@ -58,15 +58,15 @@ export interface ErrorBoundaryProps {
   /** Child components to render */
   children: ReactNode
   /** Custom fallback component or render function */
-  fallback?: ReactNode | ((props: ErrorFallbackProps) => ReactNode)
+  fallback?: ReactNode | ((props: ErrorFallbackProps) => ReactNode) | undefined
   /** Callback when an error is caught */
-  onError?: (error: Error, errorInfo: ErrorInfo) => void
+  onError?: ((error: Error, errorInfo: ErrorInfo) => void) | undefined
   /** Callback when retry is attempted */
-  onRetry?: (retryCount: number) => void
+  onRetry?: ((retryCount: number) => void) | undefined
   /** Maximum retry attempts before showing permanent error */
-  maxRetries?: number
+  maxRetries?: number | undefined
   /** Whether to show detailed error info (dev mode) */
-  showDetails?: boolean
+  showDetails?: boolean | undefined
 }
 
 /**
@@ -89,7 +89,7 @@ function DefaultErrorFallback({
   retryCount,
   maxRetries = 3,
   showDetails = false,
-}: ErrorFallbackProps & { maxRetries?: number; showDetails?: boolean }) {
+}: ErrorFallbackProps & { maxRetries?: number | undefined; showDetails?: boolean | undefined }) {
   const isExhausted = retryCount >= maxRetries
 
   return (

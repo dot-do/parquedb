@@ -31,7 +31,7 @@ export interface WalOnlySchemaOptions {
    *
    * @default false
    */
-  walOnly?: boolean
+  walOnly?: boolean | undefined
 }
 
 // =============================================================================

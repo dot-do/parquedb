@@ -37,8 +37,8 @@ interface Event {
   op: 'CREATE' | 'UPDATE' | 'DELETE'
   ns: string
   entityId: string
-  before?: Record<string, unknown>
-  after?: Record<string, unknown>
+  before?: Record<string, unknown> | undefined
+  after?: Record<string, unknown> | undefined
   actor: string
 }
 

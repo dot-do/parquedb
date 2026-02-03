@@ -42,27 +42,27 @@ interface CompactionJob {
   files: string[]
   status: JobStatus
   createdAt: number
-  startedAt?: number
-  completedAt?: number
-  error?: string
-  outputFile?: string
-  eventsProcessed?: number
+  startedAt?: number | undefined
+  completedAt?: number | undefined
+  error?: string | undefined
+  outputFile?: string | undefined
+  eventsProcessed?: number | undefined
 }
 
 /**
  * Stored compaction state
  */
 interface CompactionState {
-  lastCompactedAt?: number
+  lastCompactedAt?: number | undefined
   jobs: CompactionJob[]
-  orphanedFiles?: string[]
+  orphanedFiles?: string[] | undefined
 }
 
 /**
  * Status output structure
  */
 interface CompactionStatusOutput {
-  lastCompactedAt?: string
+  lastCompactedAt?: string | undefined
   pendingJobs: number
   processingJobs: number
   completedJobs: number
@@ -73,10 +73,10 @@ interface CompactionStatusOutput {
     status: JobStatus
     createdAt: string
     files: number
-    error?: string
+    error?: string | undefined
   }>
-  metrics?: CompactionMetrics
-  orphanedFiles?: string[]
+  metrics?: CompactionMetrics | undefined
+  orphanedFiles?: string[] | undefined
 }
 
 // =============================================================================

@@ -27,7 +27,7 @@ interface Post {
   content: string
   status: 'draft' | 'published' | 'archived'
   views: number
-  publishedAt?: Date
+  publishedAt?: Date | undefined
 }
 
 // =============================================================================

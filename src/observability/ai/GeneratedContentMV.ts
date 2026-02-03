@@ -173,36 +173,36 @@ export interface GeneratedContentRecord {
   /** Content classification */
   classification: ContentClassification
   /** Content hash for deduplication */
-  contentHash?: string
+  contentHash?: string | undefined
   /** Tool name (if contentType is tool_call or tool_result) */
-  toolName?: string
+  toolName?: string | undefined
   /** Tool call ID for correlation */
-  toolCallId?: string
+  toolCallId?: string | undefined
   /** Language detected in the content */
-  language?: string
+  language?: string | undefined
   /** Session/conversation ID */
-  sessionId?: string
+  sessionId?: string | undefined
   /** User identifier */
-  userId?: string
+  userId?: string | undefined
   /** Application identifier */
-  appId?: string
+  appId?: string | undefined
   /** Environment */
-  environment?: string
+  environment?: string | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /** When the record was created */
   createdAt: Date
   // Versioning fields
   /** Version number (1 = first version) */
   version: number
   /** ID of the parent content (null for first version) */
-  parentContentId?: string
+  parentContentId?: string | undefined
   /** Root content ID (tracks the original content in a version chain) */
-  rootContentId?: string
+  rootContentId?: string | undefined
   /** Reason for creating this version */
-  versionReason?: string
+  versionReason?: string | undefined
   /** Tenant identifier (for multi-tenant deployments) */
-  tenantId?: string
+  tenantId?: string | undefined
 }
 
 /**
@@ -218,54 +218,54 @@ export interface RecordContentInput {
   /** The generated content (string or object to be serialized) */
   content: string | Record<string, unknown>
   /** Request ID for correlation */
-  requestId?: string
+  requestId?: string | undefined
   /** Token count */
-  tokenCount?: number
+  tokenCount?: number | undefined
   /** Prompt token count */
-  promptTokenCount?: number
+  promptTokenCount?: number | undefined
   /** Total token count */
-  totalTokenCount?: number
+  totalTokenCount?: number | undefined
   /** Finish reason */
-  finishReason?: FinishReason
+  finishReason?: FinishReason | undefined
   /** Latency in milliseconds */
-  latencyMs?: number
+  latencyMs?: number | undefined
   /** Whether this was a streaming response */
-  isStreaming?: boolean
+  isStreaming?: boolean | undefined
   /** Whether this was served from cache */
-  isCached?: boolean
+  isCached?: boolean | undefined
   /** Content classification */
-  classification?: ContentClassification
+  classification?: ContentClassification | undefined
   /** Tool name */
-  toolName?: string
+  toolName?: string | undefined
   /** Tool call ID */
-  toolCallId?: string
+  toolCallId?: string | undefined
   /** Language detected */
-  language?: string
+  language?: string | undefined
   /** Session/conversation ID */
-  sessionId?: string
+  sessionId?: string | undefined
   /** User identifier */
-  userId?: string
+  userId?: string | undefined
   /** Application identifier */
-  appId?: string
+  appId?: string | undefined
   /** Environment */
-  environment?: string
+  environment?: string | undefined
   /** Custom content ID */
-  contentId?: string
+  contentId?: string | undefined
   /** Custom timestamp */
-  timestamp?: Date
+  timestamp?: Date | undefined
   /** Custom cost override */
-  estimatedCost?: number
+  estimatedCost?: number | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   // Versioning fields
   /** Parent content ID (for creating versions) */
-  parentContentId?: string
+  parentContentId?: string | undefined
   /** Root content ID */
-  rootContentId?: string
+  rootContentId?: string | undefined
   /** Reason for creating this version */
-  versionReason?: string
+  versionReason?: string | undefined
   /** Tenant identifier (overrides config tenantId for this record) */
-  tenantId?: string
+  tenantId?: string | undefined
 }
 
 /**
@@ -273,43 +273,43 @@ export interface RecordContentInput {
  */
 export interface ContentQueryOptions {
   /** Filter by model ID */
-  modelId?: string
+  modelId?: string | undefined
   /** Filter by provider ID */
-  providerId?: AIProvider
+  providerId?: AIProvider | undefined
   /** Filter by content type */
-  contentType?: GeneratedContentType
+  contentType?: GeneratedContentType | undefined
   /** Filter by classification */
-  classification?: ContentClassification
+  classification?: ContentClassification | undefined
   /** Filter by finish reason */
-  finishReason?: FinishReason
+  finishReason?: FinishReason | undefined
   /** Filter by user ID */
-  userId?: string
+  userId?: string | undefined
   /** Filter by app ID */
-  appId?: string
+  appId?: string | undefined
   /** Filter by session ID */
-  sessionId?: string
+  sessionId?: string | undefined
   /** Filter by environment */
-  environment?: string
+  environment?: string | undefined
   /** Start time (inclusive) */
-  from?: Date
+  from?: Date | undefined
   /** End time (exclusive) */
-  to?: Date
+  to?: Date | undefined
   /** Include only cached content */
-  cachedOnly?: boolean
+  cachedOnly?: boolean | undefined
   /** Include only streaming content */
-  streamingOnly?: boolean
+  streamingOnly?: boolean | undefined
   /** Filter by root content ID (get all versions) */
-  rootContentId?: string
+  rootContentId?: string | undefined
   /** Maximum results */
-  limit?: number
+  limit?: number | undefined
   /** Skip first N results */
-  offset?: number
+  offset?: number | undefined
   /** Sort field */
-  sort?: 'timestamp' | '-timestamp' | 'contentLength' | '-contentLength' | 'estimatedCost' | '-estimatedCost' | 'version' | '-version'
+  sort?: 'timestamp' | '-timestamp' | 'contentLength' | '-contentLength' | 'estimatedCost' | '-estimatedCost' | 'version' | '-version' | undefined
   /** Filter by tenant ID (overrides config tenantId for this query) */
-  tenantId?: string
+  tenantId?: string | undefined
   /** Query all tenants (requires allowCrossTenantQueries: true) */
-  allTenants?: boolean
+  allTenants?: boolean | undefined
 }
 
 /**
@@ -364,17 +364,17 @@ export interface ContentStats {
  */
 export interface GeneratedContentMVConfig extends MultiTenantConfig {
   /** Collection name for storing content (default: 'generated_content') */
-  collection?: string
+  collection?: string | undefined
   /** Maximum age of content to keep (default: 30 days) */
-  maxAgeMs?: number
+  maxAgeMs?: number | undefined
   /** Batch size for operations (default: 1000) */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Custom model pricing */
-  customPricing?: ModelPricing[]
+  customPricing?: ModelPricing[] | undefined
   /** Whether to merge with default pricing (default: true) */
-  mergeWithDefaultPricing?: boolean
+  mergeWithDefaultPricing?: boolean | undefined
   /** Enable debug logging */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 /**
@@ -386,7 +386,7 @@ export interface ResolvedContentMVConfig {
   batchSize: number
   pricing: Map<string, ModelPricing>
   debug: boolean
-  tenantId?: string
+  tenantId?: string | undefined
   tenantScopedStorage: boolean
   allowCrossTenantQueries: boolean
 }
@@ -402,7 +402,7 @@ export interface CleanupResult {
   /** Duration of cleanup in milliseconds */
   durationMs: number
   /** Error message if failed */
-  error?: string
+  error?: string | undefined
 }
 
 // =============================================================================
@@ -1086,9 +1086,9 @@ export class GeneratedContentMV {
    */
   async cleanup(options?: {
     /** Override the default max age */
-    maxAgeMs?: number
+    maxAgeMs?: number | undefined
     /** Progress callback */
-    onProgress?: (progress: { deletedSoFar: number; percentage: number }) => void
+    onProgress?: ((progress: { deletedSoFar: number; percentage: number }) => void) | undefined
   }): Promise<CleanupResult> {
     const collection = this.db.collection(this.config.collection)
     const maxAgeMs = options?.maxAgeMs ?? this.config.maxAgeMs

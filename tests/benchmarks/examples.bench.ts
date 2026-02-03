@@ -29,18 +29,18 @@ interface Title {
   originalTitle: string
   isAdult: boolean
   startYear: number
-  endYear?: number
-  runtimeMinutes?: number
+  endYear?: number | undefined
+  runtimeMinutes?: number | undefined
   genres: string[]
-  averageRating?: number
-  numVotes?: number
+  averageRating?: number | undefined
+  numVotes?: number | undefined
 }
 
 interface Person {
   nconst: string
   primaryName: string
-  birthYear?: number
-  deathYear?: number
+  birthYear?: number | undefined
+  deathYear?: number | undefined
   primaryProfession: string[]
   knownForTitles: string[]
 }
@@ -50,8 +50,8 @@ interface Principal {
   nconst: string
   ordering: number
   category: string
-  job?: string
-  characters?: string[]
+  job?: string | undefined
+  characters?: string[] | undefined
 }
 
 // =============================================================================
@@ -64,16 +64,16 @@ interface Word {
   partOfSpeech: string
   definitions: Array<{
     text: string
-    examples?: string[]
+    examples?: string[] | undefined
   }>
-  etymology?: string
+  etymology?: string | undefined
   pronunciation?: {
     ipa: string
-    audio?: string
+    audio?: string | undefined
   }
-  synonyms?: string[]
-  antonyms?: string[]
-  relatedWords?: string[]
+  synonyms?: string[] | undefined
+  antonyms?: string[] | undefined
+  relatedWords?: string[] | undefined
 }
 
 // =============================================================================
@@ -84,8 +84,8 @@ interface UNSPSCSegment {
   code: string
   title: string
   level: 'segment' | 'family' | 'class' | 'commodity'
-  parentCode?: string
-  description?: string
+  parentCode?: string | undefined
+  description?: string | undefined
 }
 
 // =============================================================================

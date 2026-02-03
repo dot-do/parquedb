@@ -75,13 +75,13 @@ export interface FTSResult {
  */
 export interface TokenizerOptions {
   /** Language for stemming */
-  language?: string
+  language?: string | undefined
   /** Minimum word length */
-  minWordLength?: number
+  minWordLength?: number | undefined
   /** Maximum word length */
-  maxWordLength?: number
+  maxWordLength?: number | undefined
   /** Custom stopwords */
-  stopwords?: Set<string>
+  stopwords?: Set<string> | undefined
   /** Whether to apply stemming */
-  stem?: boolean
+  stem?: boolean | undefined
 }

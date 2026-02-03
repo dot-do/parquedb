@@ -78,14 +78,14 @@ export interface LatencyStats {
  */
 export interface RequestResult {
   success: boolean
-  status?: number
+  status?: number | undefined
   latencyMs: number
-  error?: string
-  data?: unknown
-  headers?: Record<string, string>
-  serverTiming?: string
-  cacheStatus?: 'HIT' | 'MISS' | 'STALE' | 'BYPASS' | 'DYNAMIC' | 'UNKNOWN'
-  cfColo?: string
+  error?: string | undefined
+  data?: unknown | undefined
+  headers?: Record<string, string> | undefined
+  serverTiming?: string | undefined
+  cacheStatus?: 'HIT' | 'MISS' | 'STALE' | 'BYPASS' | 'DYNAMIC' | 'UNKNOWN' | undefined
+  cfColo?: string | undefined
 }
 
 /**
@@ -111,9 +111,9 @@ export interface BenchmarkTestResult {
   /** Raw latencies for analysis */
   rawLatencies: number[]
   /** Cache hit rate (if applicable) */
-  cacheHitRate?: number
+  cacheHitRate?: number | undefined
   /** Additional metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /** Timestamp */
   timestamp: string
 }
@@ -152,7 +152,7 @@ export interface ColdStartResult {
   /** Overhead percentage */
   overheadPercent: number
   /** CF colo for the request */
-  colo?: string
+  colo?: string | undefined
   /** Number of warm measurements */
   warmSamples: number
 }
@@ -219,7 +219,7 @@ export interface QueryBenchmarkResult {
   /** Success flag */
   success: boolean
   /** Error if failed */
-  error?: string
+  error?: string | undefined
 }
 
 // =============================================================================
@@ -236,20 +236,20 @@ export interface IndexComparisonResult {
   indexed: {
     latency: LatencyStats
     success: boolean
-    error?: string
-    rowGroupsSkipped?: number
-    rowGroupsScanned?: number
+    error?: string | undefined
+    rowGroupsSkipped?: number | undefined
+    rowGroupsScanned?: number | undefined
   }
   /** Full scan performance */
   scan: {
     latency: LatencyStats
     success: boolean
-    error?: string
+    error?: string | undefined
   }
   /** Speedup factor */
   speedup: number
   /** Bytes saved */
-  bytesSaved?: number
+  bytesSaved?: number | undefined
 }
 
 // =============================================================================
@@ -292,28 +292,28 @@ export interface E2EBenchmarkSuiteResult {
     completedAt: string
     durationMs: number
     workerUrl: string
-    cfColo?: string
+    cfColo?: string | undefined
     runnerVersion: string
   }
   /** Health check result */
   health: {
     success: boolean
     latencyMs: number
-    status?: string
-    error?: string
+    status?: string | undefined
+    error?: string | undefined
   }
   /** Cold start measurements */
-  coldStart?: ColdStartResult
+  coldStart?: ColdStartResult | undefined
   /** Cache performance */
-  cachePerformance?: CachePerformanceResult
+  cachePerformance?: CachePerformanceResult | undefined
   /** Dataset benchmarks */
   datasets: DatasetBenchmarkResult[]
   /** Index comparisons */
-  indexComparisons?: IndexComparisonResult[]
+  indexComparisons?: IndexComparisonResult[] | undefined
   /** Concurrency tests */
-  concurrency?: ConcurrencyResult[]
+  concurrency?: ConcurrencyResult[] | undefined
   /** R2 I/O benchmarks */
-  r2io?: BenchmarkTestResult
+  r2io?: BenchmarkTestResult | undefined
   /** Overall summary */
   summary: {
     totalTests: number
@@ -322,11 +322,11 @@ export interface E2EBenchmarkSuiteResult {
     avgLatencyMs: number
     p95LatencyMs: number
     overallThroughput: number
-    cacheSpeedup?: number
-    indexSpeedup?: number
+    cacheSpeedup?: number | undefined
+    indexSpeedup?: number | undefined
   }
   /** Regression analysis (if baseline provided) */
-  regression?: RegressionAnalysis
+  regression?: RegressionAnalysis | undefined
 }
 
 // =============================================================================
@@ -406,11 +406,11 @@ export interface StoredBenchmarkResult {
   /** Unique run ID */
   runId: string
   /** Git commit SHA */
-  commitSha?: string
+  commitSha?: string | undefined
   /** Git branch */
-  branch?: string
+  branch?: string | undefined
   /** Git tag (if any) */
-  tag?: string
+  tag?: string | undefined
   /** Environment (prod, staging, etc) */
   environment: string
   /** Full benchmark results */

@@ -26,7 +26,7 @@ export interface VariantShredWriteConfig {
   /** Fields to shred into typed columns */
   shredFields: string[]
   /** Optional type overrides for shredded fields */
-  fieldTypes?: Record<string, string>
+  fieldTypes?: Record<string, string> | undefined
 }
 
 /**

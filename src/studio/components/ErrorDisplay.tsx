@@ -41,29 +41,29 @@ export interface ErrorDisplayProps {
   /** The error to display */
   error: Error | string | null
   /** Callback when retry is clicked */
-  onRetry?: () => void
+  onRetry?: (() => void) | undefined
   /** Number of retry attempts made */
-  retryCount?: number
+  retryCount?: number | undefined
   /** Maximum retry attempts allowed */
-  maxRetries?: number
+  maxRetries?: number | undefined
   /** Time until next automatic retry (ms) */
-  nextRetryIn?: number | null
+  nextRetryIn?: number | null | undefined
   /** Whether a retry is currently in progress */
-  isRetrying?: boolean
+  isRetrying?: boolean | undefined
   /** Whether the error is dismissible */
-  dismissible?: boolean
+  dismissible?: boolean | undefined
   /** Callback when error is dismissed */
-  onDismiss?: () => void
+  onDismiss?: (() => void) | undefined
   /** Custom title for the error */
-  title?: string
+  title?: string | undefined
   /** Visual severity level */
-  severity?: ErrorSeverity
+  severity?: ErrorSeverity | undefined
   /** Compact mode for inline display */
-  compact?: boolean
+  compact?: boolean | undefined
   /** Additional CSS class name */
-  className?: string
+  className?: string | undefined
   /** Additional inline styles */
-  style?: React.CSSProperties
+  style?: React.CSSProperties | undefined
 }
 
 /**

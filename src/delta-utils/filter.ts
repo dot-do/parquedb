@@ -29,27 +29,27 @@ export type Filter<T = unknown> = {
  * Comparison operators
  */
 export interface ComparisonOperators<T> {
-  $eq?: T
-  $ne?: T
-  $gt?: T
-  $gte?: T
-  $lt?: T
-  $lte?: T
-  $in?: T[]
-  $nin?: T[]
-  $exists?: boolean
-  $type?: string
-  $regex?: string | RegExp
+  $eq?: T | undefined
+  $ne?: T | undefined
+  $gt?: T | undefined
+  $gte?: T | undefined
+  $lt?: T | undefined
+  $lte?: T | undefined
+  $in?: T[] | undefined
+  $nin?: T[] | undefined
+  $exists?: boolean | undefined
+  $type?: string | undefined
+  $regex?: string | RegExp | undefined
 }
 
 /**
  * Logical operators
  */
 export interface LogicalOperators<T> {
-  $and?: Filter<T>[]
-  $or?: Filter<T>[]
-  $not?: Filter<T>
-  $nor?: Filter<T>[]
+  $and?: Filter<T>[] | undefined
+  $or?: Filter<T>[] | undefined
+  $not?: Filter<T> | undefined
+  $nor?: Filter<T>[] | undefined
 }
 
 // =============================================================================
@@ -73,7 +73,7 @@ export interface ZoneMapFilter {
   column: string
   operator: 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'between'
   value: unknown
-  value2?: unknown // For 'between'
+  value2?: unknown | undefined // For 'between'
 }
 
 // =============================================================================

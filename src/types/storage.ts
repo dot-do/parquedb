@@ -153,19 +153,19 @@ export interface FileStat {
   mtime: Date
 
   /** Creation time (if available) */
-  ctime?: Date
+  ctime?: Date | undefined
 
   /** Is directory */
   isDirectory: boolean
 
   /** ETag/version for conditional operations */
-  etag?: string
+  etag?: string | undefined
 
   /** Content type (MIME) */
-  contentType?: string
+  contentType?: string | undefined
 
   /** Custom metadata */
-  metadata?: Record<string, string>
+  metadata?: Record<string, string> | undefined
 }
 
 // =============================================================================
@@ -175,19 +175,19 @@ export interface FileStat {
 /** Options for list operation */
 export interface ListOptions {
   /** Maximum results to return */
-  limit?: number
+  limit?: number | undefined
 
   /** Cursor for pagination */
-  cursor?: string
+  cursor?: string | undefined
 
   /** Delimiter for "directory" grouping (usually '/') */
-  delimiter?: string
+  delimiter?: string | undefined
 
   /** Only include files matching pattern */
-  pattern?: string
+  pattern?: string | undefined
 
   /** Include metadata with results */
-  includeMetadata?: boolean
+  includeMetadata?: boolean | undefined
 }
 
 /** Result of list operation */
@@ -196,16 +196,16 @@ export interface ListResult {
   files: string[]
 
   /** Directory prefixes (when using delimiter) */
-  prefixes?: string[]
+  prefixes?: string[] | undefined
 
   /** Cursor for next page */
-  cursor?: string
+  cursor?: string | undefined
 
   /** Whether there are more results */
   hasMore: boolean
 
   /** File stats (if includeMetadata was true) */
-  stats?: FileStat[]
+  stats?: FileStat[] | undefined
 }
 
 // =============================================================================
@@ -215,22 +215,22 @@ export interface ListResult {
 /** Options for write operation */
 export interface WriteOptions {
   /** Content type (MIME) */
-  contentType?: string
+  contentType?: string | undefined
 
   /** Custom metadata */
-  metadata?: Record<string, string>
+  metadata?: Record<string, string> | undefined
 
   /** Cache control header */
-  cacheControl?: string
+  cacheControl?: string | undefined
 
   /** Expected ETag for conditional write */
-  ifMatch?: string
+  ifMatch?: string | undefined
 
   /** Only write if doesn't exist */
-  ifNoneMatch?: '*'
+  ifNoneMatch?: '*' | undefined
 
   /** Custom modification time (for testing) */
-  mtime?: Date
+  mtime?: Date | undefined
 }
 
 /** Result of write operation */
@@ -239,7 +239,7 @@ export interface WriteResult {
   etag: string
 
   /** Version ID (for versioned storage) */
-  versionId?: string
+  versionId?: string | undefined
 
   /** Bytes written */
   size: number
@@ -248,7 +248,7 @@ export interface WriteResult {
 /** Options for rmdir */
 export interface RmdirOptions {
   /** Remove directory even if not empty */
-  recursive?: boolean
+  recursive?: boolean | undefined
 }
 
 // =============================================================================
@@ -271,13 +271,13 @@ export interface StreamableBackend extends StorageBackend {
 /** Options for streaming */
 export interface StreamOptions {
   /** Start byte offset */
-  start?: number
+  start?: number | undefined
 
   /** End byte offset */
-  end?: number
+  end?: number | undefined
 
   /** Chunk size for reading */
-  highWaterMark?: number
+  highWaterMark?: number | undefined
 }
 
 // =============================================================================
@@ -456,10 +456,10 @@ export interface StorageCapabilities {
   efficientStat: boolean
 
   /** Maximum file size supported in bytes (undefined = unlimited) */
-  maxFileSize?: number
+  maxFileSize?: number | undefined
 
   /** Maximum concurrent operations recommended (undefined = unlimited) */
-  maxConcurrency?: number
+  maxConcurrency?: number | undefined
 }
 
 /**
@@ -654,7 +654,7 @@ export const StoragePaths = {
 } as const
 
 /** Parse a storage path */
-export function parseStoragePath(path: string): { type: string; ns?: string; [key: string]: unknown } {
+export function parseStoragePath(path: string): { type: string; ns?: string | undefined; [key: string]: unknown } {
   if (path.startsWith('data/')) {
     const match = path.match(/^data\/([^/]+)\/data(?:\.(\d+))?\.parquet$/)
     if (match) {

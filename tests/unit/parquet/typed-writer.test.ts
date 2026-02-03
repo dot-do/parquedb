@@ -34,13 +34,13 @@ const PostSchema: TypeDefinition = {
 
 interface PostEntity extends Entity {
   title: string
-  content?: string
-  views?: number
-  rating?: number
-  published?: boolean
-  publishedAt?: Date | number
-  tags?: string[]
-  metadata?: Record<string, unknown>
+  content?: string | undefined
+  views?: number | undefined
+  rating?: number | undefined
+  published?: boolean | undefined
+  publishedAt?: Date | number | undefined
+  tags?: string[] | undefined
+  metadata?: Record<string, unknown> | undefined
 }
 
 const createTestPost = (id: string, data: Partial<PostEntity> = {}): PostEntity => ({
@@ -702,18 +702,18 @@ describe('complex typed schemas', () => {
     }
 
     interface ComplexEntity extends Entity {
-      description?: string
-      count?: number
-      price?: number
-      rating?: number
-      active?: boolean
-      birthDate?: string
-      createdDate?: Date | number
-      uuid?: string
-      email?: string
-      website?: string
-      data?: Record<string, unknown>
-      tags?: string[]
+      description?: string | undefined
+      count?: number | undefined
+      price?: number | undefined
+      rating?: number | undefined
+      active?: boolean | undefined
+      birthDate?: string | undefined
+      createdDate?: Date | number | undefined
+      uuid?: string | undefined
+      email?: string | undefined
+      website?: string | undefined
+      data?: Record<string, unknown> | undefined
+      tags?: string[] | undefined
     }
 
     const entity: ComplexEntity = {
@@ -764,8 +764,8 @@ describe('complex typed schemas', () => {
 
     interface StatusEntity extends Entity {
       status: string
-      priority?: number
-      percentage?: number
+      priority?: number | undefined
+      percentage?: number | undefined
     }
 
     const entity: StatusEntity = {

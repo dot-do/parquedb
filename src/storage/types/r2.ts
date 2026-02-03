@@ -32,10 +32,10 @@ export interface R2Object {
   uploaded: Date
 
   /** HTTP metadata */
-  httpMetadata?: R2HTTPMetadata
+  httpMetadata?: R2HTTPMetadata | undefined
 
   /** Custom metadata */
-  customMetadata?: Record<string, string>
+  customMetadata?: Record<string, string> | undefined
 
   /** Storage class */
   storageClass: 'Standard'
@@ -77,22 +77,22 @@ export interface R2ObjectBody extends R2Object {
  */
 export interface R2HTTPMetadata {
   /** Content-Type header */
-  contentType?: string
+  contentType?: string | undefined
 
   /** Content-Language header */
-  contentLanguage?: string
+  contentLanguage?: string | undefined
 
   /** Content-Disposition header */
-  contentDisposition?: string
+  contentDisposition?: string | undefined
 
   /** Content-Encoding header */
-  contentEncoding?: string
+  contentEncoding?: string | undefined
 
   /** Cache-Control header */
-  cacheControl?: string
+  cacheControl?: string | undefined
 
   /** Expiration time */
-  cacheExpiry?: Date
+  cacheExpiry?: Date | undefined
 }
 
 /**
@@ -100,19 +100,19 @@ export interface R2HTTPMetadata {
  */
 export interface R2Checksums {
   /** MD5 checksum */
-  md5?: ArrayBuffer
+  md5?: ArrayBuffer | undefined
 
   /** SHA-1 checksum */
-  sha1?: ArrayBuffer
+  sha1?: ArrayBuffer | undefined
 
   /** SHA-256 checksum */
-  sha256?: ArrayBuffer
+  sha256?: ArrayBuffer | undefined
 
   /** SHA-384 checksum */
-  sha384?: ArrayBuffer
+  sha384?: ArrayBuffer | undefined
 
   /** SHA-512 checksum */
-  sha512?: ArrayBuffer
+  sha512?: ArrayBuffer | undefined
 }
 
 // =============================================================================
@@ -124,10 +124,10 @@ export interface R2Checksums {
  */
 export interface R2GetOptions {
   /** Conditional headers for get */
-  onlyIf?: R2Conditional | Headers
+  onlyIf?: R2Conditional | Headers | undefined
 
   /** Byte range to read */
-  range?: R2Range | Headers
+  range?: R2Range | Headers | undefined
 }
 
 /**
@@ -135,13 +135,13 @@ export interface R2GetOptions {
  */
 export interface R2Range {
   /** Start offset (inclusive) */
-  offset?: number
+  offset?: number | undefined
 
   /** Length to read */
-  length?: number
+  length?: number | undefined
 
   /** End offset (inclusive) - alternative to length */
-  suffix?: number
+  suffix?: number | undefined
 }
 
 /**
@@ -149,19 +149,19 @@ export interface R2Range {
  */
 export interface R2Conditional {
   /** Only return if ETag matches */
-  etagMatches?: string
+  etagMatches?: string | undefined
 
   /** Only return if ETag doesn't match */
-  etagDoesNotMatch?: string
+  etagDoesNotMatch?: string | undefined
 
   /** Only return if modified after this date */
-  uploadedAfter?: Date
+  uploadedAfter?: Date | undefined
 
   /** Only return if modified before this date */
-  uploadedBefore?: Date
+  uploadedBefore?: Date | undefined
 
   /** Return null instead of throwing on condition failure */
-  secondsGranularity?: boolean
+  secondsGranularity?: boolean | undefined
 }
 
 // =============================================================================
@@ -173,28 +173,28 @@ export interface R2Conditional {
  */
 export interface R2PutOptions {
   /** Conditional headers for put */
-  onlyIf?: R2Conditional | Headers
+  onlyIf?: R2Conditional | Headers | undefined
 
   /** HTTP metadata */
-  httpMetadata?: R2HTTPMetadata | Headers
+  httpMetadata?: R2HTTPMetadata | Headers | undefined
 
   /** Custom metadata */
-  customMetadata?: Record<string, string>
+  customMetadata?: Record<string, string> | undefined
 
   /** MD5 checksum for integrity */
-  md5?: ArrayBuffer | string
+  md5?: ArrayBuffer | string | undefined
 
   /** SHA-1 checksum for integrity */
-  sha1?: ArrayBuffer | string
+  sha1?: ArrayBuffer | string | undefined
 
   /** SHA-256 checksum for integrity */
-  sha256?: ArrayBuffer | string
+  sha256?: ArrayBuffer | string | undefined
 
   /** SHA-384 checksum for integrity */
-  sha384?: ArrayBuffer | string
+  sha384?: ArrayBuffer | string | undefined
 
   /** SHA-512 checksum for integrity */
-  sha512?: ArrayBuffer | string
+  sha512?: ArrayBuffer | string | undefined
 }
 
 // =============================================================================
@@ -206,22 +206,22 @@ export interface R2PutOptions {
  */
 export interface R2ListOptions {
   /** Maximum number of objects to return (default 1000, max 1000) */
-  limit?: number
+  limit?: number | undefined
 
   /** Only list objects with this prefix */
-  prefix?: string
+  prefix?: string | undefined
 
   /** Cursor for pagination */
-  cursor?: string
+  cursor?: string | undefined
 
   /** Delimiter for grouping (usually '/') */
-  delimiter?: string
+  delimiter?: string | undefined
 
   /** Only list objects after this key */
-  startAfter?: string
+  startAfter?: string | undefined
 
   /** Include custom metadata in results */
-  include?: ('httpMetadata' | 'customMetadata')[]
+  include?: ('httpMetadata' | 'customMetadata')[] | undefined
 }
 
 /**
@@ -235,7 +235,7 @@ export interface R2Objects {
   truncated: boolean
 
   /** Cursor for next page */
-  cursor?: string
+  cursor?: string | undefined
 
   /** Common prefixes when using delimiter */
   delimitedPrefixes: string[]
@@ -281,10 +281,10 @@ export interface R2UploadedPart {
  */
 export interface R2MultipartOptions {
   /** HTTP metadata */
-  httpMetadata?: R2HTTPMetadata | Headers
+  httpMetadata?: R2HTTPMetadata | Headers | undefined
 
   /** Custom metadata */
-  customMetadata?: Record<string, string>
+  customMetadata?: Record<string, string> | undefined
 }
 
 // =============================================================================

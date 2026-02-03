@@ -54,14 +54,14 @@ export interface ParqueDBConfig {
     /** Events directory relative to config file */
     eventsDir: string
     /** R2 bucket name (if type is r2) */
-    bucket?: string
+    bucket?: string | undefined
     /** S3 bucket name (if type is s3) */
-    region?: string
+    region?: string | undefined
   }
   /** Initial namespaces to create */
-  namespaces?: string[]
+  namespaces?: string[] | undefined
   /** Schema definition (optional) */
-  schema?: Record<string, unknown>
+  schema?: Record<string, unknown> | undefined
   /** Created timestamp */
   createdAt: string
 }
@@ -75,11 +75,11 @@ export interface InitOptions {
   /** Run in interactive mode */
   interactive: boolean
   /** Database name override */
-  name?: string
+  name?: string | undefined
   /** Storage type override */
-  storageType?: StorageType
+  storageType?: StorageType | undefined
   /** Initial namespaces */
-  namespaces?: string[]
+  namespaces?: string[] | undefined
   /** Quiet mode */
   quiet: boolean
 }

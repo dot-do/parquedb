@@ -52,9 +52,9 @@ export interface ParsedRoute {
  */
 export interface DatabaseRoutingConfig {
   /** Path prefix (default: '/admin') */
-  pathPrefix?: string
+  pathPrefix?: string | undefined
   /** Cookie name for storing last accessed database */
-  lastDatabaseCookie?: string
+  lastDatabaseCookie?: string | undefined
   /** Get storage backend for a database */
   getStorage: (database: DatabaseInfo) => StorageBackend | Promise<StorageBackend>
 }
@@ -414,7 +414,7 @@ export function databaseMiddleware(config: {
     getBySlug(owner: string, slug: string): Promise<DatabaseInfo | null>
     recordAccess(id: string): Promise<void>
   }>
-  pathPrefix?: string
+  pathPrefix?: string | undefined
 }) {
   const pathPrefix = config.pathPrefix ?? '/admin'
 

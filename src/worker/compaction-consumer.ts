@@ -54,25 +54,25 @@ export interface CompactionConsumerEnv {
   LOGS_BUCKET: R2Bucket
 
   /** Optional: Prefix for raw event files (default: "raw-events") */
-  RAW_EVENTS_PREFIX?: string
+  RAW_EVENTS_PREFIX?: string | undefined
 
   /** Optional: Prefix for Parquet log files (default: "logs/workers") */
-  PARQUET_PREFIX?: string
+  PARQUET_PREFIX?: string | undefined
 
   /** Optional: Flush threshold for WorkerLogsMV (default: 1000) */
-  FLUSH_THRESHOLD?: string
+  FLUSH_THRESHOLD?: string | undefined
 
   /** Optional: Compression codec (default: "lz4") */
-  COMPRESSION?: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd'
+  COMPRESSION?: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd' | undefined
 
   /** Optional: Queue for downstream notifications (MV refresh, etc.) */
-  DOWNSTREAM_QUEUE?: Queue<DownstreamMessage>
+  DOWNSTREAM_QUEUE?: Queue<DownstreamMessage> | undefined
 
   /**
    * Optional: Maximum retry attempts before message goes to DLQ (default: 3)
    * Should match the `max_retries` setting in wrangler.toml queue consumer config
    */
-  MAX_RETRIES?: string
+  MAX_RETRIES?: string | undefined
 }
 
 /**
@@ -107,7 +107,7 @@ export interface R2EventNotification {
   copySource?: {
     bucket: string
     object: string
-  }
+  } | undefined
 }
 
 /**
@@ -158,7 +158,7 @@ export interface ProcessingResult {
   /** Whether processing succeeded */
   success: boolean
   /** Error message if failed */
-  error?: string
+  error?: string | undefined
 }
 
 /**

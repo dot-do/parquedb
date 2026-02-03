@@ -23,9 +23,9 @@ export interface JWTUserInfo {
   /** User ID (from 'sub' claim) */
   id: string
   /** Username (from 'username' or 'preferred_username' claim) */
-  username?: string
+  username?: string | undefined
   /** Email (from 'email' claim) */
-  email?: string
+  email?: string | undefined
 }
 
 /**
@@ -33,9 +33,9 @@ export interface JWTUserInfo {
  */
 export interface JWTVerifyResult {
   valid: boolean
-  user?: JWTUserInfo
-  payload?: JWTPayload
-  error?: string
+  user?: JWTUserInfo | undefined
+  payload?: JWTPayload | undefined
+  error?: string | undefined
 }
 
 // =============================================================================
@@ -100,7 +100,7 @@ async function withAbortTimeout<T>(
 async function verifyJWTWithTimeout(
   token: string,
   jwks: ReturnType<typeof createRemoteJWKSet>,
-  options: { clockTolerance?: number },
+  options: { clockTolerance?: number | undefined },
   timeoutMs: number = JWKS_FETCH_TIMEOUT_MS
 ): Promise<Awaited<ReturnType<typeof jwtVerify>>> {
   return withAbortTimeout(

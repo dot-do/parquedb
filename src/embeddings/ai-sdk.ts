@@ -75,15 +75,15 @@ export interface AISDKEmbeddingsConfig {
   /** Model identifier */
   model: string
   /** API key for the provider */
-  apiKey?: string
+  apiKey?: string | undefined
   /** Base URL override (for custom providers or self-hosted) */
-  baseURL?: string
+  baseURL?: string | undefined
   /** Custom embedding function (for custom provider) */
-  customEmbedFn?: (texts: string[]) => Promise<number[][]>
+  customEmbedFn?: ((texts: string[]) => Promise<number[][]>) | undefined
   /** Override dimensions (auto-detected if not specified) */
-  dimensions?: number
+  dimensions?: number | undefined
   /** Whether to normalize vectors to unit length (default: true) */
-  normalize?: boolean
+  normalize?: boolean | undefined
 }
 
 /**
@@ -91,7 +91,7 @@ export interface AISDKEmbeddingsConfig {
  */
 export interface AISDKEmbedOptions {
   /** Return raw embeddings without normalization */
-  raw?: boolean
+  raw?: boolean | undefined
 }
 
 /**
@@ -99,14 +99,14 @@ export interface AISDKEmbedOptions {
  */
 interface ModelConfig {
   dimensions: number
-  maxBatchSize?: number
+  maxBatchSize?: number | undefined
 }
 
 /**
  * Type for embedding model returned by AI SDK providers
  */
 interface EmbeddingModel {
-  modelId?: string
+  modelId?: string | undefined
 }
 
 /**
@@ -124,7 +124,7 @@ type EmbedManyFn = (params: { model: EmbeddingModel; values: string[] }) => Prom
 /**
  * Type for AI SDK provider factory
  */
-type ProviderFactory = (config: { apiKey?: string; baseURL?: string }) => {
+type ProviderFactory = (config: { apiKey?: string | undefined; baseURL?: string | undefined }) => {
   textEmbeddingModel: (model: string) => EmbeddingModel
 }
 

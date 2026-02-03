@@ -42,7 +42,7 @@ export interface ConflictInfo {
   readonly target: string
 
   /** Field that has a conflict (undefined for entity-level conflicts like delete_update) */
-  readonly field?: string
+  readonly field?: string | undefined
 
   /** Our value for the field */
   readonly ourValue: unknown
@@ -60,10 +60,10 @@ export interface ConflictInfo {
   readonly theirEvent: Event
 
   /** Operations from our event (if embedded) */
-  readonly ourOps?: UpdateOps
+  readonly ourOps?: UpdateOps | undefined
 
   /** Operations from their event (if embedded) */
-  readonly theirOps?: UpdateOps
+  readonly theirOps?: UpdateOps | undefined
 }
 
 // =============================================================================

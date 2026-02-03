@@ -63,12 +63,12 @@ export interface ValidatedTraceItem {
  * Validated event info structure
  */
 export interface ValidatedEventInfo {
-  request?: ValidatedRequest
-  response?: { status: number }
-  scheduledTime?: number
-  cron?: string
-  queue?: string
-  batchSize?: number
+  request?: ValidatedRequest | undefined
+  response?: { status: number } | undefined
+  scheduledTime?: number | undefined
+  cron?: string | undefined
+  queue?: string | undefined
+  batchSize?: number | undefined
 }
 
 /**
@@ -78,7 +78,7 @@ export interface ValidatedRequest {
   url: string
   method: string
   headers: Record<string, string>
-  cf?: Record<string, unknown>
+  cf?: Record<string, unknown> | undefined
 }
 
 /**
@@ -108,15 +108,15 @@ export interface ValidatedException {
  */
 export interface TailValidationConfig {
   /** Whether to throw on first error (default: false, returns all errors) */
-  throwOnError?: boolean
+  throwOnError?: boolean | undefined
   /** Whether to allow and skip invalid items (default: true) */
-  skipInvalidItems?: boolean
+  skipInvalidItems?: boolean | undefined
   /** Maximum number of items to process (default: unlimited) */
-  maxItems?: number
+  maxItems?: number | undefined
   /** Maximum number of logs per item (default: 1000) */
-  maxLogsPerItem?: number
+  maxLogsPerItem?: number | undefined
   /** Maximum number of exceptions per item (default: 100) */
-  maxExceptionsPerItem?: number
+  maxExceptionsPerItem?: number | undefined
 }
 
 /**

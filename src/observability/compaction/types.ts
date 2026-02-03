@@ -118,7 +118,7 @@ export interface PrometheusMetric {
   name: string
   help: string
   type: PrometheusMetricType
-  labels?: string[]
+  labels?: string[] | undefined
 }
 
 /** Compaction metrics for Prometheus export */
@@ -186,11 +186,11 @@ export const PROMETHEUS_METRICS: PrometheusMetric[] = [
 /** Analytics Engine data point for Workers Analytics Engine */
 export interface AnalyticsEngineDataPoint {
   /** Index fields for grouping (strings, max 32) */
-  indexes?: string[]
+  indexes?: string[] | undefined
   /** Blob fields for additional metadata (strings, max 32) */
-  blobs?: string[]
+  blobs?: string[] | undefined
   /** Double fields for numeric values (numbers, max 20) */
-  doubles?: number[]
+  doubles?: number[] | undefined
 }
 
 /** Mapping of metric names to their blob/double indexes */

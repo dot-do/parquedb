@@ -42,11 +42,11 @@ export interface AlertEvent {
   /** Detailed description */
   description: string
   /** Namespace affected (if applicable) */
-  namespace?: string
+  namespace?: string | undefined
   /** Relevant metrics at time of alert */
-  metrics?: Partial<CompactionMetrics>
+  metrics?: Partial<CompactionMetrics> | undefined
   /** Additional context data */
-  context?: Record<string, unknown>
+  context?: Record<string, unknown> | undefined
   /** Timestamp when alert was generated */
   timestamp: number
 }
@@ -110,9 +110,9 @@ export interface AlertDeliveryResult {
   /** Channel name */
   channel: string
   /** Error message if failed */
-  error?: string
+  error?: string | undefined
   /** Response from the channel (e.g., message ID) */
-  response?: unknown
+  response?: unknown | undefined
 }
 
 // =============================================================================
@@ -124,15 +124,15 @@ export interface WebhookChannelConfig {
   /** Webhook URL */
   url: string
   /** HTTP method (default: POST) */
-  method?: 'POST' | 'PUT'
+  method?: 'POST' | 'PUT' | undefined
   /** Custom headers */
-  headers?: Record<string, string>
+  headers?: Record<string, string> | undefined
   /** Secret for signing payloads (optional) */
-  secret?: string
+  secret?: string | undefined
   /** Timeout in milliseconds (default: 10000) */
-  timeoutMs?: number
+  timeoutMs?: number | undefined
   /** Whether to include full metrics in payload */
-  includeMetrics?: boolean
+  includeMetrics?: boolean | undefined
 }
 
 /**
@@ -217,23 +217,23 @@ export interface SlackChannelConfig {
   /** Slack webhook URL */
   webhookUrl: string
   /** Default channel (can be overridden by webhook config) */
-  channel?: string
+  channel?: string | undefined
   /** Bot username (default: ParqueDB Alerts) */
-  username?: string
+  username?: string | undefined
   /** Bot icon emoji (default: :database:) */
-  iconEmoji?: string
+  iconEmoji?: string | undefined
   /** Whether to mention @channel for critical alerts */
-  mentionChannelOnCritical?: boolean
+  mentionChannelOnCritical?: boolean | undefined
   /** Timeout in milliseconds (default: 10000) */
-  timeoutMs?: number
+  timeoutMs?: number | undefined
 }
 
 /** Slack message block types */
 interface SlackBlock {
   type: string
-  text?: { type: string; text: string; emoji?: boolean }
-  fields?: Array<{ type: string; text: string }>
-  elements?: Array<{ type: string; text: string }>
+  text?: { type: string; text: string; emoji?: boolean | undefined } | undefined
+  fields?: Array<{ type: string; text: string }> | undefined
+  elements?: Array<{ type: string; text: string }> | undefined
 }
 
 /**
@@ -434,13 +434,13 @@ export interface PagerDutyChannelConfig {
   /** PagerDuty routing key (integration key) */
   routingKey: string
   /** PagerDuty Events API endpoint (default: events.pagerduty.com) */
-  apiEndpoint?: string
+  apiEndpoint?: string | undefined
   /** Component name for dedup (default: parquedb-compaction) */
-  component?: string
+  component?: string | undefined
   /** Service name (default: ParqueDB) */
-  service?: string
+  service?: string | undefined
   /** Timeout in milliseconds (default: 10000) */
-  timeoutMs?: number
+  timeoutMs?: number | undefined
 }
 
 /** PagerDuty event action */
@@ -570,9 +570,9 @@ export interface AlertManagerConfig {
   /** Alert thresholds */
   thresholds: AlertThresholds
   /** Minimum interval between alerts of same type (ms) */
-  dedupeIntervalMs?: number
+  dedupeIntervalMs?: number | undefined
   /** Whether to log alerts to console */
-  logAlerts?: boolean
+  logAlerts?: boolean | undefined
 }
 
 /** Track last alert time per type/namespace for deduplication */
@@ -912,12 +912,12 @@ async function computeHmacSignature(payload: string, secret: string): Promise<st
  * Create a CompactionAlertManager from environment configuration
  */
 export function createAlertManagerFromEnv(env: {
-  WEBHOOK_URL?: string
-  WEBHOOK_SECRET?: string
-  SLACK_WEBHOOK_URL?: string
-  SLACK_CHANNEL?: string
-  PAGERDUTY_ROUTING_KEY?: string
-  ALERT_DEDUPE_INTERVAL_MS?: string
+  WEBHOOK_URL?: string | undefined
+  WEBHOOK_SECRET?: string | undefined
+  SLACK_WEBHOOK_URL?: string | undefined
+  SLACK_CHANNEL?: string | undefined
+  PAGERDUTY_ROUTING_KEY?: string | undefined
+  ALERT_DEDUPE_INTERVAL_MS?: string | undefined
 }): CompactionAlertManager {
   const channels: AlertChannel[] = []
 

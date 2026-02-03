@@ -32,7 +32,7 @@ export interface IndexCatalogEntry {
   /** Number of entries in the index */
   entryCount: number
   /** Last updated timestamp */
-  updatedAt?: string
+  updatedAt?: string | undefined
 }
 
 /**

@@ -36,13 +36,13 @@ interface MockFile {
  */
 interface StreamingMergeOptions {
   /** Maximum rows to read per chunk from each file */
-  chunkSize?: number
+  chunkSize?: number | undefined
   /** Maximum memory usage in bytes (default: 128MB) */
-  maxMemoryBytes?: number
+  maxMemoryBytes?: number | undefined
   /** Sort key field name */
-  sortKey?: string
+  sortKey?: string | undefined
   /** Sort direction */
-  sortDirection?: 'asc' | 'desc'
+  sortDirection?: 'asc' | 'desc' | undefined
 }
 
 /**

@@ -43,7 +43,7 @@ import type { Entity, Filter, FindOptions, PaginatedResult, UpdateInput, DeleteR
  */
 export interface Transport {
   call(method: string, args: unknown[]): Promise<unknown>
-  close?: () => void
+  close?: (() => void) | undefined
 }
 
 /**
@@ -55,20 +55,20 @@ export interface BatchingOptions {
    * Requests made within this window will be grouped together.
    * @default 10
    */
-  windowMs?: number
+  windowMs?: number | undefined
 
   /**
    * Maximum number of requests to include in a single batch.
    * When this limit is reached, the batch is sent immediately.
    * @default 50
    */
-  maxBatchSize?: number
+  maxBatchSize?: number | undefined
 
   /**
    * Callback when a batch is about to be sent.
    * Useful for logging and debugging.
    */
-  onBatch?: (requests: BatchedRequest[]) => void
+  onBatch?: ((requests: BatchedRequest[]) => void) | undefined
 }
 
 /**
@@ -90,9 +90,9 @@ export interface BatchedResponse {
   /** Matches the request id */
   id: number
   /** Result if successful */
-  result?: unknown
+  result?: unknown | undefined
   /** Error if failed */
-  error?: { message: string; code?: string | number; data?: unknown }
+  error?: { message: string; code?: string | number | undefined; data?: unknown | undefined } | undefined
 }
 
 /**
@@ -106,16 +106,16 @@ export interface ParqueDBRPCClientOptions {
   url: string
 
   /** Authentication token or provider function */
-  auth?: string | (() => string | null | Promise<string | null>)
+  auth?: string | (() => string | null | Promise<string | null>) | undefined
 
   /** Request timeout in milliseconds (default: 30000) */
-  timeout?: number
+  timeout?: number | undefined
 
   /** Batching options for automatic request batching */
-  batchingOptions?: BatchingOptions
+  batchingOptions?: BatchingOptions | undefined
 
   /** Custom headers for HTTP requests */
-  headers?: Record<string, string>
+  headers?: Record<string, string> | undefined
 }
 
 /**
@@ -144,7 +144,7 @@ export interface RPCCollection<T extends object = Record<string, unknown>> {
   get(id: string): Promise<Entity<T> | null>
 
   /** Create a new entity */
-  create(data: Partial<T> & { $type?: string; name?: string }): Promise<Entity<T>>
+  create(data: Partial<T> & { $type?: string | undefined; name?: string | undefined }): Promise<Entity<T>>
 
   /** Update an entity */
   update(id: string, update: UpdateInput<T>): Promise<Entity<T> | null>
@@ -274,7 +274,7 @@ function withBatching(
         if (!response) {
           request.reject(new Error(`No response received for request ${request.id}`))
         } else if (response.error) {
-          const error = new Error(response.error.message) as Error & { code?: string | number; data?: unknown }
+          const error = new Error(response.error.message) as Error & { code?: string | number | undefined; data?: unknown | undefined }
           if (response.error.code !== undefined) {
             error.code = response.error.code
           }
@@ -401,12 +401,12 @@ function createHttpTransport(options: ParqueDBRPCClientOptions): Transport {
         }
 
         const data = await response.json() as {
-          result?: unknown
-          error?: { message: string; code?: string | number; data?: unknown }
+          result?: unknown | undefined
+          error?: { message: string; code?: string | number | undefined; data?: unknown | undefined } | undefined
         }
 
         if (data.error) {
-          const error = new Error(data.error.message) as Error & { code?: string | number; data?: unknown }
+          const error = new Error(data.error.message) as Error & { code?: string | number | undefined; data?: unknown | undefined }
           if (data.error.code !== undefined) error.code = data.error.code
           if (data.error.data !== undefined) error.data = data.error.data
           throw error
@@ -447,7 +447,7 @@ function createCollection<T extends object = Record<string, unknown>>(
       return transport.call('db.get', [name, id]) as Promise<Entity<T> | null>
     },
 
-    async create(data: Partial<T> & { $type?: string; name?: string }): Promise<Entity<T>> {
+    async create(data: Partial<T> & { $type?: string | undefined; name?: string | undefined }): Promise<Entity<T>> {
       return transport.call('db.create', [name, data]) as Promise<Entity<T>>
     },
 
@@ -566,7 +566,7 @@ export interface RPCBatchLoaderDB {
     id: string,
     relationField: string,
     options?: Record<string, unknown>
-  ): Promise<{ items: Entity<T>[]; total?: number; hasMore?: boolean }>
+  ): Promise<{ items: Entity<T>[]; total?: number | undefined; hasMore?: boolean | undefined }>
 
   getByIds?<T extends object = Record<string, unknown>>(
     namespace: string,
@@ -612,7 +612,7 @@ export function createBatchLoaderDB(client: ParqueDBRPCClient): RPCBatchLoaderDB
       id: string,
       relationField: string,
       _options?: Record<string, unknown>
-    ): Promise<{ items: Entity<T>[]; total?: number; hasMore?: boolean }> {
+    ): Promise<{ items: Entity<T>[]; total?: number | undefined; hasMore?: boolean | undefined }> {
       const result = await client.collection(namespace).getRelated(id, relationField)
       return {
         items: result.items as Entity<T>[],

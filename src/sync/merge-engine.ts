@@ -62,10 +62,10 @@ export interface MergeEngineOptions {
   storage: StorageBackend
 
   /** Default resolution strategy for conflicts */
-  defaultStrategy?: MergeStrategy
+  defaultStrategy?: MergeStrategy | undefined
 
   /** Whether to auto-merge commutative operations (default: true) */
-  autoMergeCommutative?: boolean
+  autoMergeCommutative?: boolean | undefined
 }
 
 /**
@@ -73,16 +73,16 @@ export interface MergeEngineOptions {
  */
 export interface MergeBranchesOptions {
   /** Resolution strategy for conflicts */
-  strategy?: MergeStrategy
+  strategy?: MergeStrategy | undefined
 
   /** Whether to perform a dry-run (preview without applying) */
-  dryRun?: boolean
+  dryRun?: boolean | undefined
 
   /** Whether to auto-merge commutative operations */
-  autoMergeCommutative?: boolean
+  autoMergeCommutative?: boolean | undefined
 
   /** Custom merge function for specific targets */
-  customMerge?: MergeOptions['customMerge']
+  customMerge?: MergeOptions['customMerge'] | undefined
 }
 
 /**
@@ -93,16 +93,16 @@ export interface MergeBranchesResult {
   readonly success: boolean
 
   /** Error message if merge failed */
-  readonly error?: string
+  readonly error?: string | undefined
 
   /** Conflicts detected during merge */
   readonly conflicts: readonly MergeConflict[]
 
   /** Whether this was a dry-run */
-  dryRun?: boolean
+  dryRun?: boolean | undefined
 
   /** Strategy used for the merge */
-  strategy?: MergeStrategy
+  strategy?: MergeStrategy | undefined
 
   /** Statistics about the merge */
   stats?: {
@@ -114,16 +114,16 @@ export interface MergeBranchesResult {
     autoMerged: number
     /** Number of resolved conflicts */
     resolved: number
-  }
+  } | undefined
 
   /** Common ancestor commit hash (if found) */
-  baseCommit?: string
+  baseCommit?: string | undefined
 
   /** Source branch commit hash */
-  sourceCommit?: string
+  sourceCommit?: string | undefined
 
   /** Target branch commit hash */
-  targetCommit?: string
+  targetCommit?: string | undefined
 }
 
 /**
@@ -131,13 +131,13 @@ export interface MergeBranchesResult {
  */
 export interface MergeEventsOptions {
   /** Resolution strategy for conflicts */
-  resolutionStrategy?: ResolutionStrategy
+  resolutionStrategy?: ResolutionStrategy | undefined
 
   /** Whether to auto-merge commutative operations */
-  autoMergeCommutative?: boolean
+  autoMergeCommutative?: boolean | undefined
 
   /** Custom merge function for specific targets */
-  customMerge?: MergeOptions['customMerge']
+  customMerge?: MergeOptions['customMerge'] | undefined
 }
 
 /**

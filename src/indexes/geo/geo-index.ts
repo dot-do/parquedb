@@ -48,11 +48,11 @@ export interface GeoSearchResult {
  */
 export interface GeoSearchOptions {
   /** Maximum distance in meters */
-  maxDistance?: number
+  maxDistance?: number | undefined
   /** Minimum distance in meters */
-  minDistance?: number
+  minDistance?: number | undefined
   /** Maximum results to return */
-  limit?: number
+  limit?: number | undefined
 }
 
 /**

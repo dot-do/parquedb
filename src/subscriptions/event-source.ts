@@ -93,9 +93,9 @@ export class InMemoryEventSource implements SubscriptionEventSource {
  */
 export interface EventWriterSourceOptions {
   /** Maximum events to buffer while not started */
-  maxBufferSize?: number
+  maxBufferSize?: number | undefined
   /** Replay buffered events when starting */
-  replayOnStart?: boolean
+  replayOnStart?: boolean | undefined
 }
 
 /**
@@ -221,9 +221,9 @@ export class EventWriterSource implements SubscriptionEventSource {
  */
 export interface PollingEventSourceOptions {
   /** Polling interval in ms (default: 1000) */
-  intervalMs?: number
+  intervalMs?: number | undefined
   /** Last event ID to start from */
-  startAfter?: string
+  startAfter?: string | undefined
 }
 
 /**

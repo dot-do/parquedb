@@ -265,7 +265,7 @@ function transformValueToPayload(value: unknown): unknown {
  */
 export function toPayloadVersion<T = Record<string, unknown>>(
   entity: Entity,
-  options: ToPayloadOptions & { parent?: string }
+  options: ToPayloadOptions & { parent?: string | undefined }
 ): Record<string, unknown> {
   const doc = toPayloadDoc<T>(entity, options) || {}
 
@@ -290,9 +290,9 @@ export function buildVersionInput(
   versionData: Record<string, unknown>,
   options: {
     collection: string
-    autosave?: boolean
-    publishedLocale?: string
-    snapshot?: boolean
+    autosave?: boolean | undefined
+    publishedLocale?: string | undefined
+    snapshot?: boolean | undefined
   }
 ): CreateInput {
   const entityType = `${capitalizeFirst(options.collection)}Version`

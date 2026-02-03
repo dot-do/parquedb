@@ -26,17 +26,17 @@ export interface MockGitHubDatabaseIndex {
  */
 export interface MockGitHubDatabase {
   id: string
-  name?: string
-  defaultBranch?: string
-  previewUrl?: string
+  name?: string | undefined
+  defaultBranch?: string | undefined
+  previewUrl?: string | undefined
   config?: {
-    preview?: { enabled?: boolean }
+    preview?: { enabled?: boolean } | undefined
     branches?: {
-      auto_create?: string[]
-      auto_delete?: boolean
+      auto_create?: string[] | undefined
+      auto_delete?: boolean | undefined
     }
     merge?: {
-      strategy?: 'ours' | 'theirs'
+      strategy?: 'ours' | 'theirs' | undefined
     }
   }
 }

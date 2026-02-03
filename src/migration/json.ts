@@ -534,7 +534,7 @@ export async function* streamFromJsonl(
  */
 export async function* streamFromJson(
   path: string,
-  options?: StreamingOptions & { arrayPath?: string }
+  options?: StreamingOptions & { arrayPath?: string | undefined }
 ): AsyncGenerator<StreamingDocument> {
   const opts = { skipErrors: false, ...options }
 

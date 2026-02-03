@@ -36,22 +36,22 @@ export type PayloadOperator =
  * Payload field condition
  */
 export interface PayloadWhereField {
-  equals?: unknown
-  not_equals?: unknown
-  greater_than?: unknown
-  greater_than_equal?: unknown
-  less_than?: unknown
-  less_than_equal?: unknown
-  in?: unknown[]
-  not_in?: unknown[]
-  all?: unknown[]
-  exists?: boolean
-  contains?: string
-  like?: string
-  not_like?: string
-  within?: unknown
-  intersects?: unknown
-  near?: unknown
+  equals?: unknown | undefined
+  not_equals?: unknown | undefined
+  greater_than?: unknown | undefined
+  greater_than_equal?: unknown | undefined
+  less_than?: unknown | undefined
+  less_than_equal?: unknown | undefined
+  in?: unknown[] | undefined
+  not_in?: unknown[] | undefined
+  all?: unknown[] | undefined
+  exists?: boolean | undefined
+  contains?: string | undefined
+  like?: string | undefined
+  not_like?: string | undefined
+  within?: unknown | undefined
+  intersects?: unknown | undefined
+  near?: unknown | undefined
 }
 
 /**
@@ -59,8 +59,8 @@ export interface PayloadWhereField {
  */
 export interface PayloadWhere {
   [field: string]: PayloadWhere[] | PayloadWhereField | undefined
-  and?: PayloadWhere[]
-  or?: PayloadWhere[]
+  and?: PayloadWhere[] | undefined
+  or?: PayloadWhere[] | undefined
 }
 
 /**
@@ -118,31 +118,31 @@ export interface PayloadAdapterConfig {
    * Collection name for storing Payload migrations
    * @default 'payload_migrations'
    */
-  migrationCollection?: string
+  migrationCollection?: string | undefined
 
   /**
    * Collection name for storing global documents
    * @default 'payload_globals'
    */
-  globalsCollection?: string
+  globalsCollection?: string | undefined
 
   /**
    * Collection name suffix for version storage
    * @default '_versions'
    */
-  versionsSuffix?: string
+  versionsSuffix?: string | undefined
 
   /**
    * Default actor for audit fields when not provided
    * @default 'system/payload'
    */
-  defaultActor?: EntityId
+  defaultActor?: EntityId | undefined
 
   /**
    * Enable debug logging
    * @default false
    */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 /**
@@ -176,9 +176,9 @@ export interface TransactionSession {
 export interface TransactionOperation {
   type: 'create' | 'update' | 'delete'
   collection: string
-  id?: string
-  data?: Record<string, unknown>
-  where?: PayloadWhere
+  id?: string | undefined
+  data?: Record<string, unknown> | undefined
+  where?: PayloadWhere | undefined
 }
 
 // =============================================================================
@@ -207,10 +207,10 @@ export interface VersionRecord<T = Record<string, unknown>> {
   version: T
   createdAt: Date
   updatedAt: Date
-  latest?: boolean
-  autosave?: boolean
-  publishedLocale?: string
-  snapshot?: boolean
+  latest?: boolean | undefined
+  autosave?: boolean | undefined
+  publishedLocale?: string | undefined
+  snapshot?: boolean | undefined
 }
 
 // =============================================================================
@@ -224,11 +224,11 @@ export interface ToParqueDBOptions {
   /** Collection/namespace name */
   collection: string
   /** Actor for audit fields */
-  actor?: EntityId
+  actor?: EntityId | undefined
   /** Whether this is an update (vs create) */
-  isUpdate?: boolean
+  isUpdate?: boolean | undefined
   /** Existing entity (for updates) */
-  existingEntity?: Entity
+  existingEntity?: Entity | undefined
 }
 
 /**
@@ -238,9 +238,9 @@ export interface ToPayloadOptions {
   /** Collection/namespace name */
   collection: string
   /** Fields to select (projection) */
-  select?: Record<string, boolean>
+  select?: Record<string, boolean> | undefined
   /** Fields to populate with related data */
-  populate?: Record<string, boolean>
+  populate?: Record<string, boolean> | undefined
 }
 
 // =============================================================================
@@ -253,11 +253,11 @@ export interface ToPayloadOptions {
 export interface BaseOperationArgs {
   collection: CollectionSlug
   req?: {
-    transactionID?: string | number
-    locale?: string
-    fallbackLocale?: string
-    user?: Record<string, unknown>
-  }
+    transactionID?: string | number | undefined
+    locale?: string | undefined
+    fallbackLocale?: string | undefined
+    user?: Record<string, unknown> | undefined
+  } | undefined
 }
 
 /**
@@ -265,24 +265,24 @@ export interface BaseOperationArgs {
  */
 export interface CreateArgs extends BaseOperationArgs {
   data: Record<string, unknown>
-  draft?: boolean
+  draft?: boolean | undefined
 }
 
 /**
  * Arguments for find operations
  */
 export interface FindArgs extends BaseOperationArgs {
-  where?: PayloadWhere
-  sort?: PayloadSort
-  limit?: number
-  page?: number
-  pagination?: boolean
-  draft?: boolean
-  locale?: string | 'all'
-  fallbackLocale?: string
-  depth?: number
-  select?: Record<string, boolean>
-  populate?: Record<string, boolean>
+  where?: PayloadWhere | undefined
+  sort?: PayloadSort | undefined
+  limit?: number | undefined
+  page?: number | undefined
+  pagination?: boolean | undefined
+  draft?: boolean | undefined
+  locale?: string | 'all' | undefined
+  fallbackLocale?: string | undefined
+  depth?: number | undefined
+  select?: Record<string, boolean> | undefined
+  populate?: Record<string, boolean> | undefined
 }
 
 /**
@@ -290,12 +290,12 @@ export interface FindArgs extends BaseOperationArgs {
  */
 export interface FindOneArgs extends BaseOperationArgs {
   where: PayloadWhere
-  draft?: boolean
-  locale?: string
-  fallbackLocale?: string
-  depth?: number
-  select?: Record<string, boolean>
-  populate?: Record<string, boolean>
+  draft?: boolean | undefined
+  locale?: string | undefined
+  fallbackLocale?: string | undefined
+  depth?: number | undefined
+  select?: Record<string, boolean> | undefined
+  populate?: Record<string, boolean> | undefined
 }
 
 /**
@@ -304,11 +304,11 @@ export interface FindOneArgs extends BaseOperationArgs {
 export interface UpdateOneArgs extends BaseOperationArgs {
   id: string | number
   data: Record<string, unknown>
-  draft?: boolean
-  locale?: string
-  autosave?: boolean
-  select?: Record<string, boolean>
-  populate?: Record<string, boolean>
+  draft?: boolean | undefined
+  locale?: string | undefined
+  autosave?: boolean | undefined
+  select?: Record<string, boolean> | undefined
+  populate?: Record<string, boolean> | undefined
 }
 
 /**
@@ -317,8 +317,8 @@ export interface UpdateOneArgs extends BaseOperationArgs {
 export interface UpdateManyArgs extends BaseOperationArgs {
   where: PayloadWhere
   data: Record<string, unknown>
-  draft?: boolean
-  locale?: string
+  draft?: boolean | undefined
+  locale?: string | undefined
 }
 
 /**
@@ -326,7 +326,7 @@ export interface UpdateManyArgs extends BaseOperationArgs {
  */
 export interface DeleteOneArgs extends BaseOperationArgs {
   id: string | number
-  where?: PayloadWhere
+  where?: PayloadWhere | undefined
 }
 
 /**
@@ -340,8 +340,8 @@ export interface DeleteManyArgs extends BaseOperationArgs {
  * Arguments for count operations
  */
 export interface CountArgs extends BaseOperationArgs {
-  where?: PayloadWhere
-  locale?: string
+  where?: PayloadWhere | undefined
+  locale?: string | undefined
 }
 
 /**
@@ -349,7 +349,7 @@ export interface CountArgs extends BaseOperationArgs {
  */
 export interface DistinctArgs extends BaseOperationArgs {
   field: string
-  where?: PayloadWhere
+  where?: PayloadWhere | undefined
 }
 
 // =============================================================================
@@ -362,24 +362,24 @@ export interface DistinctArgs extends BaseOperationArgs {
 export interface CreateVersionArgs extends BaseOperationArgs {
   parent: string | number
   versionData: Record<string, unknown>
-  autosave?: boolean
-  createdAt?: string
-  publishedLocale?: string
-  snapshot?: boolean
-  updatedAt?: string
+  autosave?: boolean | undefined
+  createdAt?: string | undefined
+  publishedLocale?: string | undefined
+  snapshot?: boolean | undefined
+  updatedAt?: string | undefined
 }
 
 /**
  * Arguments for finding versions
  */
 export interface FindVersionsArgs extends BaseOperationArgs {
-  where?: PayloadWhere
-  sort?: PayloadSort
-  limit?: number
-  page?: number
-  pagination?: boolean
-  locale?: string
-  skip?: number
+  where?: PayloadWhere | undefined
+  sort?: PayloadSort | undefined
+  limit?: number | undefined
+  page?: number | undefined
+  pagination?: boolean | undefined
+  locale?: string | undefined
+  skip?: number | undefined
 }
 
 /**
@@ -399,23 +399,23 @@ export interface DeleteVersionsArgs extends BaseOperationArgs {
 export interface BaseGlobalArgs {
   slug: GlobalSlug
   req?: {
-    transactionID?: string | number
-    locale?: string
-    fallbackLocale?: string
-    user?: Record<string, unknown>
-  }
+    transactionID?: string | number | undefined
+    locale?: string | undefined
+    fallbackLocale?: string | undefined
+    user?: Record<string, unknown> | undefined
+  } | undefined
 }
 
 /**
  * Arguments for finding a global
  */
 export interface FindGlobalArgs extends BaseGlobalArgs {
-  locale?: string
-  fallbackLocale?: string
-  draft?: boolean
-  depth?: number
-  select?: Record<string, boolean>
-  populate?: Record<string, boolean>
+  locale?: string | undefined
+  fallbackLocale?: string | undefined
+  draft?: boolean | undefined
+  depth?: number | undefined
+  select?: Record<string, boolean> | undefined
+  populate?: Record<string, boolean> | undefined
 }
 
 /**
@@ -423,7 +423,7 @@ export interface FindGlobalArgs extends BaseGlobalArgs {
  */
 export interface CreateGlobalArgs extends BaseGlobalArgs {
   data: Record<string, unknown>
-  draft?: boolean
+  draft?: boolean | undefined
 }
 
 /**
@@ -432,21 +432,21 @@ export interface CreateGlobalArgs extends BaseGlobalArgs {
 export interface CreateGlobalVersionArgs extends BaseGlobalArgs {
   parent: string | number
   versionData: Record<string, unknown>
-  autosave?: boolean
-  createdAt?: string
-  publishedLocale?: string
-  snapshot?: boolean
-  updatedAt?: string
+  autosave?: boolean | undefined
+  createdAt?: string | undefined
+  publishedLocale?: string | undefined
+  snapshot?: boolean | undefined
+  updatedAt?: string | undefined
 }
 
 export interface FindGlobalVersionsArgs extends BaseGlobalArgs {
-  where?: PayloadWhere
-  sort?: PayloadSort
-  limit?: number
-  page?: number
-  pagination?: boolean
-  locale?: string
-  skip?: number
+  where?: PayloadWhere | undefined
+  sort?: PayloadSort | undefined
+  limit?: number | undefined
+  page?: number | undefined
+  pagination?: boolean | undefined
+  locale?: string | undefined
+  skip?: number | undefined
 }
 
 // =============================================================================
@@ -457,12 +457,12 @@ export interface FindGlobalVersionsArgs extends BaseGlobalArgs {
  * Arguments for querying drafts
  */
 export interface QueryDraftsArgs extends BaseOperationArgs {
-  where?: PayloadWhere
-  sort?: PayloadSort
-  limit?: number
-  page?: number
-  pagination?: boolean
-  locale?: string
+  where?: PayloadWhere | undefined
+  sort?: PayloadSort | undefined
+  limit?: number | undefined
+  page?: number | undefined
+  pagination?: boolean | undefined
+  locale?: string | undefined
 }
 
 // =============================================================================
@@ -475,10 +475,10 @@ export interface QueryDraftsArgs extends BaseOperationArgs {
 export interface UpsertArgs extends BaseOperationArgs {
   data: Record<string, unknown>
   where: PayloadWhere
-  draft?: boolean
-  locale?: string
-  select?: Record<string, boolean>
-  populate?: Record<string, boolean>
+  draft?: boolean | undefined
+  locale?: string | undefined
+  select?: Record<string, boolean> | undefined
+  populate?: Record<string, boolean> | undefined
 }
 
 // =============================================================================

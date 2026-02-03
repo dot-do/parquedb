@@ -50,7 +50,7 @@ export interface FilterConfig {
    * - 'warn': Log a warning to console
    * - 'error': Throw an error
    */
-  unknownOperatorBehavior?: 'ignore' | 'warn' | 'error'
+  unknownOperatorBehavior?: 'ignore' | 'warn' | 'error' | undefined
 }
 
 /**

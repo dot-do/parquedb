@@ -99,10 +99,10 @@ const CONFIG_FILENAME = 'parquedb.json'
  */
 interface CreateOptions {
   from: string
-  filter?: string
+  filter?: string | undefined
   refreshMode: RefreshMode
-  schedule?: string
-  gracePeriod?: string
+  schedule?: string | undefined
+  gracePeriod?: string | undefined
 }
 
 // =============================================================================

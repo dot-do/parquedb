@@ -41,11 +41,11 @@ export interface BranchManagerOptions {
  */
 export interface CheckoutOptions {
   /** Create branch if it doesn't exist */
-  readonly create?: boolean
+  readonly create?: boolean | undefined
   /** Force checkout even with uncommitted changes (discards changes) */
-  readonly force?: boolean
+  readonly force?: boolean | undefined
   /** Skip state reconstruction (only update HEAD) */
-  readonly skipStateReconstruction?: boolean
+  readonly skipStateReconstruction?: boolean | undefined
 }
 
 /**
@@ -53,7 +53,7 @@ export interface CheckoutOptions {
  */
 export interface DeleteOptions {
   /** Force delete even if branch has unmerged changes */
-  readonly force?: boolean
+  readonly force?: boolean | undefined
 }
 
 /**
@@ -61,7 +61,7 @@ export interface DeleteOptions {
  */
 export interface CreateOptions {
   /** Base branch or commit to create from (defaults to current HEAD) */
-  readonly from?: string
+  readonly from?: string | undefined
 }
 
 // =============================================================================

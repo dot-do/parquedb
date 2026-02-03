@@ -30,13 +30,13 @@ import { entityTarget } from '../types/entity'
  */
 export interface CreateOperationOptions {
   /** Schema for validation and defaults */
-  schema?: Schema
+  schema?: Schema | undefined
 
   /** Schema validator instance */
-  schemaValidator?: SchemaValidatorInterface | null
+  schemaValidator?: SchemaValidatorInterface | null | undefined
 
   /** ID generator function */
-  generateId?: () => string
+  generateId?: (() => string) | undefined
 }
 
 /**
@@ -201,7 +201,7 @@ export function applySchemaDefaults<T>(
         }
       }
     } else if (typeof fieldDef === 'object' && fieldDef !== null) {
-      const def = fieldDef as { default?: unknown }
+      const def = fieldDef as { default?: unknown | undefined }
       defaultValue = def.default
     }
 

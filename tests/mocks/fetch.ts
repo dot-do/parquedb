@@ -20,10 +20,10 @@ export type MockFetch = Mock<Parameters<typeof fetch>, ReturnType<typeof fetch>>
  * Options for creating mock responses
  */
 export interface MockResponseOptions {
-  status?: number
-  statusText?: string
-  headers?: Record<string, string> | Headers
-  ok?: boolean
+  status?: number | undefined
+  statusText?: string | undefined
+  headers?: Record<string, string> | Headers | undefined
+  ok?: boolean | undefined
 }
 
 /**
@@ -31,7 +31,7 @@ export interface MockResponseOptions {
  */
 export interface FetchRoute {
   pattern: string | RegExp | ((url: string) => boolean)
-  method?: string | string[]
+  method?: string | string[] | undefined
   handler: (request: Request) => Response | Promise<Response>
 }
 
@@ -42,17 +42,17 @@ export interface MockFetchOptions {
   /**
    * Default response when no routes match
    */
-  defaultResponse?: Response | ((request: Request) => Response | Promise<Response>)
+  defaultResponse?: (Response | ((request: Request) => Response | Promise<Response>)) | undefined
 
   /**
    * Routes to handle specific URL patterns
    */
-  routes?: FetchRoute[]
+  routes?: FetchRoute[] | undefined
 
   /**
    * Whether to throw on unmatched requests (default: false, returns 404)
    */
-  throwOnUnmatched?: boolean
+  throwOnUnmatched?: boolean | undefined
 }
 
 // =============================================================================

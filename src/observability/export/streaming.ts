@@ -158,13 +158,13 @@ export function createSSEResponse(
  */
 export interface SSEStreamConfig {
   /** Interval between heartbeats in ms (default: 30000) */
-  heartbeatInterval?: number
+  heartbeatInterval?: number | undefined
   /** Interval between metric updates in ms (default: 5000) */
-  metricInterval?: number
+  metricInterval?: number | undefined
   /** Namespaces to stream (all if empty) */
-  namespaces?: string[]
+  namespaces?: string[] | undefined
   /** Metrics to include (all if empty) */
-  metrics?: string[]
+  metrics?: string[] | undefined
 }
 
 /**
@@ -341,7 +341,7 @@ export interface WSSubscription {
   namespaces: string[]
   metrics: string[]
   interval: number
-  timer?: ReturnType<typeof setInterval>
+  timer?: ReturnType<typeof setInterval> | undefined
 }
 
 /**

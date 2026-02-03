@@ -72,7 +72,7 @@ export interface MVManifestEntry {
   createdAt: string
 
   /** When the view was last refreshed */
-  lastRefreshedAt?: string
+  lastRefreshedAt?: string | undefined
 
   /** Metadata file path */
   metadataPath: string

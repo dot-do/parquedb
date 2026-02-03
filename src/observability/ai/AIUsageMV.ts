@@ -288,7 +288,7 @@ export class AIUsageMV {
    * @param options - Refresh options
    * @returns Refresh result with statistics
    */
-  async refresh(options: { full?: boolean } = {}): Promise<RefreshResult> {
+  async refresh(options: { full?: boolean | undefined } = {}): Promise<RefreshResult> {
     const startTime = Date.now()
     let recordsProcessed = 0
     let aggregatesUpdated = 0
@@ -544,7 +544,7 @@ export class AIUsageMV {
    * @param options - Query options for time range
    * @returns Usage summary
    */
-  async getSummary(options: { from?: Date; to?: Date } = {}): Promise<AIUsageSummary> {
+  async getSummary(options: { from?: Date | undefined; to?: Date | undefined } = {}): Promise<AIUsageSummary> {
     const aggregates = await this.getUsage({
       from: options.from,
       to: options.to,
@@ -641,7 +641,7 @@ export class AIUsageMV {
    * @param options - Query options
    * @returns Array of daily costs
    */
-  async getDailyCosts(options: { from?: Date; to?: Date; modelId?: string; providerId?: string } = {}): Promise<Array<{
+  async getDailyCosts(options: { from?: Date | undefined; to?: Date | undefined; modelId?: string | undefined; providerId?: string | undefined } = {}): Promise<Array<{
     dateKey: string
     totalCost: number
     inputCost: number
@@ -699,7 +699,7 @@ export class AIUsageMV {
    */
   async getTenantSummary(
     tenantId?: string,
-    options: { from?: Date; to?: Date } = {}
+    options: { from?: Date | undefined; to?: Date | undefined } = {}
   ): Promise<TenantUsageSummary> {
     const effectiveTenantId = tenantId ?? this.config.tenantId
     if (!effectiveTenantId) {
@@ -777,9 +777,9 @@ export class AIUsageMV {
    * @returns Array of cross-tenant aggregates
    */
   async getCrossTenantAggregates(options: {
-    from?: Date
-    to?: Date
-    granularity?: 'day' | 'week' | 'month'
+    from?: Date | undefined
+    to?: Date | undefined
+    granularity?: 'day' | 'week' | 'month' | undefined
   } = {}): Promise<CrossTenantAggregate[]> {
     if (!this.config.allowCrossTenantQueries) {
       throw new Error('Cross-tenant queries are not enabled. Set allowCrossTenantQueries: true in config.')
@@ -974,7 +974,7 @@ function updateAggregateFromLog(
   }
 
   // Update token usage
-  const usage = log.usage as { promptTokens?: number; completionTokens?: number; totalTokens?: number } | undefined
+  const usage = log.usage as { promptTokens?: number | undefined; completionTokens?: number | undefined; totalTokens?: number | undefined } | undefined
   if (usage) {
     const promptTokens = usage.promptTokens ?? 0
     const completionTokens = usage.completionTokens ?? 0

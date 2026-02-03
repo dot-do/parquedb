@@ -69,7 +69,7 @@ export interface ParquetPredicate {
  * - $or: Array of conditions (any must match)
  * - $not: Single condition (must not match)
  */
-export type HyparquetFilter = Record<string, unknown> | { $and?: HyparquetFilter[]; $or?: HyparquetFilter[] }
+export type HyparquetFilter = Record<string, unknown> | { $and?: HyparquetFilter[] | undefined; $or?: HyparquetFilter[] | undefined }
 
 /**
  * Result of filter conversion with pushdown analysis

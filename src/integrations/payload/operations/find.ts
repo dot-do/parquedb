@@ -382,7 +382,7 @@ export async function findGlobalVersions<T = Record<string, unknown>>(
 export async function countVersions(
   db: ParqueDB,
   config: ResolvedAdapterConfig,
-  args: { collection: string; where?: PayloadWhere }
+  args: { collection: string; where?: PayloadWhere | undefined }
 ): Promise<number> {
   const versionsCollection = `${args.collection}${config.versionsSuffix}`
   const filter = translatePayloadFilter(args.where)
@@ -397,7 +397,7 @@ export async function countVersions(
 export async function countGlobalVersions(
   db: ParqueDB,
   config: ResolvedAdapterConfig,
-  args: { slug: string; where?: PayloadWhere }
+  args: { slug: string; where?: PayloadWhere | undefined }
 ): Promise<number> {
   const versionsCollection = `${config.globalsCollection}${config.versionsSuffix}`
 

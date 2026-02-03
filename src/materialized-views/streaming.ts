@@ -50,20 +50,20 @@ import {
  */
 export interface StreamingRefreshConfig {
   /** Number of events to batch before processing (default: 100) */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Maximum time to wait before processing a partial batch in ms (default: 500) */
-  batchTimeoutMs?: number
+  batchTimeoutMs?: number | undefined
   /** Maximum buffer size before applying backpressure (default: 1000) */
-  maxBufferSize?: number
+  maxBufferSize?: number | undefined
   /** Retry configuration for failed batches */
   retry?: {
     /** Maximum retry attempts (default: 3) */
-    maxAttempts?: number
+    maxAttempts?: number | undefined
     /** Base delay between retries in ms (default: 100) */
-    baseDelayMs?: number
+    baseDelayMs?: number | undefined
     /** Maximum delay between retries in ms (default: 5000) */
-    maxDelayMs?: number
-  }
+    maxDelayMs?: number | undefined
+  } | undefined
 }
 
 /**
@@ -111,7 +111,7 @@ export interface StreamingStats {
 /**
  * Error handler callback type
  */
-export type ErrorHandler = (error: Error, context?: { mvName?: string; batch?: Event[] }) => void
+export type ErrorHandler = (error: Error, context?: { mvName?: string | undefined; batch?: Event[] | undefined }) => void
 
 /**
  * Warning handler callback type for capacity/eviction warnings
@@ -719,7 +719,7 @@ export class StreamingRefreshEngine {
   /**
    * Emit an error to registered handlers
    */
-  private emitError(error: Error, context?: { mvName?: string; batch?: Event[] }): void {
+  private emitError(error: Error, context?: { mvName?: string | undefined; batch?: Event[] | undefined }): void {
     for (const handler of this.errorHandlers) {
       try {
         handler(error, context)

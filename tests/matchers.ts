@@ -226,11 +226,11 @@ import type { Event, EventOp, Relationship, Variant } from '../src/types/entity'
  */
 interface ParsedIndexStructure {
   type: IndexType
-  version?: number
-  entryCount?: number
-  hasKeyHash?: boolean
+  version?: number | undefined
+  entryCount?: number | undefined
+  hasKeyHash?: boolean | undefined
   isValid: boolean
-  error?: string
+  error?: string | undefined
 }
 
 /**

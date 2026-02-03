@@ -60,7 +60,7 @@ export interface DatasetConfigFile {
   /** Events configuration */
   events: boolean
   /** Compaction configuration (only used if events: true) */
-  compaction?: CompactionConfig
+  compaction?: CompactionConfig | undefined
   /** Creation timestamp */
   createdAt: number
   /** Last update timestamp */

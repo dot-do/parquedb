@@ -32,13 +32,13 @@ export interface RowGroupStats {
  */
 export interface ColumnStats {
   /** Minimum value in the column (undefined if all nulls) */
-  min?: unknown
+  min?: unknown | undefined
   /** Maximum value in the column (undefined if all nulls) */
-  max?: unknown
+  max?: unknown | undefined
   /** Number of null values */
   nullCount: number
   /** Number of distinct values (if available) */
-  distinctCount?: number
+  distinctCount?: number | undefined
   /** Whether this column has a bloom filter */
   hasBloomFilter: boolean
 }
@@ -448,7 +448,7 @@ export interface ParquetMetadata {
   /** Total number of rows */
   numRows: number
   /** Key-value metadata */
-  keyValueMetadata?: Array<{ key: string; value: string }>
+  keyValueMetadata?: Array<{ key: string; value: string }> | undefined
 }
 
 /** Row group metadata */
@@ -476,23 +476,23 @@ export interface ParquetColumnChunk {
   /** Uncompressed size in bytes */
   uncompressedSize: number
   /** Column statistics */
-  statistics?: ParquetColumnStatistics
+  statistics?: ParquetColumnStatistics | undefined
   /** Whether this column has a bloom filter */
-  hasBloomFilter?: boolean
+  hasBloomFilter?: boolean | undefined
   /** Offset to bloom filter data */
-  bloomFilterOffset?: number
+  bloomFilterOffset?: number | undefined
 }
 
 /** Column statistics */
 export interface ParquetColumnStatistics {
   /** Minimum value */
-  min?: unknown
+  min?: unknown | undefined
   /** Maximum value */
-  max?: unknown
+  max?: unknown | undefined
   /** Number of null values */
-  nullCount?: number
+  nullCount?: number | undefined
   /** Number of distinct values */
-  distinctCount?: number
+  distinctCount?: number | undefined
 }
 
 /** Schema element */
@@ -500,11 +500,11 @@ export interface ParquetSchemaElement {
   /** Element name */
   name: string
   /** Element type */
-  type?: string
+  type?: string | undefined
   /** Type length (for fixed-length types) */
-  typeLength?: number
+  typeLength?: number | undefined
   /** Repetition type */
-  repetition?: 'REQUIRED' | 'OPTIONAL' | 'REPEATED'
+  repetition?: 'REQUIRED' | 'OPTIONAL' | 'REPEATED' | undefined
   /** Number of children (for groups) */
-  numChildren?: number
+  numChildren?: number | undefined
 }

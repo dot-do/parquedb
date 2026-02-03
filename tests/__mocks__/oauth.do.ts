@@ -113,12 +113,12 @@ export interface OAuthConfig {
 
 export interface User {
   id: string
-  email?: string
+  email?: string | undefined
 }
 
 export interface AuthResult {
   token: string
-  user?: User
+  user?: User | undefined
 }
 
 export interface DeviceAuthorizationResponse {
@@ -134,7 +134,7 @@ export interface TokenResponse {
 
 export interface TokenError {
   error: string
-  error_description?: string
+  error_description?: string | undefined
 }
 
 export interface TokenStorage {
@@ -144,7 +144,7 @@ export interface TokenStorage {
 }
 
 export interface LoginOptions {
-  provider?: string
+  provider?: string | undefined
 }
 
 export interface LoginResult {

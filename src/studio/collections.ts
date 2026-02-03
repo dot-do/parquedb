@@ -24,25 +24,25 @@ import { findTitleField, findDefaultColumns } from './discovery'
 export interface PayloadFieldConfig {
   name: string
   type: PayloadFieldType
-  label?: string
-  required?: boolean
+  label?: string | undefined
+  required?: boolean | undefined
   admin?: {
-    readOnly?: boolean
-    hidden?: boolean
-    position?: 'sidebar'
-    width?: string
-    description?: string
-    condition?: unknown
-  }
+    readOnly?: boolean | undefined
+    hidden?: boolean | undefined
+    position?: 'sidebar' | undefined
+    width?: string | undefined
+    description?: string | undefined
+    condition?: unknown | undefined
+  } | undefined
   // Type-specific options
-  options?: Array<{ label: string; value: string }>
-  min?: number
-  max?: number
-  minLength?: number
-  maxLength?: number
-  relationTo?: string | string[]
-  hasMany?: boolean
-  fields?: PayloadFieldConfig[]
+  options?: Array<{ label: string; value: string }> | undefined
+  min?: number | undefined
+  max?: number | undefined
+  minLength?: number | undefined
+  maxLength?: number | undefined
+  relationTo?: string | string[] | undefined
+  hasMany?: boolean | undefined
+  fields?: PayloadFieldConfig[] | undefined
 }
 
 /**
@@ -51,20 +51,20 @@ export interface PayloadFieldConfig {
 export interface PayloadCollectionConfig {
   slug: string
   labels?: {
-    singular?: string
-    plural?: string
-  }
+    singular?: string | undefined
+    plural?: string | undefined
+  } | undefined
   admin?: {
-    useAsTitle?: string
-    defaultColumns?: string[]
-    description?: string
-    group?: string
-    hidden?: boolean
-    preview?: boolean
-  }
+    useAsTitle?: string | undefined
+    defaultColumns?: string[] | undefined
+    description?: string | undefined
+    group?: string | undefined
+    hidden?: boolean | undefined
+    preview?: boolean | undefined
+  } | undefined
   fields: PayloadFieldConfig[]
-  timestamps?: boolean
-  access?: Record<string, unknown>
+  timestamps?: boolean | undefined
+  access?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -82,7 +82,7 @@ export interface PayloadCollectionConfig {
 export function generateCollection(
   collection: DiscoveredCollection,
   uiMetadata?: CollectionUIMetadata,
-  options: { readOnly?: boolean } = {}
+  options: { readOnly?: boolean | undefined } = {}
 ): PayloadCollectionConfig {
   const { slug, label, fields, isParqueDB } = collection
   const { readOnly = false } = options
@@ -230,7 +230,7 @@ export function generateField(
 export function generateCollections(
   collections: DiscoveredCollection[],
   metadataMap: Record<string, CollectionUIMetadata> = {},
-  options: { readOnly?: boolean } = {}
+  options: { readOnly?: boolean | undefined } = {}
 ): PayloadCollectionConfig[] {
   return collections.map((collection) =>
     generateCollection(collection, metadataMap[collection.slug], options)

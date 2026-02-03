@@ -143,7 +143,7 @@ export interface RateLimitObservation {
   /** Cost in USD */
   costUSD: number
   /** Timestamp (defaults to now) */
-  timestamp?: number
+  timestamp?: number | undefined
 }
 
 /**
@@ -236,41 +236,41 @@ export interface RateLimitMetricsConfig {
    * Window size for rate calculations in milliseconds
    * @default 60000 (1 minute)
    */
-  windowSizeMs?: number
+  windowSizeMs?: number | undefined
 
   /**
    * Minimum window duration before triggering alerts (prevents false positives from instant rates)
    * @default 1000 (1 second)
    */
-  minWindowForAlertsMs?: number
+  minWindowForAlertsMs?: number | undefined
 
   /**
    * Global thresholds for all models
    */
-  thresholds?: Partial<RateLimitThresholds>
+  thresholds?: Partial<RateLimitThresholds> | undefined
 
   /**
    * Model-specific thresholds (override global)
    * Key format: "modelId:providerId"
    */
-  modelThresholds?: Record<string, Partial<RateLimitThresholds>>
+  modelThresholds?: Record<string, Partial<RateLimitThresholds>> | undefined
 
   /**
    * Callback when an alert is triggered
    */
-  onAlert?: (alert: RateLimitAlert) => void | Promise<void>
+  onAlert?: ((alert: RateLimitAlert) => void | Promise<void>) | undefined
 
   /**
    * Minimum interval between duplicate alerts in milliseconds
    * @default 300000 (5 minutes)
    */
-  alertDedupeIntervalMs?: number
+  alertDedupeIntervalMs?: number | undefined
 
   /**
    * Whether to log alerts
    * @default true
    */
-  logAlerts?: boolean
+  logAlerts?: boolean | undefined
 }
 
 /**
@@ -281,7 +281,7 @@ export interface ResolvedRateLimitMetricsConfig {
   minWindowForAlertsMs: number
   thresholds: RateLimitThresholds
   modelThresholds: Record<string, Partial<RateLimitThresholds>>
-  onAlert?: (alert: RateLimitAlert) => void | Promise<void>
+  onAlert?: ((alert: RateLimitAlert) => void | Promise<void>) | undefined
   alertDedupeIntervalMs: number
   logAlerts: boolean
 }

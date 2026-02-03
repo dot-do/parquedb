@@ -48,13 +48,13 @@ export interface EvalScoreRecord {
   /** Score value (typically 0-1 range) */
   score: number
   /** Optional description from the scorer */
-  description?: string
+  description?: string | undefined
   /** Model ID used for this evaluation (if applicable) */
-  modelId?: string
+  modelId?: string | undefined
   /** Prompt template ID (if applicable) */
-  promptId?: string
+  promptId?: string | undefined
   /** Additional metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -82,11 +82,11 @@ export interface EvalScoreAggregate {
   /** Scorer name (required dimension) */
   scorerName: string
   /** Suite name (optional dimension) */
-  suiteName?: string
+  suiteName?: string | undefined
   /** Model ID (optional dimension) */
-  modelId?: string
+  modelId?: string | undefined
   /** Prompt ID (optional dimension) */
-  promptId?: string
+  promptId?: string | undefined
 
   // Score Statistics
   /** Total number of scores */
@@ -144,7 +144,7 @@ export interface EvalScoreAggregate {
   /** Version for optimistic concurrency */
   version: number
   /** Tenant identifier (for multi-tenant deployments) */
-  tenantId?: string
+  tenantId?: string | undefined
 }
 
 /**
@@ -246,7 +246,7 @@ export interface ScoreComparison {
   /** Whether the change is statistically significant */
   isSignificant: boolean
   /** P-value for significance test */
-  pValue?: number
+  pValue?: number | undefined
 }
 
 // =============================================================================
@@ -263,21 +263,21 @@ export type AggregationDimension = 'scorerName' | 'suiteName' | 'modelId' | 'pro
  */
 export interface EvalScoresMVConfig {
   /** Collection name for source eval scores (default: 'eval_scores') */
-  sourceCollection?: string
+  sourceCollection?: string | undefined
   /** Collection name for aggregated scores (default: 'eval_score_aggregates') */
-  targetCollection?: string
+  targetCollection?: string | undefined
   /** Time granularity for aggregation (default: 'day') */
-  granularity?: TimeGranularity
+  granularity?: TimeGranularity | undefined
   /** Dimensions to aggregate by (default: ['scorerName']) */
-  aggregationDimensions?: AggregationDimension[]
+  aggregationDimensions?: AggregationDimension[] | undefined
   /** Maximum age of scores to process in milliseconds (default: 90 days) */
-  maxAgeMs?: number
+  maxAgeMs?: number | undefined
   /** Batch size for processing (default: 1000) */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Number of distribution buckets (default: 10) */
-  distributionBuckets?: number
+  distributionBuckets?: number | undefined
   /** Whether to enable debug logging (default: false) */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 /**
@@ -303,23 +303,23 @@ export interface ResolvedEvalScoresMVConfig {
  */
 export interface EvalScoreQueryOptions {
   /** Filter by scorer name */
-  scorerName?: string
+  scorerName?: string | undefined
   /** Filter by suite name */
-  suiteName?: string
+  suiteName?: string | undefined
   /** Filter by model ID */
-  modelId?: string
+  modelId?: string | undefined
   /** Filter by prompt ID */
-  promptId?: string
+  promptId?: string | undefined
   /** Start date (inclusive) */
-  from?: Date
+  from?: Date | undefined
   /** End date (inclusive) */
-  to?: Date
+  to?: Date | undefined
   /** Time granularity */
-  granularity?: TimeGranularity
+  granularity?: TimeGranularity | undefined
   /** Maximum results to return */
-  limit?: number
+  limit?: number | undefined
   /** Sort order */
-  sort?: 'dateKey' | '-dateKey' | 'scoreAvg' | '-scoreAvg' | 'scoreCount' | '-scoreCount'
+  sort?: 'dateKey' | '-dateKey' | 'scoreAvg' | '-scoreAvg' | 'scoreCount' | '-scoreCount' | undefined
 }
 
 /**
@@ -327,19 +327,19 @@ export interface EvalScoreQueryOptions {
  */
 export interface TrendQueryOptions {
   /** Filter by scorer name */
-  scorerName?: string
+  scorerName?: string | undefined
   /** Filter by suite name */
-  suiteName?: string
+  suiteName?: string | undefined
   /** Filter by model ID */
-  modelId?: string
+  modelId?: string | undefined
   /** Start date */
-  from?: Date
+  from?: Date | undefined
   /** End date */
-  to?: Date
+  to?: Date | undefined
   /** Time granularity for trend buckets */
-  granularity?: TimeGranularity
+  granularity?: TimeGranularity | undefined
   /** Maximum number of data points */
-  limit?: number
+  limit?: number | undefined
 }
 
 // =============================================================================
@@ -359,7 +359,7 @@ export interface RefreshResult {
   /** Duration of the refresh in milliseconds */
   durationMs: number
   /** Error message if failed */
-  error?: string
+  error?: string | undefined
 }
 
 /**

@@ -467,7 +467,7 @@ describe('Result Type', () => {
     it('should handle optional chaining patterns', () => {
       interface Config {
         database?: {
-          host?: string
+          host?: string | undefined
         }
       }
 

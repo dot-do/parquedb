@@ -24,13 +24,13 @@ export interface FindCommonAncestorOptions {
    * Maximum depth to search before giving up.
    * Set to Infinity for unlimited search (default).
    */
-  maxDepth?: number
+  maxDepth?: number | undefined
 
   /**
    * Enable memoization of parent lookups.
    * Useful when performing multiple ancestor searches on the same commit graph.
    */
-  memoize?: boolean
+  memoize?: boolean | undefined
 }
 
 /**
@@ -44,10 +44,10 @@ export interface CommonAncestorResult {
   commitsTraversed: number
 
   /** Depth of the common ancestor from commit1 */
-  depthFromCommit1?: number
+  depthFromCommit1?: number | undefined
 
   /** Depth of the common ancestor from commit2 */
-  depthFromCommit2?: number
+  depthFromCommit2?: number | undefined
 }
 
 /**

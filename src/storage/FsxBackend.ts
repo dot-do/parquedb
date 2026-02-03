@@ -38,12 +38,12 @@ export interface FsxBackendOptions {
   /**
    * Root path prefix for all operations
    */
-  root?: string
+  root?: string | undefined
 
   /**
    * Default storage tier for writes
    */
-  defaultTier?: FsxStorageTier
+  defaultTier?: FsxStorageTier | undefined
 }
 
 /**

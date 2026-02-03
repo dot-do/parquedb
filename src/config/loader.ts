@@ -29,22 +29,22 @@ export type LayoutConfig =
  */
 export interface FieldStudioConfig {
   /** Display label */
-  label?: string
+  label?: string | undefined
   /** Help text */
-  description?: string
+  description?: string | undefined
   /** For select fields - simple string array or label/value pairs */
-  options?: string[] | Array<{ label: string; value: string }>
+  options?: string[] | Array<{ label: string; value: string }> | undefined
   /** Hide from list view */
-  hideInList?: boolean
+  hideInList?: boolean | undefined
   /** Read-only field */
-  readOnly?: boolean
+  readOnly?: boolean | undefined
   /** Validation */
-  min?: number
-  max?: number
-  minLength?: number
-  maxLength?: number
+  min?: number | undefined
+  max?: number | undefined
+  minLength?: number | undefined
+  maxLength?: number | undefined
   /** Relationship target */
-  relationTo?: string | string[]
+  relationTo?: string | string[] | undefined
 }
 
 /**
@@ -52,25 +52,25 @@ export interface FieldStudioConfig {
  */
 export interface CollectionStudioConfig {
   /** Layout: array = rows, object = tabs */
-  layout?: LayoutConfig
+  layout?: LayoutConfig | undefined
   /** Sidebar fields */
-  sidebar?: string[]
+  sidebar?: string[] | undefined
   /** Collection display label */
-  label?: string
+  label?: string | undefined
   /** Singular label */
-  labelSingular?: string
+  labelSingular?: string | undefined
   /** Description */
-  description?: string
+  description?: string | undefined
   /** Field to use as title in admin */
-  useAsTitle?: string
+  useAsTitle?: string | undefined
   /** Default columns in list view */
-  defaultColumns?: string[]
+  defaultColumns?: string[] | undefined
   /** Group in admin nav */
-  group?: string
+  group?: string | undefined
   /** Hide from admin nav */
-  hidden?: boolean
+  hidden?: boolean | undefined
   /** Field-level config */
-  fields?: Record<string, FieldStudioConfig>
+  fields?: Record<string, FieldStudioConfig> | undefined
 }
 
 /**
@@ -78,13 +78,13 @@ export interface CollectionStudioConfig {
  */
 export interface StudioConfig {
   /** Theme: 'light' | 'dark' | 'auto' */
-  theme?: 'light' | 'dark' | 'auto'
+  theme?: 'light' | 'dark' | 'auto' | undefined
   /** Default fields to always put in sidebar */
-  defaultSidebar?: string[]
+  defaultSidebar?: string[] | undefined
   /** Port for studio server */
-  port?: number
+  port?: number | undefined
   /** Collection-specific studio config (alternative to $studio in schema) */
-  collections?: Record<string, CollectionStudioConfig>
+  collections?: Record<string, CollectionStudioConfig> | undefined
 }
 
 /**
@@ -98,28 +98,28 @@ export interface ParqueDBConfig {
     | 'fs'
     | { type: 'fs'; path: string }
     | { type: 'r2'; bucket: string }
-    | { type: 's3'; bucket: string; region?: string }
+    | { type: 's3'; bucket: string; region?: string | undefined } | undefined
 
   /** Database schema definition (supports $layout, $studio, $rows, $tabs, $sidebar) */
-  schema?: DBSchema
+  schema?: DBSchema | undefined
 
   /** Default namespace for collections */
-  defaultNamespace?: string
+  defaultNamespace?: string | undefined
 
   /** Enable debug logging */
-  debug?: boolean
+  debug?: boolean | undefined
 
   /** Default actor for mutations (static) */
-  actor?: string | EntityId
+  actor?: string | EntityId | undefined
 
   /** Dynamic actor resolver function */
-  resolveActor?: ActorResolver
+  resolveActor?: ActorResolver | undefined
 
   /** Use oauth.do for actor resolution (shorthand for resolveActor) */
-  useOAuth?: boolean
+  useOAuth?: boolean | undefined
 
   /** Studio/admin UI configuration */
-  studio?: StudioConfig
+  studio?: StudioConfig | undefined
 
   /**
    * Default visibility level for the database
@@ -129,7 +129,7 @@ export interface ParqueDBConfig {
    *
    * Collections inherit this unless they specify their own $visibility
    */
-  visibility?: Visibility
+  visibility?: Visibility | undefined
 
   /**
    * CORS configuration for public/unlisted database access
@@ -148,14 +148,14 @@ export interface ParqueDBConfig {
    * })
    * ```
    */
-  cors?: CorsConfig
+  cors?: CorsConfig | undefined
 
   /** Environment-specific overrides */
   environments?: {
-    development?: Partial<ParqueDBConfig>
-    production?: Partial<ParqueDBConfig>
-    test?: Partial<ParqueDBConfig>
-  }
+    development?: Partial<ParqueDBConfig> | undefined
+    production?: Partial<ParqueDBConfig> | undefined
+    test?: Partial<ParqueDBConfig> | undefined
+  } | undefined
 }
 
 /**

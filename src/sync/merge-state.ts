@@ -39,19 +39,19 @@ export interface ConflictInfo {
   readonly resolved: boolean
 
   /** Resolution strategy used (if resolved) */
-  readonly resolution?: ConflictResolutionStrategy
+  readonly resolution?: ConflictResolutionStrategy | undefined
 
   /** Resolved value (if manually resolved) */
-  readonly resolvedValue?: unknown
+  readonly resolvedValue?: unknown | undefined
 
   /** Our value for conflicting fields */
-  readonly ourValue?: unknown
+  readonly ourValue?: unknown | undefined
 
   /** Their value for conflicting fields */
-  readonly theirValue?: unknown
+  readonly theirValue?: unknown | undefined
 
   /** Base value (common ancestor) */
-  readonly baseValue?: unknown
+  readonly baseValue?: unknown | undefined
 }
 
 /**
@@ -86,7 +86,7 @@ export interface MergeState {
   readonly strategy: ConflictResolutionStrategy
 
   /** Additional metadata */
-  readonly metadata?: Readonly<Record<string, unknown>>
+  readonly metadata?: Readonly<Record<string, unknown>> | undefined
 }
 
 // =============================================================================
@@ -312,7 +312,7 @@ export function createMergeState(params: {
   baseCommit: string
   sourceCommit: string
   targetCommit: string
-  strategy?: ConflictResolutionStrategy
+  strategy?: ConflictResolutionStrategy | undefined
 }): MergeState {
   return {
     status: 'in_progress',

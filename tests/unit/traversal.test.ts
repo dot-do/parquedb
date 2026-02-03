@@ -29,7 +29,7 @@ interface Post {
   title: string
   content: string
   status: 'draft' | 'published' | 'archived'
-  publishedAt?: Date
+  publishedAt?: Date | undefined
 }
 
 interface User {
@@ -39,7 +39,7 @@ interface User {
 
 interface Comment {
   text: string
-  rating?: number
+  rating?: number | undefined
   createdAt: Date
 }
 

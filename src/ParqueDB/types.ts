@@ -41,7 +41,7 @@ import type { EmbeddingProvider } from '../embeddings/provider'
  */
 export interface SnapshotConfig {
   /** Automatically create snapshot after this many events */
-  autoSnapshotThreshold?: number
+  autoSnapshotThreshold?: number | undefined
 }
 
 // =============================================================================
@@ -59,8 +59,8 @@ export interface UpsertManyItem<T = Record<string, unknown>> {
   /** Per-item options */
   options?: {
     /** Expected version for optimistic concurrency */
-    expectedVersion?: number
-  }
+    expectedVersion?: number | undefined
+  } | undefined
 }
 
 /**
@@ -68,9 +68,9 @@ export interface UpsertManyItem<T = Record<string, unknown>> {
  */
 export interface UpsertManyOptions {
   /** Stop on first error if true (default: true) */
-  ordered?: boolean
+  ordered?: boolean | undefined
   /** Actor performing the operation */
-  actor?: EntityId
+  actor?: EntityId | undefined
 }
 
 /**
@@ -114,21 +114,21 @@ export interface UpsertManyResult {
  */
 export interface IngestStreamOptions<T = Record<string, unknown>> {
   /** Batch size for bulk inserts (default: 100) */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Stop on first error if true (default: true) */
-  ordered?: boolean
+  ordered?: boolean | undefined
   /** Actor performing the operation */
-  actor?: EntityId
+  actor?: EntityId | undefined
   /** Skip validation */
-  skipValidation?: boolean
+  skipValidation?: boolean | undefined
   /** Override entity type for all documents */
-  entityType?: string
+  entityType?: string | undefined
   /** Transform function to apply to each document before insertion */
-  transform?: (doc: T) => T | null
+  transform?: ((doc: T) => T | null) | undefined
   /** Progress callback called after each document is processed */
-  onProgress?: (count: number) => void
+  onProgress?: ((count: number) => void) | undefined
   /** Callback called after each batch is completed */
-  onBatchComplete?: (stats: IngestBatchStats) => void
+  onBatchComplete?: ((stats: IngestBatchStats) => void) | undefined
 }
 
 /**
@@ -152,7 +152,7 @@ export interface IngestStreamError {
   /** Error message */
   message: string
   /** Original error */
-  error?: Error
+  error?: Error | undefined
 }
 
 /**
@@ -176,13 +176,13 @@ export interface IngestStreamResult {
  */
 export interface EventLogConfig {
   /** Maximum number of events to keep in the log (default: 10000) */
-  maxEvents?: number
+  maxEvents?: number | undefined
   /** Maximum age of events in milliseconds (default: 7 days = 604800000) */
-  maxAge?: number
+  maxAge?: number | undefined
   /** Whether to archive rotated events instead of dropping them (default: false) */
-  archiveOnRotation?: boolean
+  archiveOnRotation?: boolean | undefined
   /** Maximum number of archived events to keep in memory (default: 50000). Only applies when archiveOnRotation is true. Older archived events are pruned when this limit is exceeded. */
-  maxArchivedEvents?: number
+  maxArchivedEvents?: number | undefined
 }
 
 /**
@@ -194,11 +194,11 @@ export interface ArchiveEventsResult {
   /** Number of events dropped (if archiveOnRotation is false) */
   droppedCount: number
   /** Number of old archived events pruned due to maxArchivedEvents limit */
-  prunedCount?: number
+  prunedCount?: number | undefined
   /** Timestamp of the oldest remaining event */
-  oldestEventTs?: number
+  oldestEventTs?: number | undefined
   /** Timestamp of the newest archived event */
-  newestArchivedTs?: number
+  newestArchivedTs?: number | undefined
 }
 
 /**
@@ -219,22 +219,22 @@ export interface ParqueDBConfig {
   storage: StorageBackend
 
   /** Schema definition for entity validation */
-  schema?: Schema
+  schema?: Schema | undefined
 
   /** Default namespace for operations */
-  defaultNamespace?: string
+  defaultNamespace?: string | undefined
 
   /** Snapshot configuration */
-  snapshotConfig?: SnapshotConfig
+  snapshotConfig?: SnapshotConfig | undefined
 
   /** Event log configuration for rotation and archival */
-  eventLogConfig?: EventLogConfig
+  eventLogConfig?: EventLogConfig | undefined
 
   /** Storage router for determining storage mode and paths */
-  storageRouter?: IStorageRouter
+  storageRouter?: IStorageRouter | undefined
 
   /** Per-collection options from DB() schema */
-  collectionOptions?: Map<string, CollectionOptions>
+  collectionOptions?: Map<string, CollectionOptions> | undefined
 
   /**
    * Embedding provider for query-time text-to-vector conversion
@@ -258,7 +258,7 @@ export interface ParqueDBConfig {
    * })
    * ```
    */
-  embeddingProvider?: EmbeddingProvider
+  embeddingProvider?: EmbeddingProvider | undefined
 
   /**
    * Event callback for materialized view integration
@@ -295,7 +295,7 @@ export interface ParqueDBConfig {
    * await db.create('orders', { total: 100 })
    * ```
    */
-  onEvent?: (event: Event) => void | Promise<void>
+  onEvent?: ((event: Event) => void | Promise<void>) | undefined
 }
 
 // =============================================================================
@@ -465,8 +465,8 @@ export interface HistoryItem {
   ns: string
   before: Entity | null
   after: Entity | null
-  actor?: EntityId
-  metadata?: Record<string, unknown>
+  actor?: EntityId | undefined
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -475,7 +475,7 @@ export interface HistoryItem {
 export interface HistoryResult {
   items: HistoryItem[]
   hasMore: boolean
-  nextCursor?: string
+  nextCursor?: string | undefined
 }
 
 /**
@@ -499,7 +499,7 @@ export interface DiffResult {
  */
 export interface RevertOptions {
   /** Actor performing the revert */
-  actor?: EntityId
+  actor?: EntityId | undefined
 }
 
 /**
@@ -507,17 +507,17 @@ export interface RevertOptions {
  */
 export interface GetRelatedOptions {
   /** Cursor for pagination */
-  cursor?: string
+  cursor?: string | undefined
   /** Maximum results */
-  limit?: number
+  limit?: number | undefined
   /** Filter related entities */
-  filter?: Filter
+  filter?: Filter | undefined
   /** Sort order */
-  sort?: SortSpec
+  sort?: SortSpec | undefined
   /** Field projection */
-  project?: Projection
+  project?: Projection | undefined
   /** Include soft-deleted */
-  includeDeleted?: boolean
+  includeDeleted?: boolean | undefined
 }
 
 /**
@@ -531,7 +531,7 @@ export interface GetRelatedResult<T = Record<string, unknown>> {
   /** Whether there are more results */
   hasMore: boolean
   /** Cursor for next page */
-  nextCursor?: string
+  nextCursor?: string | undefined
 }
 
 // =============================================================================
@@ -561,11 +561,11 @@ export interface Snapshot {
   entityId: EntityId
   ns: string
   sequenceNumber: number
-  eventId?: string
+  eventId?: string | undefined
   createdAt: Date
   state: Record<string, unknown>
   compressed: boolean
-  size?: number
+  size?: number | undefined
 }
 
 /**
@@ -583,7 +583,7 @@ export interface RawSnapshot {
 export interface SnapshotQueryStats {
   snapshotsUsed: number
   eventsReplayed: number
-  snapshotUsedAt?: number
+  snapshotUsedAt?: number | undefined
 }
 
 /**
@@ -599,8 +599,8 @@ export interface SnapshotStorageStats {
  * Options for pruning snapshots
  */
 export interface PruneSnapshotsOptions {
-  olderThan?: Date
-  keepMinimum?: number
+  olderThan?: Date | undefined
+  keepMinimum?: number | undefined
 }
 
 /**
@@ -640,7 +640,7 @@ export interface EventLog {
   /** Get current event log configuration */
   getConfig(): EventLogConfig
   /** Archive old events based on configuration or manual threshold */
-  archiveEvents(options?: { olderThan?: Date; maxEvents?: number }): Promise<ArchiveEventsResult>
+  archiveEvents(options?: { olderThan?: Date | undefined; maxEvents?: number | undefined }): Promise<ArchiveEventsResult>
   /** Get archived events (if archiveOnRotation is enabled) */
   getArchivedEvents(): Promise<Event[]>
 }
@@ -683,9 +683,9 @@ export class ValidationError extends BaseValidationError {
     namespace: string,
     message: string,
     context?: {
-      fieldName?: string
-      expectedType?: string
-      actualType?: string
+      fieldName?: string | undefined
+      expectedType?: string | undefined
+      actualType?: string | undefined
     }
   ) {
     const contextMsg = context?.fieldName

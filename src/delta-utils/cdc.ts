@@ -47,7 +47,7 @@ export interface CDCRecord<T = unknown> {
   _source: CDCSource
 
   /** Transaction ID (for exactly-once) */
-  _txn?: string
+  _txn?: string | undefined
 }
 
 /**
@@ -58,16 +58,16 @@ export interface CDCSource {
   system: 'parquedb' | 'deltalake' | 'mongolake' | 'kafkalake' | 'postgres' | 'mysql' | 'debezium'
 
   /** Database name */
-  database?: string
+  database?: string | undefined
 
   /** Collection/table/topic name */
-  collection?: string
+  collection?: string | undefined
 
   /** Partition/shard ID */
-  partition?: number
+  partition?: number | undefined
 
   /** Server ID (for multi-master) */
-  serverId?: string
+  serverId?: string | undefined
 }
 
 // =============================================================================
@@ -106,7 +106,7 @@ export interface CDCConfig {
   /** Whether CDC is enabled for this table */
   enabled: boolean
   /** Retention period for CDC files in milliseconds */
-  retentionMs?: number
+  retentionMs?: number | undefined
 }
 
 // =============================================================================
@@ -118,7 +118,7 @@ export interface CDCConfig {
  */
 export interface CDCProducerOptions {
   source: Omit<CDCSource, 'system'>
-  system?: CDCSource['system']
+  system?: CDCSource['system'] | undefined
 }
 
 /**
@@ -213,13 +213,13 @@ export class CDCProducer<T = unknown> {
  */
 export interface CDCConsumerOptions {
   /** Starting sequence number */
-  fromSeq?: bigint
+  fromSeq?: bigint | undefined
 
   /** Starting timestamp */
-  fromTimestamp?: Date
+  fromTimestamp?: Date | undefined
 
   /** Filter by operation types */
-  operations?: CDCOperation[]
+  operations?: CDCOperation[] | undefined
 }
 
 /**

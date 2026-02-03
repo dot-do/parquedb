@@ -44,7 +44,7 @@ export interface CollectionManagerContext {
   update<T>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
   delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
   deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
-  upsert<T>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: { returnDocument?: 'before' | 'after' }): Promise<Entity<T> | null>
+  upsert<T>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: { returnDocument?: 'before' | 'after' | undefined }): Promise<Entity<T> | null>
   upsertMany<T>(namespace: string, items: UpsertManyItem<T>[], options?: UpsertManyOptions): Promise<UpsertManyResult>
   ingestStream<T>(namespace: string, source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>, options?: IngestStreamOptions<Partial<T>>): Promise<IngestStreamResult>
 }

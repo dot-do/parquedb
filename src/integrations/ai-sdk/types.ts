@@ -20,13 +20,13 @@ export interface CacheConfig {
   /** Enable response caching (default: false) */
   enabled: boolean
   /** Time-to-live for cached entries in seconds (default: 3600 = 1 hour) */
-  ttlSeconds?: number
+  ttlSeconds?: number | undefined
   /** Collection name for cache storage (default: 'ai_cache') */
-  collection?: string
+  collection?: string | undefined
   /** Hash function for generating cache keys (default: SHA-256 based) */
-  hashFn?: (params: unknown) => string | Promise<string>
+  hashFn?: ((params: unknown) => string | Promise<string>) | undefined
   /** Fields to exclude from cache key generation (e.g., 'temperature' for deterministic caching) */
-  excludeFromKey?: string[]
+  excludeFromKey?: string[] | undefined
 }
 
 /**
@@ -36,13 +36,13 @@ export interface LoggingConfig {
   /** Enable request/response logging (default: false) */
   enabled: boolean
   /** Collection name for log storage (default: 'ai_logs') */
-  collection?: string
+  collection?: string | undefined
   /** Log level: 'minimal' (prompt/response only), 'standard' (+ metadata), 'verbose' (everything) */
-  level?: 'minimal' | 'standard' | 'verbose'
+  level?: 'minimal' | 'standard' | 'verbose' | undefined
   /** Custom metadata to include with each log entry */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /** Callback for custom log processing (runs after database write) */
-  onLog?: (entry: LogEntry) => void | Promise<void>
+  onLog?: ((entry: LogEntry) => void | Promise<void>) | undefined
 }
 
 /**
@@ -52,9 +52,9 @@ export interface ParqueDBMiddlewareOptions {
   /** ParqueDB instance for storage */
   db: ParqueDB
   /** Cache configuration */
-  cache?: CacheConfig
+  cache?: CacheConfig | undefined
   /** Logging configuration */
-  logging?: LoggingConfig
+  logging?: LoggingConfig | undefined
 }
 
 // =============================================================================
@@ -72,7 +72,7 @@ export interface CacheEntry {
   /** Cached response data */
   response: unknown
   /** Model ID used for the request */
-  modelId?: string
+  modelId?: string | undefined
   /** Cache hit count (incremented on each hit) */
   hitCount: number
   /** When this entry was created */
@@ -96,37 +96,37 @@ export interface LogEntry {
   /** Timestamp of the request */
   timestamp: Date
   /** Model ID */
-  modelId?: string
+  modelId?: string | undefined
   /** Provider ID */
-  providerId?: string
+  providerId?: string | undefined
   /** Request type: 'generate' or 'stream' */
   requestType: 'generate' | 'stream'
   /** Prompt messages (if logging level allows) */
-  prompt?: unknown
+  prompt?: unknown | undefined
   /** Response data (if logging level allows) */
-  response?: unknown
+  response?: unknown | undefined
   /** Response text (extracted for convenience) */
-  responseText?: string
+  responseText?: string | undefined
   /** Token usage information */
   usage?: {
-    promptTokens?: number
-    completionTokens?: number
-    totalTokens?: number
-  }
+    promptTokens?: number | undefined
+    completionTokens?: number | undefined
+    totalTokens?: number | undefined
+  } | undefined
   /** Request latency in milliseconds */
   latencyMs: number
   /** Whether the request was cached */
   cached: boolean
   /** Finish reason (e.g., 'stop', 'length', 'tool-calls') */
-  finishReason?: string
+  finishReason?: string | undefined
   /** Additional metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /** Error information (if request failed) */
   error?: {
     name: string
     message: string
-    stack?: string
-  }
+    stack?: string | undefined
+  } | undefined
 }
 
 // =============================================================================
@@ -138,17 +138,17 @@ export interface LogEntry {
  */
 export interface LanguageModelCallOptions {
   /** Input prompt/messages */
-  prompt?: unknown
+  prompt?: unknown | undefined
   /** Maximum tokens to generate */
-  maxTokens?: number
+  maxTokens?: number | undefined
   /** Temperature for sampling */
-  temperature?: number
+  temperature?: number | undefined
   /** Top-p sampling */
-  topP?: number
+  topP?: number | undefined
   /** Stop sequences */
-  stopSequences?: string[]
+  stopSequences?: string[] | undefined
   /** Tool definitions */
-  tools?: unknown[]
+  tools?: unknown[] | undefined
   /** Additional options */
   [key: string]: unknown
 }
@@ -158,19 +158,19 @@ export interface LanguageModelCallOptions {
  */
 export interface LanguageModelGenerateResult {
   /** Generated text */
-  text?: string
+  text?: string | undefined
   /** Finish reason */
-  finishReason?: string
+  finishReason?: string | undefined
   /** Token usage */
   usage?: {
-    promptTokens?: number
-    completionTokens?: number
-    totalTokens?: number
-  }
+    promptTokens?: number | undefined
+    completionTokens?: number | undefined
+    totalTokens?: number | undefined
+  } | undefined
   /** Tool calls made */
-  toolCalls?: unknown[]
+  toolCalls?: unknown[] | undefined
   /** Raw response */
-  response?: unknown
+  response?: unknown | undefined
   /** Additional properties */
   [key: string]: unknown
 }
@@ -183,14 +183,14 @@ export interface LanguageModelStreamResult {
   stream: ReadableStream<unknown>
   /** Promise that resolves when stream completes */
   response?: Promise<{
-    text?: string
-    finishReason?: string
+    text?: string | undefined
+    finishReason?: string | undefined
     usage?: {
-      promptTokens?: number
-      completionTokens?: number
-      totalTokens?: number
-    }
-  }>
+      promptTokens?: number | undefined
+      completionTokens?: number | undefined
+      totalTokens?: number | undefined
+    } | undefined
+  }> | undefined
   /** Additional properties */
   [key: string]: unknown
 }
@@ -200,17 +200,17 @@ export interface LanguageModelStreamResult {
  */
 export interface LanguageModel {
   /** Specification version */
-  specificationVersion?: string
+  specificationVersion?: string | undefined
   /** Model ID */
-  modelId?: string
+  modelId?: string | undefined
   /** Provider */
-  provider?: string
+  provider?: string | undefined
   /** Model capabilities */
   capabilities?: {
-    streaming?: boolean
-    tools?: boolean
-    images?: boolean
-  }
+    streaming?: boolean | undefined
+    tools?: boolean | undefined
+    images?: boolean | undefined
+  } | undefined
 }
 
 /**
@@ -221,44 +221,44 @@ export interface LanguageModel {
  */
 export interface LanguageModelV3Middleware {
   /** Specification version (must be 'v3') */
-  specificationVersion?: 'v3'
+  specificationVersion?: 'v3' | undefined
 
   /**
    * Transform parameters before they reach the language model
    */
-  transformParams?: (options: {
+  transformParams?: ((options: {
     type: 'generate' | 'stream'
     params: LanguageModelCallOptions
     model: LanguageModel
-  }) => LanguageModelCallOptions | Promise<LanguageModelCallOptions>
+  }) => LanguageModelCallOptions | Promise<LanguageModelCallOptions>) | undefined
 
   /**
    * Wrap the generate operation
    */
-  wrapGenerate?: (options: {
+  wrapGenerate?: ((options: {
     doGenerate: () => Promise<LanguageModelGenerateResult>
     doStream: () => Promise<LanguageModelStreamResult>
     params: LanguageModelCallOptions
     model: LanguageModel
-  }) => Promise<LanguageModelGenerateResult>
+  }) => Promise<LanguageModelGenerateResult>) | undefined
 
   /**
    * Wrap the stream operation
    */
-  wrapStream?: (options: {
+  wrapStream?: ((options: {
     doGenerate: () => Promise<LanguageModelGenerateResult>
     doStream: () => Promise<LanguageModelStreamResult>
     params: LanguageModelCallOptions
     model: LanguageModel
-  }) => Promise<LanguageModelStreamResult>
+  }) => Promise<LanguageModelStreamResult>) | undefined
 
   /**
    * Override the provider ID
    */
-  overrideProvider?: (options: { model: LanguageModel }) => string
+  overrideProvider?: ((options: { model: LanguageModel }) => string) | undefined
 
   /**
    * Override the model ID
    */
-  overrideModelId?: (options: { model: LanguageModel }) => string
+  overrideModelId?: ((options: { model: LanguageModel }) => string) | undefined
 }

@@ -22,26 +22,26 @@ export interface RepoIdentifier {
 }
 
 export interface CommandConfig {
-  readonly show_samples?: boolean
-  readonly max_entities?: number
+  readonly show_samples?: boolean | undefined
+  readonly max_entities?: number | undefined
 }
 
 export interface CommandContext {
   readonly issueNumber: number
   readonly repo: RepoIdentifier
   readonly commentId: number
-  readonly prBranch?: string
-  readonly baseBranch?: string
-  readonly headBranch?: string
-  readonly checkRunId?: number
-  readonly commentAuthor?: string
-  readonly config?: CommandConfig
+  readonly prBranch?: string | undefined
+  readonly baseBranch?: string | undefined
+  readonly headBranch?: string | undefined
+  readonly checkRunId?: number | undefined
+  readonly commentAuthor?: string | undefined
+  readonly config?: CommandConfig | undefined
 }
 
 export interface BranchCreateOpts {
   readonly name: string
   readonly from: string
-  readonly overwrite?: boolean
+  readonly overwrite?: boolean | undefined
 }
 
 export interface BranchCreateResult {
@@ -52,7 +52,7 @@ export interface BranchCreateResult {
 export interface DiffOpts {
   readonly base: string
   readonly head: string
-  readonly collection?: string
+  readonly collection?: string | undefined
 }
 
 export interface ResolveOpts {
@@ -84,21 +84,21 @@ export interface ParqueDBClient {
 
 export interface EntitySample {
   readonly $id: string
-  readonly name?: string
+  readonly name?: string | undefined
   readonly [key: string]: unknown
 }
 
 export interface CollectionSamples {
-  readonly added?: readonly EntitySample[]
-  readonly removed?: readonly EntitySample[]
-  readonly modified?: readonly EntitySample[]
+  readonly added?: readonly EntitySample[] | undefined
+  readonly removed?: readonly EntitySample[] | undefined
+  readonly modified?: readonly EntitySample[] | undefined
 }
 
 export interface CollectionDiff {
   readonly added: number
   readonly removed: number
   readonly modified: number
-  readonly samples?: CollectionSamples
+  readonly samples?: CollectionSamples | undefined
 }
 
 export interface DiffResult {
@@ -114,16 +114,16 @@ export interface SchemaChange {
   readonly type: string
   readonly collection: string
   readonly field: string
-  readonly fieldType?: string
+  readonly fieldType?: string | undefined
 }
 
 export interface BreakingChange {
   readonly type: string
   readonly collection: string
   readonly field: string
-  readonly oldType?: string
-  readonly newType?: string
-  readonly migrationHint?: string
+  readonly oldType?: string | undefined
+  readonly newType?: string | undefined
+  readonly migrationHint?: string | undefined
 }
 
 export interface SchemaDiffResult {
@@ -323,7 +323,7 @@ export async function handleDiffCommand(
     content: 'eyes',
   })
 
-  const diffOpts: { base: string; head: string; collection?: string } = {
+  const diffOpts: { base: string; head: string; collection?: string | undefined } = {
     base: baseBranch!,
     head: headBranch!,
   }

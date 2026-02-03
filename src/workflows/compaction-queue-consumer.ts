@@ -83,49 +83,49 @@ export interface R2EventMessage {
 /** Configuration for the queue consumer */
 export interface CompactionConsumerConfig {
   /** Time window size in milliseconds (default: 1 hour) */
-  windowSizeMs?: number
+  windowSizeMs?: number | undefined
 
   /** Minimum files before compaction is considered (default: 10) */
-  minFilesToCompact?: number
+  minFilesToCompact?: number | undefined
 
   /** Maximum time to wait for late writers (default: 5 minutes) */
-  maxWaitTimeMs?: number
+  maxWaitTimeMs?: number | undefined
 
   /** Target format for compacted files */
-  targetFormat?: BackendType
+  targetFormat?: BackendType | undefined
 
   /** Namespace prefix to watch (default: 'data/') */
-  namespacePrefix?: string
+  namespacePrefix?: string | undefined
 
   /**
    * Time after which a writer is considered inactive (default: 30 minutes)
    * Writers that haven't written within this threshold won't delay compaction
    */
-  writerInactiveThresholdMs?: number
+  writerInactiveThresholdMs?: number | undefined
 
   /**
    * Time after which a processing window is considered stuck (default: 5 minutes)
    * Stuck windows will be recovered via /get-stuck-windows endpoint
    */
-  processingTimeoutMs?: number
+  processingTimeoutMs?: number | undefined
 
   /**
    * Age after which bucket DOs can be cleaned up (default: 48 hours)
    * Only applies when time bucket sharding is enabled
    */
-  bucketCleanupAgeMs?: number
+  bucketCleanupAgeMs?: number | undefined
 
   /**
    * Time bucket sharding configuration
    * When enabled, DOs are sharded by namespace + time bucket for extreme concurrency (>1000 writes/sec)
    */
-  timeBucketSharding?: TimeBucketShardingConfig
+  timeBucketSharding?: TimeBucketShardingConfig | undefined
 
   /**
    * Backpressure configuration for overload protection
    * Controls rate limiting, circuit breaker, and backpressure detection
    */
-  backpressure?: BackpressureConfig
+  backpressure?: BackpressureConfig | undefined
 }
 
 /**
@@ -137,13 +137,13 @@ export interface TimeBucketShardingConfig {
   enabled: boolean
 
   /** Namespaces that should use time bucket sharding (empty = all namespaces if enabled) */
-  namespacesWithSharding?: string[]
+  namespacesWithSharding?: string[] | undefined
 
   /** Time bucket size in milliseconds (default: 1 hour / 3600000) */
-  bucketSizeMs?: number
+  bucketSizeMs?: number | undefined
 
   /** Maximum age of buckets to query for status aggregation in hours (default: 24) */
-  maxBucketAgeHours?: number
+  maxBucketAgeHours?: number | undefined
 }
 
 /**
@@ -387,7 +387,7 @@ export function getCompactionStateDOId(
  * @param doId - DO ID string
  * @returns Object with namespace and optional timeBucket
  */
-export function parseCompactionStateDOId(doId: string): { namespace: string; timeBucket?: number } {
+export function parseCompactionStateDOId(doId: string): { namespace: string; timeBucket?: number | undefined } {
   const colonIndex = doId.lastIndexOf(':')
   if (colonIndex !== -1) {
     const possibleBucket = doId.slice(colonIndex + 1)
@@ -502,7 +502,7 @@ export interface WindowReadyEntry {
   files: string[]
   writers: string[]
   /** Namespace priority for workflow queue routing */
-  priority?: NamespacePriority
+  priority?: NamespacePriority | undefined
   /** Provisional workflow ID generated before workflow.create() for crash recovery */
   provisionalWorkflowId: string
 }
@@ -1271,7 +1271,7 @@ interface StoredWindowState {
   writers: string[]
   lastActivityAt: number
   totalSize: number
-  processingStatus?: StoredProcessingStatus
+  processingStatus?: StoredProcessingStatus | undefined
 }
 
 /** Stored state structure (namespace-sharded - each DO handles one namespace) */
@@ -1283,7 +1283,7 @@ interface StoredState {
   knownWriters: string[]
   writerLastSeen: Record<string, number>
   /** Namespace priority: 0 (critical) to 3 (background). Default: 2 */
-  priority?: NamespacePriority
+  priority?: NamespacePriority | undefined
 }
 
 /**
@@ -1295,7 +1295,7 @@ interface StoredMetadata {
   namespace: string
   knownWriters: string[]
   writerLastSeen: Record<string, number>
-  priority?: NamespacePriority
+  priority?: NamespacePriority | undefined
 }
 
 /**
@@ -1541,7 +1541,7 @@ export class CompactionStateDO {
    * Handle /config endpoint - configure namespace priority
    */
   private async handleConfig(request: Request): Promise<Response> {
-    const body = await request.json() as { priority?: number }
+    const body = await request.json() as { priority?: number | undefined }
 
     if (body.priority !== undefined) {
       // Validate priority is 0-3
@@ -1607,9 +1607,9 @@ export class CompactionStateDO {
         minFilesToCompact: number
         maxWaitTimeMs: number
         targetFormat: string
-        writerInactiveThresholdMs?: number
-        processingTimeoutMs?: number
-        bucketCleanupAgeMs?: number
+        writerInactiveThresholdMs?: number | undefined
+        processingTimeoutMs?: number | undefined
+        bucketCleanupAgeMs?: number | undefined
       }
     }
 

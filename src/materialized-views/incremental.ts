@@ -72,7 +72,7 @@ export interface IncrementalRefreshResult {
   /** Whether a full refresh was required */
   wasFullRefresh: boolean
   /** Error message if not successful */
-  error?: string
+  error?: string | undefined
 }
 
 /**
@@ -88,7 +88,7 @@ export interface SourceDelta {
   /** Whether the delta requires full refresh (e.g., contains DELETE operations) */
   requiresFullRefresh: boolean
   /** Reason for requiring full refresh */
-  fullRefreshReason?: string
+  fullRefreshReason?: string | undefined
 }
 
 /**
@@ -96,13 +96,13 @@ export interface SourceDelta {
  */
 export interface IncrementalRefreshOptions {
   /** Force full refresh even if incremental is possible */
-  forceFullRefresh?: boolean
+  forceFullRefresh?: boolean | undefined
   /** Maximum events to process in one refresh */
-  maxEvents?: number
+  maxEvents?: number | undefined
   /** Timeout in milliseconds */
-  timeoutMs?: number
+  timeoutMs?: number | undefined
   /** Callback for progress updates */
-  onProgress?: (processed: number, total: number) => void
+  onProgress?: ((processed: number, total: number) => void) | undefined
 }
 
 /**
@@ -128,13 +128,13 @@ export interface MVStorage {
  */
 export interface AggregateState {
   /** Running sum for $sum and $avg */
-  sum?: number
+  sum?: number | undefined
   /** Running count for $count and $avg */
-  count?: number
+  count?: number | undefined
   /** Current min for $min */
-  min?: number | string | Date
+  min?: number | string | Date | undefined
   /** Current max for $max */
-  max?: number | string | Date
+  max?: number | string | Date | undefined
 }
 
 // =============================================================================
@@ -187,7 +187,7 @@ export class IncrementalRefresher {
   async canRefreshIncrementally(
     view: ViewDefinition,
     lineage: IncrementalLineage
-  ): Promise<{ canIncremental: boolean; reason?: string }> {
+  ): Promise<{ canIncremental: boolean; reason?: string | undefined }> {
     // Check if view supports incremental refresh
     if (view.options.refreshStrategy === 'full') {
       return { canIncremental: false, reason: 'View is configured for full refresh only' }
@@ -327,7 +327,7 @@ export class IncrementalRefresher {
   async fullRefresh(
     view: ViewDefinition,
     lineage: IncrementalLineage,
-    options: IncrementalRefreshOptions & { wasFullRefresh?: boolean; fullRefreshReason?: string } = {}
+    options: IncrementalRefreshOptions & { wasFullRefresh?: boolean | undefined; fullRefreshReason?: string | undefined } = {}
   ): Promise<IncrementalRefreshResult> {
     const startTime = Date.now()
 

@@ -35,30 +35,30 @@ interface Post {
   content: string
   status: 'draft' | 'published' | 'archived'
   // Outbound relationships
-  author?: RelLink    // -> User
-  categories?: RelSet // -> Category[]
+  author?: RelLink | undefined // -> User
+  categories?: RelSet | undefined // -> Category[]
 }
 
 interface User {
   email: string
   role: 'admin' | 'author' | 'reader'
   // Inbound references
-  posts?: RelSet      // <- Post.author
-  comments?: RelSet   // <- Comment.author
+  posts?: RelSet | undefined // <- Post.author
+  comments?: RelSet | undefined // <- Comment.author
 }
 
 interface Comment {
   text: string
-  rating?: number
+  rating?: number | undefined
   // Outbound relationships
-  post?: RelLink      // -> Post
-  author?: RelLink    // -> User
+  post?: RelLink | undefined // -> Post
+  author?: RelLink | undefined // -> User
 }
 
 interface Category {
   slug: string
   // Inbound references
-  posts?: RelSet      // <- Post.categories
+  posts?: RelSet | undefined // <- Post.categories
 }
 
 // =============================================================================

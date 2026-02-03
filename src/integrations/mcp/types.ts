@@ -11,25 +11,25 @@ import type { Filter, UpdateInput } from '../../types'
  */
 export interface ParqueDBMCPOptions {
   /** Server name (defaults to 'parquedb') */
-  name?: string
+  name?: string | undefined
   /** Server version (defaults to package version) */
-  version?: string
+  version?: string | undefined
   /** Instructions for AI agents on how to use this server */
-  instructions?: string
+  instructions?: string | undefined
   /** Enable/disable specific tools (all enabled by default) */
   tools?: {
-    find?: boolean
-    get?: boolean
-    create?: boolean
-    update?: boolean
-    delete?: boolean
-    count?: boolean
-    aggregate?: boolean
-    listCollections?: boolean
-    semanticSearch?: boolean
-  }
+    find?: boolean | undefined
+    get?: boolean | undefined
+    create?: boolean | undefined
+    update?: boolean | undefined
+    delete?: boolean | undefined
+    count?: boolean | undefined
+    aggregate?: boolean | undefined
+    listCollections?: boolean | undefined
+    semanticSearch?: boolean | undefined
+  } | undefined
   /** Enable read-only mode (disables create, update, delete) */
-  readOnly?: boolean
+  readOnly?: boolean | undefined
 }
 
 /**
@@ -39,15 +39,15 @@ export interface FindToolParams {
   /** Collection name to query */
   collection: string
   /** MongoDB-style filter object */
-  filter?: Filter
+  filter?: Filter | undefined
   /** Maximum number of results to return */
-  limit?: number
+  limit?: number | undefined
   /** Number of results to skip */
-  skip?: number
+  skip?: number | undefined
   /** Sort specification (field: 1 for ascending, -1 for descending) */
-  sort?: Record<string, 1 | -1>
+  sort?: Record<string, 1 | -1> | undefined
   /** Fields to include/exclude in results */
-  project?: Record<string, 0 | 1>
+  project?: Record<string, 0 | 1> | undefined
 }
 
 /**
@@ -59,7 +59,7 @@ export interface GetToolParams {
   /** Entity ID (without namespace prefix) */
   id: string
   /** Fields to include/exclude */
-  project?: Record<string, 0 | 1>
+  project?: Record<string, 0 | 1> | undefined
 }
 
 /**
@@ -93,7 +93,7 @@ export interface DeleteToolParams {
   /** Entity ID to delete */
   id: string
   /** Perform hard delete (permanent) instead of soft delete */
-  hard?: boolean
+  hard?: boolean | undefined
 }
 
 /**
@@ -103,7 +103,7 @@ export interface CountToolParams {
   /** Collection name */
   collection: string
   /** Optional filter to count matching documents */
-  filter?: Filter
+  filter?: Filter | undefined
 }
 
 /**
@@ -125,9 +125,9 @@ export interface SemanticSearchToolParams {
   /** Natural language search query */
   query: string
   /** Maximum number of results */
-  limit?: number
+  limit?: number | undefined
   /** Optional filter to apply before semantic search */
-  filter?: Filter
+  filter?: Filter | undefined
 }
 
 /**
@@ -137,17 +137,17 @@ export interface ToolResult<T = unknown> {
   /** Whether the operation succeeded */
   success: boolean
   /** Result data (on success) */
-  data?: T
+  data?: T | undefined
   /** Error message (on failure) */
-  error?: string
+  error?: string | undefined
   /** Number of items affected/returned */
-  count?: number
+  count?: number | undefined
   /** Total count (for paginated results) */
-  total?: number
+  total?: number | undefined
   /** Whether there are more results */
-  hasMore?: boolean
+  hasMore?: boolean | undefined
   /** Cursor for next page */
-  nextCursor?: string
+  nextCursor?: string | undefined
 }
 
 /**
@@ -159,5 +159,5 @@ export interface CollectionInfo {
   /** Collection namespace */
   namespace: string
   /** Estimated document count */
-  estimatedCount?: number
+  estimatedCount?: number | undefined
 }

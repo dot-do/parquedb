@@ -36,7 +36,7 @@ const INSTRUMENTATION_SCOPE = 'parquedb.observability'
  */
 function resourceAttributesToOTLP(
   attrs: OTelResourceAttributes
-): Array<{ key: string; value: { stringValue?: string; intValue?: number; boolValue?: boolean } }> {
+): Array<{ key: string; value: { stringValue?: string | undefined; intValue?: number | undefined; boolValue?: boolean | undefined } }> {
   return Object.entries(attrs)
     .filter(([, v]) => v !== undefined)
     .map(([key, value]) => {
@@ -56,7 +56,7 @@ function resourceAttributesToOTLP(
  */
 function attributesToOTLP(
   attrs: Record<string, string | number | boolean>
-): Array<{ key: string; value: { stringValue?: string; intValue?: number; boolValue?: boolean } }> {
+): Array<{ key: string; value: { stringValue?: string | undefined; intValue?: number | undefined; boolValue?: boolean | undefined } }> {
   return Object.entries(attrs).map(([key, value]) => {
     if (typeof value === 'string') {
       return { key, value: { stringValue: value } }
@@ -112,8 +112,8 @@ function dateToUnixNano(date: Date): number {
 export function exportAIUsageToOTLP(
   aggregates: AIUsageAggregate[],
   options: {
-    resourceAttributes?: Partial<OTelResourceAttributes>
-    environment?: string
+    resourceAttributes?: Partial<OTelResourceAttributes> | undefined
+    environment?: string | undefined
   } = {}
 ): OTelMetricsPayload {
   const resourceAttrs: OTelResourceAttributes = {
@@ -311,8 +311,8 @@ export function exportAIUsageToOTLP(
 export function exportCompactionToOTLP(
   metrics: Map<string, CompactionMetrics> | CompactionMetrics[],
   options: {
-    resourceAttributes?: Partial<OTelResourceAttributes>
-    environment?: string
+    resourceAttributes?: Partial<OTelResourceAttributes> | undefined
+    environment?: string | undefined
   } = {}
 ): OTelMetricsPayload {
   const resourceAttrs: OTelResourceAttributes = {
@@ -452,10 +452,10 @@ export function exportCompactionToOTLP(
 export function exportAIRequestsToOTLPTraces(
   requests: AIRequestRecord[],
   options: {
-    resourceAttributes?: Partial<OTelResourceAttributes>
-    environment?: string
-    parentSpanId?: string
-    traceId?: string
+    resourceAttributes?: Partial<OTelResourceAttributes> | undefined
+    environment?: string | undefined
+    parentSpanId?: string | undefined
+    traceId?: string | undefined
   } = {}
 ): OTelTracePayload {
   const resourceAttrs: OTelResourceAttributes = {

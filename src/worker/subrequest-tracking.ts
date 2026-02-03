@@ -41,13 +41,13 @@ export interface DiagnosticsChannelEvent {
  */
 export interface FetchSubrequest {
   /** URL of the subrequest */
-  url?: string
+  url?: string | undefined
   /** HTTP method used */
-  method?: string
+  method?: string | undefined
   /** Response status code */
-  status?: number
+  status?: number | undefined
   /** Duration of the request in milliseconds */
-  duration?: number
+  duration?: number | undefined
   /** Timestamp when the request was made */
   timestamp: number
 }

@@ -35,13 +35,13 @@ export interface ChangeEvent {
   /** Full entity ID (ns/id) */
   fullId: EntityId
   /** State before change (undefined for CREATE) */
-  before?: Variant
+  before?: Variant | undefined
   /** State after change (undefined for DELETE) */
-  after?: Variant
+  after?: Variant | undefined
   /** Who made the change */
-  actor?: string
+  actor?: string | undefined
   /** Additional metadata */
-  metadata?: Variant
+  metadata?: Variant | undefined
 }
 
 /**
@@ -50,17 +50,17 @@ export interface ChangeEvent {
 export interface SubscriptionControlMessage {
   type: 'subscribe' | 'unsubscribe' | 'ping' | 'pong' | 'error' | 'ack'
   /** Subscription ID */
-  subscriptionId?: string
+  subscriptionId?: string | undefined
   /** Namespace to subscribe to */
-  ns?: string
+  ns?: string | undefined
   /** Filter for the subscription */
-  filter?: Filter
+  filter?: Filter | undefined
   /** Operations to subscribe to */
-  ops?: SubscriptionOp[]
+  ops?: SubscriptionOp[] | undefined
   /** Error message (for error type) */
-  error?: string
+  error?: string | undefined
   /** Error code */
-  code?: string
+  code?: string | undefined
 }
 
 /**
@@ -70,7 +70,7 @@ export type SubscriptionMessage =
   | { type: 'change'; data: ChangeEvent }
   | { type: 'subscribed'; subscriptionId: string; ns: string }
   | { type: 'unsubscribed'; subscriptionId: string }
-  | { type: 'error'; error: string; code?: string }
+  | { type: 'error'; error: string; code?: string | undefined }
   | { type: 'pong'; ts: number }
   | { type: 'connected'; connectionId: string }
 
@@ -85,15 +85,15 @@ export interface SubscriptionOptions {
   /** Namespace/collection to subscribe to */
   ns: string
   /** MongoDB-style filter for matching entities */
-  filter?: Filter
+  filter?: Filter | undefined
   /** Operations to subscribe to (default: ALL) */
-  ops?: SubscriptionOp[]
+  ops?: SubscriptionOp[] | undefined
   /** Include full before/after state (default: true) */
-  includeState?: boolean
+  includeState?: boolean | undefined
   /** Cursor to resume from (for reconnection) */
-  resumeAfter?: string
+  resumeAfter?: string | undefined
   /** Maximum events per second (rate limiting) */
-  maxEventsPerSecond?: number
+  maxEventsPerSecond?: number | undefined
 }
 
 /**
@@ -113,7 +113,7 @@ export interface Subscription {
   /** Include full state in events */
   includeState: boolean
   /** Last event ID processed (for resumption) */
-  lastEventId?: string
+  lastEventId?: string | undefined
   /** Created timestamp */
   createdAt: number
 }
@@ -131,7 +131,7 @@ export interface Connection {
   /** WebSocket or SSE response writer */
   writer: SubscriptionWriter
   /** Connection metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -155,15 +155,15 @@ export interface SubscriptionWriter {
  */
 export interface SubscriptionManagerConfig {
   /** Maximum subscriptions per connection (default: 10) */
-  maxSubscriptionsPerConnection?: number
+  maxSubscriptionsPerConnection?: number | undefined
   /** Connection timeout in ms (default: 30000) */
-  connectionTimeoutMs?: number
+  connectionTimeoutMs?: number | undefined
   /** Heartbeat interval in ms (default: 15000) */
-  heartbeatIntervalMs?: number
+  heartbeatIntervalMs?: number | undefined
   /** Maximum pending events per subscription (default: 1000) */
-  maxPendingEvents?: number
+  maxPendingEvents?: number | undefined
   /** Enable debug logging */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 import {
@@ -219,8 +219,8 @@ export interface ReconnectionState {
   subscriptions: Array<{
     id: string
     ns: string
-    filter?: Filter
-    ops?: SubscriptionOp[]
+    filter?: Filter | undefined
+    ops?: SubscriptionOp[] | undefined
   }>
 }
 
@@ -233,7 +233,7 @@ export interface ResumeResult {
   /** New connection ID (may differ if old connection expired) */
   connectionId: string
   /** Events that occurred during disconnection */
-  missedEvents?: ChangeEvent[]
+  missedEvents?: ChangeEvent[] | undefined
   /** Subscriptions that were re-established */
   resumedSubscriptions: string[]
   /** Subscriptions that failed to resume */

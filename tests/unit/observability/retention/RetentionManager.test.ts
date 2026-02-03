@@ -24,7 +24,7 @@ import {
 interface MockRecord {
   $id: string
   timestamp: Date
-  granularity?: string
+  granularity?: string | undefined
   [key: string]: unknown
 }
 

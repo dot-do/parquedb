@@ -266,11 +266,11 @@ export class MockWriter implements SubscriptionWriter {
  */
 export interface WebSocketHandlerConfig {
   /** Handler for incoming messages */
-  onMessage?: (connectionId: string, data: unknown) => void
+  onMessage?: ((connectionId: string, data: unknown) => void) | undefined
   /** Handler for connection close */
-  onClose?: (connectionId: string) => void
+  onClose?: ((connectionId: string) => void) | undefined
   /** Handler for errors */
-  onError?: (connectionId: string, error: Error) => void
+  onError?: ((connectionId: string, error: Error) => void) | undefined
 }
 
 /**

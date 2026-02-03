@@ -31,16 +31,16 @@ const EVENTS_DIR = 'events'
 
 export interface SegmentWriterOptions {
   /** Maximum events per segment (default: 10000) */
-  maxEventsPerSegment?: number
+  maxEventsPerSegment?: number | undefined
 
   /** Segment file name prefix (default: 'seg-') */
-  segmentPrefix?: string
+  segmentPrefix?: string | undefined
 
   /** Compression codec (default: 'SNAPPY') */
-  compression?: 'UNCOMPRESSED' | 'SNAPPY' | 'GZIP' | 'ZSTD' | 'LZ4'
+  compression?: 'UNCOMPRESSED' | 'SNAPPY' | 'GZIP' | 'ZSTD' | 'LZ4' | undefined
 
   /** Base directory for segments (default: 'events') */
-  baseDir?: string
+  baseDir?: string | undefined
 }
 
 // =============================================================================

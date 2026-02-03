@@ -34,9 +34,9 @@ import { translateSelect, translateInsert, translateUpdate, translateDelete } fr
 
 export interface DrizzleProxyOptions {
   /** Log SQL queries for debugging */
-  debug?: boolean
+  debug?: boolean | undefined
   /** Default actor for mutations */
-  actor?: string
+  actor?: string | undefined
 }
 
 /**

@@ -48,13 +48,13 @@ import {
  *   parquedb deploy snippets delete <name>
  */
 function parseDeployArgs(args: string[]): {
-  target?: string
-  name?: string
-  file?: string
-  rule?: string
-  description?: string
-  enabled?: boolean
-  dryRun?: boolean
+  target?: string | undefined
+  name?: string | undefined
+  file?: string | undefined
+  rule?: string | undefined
+  description?: string | undefined
+  enabled?: boolean | undefined
+  dryRun?: boolean | undefined
 } {
   const result: ReturnType<typeof parseDeployArgs> = {}
   const positional: string[] = []

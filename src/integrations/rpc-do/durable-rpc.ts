@@ -96,7 +96,7 @@ export interface CollectionMethods<T extends object = Record<string, unknown>> {
   /** Get entity by ID */
   get(id: string): Promise<Entity<T> | null>
   /** Create a new entity */
-  create(data: Partial<T> & { $type?: string; name?: string }): Promise<Entity<T>>
+  create(data: Partial<T> & { $type?: string | undefined; name?: string | undefined }): Promise<Entity<T>>
   /** Update an entity */
   update(id: string, update: UpdateInput<T>): Promise<Entity<T> | null>
   /** Delete an entity */
@@ -159,9 +159,9 @@ export interface ParqueDBRPCMethods {
  */
 export interface ParqueDBDurableRPCConfig {
   /** Default actor for operations (used when no actor is provided) */
-  defaultActor?: string
+  defaultActor?: string | undefined
   /** Enable debug logging */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 /**
@@ -711,15 +711,15 @@ export class ParqueDBDurableRPC extends DurableObject<Env> {
 interface JsonRpcRequest {
   jsonrpc: '2.0'
   method: string
-  params?: unknown[]
-  id?: string | number | null
+  params?: unknown[] | undefined
+  id?: string | number | null | undefined
 }
 
 interface JsonRpcResponse {
   jsonrpc: '2.0'
-  result?: unknown
-  error?: { code: number; message: string; data?: unknown }
-  id?: string | number | null
+  result?: unknown | undefined
+  error?: { code: number; message: string; data?: unknown | undefined } | undefined
+  id?: string | number | null | undefined
 }
 
 // =============================================================================

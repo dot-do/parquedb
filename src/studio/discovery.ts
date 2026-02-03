@@ -216,7 +216,7 @@ export function schemaElementToField(element: SchemaElement): DiscoveredField | 
   // Determine the Parquet type
   const physicalType = element.type as string | undefined
   const convertedType = element.converted_type as string | undefined
-  const logicalType = element.logical_type as { type?: string } | undefined
+  const logicalType = element.logical_type as { type?: string | undefined } | undefined
 
   // Determine optionality from repetition type
   // 'REQUIRED', 'OPTIONAL', 'REPEATED'

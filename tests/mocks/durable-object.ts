@@ -47,11 +47,11 @@ export interface DurableObjectStorage {
   delete(keys: string[]): Promise<number>
   deleteAll(): Promise<void>
   list<T = unknown>(options?: {
-    prefix?: string
-    start?: string
-    end?: string
-    limit?: number
-    reverse?: boolean
+    prefix?: string | undefined
+    start?: string | undefined
+    end?: string | undefined
+    limit?: number | undefined
+    reverse?: boolean | undefined
   }): Promise<Map<string, T>>
   sql: SqlStorage
 }
@@ -62,7 +62,7 @@ export interface DurableObjectStorage {
 export interface DurableObjectId {
   toString(): string
   equals(other: DurableObjectId): boolean
-  name?: string
+  name?: string | undefined
 }
 
 /**
@@ -80,7 +80,7 @@ export interface DurableObjectState {
  */
 export interface DurableObjectStub {
   id: DurableObjectId
-  name?: string
+  name?: string | undefined
   fetch(request: Request | string, init?: RequestInit): Promise<Response>
 }
 

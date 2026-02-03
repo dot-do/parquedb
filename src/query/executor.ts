@@ -42,9 +42,9 @@ export interface QueryResult<T> {
   /** Matching rows */
   rows: T[]
   /** Total count (if available/requested) */
-  totalCount?: number
+  totalCount?: number | undefined
   /** Cursor for pagination */
-  nextCursor?: string
+  nextCursor?: string | undefined
   /** Whether more results exist */
   hasMore: boolean
   /** Query execution statistics */
@@ -72,9 +72,9 @@ export interface QueryStats {
   /** Whether bloom filter was used */
   usedBloomFilter: boolean
   /** Index used (if any) */
-  indexUsed?: string
+  indexUsed?: string | undefined
   /** Index type used */
-  indexType?: 'fts' | 'vector' | 'geo'
+  indexType?: 'fts' | 'vector' | 'geo' | undefined
 }
 
 /**
@@ -112,10 +112,10 @@ export interface QueryPlan {
     /** Index type */
     type: 'fts' | 'vector' | 'geo'
     /** Field being queried */
-    field?: string
+    field?: string | undefined
     /** Whether index will be used */
     willUse: boolean
-  }
+  } | undefined
   /** Vector search plan (for $vector queries) */
   vectorSearch?: {
     /** Vector index name */
@@ -127,16 +127,16 @@ export interface QueryPlan {
     /** efSearch parameter */
     efSearch: number
     /** Minimum similarity score */
-    minScore?: number
+    minScore?: number | undefined
     /** Whether this is a hybrid search */
     isHybrid: boolean
     /** Hybrid search strategy (if applicable) */
-    hybridStrategy?: 'pre-filter' | 'post-filter' | 'auto'
+    hybridStrategy?: 'pre-filter' | 'post-filter' | 'auto' | undefined
     /** Strategy reasoning */
-    strategyReason?: string
+    strategyReason?: string | undefined
     /** Estimated filter selectivity for hybrid search */
-    filterSelectivity?: number
-  }
+    filterSelectivity?: number | undefined
+  } | undefined
 }
 
 // =============================================================================
@@ -466,17 +466,17 @@ export class QueryExecutor {
           // Handle vector similarity search with hybrid filtering support
           const vectorCondition = indexPlan.condition as {
             // New format
-            query?: number[] | string
-            field?: string
-            topK?: number
-            minScore?: number
-            strategy?: 'pre-filter' | 'post-filter' | 'auto'
-            efSearch?: number
+            query?: number[] | string | undefined
+            field?: string | undefined
+            topK?: number | undefined
+            minScore?: number | undefined
+            strategy?: 'pre-filter' | 'post-filter' | 'auto' | undefined
+            efSearch?: number | undefined
             // Legacy format
-            $near?: number[]
-            $k?: number
-            $field?: string
-            $minScore?: number
+            $near?: number[] | undefined
+            $k?: number | undefined
+            $field?: string | undefined
+            $minScore?: number | undefined
           }
 
           // Support both new and legacy format
@@ -526,13 +526,13 @@ export class QueryExecutor {
           // Handle geo proximity search
           const geoCondition = indexPlan.condition as {
             // $geo operator format
-            $near?: { lat: number; lng: number } | [number, number]
-            $maxDistance?: number
-            $minDistance?: number
-            limit?: number
+            $near?: { lat: number; lng: number } | [number, number] | undefined
+            $maxDistance?: number | undefined
+            $minDistance?: number | undefined
+            limit?: number | undefined
             // Field-level $near format (MongoDB style)
-            lat?: number
-            lng?: number
+            lat?: number | undefined
+            lng?: number | undefined
           }
 
           // Extract center point
@@ -723,9 +723,9 @@ export class QueryExecutor {
     topK: number,
     metadataFilter: Filter,
     options: {
-      minScore?: number
-      strategy?: 'pre-filter' | 'post-filter' | 'auto'
-      efSearch?: number
+      minScore?: number | undefined
+      strategy?: 'pre-filter' | 'post-filter' | 'auto' | undefined
+      efSearch?: number | undefined
     },
     startTime: number
   ): Promise<QueryResult<T> | null> {
@@ -943,17 +943,17 @@ export class QueryExecutor {
    * @internal Reserved for future range query optimization
    */
   public _extractRangeQuery(condition: unknown): {
-    $gt?: unknown
-    $gte?: unknown
-    $lt?: unknown
-    $lte?: unknown
+    $gt?: unknown | undefined
+    $gte?: unknown | undefined
+    $lt?: unknown | undefined
+    $lte?: unknown | undefined
   } | null {
     if (typeof condition !== 'object' || condition === null) {
       return null
     }
 
     const obj = condition as Record<string, unknown>
-    const range: { $gt?: unknown; $gte?: unknown; $lt?: unknown; $lte?: unknown } = {}
+    const range: { $gt?: unknown | undefined; $gte?: unknown | undefined; $lt?: unknown | undefined; $lte?: unknown | undefined } = {}
 
     if ('$gt' in obj) range.$gt = obj.$gt
     if ('$gte' in obj) range.$gte = obj.$gte
@@ -1045,16 +1045,16 @@ export class QueryExecutor {
       // Add vector search plan if applicable
       if (filter.$vector) {
         const vq = filter.$vector as {
-          query?: number[] | string
-          field?: string
-          topK?: number
-          minScore?: number
-          efSearch?: number
-          strategy?: 'pre-filter' | 'post-filter' | 'auto'
-          $near?: number[]
-          $k?: number
-          $field?: string
-          $minScore?: number
+          query?: number[] | string | undefined
+          field?: string | undefined
+          topK?: number | undefined
+          minScore?: number | undefined
+          efSearch?: number | undefined
+          strategy?: 'pre-filter' | 'post-filter' | 'auto' | undefined
+          $near?: number[] | undefined
+          $k?: number | undefined
+          $field?: string | undefined
+          $minScore?: number | undefined
         }
 
         const field = vq.field ?? vq.$field ?? 'embedding'
@@ -1337,7 +1337,7 @@ export class QueryExecutor {
   private postProcess<T>(
     rows: T[],
     options: FindOptions<T>
-  ): { rows: T[]; totalCount?: number; nextCursor?: string; hasMore: boolean } {
+  ): { rows: T[]; totalCount?: number | undefined; nextCursor?: string | undefined; hasMore: boolean } {
     let result = rows
 
     // Apply soft-delete filter unless includeDeleted is true
@@ -1661,7 +1661,7 @@ export class QueryExecutor {
    */
   private applyUnwind(
     data: unknown[],
-    unwind: string | { path: string; preserveNullAndEmptyArrays?: boolean }
+    unwind: string | { path: string; preserveNullAndEmptyArrays?: boolean | undefined }
   ): unknown[] {
     const path = typeof unwind === 'string' ? unwind : unwind.path
     const preserveNullAndEmpty =
@@ -1817,7 +1817,7 @@ export type AggregationStage =
   | { $limit: number }
   | { $skip: number }
   | { $project: Record<string, 0 | 1 | boolean | unknown> }
-  | { $unwind: string | { path: string; preserveNullAndEmptyArrays?: boolean } }
+  | { $unwind: string | { path: string; preserveNullAndEmptyArrays?: boolean | undefined } }
   | { $lookup: { from: string; localField: string; foreignField: string; as: string } }
   | { $count: string }
   | { $addFields: Record<string, unknown> }
@@ -1827,15 +1827,15 @@ export type AggregationStage =
 /** Aggregation options */
 export interface AggregationOptions {
   /** Maximum time in milliseconds */
-  maxTimeMs?: number
+  maxTimeMs?: number | undefined
   /** Allow disk use for large aggregations */
-  allowDiskUse?: boolean
+  allowDiskUse?: boolean | undefined
   /** Hint for index */
-  hint?: string | { [field: string]: 1 | -1 }
+  hint?: string | { [field: string]: 1 | -1 } | undefined
   /** Include soft-deleted entities */
-  includeDeleted?: boolean
+  includeDeleted?: boolean | undefined
   /** Time-travel */
-  asOf?: Date
+  asOf?: Date | undefined
   /** Explain without executing */
-  explain?: boolean
+  explain?: boolean | undefined
 }

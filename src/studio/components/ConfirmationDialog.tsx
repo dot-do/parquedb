@@ -36,19 +36,19 @@ export interface ConfirmationDialogProps {
   /** Main message/warning to display */
   message: string
   /** Optional additional details or consequences */
-  details?: string
+  details?: string | undefined
   /** Label for cancel button (default: "Cancel") */
-  cancelLabel?: string
+  cancelLabel?: string | undefined
   /** Label for confirm button (default: "Confirm") */
-  confirmLabel?: string
+  confirmLabel?: string | undefined
   /** Visual variant affecting confirm button styling (default: "danger") */
-  variant?: ConfirmationVariant
+  variant?: ConfirmationVariant | undefined
   /** Whether confirm action is in progress */
-  loading?: boolean
+  loading?: boolean | undefined
   /** Item name to display (for "Delete X" patterns) */
-  itemName?: string
+  itemName?: string | undefined
   /** Item type for context (e.g., "database", "entity", "collection") */
-  itemType?: string
+  itemType?: string | undefined
 }
 
 /**

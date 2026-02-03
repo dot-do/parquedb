@@ -26,13 +26,13 @@ export interface ModelPricing {
   /** Price per 1M output/completion tokens in USD */
   outputPricePerMillion: number
   /** Optional display name for the model */
-  displayName?: string
+  displayName?: string | undefined
   /** Whether this model supports streaming */
-  supportsStreaming?: boolean
+  supportsStreaming?: boolean | undefined
   /** Context window size in tokens */
-  contextWindow?: number
+  contextWindow?: number | undefined
   /** When this pricing was last updated */
-  updatedAt?: Date
+  updatedAt?: Date | undefined
 }
 
 /**
@@ -112,20 +112,20 @@ export interface AIRequest {
   /** Request type */
   requestType: 'generate' | 'stream'
   /** Token usage */
-  usage?: TokenUsage
+  usage?: TokenUsage | undefined
   /** Latency in milliseconds */
   latencyMs: number
   /** Whether response was cached */
   cached: boolean
   /** Finish reason */
-  finishReason?: string
+  finishReason?: string | undefined
   /** Error information (if failed) */
   error?: {
     name: string
     message: string
-  }
+  } | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -192,13 +192,13 @@ export interface AIUsageAggregate {
   /** Maximum latency observed */
   maxLatencyMs: number
   /** P50 latency estimate */
-  p50LatencyMs?: number
+  p50LatencyMs?: number | undefined
   /** P90 latency estimate */
-  p90LatencyMs?: number
+  p90LatencyMs?: number | undefined
   /** P95 latency estimate */
-  p95LatencyMs?: number
+  p95LatencyMs?: number | undefined
   /** P99 latency estimate */
-  p99LatencyMs?: number
+  p99LatencyMs?: number | undefined
 
   // Cost Estimates
   /** Estimated input token cost in USD */
@@ -216,7 +216,7 @@ export interface AIUsageAggregate {
   /** Version for optimistic concurrency */
   version: number
   /** Tenant identifier (for multi-tenant deployments) */
-  tenantId?: string
+  tenantId?: string | undefined
 }
 
 /**
@@ -304,15 +304,15 @@ export interface PricingProvider {
  */
 export interface AIUsageMVConfig extends MultiTenantConfig {
   /** Collection name for source AI logs (default: 'ai_logs') */
-  sourceCollection?: string
+  sourceCollection?: string | undefined
   /** Collection name for aggregated usage (default: 'ai_usage') */
-  targetCollection?: string
+  targetCollection?: string | undefined
   /** Time granularity for aggregation (default: 'day') */
-  granularity?: TimeGranularity
+  granularity?: TimeGranularity | undefined
   /** Custom model pricing (overrides defaults) */
-  customPricing?: ModelPricing[]
+  customPricing?: ModelPricing[] | undefined
   /** Whether to merge with default pricing (default: true) */
-  mergeWithDefaultPricing?: boolean
+  mergeWithDefaultPricing?: boolean | undefined
   /**
    * Dynamic pricing provider (e.g., ModelPricingService)
    *
@@ -329,13 +329,13 @@ export interface AIUsageMVConfig extends MultiTenantConfig {
    * })
    * ```
    */
-  pricingService?: PricingProvider
+  pricingService?: PricingProvider | undefined
   /** Maximum age of logs to process in milliseconds (default: 30 days) */
-  maxAgeMs?: number
+  maxAgeMs?: number | undefined
   /** Batch size for processing (default: 1000) */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Whether to enable debug logging (default: false) */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 /**
@@ -348,12 +348,12 @@ export interface ResolvedAIUsageMVConfig {
   /** Static pricing map (used when pricingService is not provided) */
   pricing: Map<string, ModelPricing>
   /** Dynamic pricing provider (takes precedence over static pricing) */
-  pricingService?: PricingProvider
+  pricingService?: PricingProvider | undefined
   maxAgeMs: number
   batchSize: number
   debug: boolean
   /** Tenant identifier */
-  tenantId?: string
+  tenantId?: string | undefined
   /** Whether to use tenant-scoped storage paths */
   tenantScopedStorage: boolean
   /** Whether cross-tenant queries are allowed */
@@ -369,19 +369,19 @@ export interface ResolvedAIUsageMVConfig {
  */
 export interface AIUsageQueryOptions extends MultiTenantQueryOptions {
   /** Filter by model ID */
-  modelId?: string
+  modelId?: string | undefined
   /** Filter by provider ID */
-  providerId?: string
+  providerId?: string | undefined
   /** Start date (inclusive) */
-  from?: Date
+  from?: Date | undefined
   /** End date (inclusive) */
-  to?: Date
+  to?: Date | undefined
   /** Time granularity */
-  granularity?: TimeGranularity
+  granularity?: TimeGranularity | undefined
   /** Maximum results to return */
-  limit?: number
+  limit?: number | undefined
   /** Sort order */
-  sort?: 'dateKey' | '-dateKey' | 'estimatedTotalCost' | '-estimatedTotalCost'
+  sort?: 'dateKey' | '-dateKey' | 'estimatedTotalCost' | '-estimatedTotalCost' | undefined
 }
 
 // =============================================================================
@@ -401,7 +401,7 @@ export interface RefreshResult {
   /** Duration of the refresh in milliseconds */
   durationMs: number
   /** Error message if failed */
-  error?: string
+  error?: string | undefined
 }
 
 // =============================================================================
@@ -441,7 +441,7 @@ export interface MultiTenantConfig {
    * When set, all records are tagged with this tenant ID and queries
    * are automatically filtered to this tenant's data only.
    */
-  tenantId?: string
+  tenantId?: string | undefined
 
   /**
    * Enable tenant-scoped storage paths
@@ -455,7 +455,7 @@ export interface MultiTenantConfig {
    * // With tenantId='acme', collection='ai_usage'
    * // Actual collection path: 'tenant_acme/ai_usage'
    */
-  tenantScopedStorage?: boolean
+  tenantScopedStorage?: boolean | undefined
 
   /**
    * Allow queries across multiple tenants
@@ -468,7 +468,7 @@ export interface MultiTenantConfig {
    *
    * @default false
    */
-  allowCrossTenantQueries?: boolean
+  allowCrossTenantQueries?: boolean | undefined
 }
 
 /**
@@ -478,7 +478,7 @@ export interface MultiTenantQueryOptions {
   /**
    * Filter by tenant ID (overrides config tenantId for this query)
    */
-  tenantId?: string
+  tenantId?: string | undefined
 
   /**
    * Query all tenants (requires allowCrossTenantQueries: true)
@@ -486,7 +486,7 @@ export interface MultiTenantQueryOptions {
    * When true, returns data from all tenants. The tenantId field
    * will be included in results for filtering/grouping.
    */
-  allTenants?: boolean
+  allTenants?: boolean | undefined
 }
 
 /**
@@ -556,7 +556,7 @@ export interface TenantUsageSummary {
   /** Cache hit ratio (0-1) */
   cacheHitRatio: number
   /** Quota information (if quotas are configured) */
-  quota?: TenantQuota
+  quota?: TenantQuota | undefined
 }
 
 /**
@@ -566,23 +566,23 @@ export interface TenantUsageSummary {
  */
 export interface TenantQuota {
   /** Maximum requests per day */
-  maxRequestsPerDay?: number
+  maxRequestsPerDay?: number | undefined
   /** Current requests today */
-  currentRequestsToday?: number
+  currentRequestsToday?: number | undefined
   /** Maximum tokens per day */
-  maxTokensPerDay?: number
+  maxTokensPerDay?: number | undefined
   /** Current tokens today */
-  currentTokensToday?: number
+  currentTokensToday?: number | undefined
   /** Maximum cost per day in USD */
-  maxCostPerDay?: number
+  maxCostPerDay?: number | undefined
   /** Current cost today */
-  currentCostToday?: number
+  currentCostToday?: number | undefined
   /** Maximum cost per month in USD */
-  maxCostPerMonth?: number
+  maxCostPerMonth?: number | undefined
   /** Current cost this month */
-  currentCostThisMonth?: number
+  currentCostThisMonth?: number | undefined
   /** Whether tenant has exceeded any quota */
-  isQuotaExceeded?: boolean
+  isQuotaExceeded?: boolean | undefined
   /** Which quota was exceeded */
-  exceededQuota?: 'requests' | 'tokens' | 'dailyCost' | 'monthlyCost'
+  exceededQuota?: 'requests' | 'tokens' | 'dailyCost' | 'monthlyCost' | undefined
 }

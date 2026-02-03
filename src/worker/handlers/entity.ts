@@ -74,7 +74,7 @@ export async function handleEntityDetail(
   const relationships: Record<string, {
     count: number
     href: string
-    items: Array<{ name: string; href: string; importance?: number; level?: number }>
+    items: Array<{ name: string; href: string; importance?: number | undefined; level?: number | undefined }>
   }> = {}
 
   for (const rel of allRels) {

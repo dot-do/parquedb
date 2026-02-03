@@ -71,7 +71,7 @@ export interface CacheInvalidationSignal {
   /** Version number (monotonically increasing) */
   version: number
   /** Optional entity ID for entity-specific invalidation */
-  entityId?: string
+  entityId?: string | undefined
 }
 
 // Initialize Sqids for short ID generation
@@ -88,7 +88,7 @@ const sqids = new Sqids()
  */
 export interface DOCreateOptions extends Omit<CreateOptions, 'actor'> {
   /** Actor performing the operation (string in DO context) */
-  actor?: string
+  actor?: string | undefined
 }
 
 /**
@@ -98,7 +98,7 @@ export interface DOCreateOptions extends Omit<CreateOptions, 'actor'> {
  */
 export interface DOUpdateOptions extends Omit<UpdateOptions, 'actor' | 'returnDocument'> {
   /** Actor performing the operation (string in DO context) */
-  actor?: string
+  actor?: string | undefined
 }
 
 /**
@@ -108,27 +108,27 @@ export interface DOUpdateOptions extends Omit<UpdateOptions, 'actor' | 'returnDo
  */
 export interface DODeleteOptions extends Omit<DeleteOptions, 'actor'> {
   /** Actor performing the operation (string in DO context) */
-  actor?: string
+  actor?: string | undefined
 }
 
 /** Options for link operation */
 export interface DOLinkOptions {
   /** Actor performing the operation */
-  actor?: string
+  actor?: string | undefined
   /**
    * How the relationship was matched (SHREDDED)
    * - 'exact': Precise match (user explicitly linked)
    * - 'fuzzy': Approximate match (entity resolution, text similarity)
    */
-  matchMode?: 'exact' | 'fuzzy'
+  matchMode?: 'exact' | 'fuzzy' | undefined
   /**
    * Similarity score for fuzzy matches (SHREDDED)
    * Range: 0.0 to 1.0
    * Only meaningful when matchMode is 'fuzzy'
    */
-  similarity?: number
+  similarity?: number | undefined
   /** Edge data (remaining metadata in Variant) */
-  data?: Record<string, unknown>
+  data?: Record<string, unknown> | undefined
 }
 
 /** Entity as stored in SQLite */
@@ -945,7 +945,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   async restore(
     ns: string,
     id: string,
-    options: { actor?: string } = {}
+    options: { actor?: string | undefined } = {}
   ): Promise<Entity | null> {
     await this.ensureInitialized()
 
@@ -1292,7 +1292,7 @@ export class ParqueDBDO extends DurableObject<Env> {
 
       case 'UPDATE': {
         if (!current || !event.after) return current
-        const { $type, name, ...rest } = event.after as { $type?: string; name?: string; [key: string]: unknown }
+        const { $type, name, ...rest } = event.after as { $type?: string | undefined; name?: string | undefined; [key: string]: unknown }
         return {
           ...current,
           $type: $type || current.$type,
@@ -2521,7 +2521,7 @@ export class ParqueDBDO extends DurableObject<Env> {
     ns: string,
     id: string,
     beforeState?: StoredEntity | StoredRelationship | null,
-    extra?: { predicate?: string; toNs?: string; toId?: string }
+    extra?: { predicate?: string | undefined; toNs?: string | undefined; toId?: string | undefined }
   ): void {
     if (!this.inTransaction || !this.transactionSnapshot) return
     this.transactionSnapshot.sqlRollbackOps.push({ type, ns, id, beforeState, ...extra })
@@ -2688,10 +2688,10 @@ interface TransactionSnapshot {
     type: 'entity_insert' | 'entity_update' | 'entity_delete' | 'rel_insert' | 'rel_update' | 'rel_delete' | 'pending_row_group'
     ns: string
     id: string
-    predicate?: string
-    toNs?: string
-    toId?: string
-    beforeState?: StoredEntity | StoredRelationship | null
+    predicate?: string | undefined
+    toNs?: string | undefined
+    toId?: string | undefined
+    beforeState?: StoredEntity | StoredRelationship | null | undefined
   }>
   pendingR2Paths: string[]
 }

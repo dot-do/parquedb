@@ -29,7 +29,7 @@ import {
 interface User {
   name: string
   email: string
-  bio?: string
+  bio?: string | undefined
 }
 
 interface Post {

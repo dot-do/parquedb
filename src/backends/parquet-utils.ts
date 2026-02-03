@@ -23,7 +23,7 @@ export interface EntityToRowOptions {
    * Fields to extract into separate Parquet columns (shredding)
    * for predicate pushdown support
    */
-  shredFields?: string[]
+  shredFields?: string[] | undefined
 }
 
 /**
@@ -34,7 +34,7 @@ export interface RowToEntityOptions {
    * Fields that were shredded into separate columns
    * These take precedence over values in $data
    */
-  shredFields?: string[]
+  shredFields?: string[] | undefined
 }
 
 /**
@@ -64,7 +64,7 @@ export function entityToRow<T>(entity: Entity<T>, options?: EntityToRowOptions):
     deletedBy,
     version,
     ...dataFields
-  } = entity as Entity<T> & { deletedAt?: Date; deletedBy?: string }
+  } = entity as Entity<T> & { deletedAt?: Date | undefined; deletedBy?: string | undefined }
 
   // Filter out undefined values (null should be preserved)
   const filteredDataFields: Record<string, unknown> = {}

@@ -34,17 +34,17 @@ export interface SimpleQuery {
   /**
    * MongoDB-style filter to apply to the data
    */
-  filter?: Filter
+  filter?: Filter | undefined
 
   /**
    * Projection to apply (field inclusion/exclusion)
    */
-  project?: ProjectionSpec
+  project?: ProjectionSpec | undefined
 
   /**
    * Sort specification (field names to sort directions)
    */
-  sort?: SortSpec
+  sort?: SortSpec | undefined
 }
 
 // =============================================================================

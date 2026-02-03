@@ -54,7 +54,7 @@ export interface FileStat {
   /** Last modified time */
   lastModified: Date
   /** ETag/version for conditional operations */
-  etag?: string
+  etag?: string | undefined
 }
 
 /**
@@ -193,10 +193,10 @@ export interface R2BucketLike {
   put(key: string, data: Uint8Array | ArrayBuffer): Promise<unknown>
   delete(key: string): Promise<void>
   head(key: string): Promise<{ size: number; uploaded: Date; etag: string } | null>
-  list(options?: { prefix?: string; cursor?: string }): Promise<{
+  list(options?: { prefix?: string | undefined; cursor?: string | undefined }): Promise<{
     objects: Array<{ key: string }>
     truncated: boolean
-    cursor?: string
+    cursor?: string | undefined
   }>
 }
 

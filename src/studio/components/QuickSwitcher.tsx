@@ -32,21 +32,21 @@ export interface QuickSwitcherProps {
   /** Available databases to search through */
   databases: DatabaseInfo[]
   /** Base path for admin routes (default: '/admin') */
-  basePath?: string
+  basePath?: string | undefined
   /** Callback when a database is selected */
-  onSelect?: (database: DatabaseInfo) => void
+  onSelect?: ((database: DatabaseInfo) => void) | undefined
   /** Whether the quick switcher is currently open */
-  isOpen?: boolean
+  isOpen?: boolean | undefined
   /** Callback when the quick switcher should close */
-  onClose?: () => void
+  onClose?: (() => void) | undefined
   /** Whether to register global keyboard shortcut (default: true) */
-  registerShortcut?: boolean
+  registerShortcut?: boolean | undefined
   /** Currently active database ID (will be highlighted) */
-  activeDatabaseId?: string
+  activeDatabaseId?: string | undefined
   /** Placeholder text for the search input */
-  placeholder?: string
+  placeholder?: string | undefined
   /** Maximum number of results to display (default: 10) */
-  maxResults?: number
+  maxResults?: number | undefined
 }
 
 /**

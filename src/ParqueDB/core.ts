@@ -582,7 +582,7 @@ export class ParqueDBImpl {
   async restore<T = Record<string, unknown>>(
     namespace: string,
     id: string,
-    options?: { actor?: EntityId }
+    options?: { actor?: EntityId | undefined }
   ): Promise<Entity<T> | null> {
     return restoreEntity<T>(this.getEntityContext(), namespace, id, options)
   }
@@ -631,7 +631,7 @@ export class ParqueDBImpl {
   // Public API - Event Log
   // ===========================================================================
 
-  archiveEvents(options?: { olderThan?: Date; maxEvents?: number }): ArchiveEventsResult {
+  archiveEvents(options?: { olderThan?: Date | undefined; maxEvents?: number | undefined }): ArchiveEventsResult {
     return archiveEvents(this.getEventContext(), options)
   }
 
@@ -658,12 +658,12 @@ export class ParqueDBImpl {
     const pendingOps: Array<{
       type: 'create' | 'update' | 'delete'
       namespace: string
-      id?: string
-      data?: CreateInput
-      update?: UpdateInput
-      options?: CreateOptions | UpdateOptions | DeleteOptions
-      entity?: Entity
-      beforeState?: Entity
+      id?: string | undefined
+      data?: CreateInput | undefined
+      update?: UpdateInput | undefined
+      options?: CreateOptions | UpdateOptions | DeleteOptions | undefined
+      entity?: Entity | undefined
+      beforeState?: Entity | undefined
     }> = []
 
     const self = this
@@ -857,7 +857,7 @@ export class ParqueDBImpl {
     namespace: string,
     filter: Filter,
     update: UpdateInput<T>,
-    options?: { returnDocument?: 'before' | 'after' }
+    options?: { returnDocument?: 'before' | 'after' | undefined }
   ): Promise<Entity<T> | null> {
     validateNamespace(namespace)
     validateFilter(filter)
@@ -926,7 +926,7 @@ export class ParqueDBImpl {
             updateOptions.expectedVersion = item.options.expectedVersion
           }
 
-          const { $setOnInsert: _, ...updateWithoutSetOnInsert } = item.update as UpdateInput<T> & { $setOnInsert?: unknown }
+          const { $setOnInsert: _, ...updateWithoutSetOnInsert } = item.update as UpdateInput<T> & { $setOnInsert?: unknown | undefined }
 
           await this.update<T>(namespace, entity.$id as string, updateWithoutSetOnInsert, updateOptions)
           result.modifiedCount++

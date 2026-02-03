@@ -20,15 +20,15 @@ export interface DatabaseSelectViewProps {
   user?: {
     id: string
     email: string
-    name?: string
-    avatarUrl?: string
-  }
+    name?: string | undefined
+    avatarUrl?: string | undefined
+  } | undefined
   /** Base path for admin routes */
-  basePath?: string
+  basePath?: string | undefined
   /** Brand/logo URL */
-  logoUrl?: string
+  logoUrl?: string | undefined
   /** App name */
-  appName?: string
+  appName?: string | undefined
 }
 
 /**

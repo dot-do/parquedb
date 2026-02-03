@@ -64,7 +64,7 @@ interface IssueCommentPayload {
   action: 'created' | 'edited' | 'deleted'
   issue: {
     number: number
-    pull_request?: { url: string }
+    pull_request?: { url: string } | undefined
   }
   comment: {
     id: number
@@ -76,7 +76,7 @@ interface IssueCommentPayload {
     owner: { login: string }
     name: string
   }
-  installation?: { id: number }
+  installation?: { id: number } | undefined
 }
 
 /**
@@ -439,7 +439,7 @@ async function createOctokitAdapter(
   payload: unknown
 ): Promise<OctokitClient> {
   // Get installation ID from payload
-  const installationId = (payload as { installation?: { id: number } })?.installation?.id
+  const installationId = (payload as { installation?: { id: number } | undefined })?.installation?.id
 
   // GitHub App authentication would require:
   // 1. Generating JWT using App private key (stored in env.GITHUB_APP_PRIVATE_KEY)

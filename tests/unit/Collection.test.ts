@@ -39,7 +39,7 @@ interface Post {
   status: 'draft' | 'published' | 'archived'
   views: number
   tags: string[]
-  publishedAt?: Date
+  publishedAt?: Date | undefined
   metadata?: {
     readTime: number
     wordCount: number

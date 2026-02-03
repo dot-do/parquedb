@@ -235,21 +235,21 @@ export interface PushModifiers<T> {
   /**
    * Position to insert at (0 = beginning, negative from end)
    */
-  $position?: number
+  $position?: number | undefined
 
   /**
    * Limit array size after push
    * Positive: keep first N elements
    * Negative: keep last N elements
    */
-  $slice?: number
+  $slice?: number | undefined
 
   /**
    * Sort array after push
    * 1 for ascending, -1 for descending
    * Or object for sorting by nested field
    */
-  $sort?: 1 | -1 | Record<string, 1 | -1>
+  $sort?: 1 | -1 | Record<string, 1 | -1> | undefined
 }
 
 /**
@@ -463,11 +463,11 @@ export interface BitOperator<T extends EntityData = EntityData> {
   $bit: {
     [K in keyof T]?: {
       /** Bitwise AND with current value */
-      and?: number
+      and?: number | undefined
       /** Bitwise OR with current value */
-      or?: number
+      or?: number | undefined
       /** Bitwise XOR with current value */
-      xor?: number
+      xor?: number | undefined
     }
   }
 }
@@ -505,9 +505,9 @@ export interface EmbedFieldOptions {
   /** Target field to store the embedding vector */
   field: string
   /** Model to use for embedding (default: @cf/baai/bge-m3) */
-  model?: string
+  model?: string | undefined
   /** Whether to overwrite existing embedding */
-  overwrite?: boolean
+  overwrite?: boolean | undefined
 }
 
 // =============================================================================
@@ -548,36 +548,36 @@ export interface EmbedFieldOptions {
  */
 export interface UpdateInput<T extends EntityData = EntityData> {
   // Field updates
-  $set?: Partial<T>
-  $unset?: { [K in keyof T]?: '' | 1 | true }
-  $rename?: Record<string, string>
-  $setOnInsert?: Partial<T>
+  $set?: Partial<T> | undefined
+  $unset?: { [K in keyof T]?: '' | 1 | true } | undefined
+  $rename?: Record<string, string> | undefined
+  $setOnInsert?: Partial<T> | undefined
 
   // Numeric
-  $inc?: { [K in keyof T]?: number }
-  $mul?: { [K in keyof T]?: number }
-  $min?: Partial<T>
-  $max?: Partial<T>
+  $inc?: { [K in keyof T]?: number } | undefined
+  $mul?: { [K in keyof T]?: number } | undefined
+  $min?: Partial<T> | undefined
+  $max?: Partial<T> | undefined
 
   // Array
-  $push?: Record<string, unknown>
-  $pull?: Record<string, unknown>
-  $pullAll?: Record<string, unknown[]>
-  $addToSet?: Record<string, unknown>
-  $pop?: Record<string, -1 | 1>
+  $push?: Record<string, unknown> | undefined
+  $pull?: Record<string, unknown> | undefined
+  $pullAll?: Record<string, unknown[]> | undefined
+  $addToSet?: Record<string, unknown> | undefined
+  $pop?: Record<string, -1 | 1> | undefined
 
   // Date
-  $currentDate?: Record<string, true | { $type: 'date' | 'timestamp' }>
+  $currentDate?: Record<string, true | { $type: 'date' | 'timestamp' }> | undefined
 
   // Relationships (ParqueDB-specific)
-  $link?: Record<string, EntityId | EntityId[]>
-  $unlink?: Record<string, EntityId | EntityId[] | '$all'>
+  $link?: Record<string, EntityId | EntityId[]> | undefined
+  $unlink?: Record<string, EntityId | EntityId[] | '$all'> | undefined
 
   // Bit
-  $bit?: Record<string, { and?: number; or?: number; xor?: number }>
+  $bit?: Record<string, { and?: number | undefined; or?: number | undefined; xor?: number | undefined }> | undefined
 
   // Embedding (ParqueDB AI)
-  $embed?: Record<string, string | EmbedFieldOptions>
+  $embed?: Record<string, string | EmbedFieldOptions> | undefined
 }
 
 // =============================================================================

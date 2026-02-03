@@ -120,8 +120,8 @@ interface QueryDefinition {
   name: string
   description: string
   file: string
-  filter?: Record<string, unknown>
-  columns?: string[]
+  filter?: Record<string, unknown> | undefined
+  columns?: string[] | undefined
 }
 
 const DATASET_QUERIES: Record<string, QueryDefinition[]> = {

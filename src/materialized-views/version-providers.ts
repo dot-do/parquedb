@@ -27,7 +27,7 @@ export interface NativeVersionProviderConfig {
   /** Dataset name (used in path prefix) */
   dataset: string
   /** Events path prefix (default: 'events') */
-  eventsPrefix?: string
+  eventsPrefix?: string | undefined
 }
 
 /**
@@ -201,7 +201,7 @@ export interface IcebergVersionProviderConfig {
   /** Warehouse path */
   warehouse: string
   /** Database name (optional, default: 'default') */
-  database?: string
+  database?: string | undefined
 }
 
 /**
@@ -391,14 +391,14 @@ export class IcebergSourceVersionProvider implements SourceVersionProvider {
  * Minimal Iceberg metadata structure for version provider
  */
 interface IcebergMetadataSnapshot {
-  'current-snapshot-id'?: number | null
-  'last-updated-ms'?: number
-  'last-sequence-number'?: number
+  'current-snapshot-id'?: number | null | undefined
+  'last-updated-ms'?: number | undefined
+  'last-sequence-number'?: number | undefined
   snapshots?: Array<{
     'snapshot-id': number
     'timestamp-ms': number
-    summary?: Record<string, unknown>
-  }>
+    summary?: Record<string, unknown> | undefined
+  }> | undefined
 }
 
 // =============================================================================
@@ -526,7 +526,7 @@ export class DeltaSourceVersionProvider implements SourceVersionProvider {
 
       for (const line of lines) {
         try {
-          const action = JSON.parse(line) as { commitInfo?: DeltaCommitInfo }
+          const action = JSON.parse(line) as { commitInfo?: DeltaCommitInfo | undefined }
           if (action.commitInfo) {
             return action.commitInfo
           }
@@ -633,7 +633,7 @@ export class DeltaSourceVersionProvider implements SourceVersionProvider {
 interface DeltaCommitInfo {
   timestamp: number
   operation: string
-  operationMetrics?: Record<string, string>
+  operationMetrics?: Record<string, string> | undefined
 }
 
 // =============================================================================

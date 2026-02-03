@@ -33,7 +33,7 @@ export interface MutationContext {
   inTransaction: boolean
 
   /** Transaction ID (if in transaction) */
-  transactionId?: string
+  transactionId?: string | undefined
 
   /** Validation mode */
   validationMode: ValidationMode | false
@@ -156,10 +156,10 @@ export interface MutationEvent {
   timestamp: Date
 
   /** Whether this is a relationship event */
-  isRelationship?: boolean
+  isRelationship?: boolean | undefined
 
   /** Relationship predicate (if relationship event) */
-  predicate?: string
+  predicate?: string | undefined
 }
 
 // =============================================================================
@@ -171,10 +171,10 @@ export interface MutationEvent {
  */
 export interface MutationError {
   /** Index in bulk operation (if applicable) */
-  index?: number
+  index?: number | undefined
 
   /** The entity ID involved */
-  entityId?: EntityId
+  entityId?: EntityId | undefined
 
   /** Error code */
   code: string
@@ -183,7 +183,7 @@ export interface MutationError {
   message: string
 
   /** Original error */
-  cause?: Error
+  cause?: Error | undefined
 }
 
 /**
@@ -246,28 +246,28 @@ export type PostMutationHandler = (
  */
 export interface MutationHooks {
   /** Called before any mutation */
-  preMutation?: PreMutationHandler[]
+  preMutation?: PreMutationHandler[] | undefined
 
   /** Called after successful mutation */
-  postMutation?: PostMutationHandler[]
+  postMutation?: PostMutationHandler[] | undefined
 
   /** Called before create */
-  preCreate?: PreMutationHandler[]
+  preCreate?: PreMutationHandler[] | undefined
 
   /** Called after create */
-  postCreate?: PostMutationHandler[]
+  postCreate?: PostMutationHandler[] | undefined
 
   /** Called before update */
-  preUpdate?: PreMutationHandler[]
+  preUpdate?: PreMutationHandler[] | undefined
 
   /** Called after update */
-  postUpdate?: PostMutationHandler[]
+  postUpdate?: PostMutationHandler[] | undefined
 
   /** Called before delete */
-  preDelete?: PreMutationHandler[]
+  preDelete?: PreMutationHandler[] | undefined
 
   /** Called after delete */
-  postDelete?: PostMutationHandler[]
+  postDelete?: PostMutationHandler[] | undefined
 }
 
 // =============================================================================
@@ -279,10 +279,10 @@ export interface MutationHooks {
  */
 export interface ApplyOperatorsOptions {
   /** Whether this is an insert (for $setOnInsert) */
-  isInsert?: boolean
+  isInsert?: boolean | undefined
 
   /** Current timestamp to use */
-  timestamp?: Date
+  timestamp?: Date | undefined
 }
 
 /**

@@ -22,9 +22,9 @@ export interface HookContext {
   /** Timestamp when the operation started */
   startTime: number
   /** Namespace/collection being accessed */
-  namespace?: string
+  namespace?: string | undefined
   /** Additional metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -34,11 +34,11 @@ export interface QueryContext extends HookContext {
   /** Type of query operation */
   operationType: 'find' | 'findOne' | 'get' | 'count' | 'aggregate' | 'explain'
   /** Query filter */
-  filter?: Filter
+  filter?: Filter | undefined
   /** Query options (limit, skip, sort, etc.) */
-  options?: FindOptions<unknown>
+  options?: FindOptions<unknown> | undefined
   /** Aggregation pipeline (for aggregate operations) */
-  pipeline?: unknown[]
+  pipeline?: unknown[] | undefined
 }
 
 /**
@@ -48,11 +48,11 @@ export interface MutationContext extends HookContext {
   /** Type of mutation operation */
   operationType: 'create' | 'update' | 'delete' | 'updateMany' | 'deleteMany' | 'link' | 'unlink'
   /** Entity ID(s) being mutated */
-  entityId?: string | string[]
+  entityId?: string | string[] | undefined
   /** Create/update data */
-  data?: CreateInput<unknown> | UpdateInput<unknown>
+  data?: CreateInput<unknown> | UpdateInput<unknown> | undefined
   /** Delete options */
-  hard?: boolean
+  hard?: boolean | undefined
 }
 
 /**
@@ -64,7 +64,7 @@ export interface StorageContext extends HookContext {
   /** File path being accessed */
   path: string
   /** Byte range for range reads */
-  range?: { start: number; end: number }
+  range?: { start: number; end: number } | undefined
 }
 
 // =============================================================================
@@ -78,15 +78,15 @@ export interface QueryResult {
   /** Number of rows returned */
   rowCount: number
   /** Whether the query used an index */
-  indexUsed?: string
+  indexUsed?: string | undefined
   /** Execution time in milliseconds */
   durationMs: number
   /** Whether results were cached */
-  cached?: boolean
+  cached?: boolean | undefined
   /** Number of row groups scanned */
-  rowGroupsScanned?: number
+  rowGroupsScanned?: number | undefined
   /** Number of row groups skipped */
-  rowGroupsSkipped?: number
+  rowGroupsSkipped?: number | undefined
 }
 
 /**
@@ -96,11 +96,11 @@ export interface MutationResult {
   /** Number of entities affected */
   affectedCount: number
   /** Generated entity ID(s) for creates */
-  generatedIds?: string[]
+  generatedIds?: string[] | undefined
   /** Execution time in milliseconds */
   durationMs: number
   /** New version number(s) */
-  newVersion?: number | number[]
+  newVersion?: number | number[] | undefined
 }
 
 /**
@@ -112,9 +112,9 @@ export interface StorageResult {
   /** Execution time in milliseconds */
   durationMs: number
   /** ETag of the file */
-  etag?: string
+  etag?: string | undefined
   /** Number of files affected (for list, deletePrefix) */
-  fileCount?: number
+  fileCount?: number | undefined
 }
 
 // =============================================================================
@@ -228,9 +228,9 @@ export interface OperationMetrics {
   /** Error count */
   errorCount: number
   /** Total bytes transferred (for storage) */
-  bytesTransferred?: number
+  bytesTransferred?: number | undefined
   /** Total rows processed (for queries) */
-  rowsProcessed?: number
+  rowsProcessed?: number | undefined
   /** Last updated timestamp */
   lastUpdated: number
 }

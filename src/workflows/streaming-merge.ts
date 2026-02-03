@@ -48,39 +48,39 @@ export interface StreamingMergeOptions {
    * Lower values = less memory, more I/O.
    * @default 10000
    */
-  chunkSize?: number
+  chunkSize?: number | undefined
 
   /**
    * Maximum memory usage in bytes.
    * Used to adaptively adjust chunk sizes.
    * @default 128MB
    */
-  maxMemoryBytes?: number
+  maxMemoryBytes?: number | undefined
 
   /**
    * Field to sort by.
    * @default 'createdAt'
    */
-  sortKey?: string
+  sortKey?: string | undefined
 
   /**
    * Sort direction.
    * @default 'asc'
    */
-  sortDirection?: 'asc' | 'desc'
+  sortDirection?: 'asc' | 'desc' | undefined
 
   /**
    * Columns to read from Parquet files.
    * If not specified, all columns are read.
    */
-  columns?: string[]
+  columns?: string[] | undefined
 
   /**
    * Output buffer size (rows).
    * Chunks of this size are yielded to the caller.
    * @default same as chunkSize
    */
-  outputBufferSize?: number
+  outputBufferSize?: number | undefined
 }
 
 /**
@@ -272,7 +272,7 @@ async function* createChunkedParquetReader(
       const readOptions: {
         file: typeof asyncBuffer
         compressors: Compressors
-        columns?: string[]
+        columns?: string[] | undefined
         rowGroups: number[]
       } = {
         file: asyncBuffer,
@@ -310,7 +310,7 @@ async function* createChunkedParquetReader(
  */
 export class StreamingMergeSorter {
   private storage: StorageBackend
-  private options: Required<Omit<StreamingMergeOptions, 'columns'>> & { columns?: string[] }
+  private options: Required<Omit<StreamingMergeOptions, 'columns'>> & { columns?: string[] | undefined }
 
   constructor(storage: StorageBackend, options: StreamingMergeOptions = {}) {
     this.storage = storage

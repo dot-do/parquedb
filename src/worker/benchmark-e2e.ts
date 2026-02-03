@@ -21,11 +21,11 @@ import { logger } from '../utils/logger'
 // =============================================================================
 
 type R2Bucket = {
-  get(key: string, options?: { range?: { offset: number; length: number } }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
+  get(key: string, options?: { range?: { offset: number; length: number } | undefined }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
   put(key: string, value: ArrayBuffer | Uint8Array): Promise<unknown>
   delete(key: string): Promise<void>
   head(key: string): Promise<{ size: number } | null>
-  list(options?: { prefix?: string; limit?: number }): Promise<{ objects: { key: string; size: number; uploaded: Date }[]; truncated: boolean }>
+  list(options?: { prefix?: string | undefined; limit?: number | undefined }): Promise<{ objects: { key: string; size: number; uploaded: Date }[]; truncated: boolean }>
 }
 
 export interface LatencyStats {
@@ -45,20 +45,20 @@ export interface ColdStartResult {
   metadata: {
     colo: string
     timestamp: string
-    isolateId?: string
+    isolateId?: string | undefined
   }
 }
 
 export interface CrudBenchmarkResult {
   operation: string
   iterations: number
-  batchSize?: number
+  batchSize?: number | undefined
   latencyMs: LatencyStats
   throughput: {
     opsPerSec: number
     totalTimeMs: number
   }
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 export interface QueryBenchmarkResult {
@@ -81,16 +81,16 @@ export interface BackendBenchmarkResult {
       latencyMs: LatencyStats
       bytesWritten: number
       rowsWritten: number
-    }
+    } | undefined
     read?: {
       latencyMs: LatencyStats
       bytesRead: number
       rowsRead: number
-    }
+    } | undefined
     'time-travel'?: {
       latencyMs: LatencyStats
       snapshotsAvailable: number
-    }
+    } | undefined
   }
 }
 
@@ -189,7 +189,7 @@ export async function measureColdStart(
   const firstQueryMs = Math.round(performance.now() - queryStart)
 
   // Extract colo from request
-  const cf = (request as Request & { cf?: { colo?: string } }).cf
+  const cf = (request as Request & { cf?: { colo?: string | undefined } | undefined }).cf
   const colo = cf?.colo ?? 'unknown'
 
   const coldStartMs = Math.round(performance.now() - startTime)
@@ -593,7 +593,7 @@ export interface HealthCheckResult {
   }
   metadata: {
     colo: string
-    region?: string
+    region?: string | undefined
   }
 }
 
@@ -601,7 +601,7 @@ export async function healthCheck(
   bucket: R2Bucket,
   request: Request
 ): Promise<HealthCheckResult> {
-  const cf = (request as Request & { cf?: { colo?: string; region?: string } }).cf
+  const cf = (request as Request & { cf?: { colo?: string | undefined; region?: string | undefined } | undefined }).cf
 
   // Check R2
   const r2Start = performance.now()

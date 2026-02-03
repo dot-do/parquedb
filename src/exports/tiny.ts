@@ -41,16 +41,16 @@ export interface TinyFilter {
  * Filter operators
  */
 export interface TinyOperator {
-  $eq?: unknown
-  $ne?: unknown
-  $gt?: number | string | Date
-  $gte?: number | string | Date
-  $lt?: number | string | Date
-  $lte?: number | string | Date
-  $in?: unknown[]
-  $nin?: unknown[]
-  $exists?: boolean
-  $regex?: string | RegExp
+  $eq?: unknown | undefined
+  $ne?: unknown | undefined
+  $gt?: number | string | Date | undefined
+  $gte?: number | string | Date | undefined
+  $lt?: number | string | Date | undefined
+  $lte?: number | string | Date | undefined
+  $in?: unknown[] | undefined
+  $nin?: unknown[] | undefined
+  $exists?: boolean | undefined
+  $regex?: string | RegExp | undefined
 }
 
 /**
@@ -58,13 +58,13 @@ export interface TinyOperator {
  */
 export interface QueryOptions {
   /** Columns to read (default: all) */
-  columns?: string[]
+  columns?: string[] | undefined
   /** Row groups to read (default: all) */
-  rowGroups?: number[]
+  rowGroups?: number[] | undefined
   /** Maximum rows to return */
-  limit?: number
+  limit?: number | undefined
   /** Rows to skip */
-  offset?: number
+  offset?: number | undefined
 }
 
 /**
@@ -320,7 +320,7 @@ export async function parquetQuery(
   const asyncBuffer = createBufferAdapter(buffer)
 
   // Build read options
-  const readOptions: { file: AsyncBuffer; columns?: string[]; rowGroups?: number[] } = {
+  const readOptions: { file: AsyncBuffer; columns?: string[] | undefined; rowGroups?: number[] | undefined } = {
     file: asyncBuffer,
   }
 
@@ -389,7 +389,7 @@ export async function* parquetStream(
   for (const groupIndex of rowGroups) {
     if (limit !== undefined && rowCount - offset >= limit) break
 
-    const readOptions: { file: AsyncBuffer; columns?: string[]; rowGroups: number[] } = {
+    const readOptions: { file: AsyncBuffer; columns?: string[] | undefined; rowGroups: number[] } = {
       file: asyncBuffer,
       rowGroups: [groupIndex],
     }

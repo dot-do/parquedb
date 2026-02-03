@@ -25,10 +25,10 @@ interface RowGroupMetadata {
 
 interface ColumnStats {
   name: string
-  min?: unknown
-  max?: unknown
+  min?: unknown | undefined
+  max?: unknown | undefined
   nullCount: number
-  distinctCount?: number
+  distinctCount?: number | undefined
   hasStats: boolean
 }
 
@@ -37,7 +37,7 @@ interface ParquetMetadata {
   rowGroups: RowGroupMetadata[]
   columns: Array<{ name: string; physicalType: string; logicalType?: string; encoding: string; compression: string }>
   schema: { fields: Array<{ name: string; type: string; nullable: boolean }> }
-  keyValueMetadata?: Record<string, string>
+  keyValueMetadata?: Record<string, string> | undefined
 }
 
 interface QueryStats {

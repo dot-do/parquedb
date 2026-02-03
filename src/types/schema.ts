@@ -106,52 +106,52 @@ export interface FieldDefinition {
   type: FieldTypeString | string  // Allow string for dynamic types
 
   /** Whether field is required */
-  required?: boolean
+  required?: boolean | undefined
 
   /** Default value */
-  default?: unknown
+  default?: unknown | undefined
 
   /** Index type */
-  index?: SchemaIndexType
+  index?: SchemaIndexType | undefined
 
   /** Field description */
-  description?: string
+  description?: string | undefined
 
   /** Validation pattern (for strings) */
-  pattern?: string
+  pattern?: string | undefined
 
   /** Minimum value (for numbers) */
-  min?: number
+  min?: number | undefined
 
   /** Maximum value (for numbers) */
-  max?: number
+  max?: number | undefined
 
   /** Minimum length (for strings/arrays) */
-  minLength?: number
+  minLength?: number | undefined
 
   /** Maximum length (for strings/arrays) */
-  maxLength?: number
+  maxLength?: number | undefined
 
   /** Allowed values (for enums) */
-  enum?: unknown[]
+  enum?: unknown[] | undefined
 
   /** Vector dimensions (for vector type) */
-  dimensions?: number
+  dimensions?: number | undefined
 
   /** Vector distance metric (for vector type) */
-  metric?: 'cosine' | 'euclidean' | 'dotProduct'
+  metric?: 'cosine' | 'euclidean' | 'dotProduct' | undefined
 
   /** FTS options (for full-text search indexed fields) */
   ftsOptions?: {
-    language?: string
-    weight?: number
-  }
+    language?: string | undefined
+    weight?: number | undefined
+  } | undefined
 
   /** Similarity threshold for fuzzy relationships (0-1) */
-  threshold?: number
+  threshold?: number | undefined
 
   /** Custom metadata */
-  meta?: Record<string, unknown>
+  meta?: Record<string, unknown> | undefined
 }
 
 /** Field definition - string shorthand or full object */
@@ -183,25 +183,25 @@ export type FieldDef = FieldTypeString | RelationString | FieldDefinition
  */
 export interface TypeDefinition {
   /** JSON-LD type URI */
-  $type?: string
+  $type?: string | undefined
 
   /** Default namespace for this type */
-  $ns?: string
+  $ns?: string | undefined
 
   /** Fields to shred from Variant (for columnar efficiency) */
-  $shred?: string[]
+  $shred?: string[] | undefined
 
   /** Type description */
-  $description?: string
+  $description?: string | undefined
 
   /** Abstract type (cannot be instantiated directly) */
-  $abstract?: boolean
+  $abstract?: boolean | undefined
 
   /** Extends another type */
-  $extends?: string
+  $extends?: string | undefined
 
   /** Index definitions */
-  $indexes?: IndexDefinition[]
+  $indexes?: IndexDefinition[] | undefined
 
   /**
    * Visibility level for this collection
@@ -211,7 +211,7 @@ export interface TypeDefinition {
    *
    * Inherits from database-level visibility if not specified
    */
-  $visibility?: Visibility
+  $visibility?: Visibility | undefined
 
   /** Field definitions */
   [fieldName: string]: FieldDef | string | string[] | boolean | IndexDefinition[] | Visibility | undefined
@@ -224,22 +224,22 @@ export interface TypeDefinition {
 /** Compound index definition */
 export interface IndexDefinition {
   /** Index name */
-  name?: string
+  name?: string | undefined
 
   /** Fields in index (with optional direction) */
-  fields: (string | { field: string; direction?: 1 | -1 })[]
+  fields: (string | { field: string; direction?: 1 | -1 | undefined })[]
 
   /** Unique constraint */
-  unique?: boolean
+  unique?: boolean | undefined
 
   /** Sparse index (only index documents with field) */
-  sparse?: boolean
+  sparse?: boolean | undefined
 
   /** Partial filter expression */
-  partialFilterExpression?: Record<string, unknown>
+  partialFilterExpression?: Record<string, unknown> | undefined
 
   /** TTL in seconds (for expiring documents) */
-  expireAfterSeconds?: number
+  expireAfterSeconds?: number | undefined
 }
 
 // =============================================================================
@@ -283,27 +283,27 @@ export interface ParsedField {
   type: string
   required: boolean
   isArray: boolean
-  default?: unknown
-  index?: SchemaIndexType
+  default?: unknown | undefined
+  index?: SchemaIndexType | undefined
 
   // Relationship info
   isRelation: boolean
-  relationDirection?: 'forward' | 'backward'
-  relationMode?: 'exact' | 'fuzzy'
-  targetType?: string
-  reverseName?: string
+  relationDirection?: 'forward' | 'backward' | undefined
+  relationMode?: 'exact' | 'fuzzy' | undefined
+  targetType?: string | undefined
+  reverseName?: string | undefined
 }
 
 /** Parsed type information */
 export interface ParsedType {
   name: string
-  typeUri?: string
-  namespace?: string
+  typeUri?: string | undefined
+  namespace?: string | undefined
   shredFields: string[]
   fields: Map<string, ParsedField>
   indexes: IndexDefinition[]
   isAbstract: boolean
-  extends?: string
+  extends?: string | undefined
 }
 
 /** Parsed schema */
@@ -344,11 +344,11 @@ export interface ParsedRelationship {
  *   - toType, reverse must be filled by caller
  */
 export interface PartialParsedRelationship {
-  fromType?: string
-  fromField?: string
-  predicate?: string
-  toType?: string
-  reverse?: string
+  fromType?: string | undefined
+  fromField?: string | undefined
+  predicate?: string | undefined
+  toType?: string | undefined
+  reverse?: string | undefined
   isArray: boolean
   direction: 'forward' | 'backward'
   mode: 'exact' | 'fuzzy'
@@ -361,11 +361,11 @@ export interface PartialParsedRelationship {
 export function completeRelationship(
   partial: PartialParsedRelationship,
   context: {
-    fromType?: string
-    fromField?: string
-    predicate?: string
-    toType?: string
-    reverse?: string
+    fromType?: string | undefined
+    fromField?: string | undefined
+    predicate?: string | undefined
+    toType?: string | undefined
+    reverse?: string | undefined
   }
 ): ParsedRelationship {
   return {
@@ -474,8 +474,8 @@ export function parseFieldType(value: string): {
   type: string
   required: boolean
   isArray: boolean
-  index?: SchemaIndexType
-  default?: string
+  index?: SchemaIndexType | undefined
+  default?: string | undefined
 } {
   let type = value.trim()
   let required = false

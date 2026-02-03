@@ -28,11 +28,11 @@ import { logger } from '../utils/logger'
 // =============================================================================
 
 type R2Bucket = {
-  get(key: string, options?: { range?: { offset: number; length: number } }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
+  get(key: string, options?: { range?: { offset: number; length: number } | undefined }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
   put(key: string, value: ArrayBuffer | Uint8Array): Promise<unknown>
   delete(key: string | string[]): Promise<void>
   head(key: string): Promise<{ size: number } | null>
-  list(options?: { prefix?: string; limit?: number; cursor?: string }): Promise<{ objects: { key: string; size: number }[]; truncated: boolean; cursor?: string }>
+  list(options?: { prefix?: string | undefined; limit?: number | undefined; cursor?: string | undefined }): Promise<{ objects: { key: string; size: number }[]; truncated: boolean; cursor?: string | undefined }>
 }
 
 export interface BackendBenchmarkConfig {
@@ -56,10 +56,10 @@ export interface LatencyStats {
 export interface OperationResult {
   operation: string
   latency: LatencyStats
-  bytesWritten?: number
-  bytesRead?: number
-  rowsAffected?: number
-  metadata?: Record<string, unknown>
+  bytesWritten?: number | undefined
+  bytesRead?: number | undefined
+  rowsAffected?: number | undefined
+  metadata?: Record<string, unknown> | undefined
 }
 
 export interface BackendResult {
@@ -81,7 +81,7 @@ export interface BackendBenchmarkResult {
   }
   metadata: {
     timestamp: string
-    colo?: string
+    colo?: string | undefined
     durationMs: number
   }
 }

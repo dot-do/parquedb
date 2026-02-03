@@ -82,7 +82,7 @@ export function applySchemaDefaults<T>(data: CreateInput<T>, schema: Schema): Cr
         }
       }
     } else if (typeof fieldDef === 'object' && fieldDef !== null) {
-      const def = fieldDef as { default?: unknown }
+      const def = fieldDef as { default?: unknown | undefined }
       defaultValue = def.default
     }
 
@@ -102,7 +102,7 @@ export function isFieldRequired(fieldDef: unknown): boolean {
     return fieldDef.includes('!')
   }
   if (typeof fieldDef === 'object' && fieldDef !== null) {
-    const def = fieldDef as { type?: string; required?: boolean }
+    const def = fieldDef as { type?: string | undefined; required?: boolean | undefined }
     if (def.required) return true
     if (def.type && def.type.includes('!')) return true
   }
@@ -155,7 +155,7 @@ export function validateFieldType(
     const parsed = parseFieldType(fieldDef)
     expectedType = parsed.type
   } else if (typeof fieldDef === 'object' && fieldDef !== null) {
-    const def = fieldDef as { type?: string }
+    const def = fieldDef as { type?: string | undefined }
     if (def.type && !isRelationString(def.type)) {
       const parsed = parseFieldType(def.type)
       expectedType = parsed.type
@@ -651,7 +651,7 @@ export async function deleteEntity(
 export async function restoreEntity<T = Record<string, unknown>>(
   namespace: string,
   id: string,
-  options: { actor?: EntityId } | undefined,
+  options: { actor?: EntityId | undefined } | undefined,
   ctx: CRUDContext
 ): Promise<Entity<T> | null> {
   const fullId = toFullId(namespace, id)

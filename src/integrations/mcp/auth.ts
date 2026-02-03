@@ -52,17 +52,17 @@ export interface AuthInfo extends MCPAuthInfo {
   /**
    * When the token expires (Unix timestamp in seconds)
    */
-  expiresAt?: number
+  expiresAt?: number | undefined
 
   /**
    * The resource server URL this token is valid for (RFC 8707)
    */
-  resource?: URL
+  resource?: URL | undefined
 
   /**
    * Additional custom data attached to the auth info
    */
-  extra?: Record<string, unknown>
+  extra?: Record<string, unknown> | undefined
 }
 
 /**
@@ -89,7 +89,7 @@ export interface AuthError {
   /**
    * HTTP status code to return (default: 401)
    */
-  statusCode?: number
+  statusCode?: number | undefined
 }
 
 /**
@@ -135,22 +135,22 @@ export interface AuthContext {
   /**
    * The MCP operation being performed
    */
-  operation?: string
+  operation?: string | undefined
 
   /**
    * Required scopes for this operation
    */
-  requiredScopes?: string[]
+  requiredScopes?: string[] | undefined
 
   /**
    * IP address of the client (if available)
    */
-  clientIp?: string
+  clientIp?: string | undefined
 
   /**
    * User agent of the client (if available)
    */
-  userAgent?: string
+  userAgent?: string | undefined
 }
 
 /**
@@ -167,17 +167,17 @@ export interface ApiKeyAuthConfig {
    * Hash algorithm for comparing keys (default: none - direct comparison)
    * Use 'sha256' for production to avoid timing attacks
    */
-  hashAlgorithm?: 'none' | 'sha256'
+  hashAlgorithm?: 'none' | 'sha256' | undefined
 
   /**
    * Default scopes to grant if not specified in the key entry
    */
-  defaultScopes?: string[]
+  defaultScopes?: string[] | undefined
 
   /**
    * Optional key expiration check
    */
-  checkExpiration?: boolean
+  checkExpiration?: boolean | undefined
 }
 
 /**
@@ -192,27 +192,27 @@ export interface ApiKeyEntry {
   /**
    * Scopes/permissions granted to this key
    */
-  scopes?: string[]
+  scopes?: string[] | undefined
 
   /**
    * When this key expires (Unix timestamp in seconds)
    */
-  expiresAt?: number
+  expiresAt?: number | undefined
 
   /**
    * Human-readable name/description for this key
    */
-  name?: string
+  name?: string | undefined
 
   /**
    * Whether this key is currently active
    */
-  active?: boolean
+  active?: boolean | undefined
 
   /**
    * Additional metadata
    */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -366,12 +366,12 @@ export interface CustomAuthConfig {
   /**
    * Optional function to refresh a token
    */
-  refresh?: (authInfo: AuthInfo) => Promise<AuthInfo | null>
+  refresh?: ((authInfo: AuthInfo) => Promise<AuthInfo | null>) | undefined
 
   /**
    * Optional function to revoke a token
    */
-  revoke?: (token: string) => Promise<void>
+  revoke?: ((token: string) => Promise<void>) | undefined
 }
 
 /**

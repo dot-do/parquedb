@@ -39,12 +39,12 @@ export interface SourceVersion {
   /**
    * Optional: Last event ID processed (for event-sourced data)
    */
-  lastEventId?: string
+  lastEventId?: string | undefined
 
   /**
    * Optional: Last event timestamp processed
    */
-  lastEventTs?: number
+  lastEventTs?: number | undefined
 
   /**
    * Backend type for this version
@@ -59,7 +59,7 @@ export interface MVLineage {
   /**
    * View name
    */
-  viewName?: ViewName
+  viewName?: ViewName | undefined
 
   /**
    * Source versions at last refresh, keyed by source collection name
@@ -80,32 +80,32 @@ export interface MVLineage {
   /**
    * Duration of last refresh in milliseconds
    */
-  lastRefreshDurationMs?: number
+  lastRefreshDurationMs?: number | undefined
 
   /**
    * Number of records processed in last refresh
    */
-  lastRefreshRecordCount?: number
+  lastRefreshRecordCount?: number | undefined
 
   /**
    * Whether last refresh was incremental or full
    */
-  lastRefreshType?: 'incremental' | 'full'
+  lastRefreshType?: 'incremental' | 'full' | undefined
 
   /**
    * Last event IDs per source for incremental tracking
    */
-  lastEventIds?: Map<string, string>
+  lastEventIds?: Map<string, string> | undefined
 
   /**
    * Source snapshots per source collection
    */
-  sourceSnapshots?: Map<string, string>
+  sourceSnapshots?: Map<string, string> | undefined
 
   /**
    * Count of events processed in last refresh
    */
-  lastEventCount?: number
+  lastEventCount?: number | undefined
 }
 
 // =============================================================================
@@ -133,12 +133,12 @@ export interface SourceStaleness {
   /**
    * Version at last refresh
    */
-  refreshedVersion?: SourceVersion
+  refreshedVersion?: SourceVersion | undefined
 
   /**
    * Current version of source
    */
-  currentVersion?: SourceVersion
+  currentVersion?: SourceVersion | undefined
 
   /**
    * Whether this source has changed
@@ -148,12 +148,12 @@ export interface SourceStaleness {
   /**
    * Estimated number of changes since last refresh
    */
-  estimatedChanges?: number
+  estimatedChanges?: number | undefined
 
   /**
    * Time since source last changed (milliseconds)
    */
-  timeSinceChange?: number
+  timeSinceChange?: number | undefined
 }
 
 /**
@@ -210,7 +210,7 @@ export interface StalenessMetrics {
   /**
    * Reason for staleness (human readable)
    */
-  reason?: string
+  reason?: string | undefined
 
   /**
    * Recommendation for refresh type
@@ -813,11 +813,11 @@ export function parseThresholdDuration(duration: string): number {
  * Create staleness thresholds from a config object with duration strings
  */
 export function createThresholdsFromConfig(config: {
-  gracePeriod?: string
-  warningThreshold?: string
-  maxIncrementalChanges?: number
-  allowStaleReads?: boolean
-  criticalStalenessRatio?: number
+  gracePeriod?: string | undefined
+  warningThreshold?: string | undefined
+  maxIncrementalChanges?: number | undefined
+  allowStaleReads?: boolean | undefined
+  criticalStalenessRatio?: number | undefined
 }): Partial<StalenessThresholds> {
   return {
     ...(config.gracePeriod && { gracePeriodMs: parseThresholdDuration(config.gracePeriod) }),

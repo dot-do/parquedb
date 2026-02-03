@@ -59,16 +59,16 @@ export interface SyncEngineOptions {
   name: string
 
   /** Owner username */
-  owner?: string
+  owner?: string | undefined
 
   /** Progress callback */
-  onProgress?: (progress: SyncProgress) => void
+  onProgress?: ((progress: SyncProgress) => void) | undefined
 
   /** Overall operation timeout in milliseconds (default: 30000 = 30 seconds) */
-  timeout?: number
+  timeout?: number | undefined
 
   /** Optional lock manager for distributed locking (auto-created if not provided) */
-  lockManager?: LockManager
+  lockManager?: LockManager | undefined
 }
 
 /**

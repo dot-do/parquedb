@@ -47,13 +47,13 @@ import { logger } from '../../utils/logger'
  */
 export interface AuthUser {
   id: string
-  email?: string
-  firstName?: string
-  lastName?: string
-  profilePictureUrl?: string
-  organizationId?: string
-  roles?: string[]
-  permissions?: string[]
+  email?: string | undefined
+  firstName?: string | undefined
+  lastName?: string | undefined
+  profilePictureUrl?: string | undefined
+  organizationId?: string | undefined
+  roles?: string[] | undefined
+  permissions?: string[] | undefined
 }
 
 /**
@@ -76,9 +76,9 @@ export interface AuthOptions {
    */
   jwksUri: string
   /** Custom token extractor (defaults to Bearer token from Authorization header) */
-  extractToken?: (c: Context) => string | null
+  extractToken?: ((c: Context) => string | null) | undefined
   /** Namespace prefix for actor IDs (default: 'users') */
-  actorNamespace?: string
+  actorNamespace?: string | undefined
 }
 
 /**
@@ -178,8 +178,8 @@ export function auth(options: AuthOptions): MiddlewareHandler {
  * ```
  */
 export function requireAuth(options: {
-  roles?: string[]
-  message?: string
+  roles?: string[] | undefined
+  message?: string | undefined
 } = {}): MiddlewareHandler {
   return async (c: Context, next: Next) => {
     const user = c.var.user
@@ -216,7 +216,7 @@ export function requireAuth(options: {
  * for `c as unknown as Context` casts in typed route handlers.
  */
 interface ContextWithVars {
-  var: { user?: AuthUser | null; [key: string]: unknown }
+  var: { user?: AuthUser | null | undefined; [key: string]: unknown }
 }
 
 /**

@@ -47,8 +47,8 @@ interface ONetOccupation {
   socCode: string
   title: string
   description: string
-  jobZone?: number
-  jobZoneTitle?: string
+  jobZone?: number | undefined
+  jobZoneTitle?: string | undefined
 }
 
 interface ONetSkill {
@@ -56,8 +56,8 @@ interface ONetSkill {
   $type: string
   name: string
   elementId: string
-  description?: string
-  category?: string
+  description?: string | undefined
+  category?: string | undefined
 }
 
 interface ONetOccupationSkill {
@@ -65,9 +65,9 @@ interface ONetOccupationSkill {
   $type: string
   name: string
   occupation: Record<string, string>
-  skill?: Record<string, string>
-  importance?: number
-  level?: number
+  skill?: Record<string, string> | undefined
+  importance?: number | undefined
+  level?: number | undefined
 }
 
 interface ONetTask {
@@ -77,51 +77,51 @@ interface ONetTask {
   taskId: string
   statement: string
   occupation: Record<string, string>
-  isCore?: boolean
+  isCore?: boolean | undefined
 }
 
 interface ONetTechnology {
   $id: string
   $type: string
   name: string
-  commodityCode?: string
-  commodityTitle?: string
+  commodityCode?: string | undefined
+  commodityTitle?: string | undefined
 }
 
 // IMDB Types
 interface IMDBTitle {
-  $id?: string
+  $id?: string | undefined
   tconst: string
   titleType: string
   primaryTitle: string
-  originalTitle?: string
-  isAdult?: boolean
-  startYear?: number
-  endYear?: number
-  runtimeMinutes?: number
-  genres?: string[]
-  averageRating?: number
-  numVotes?: number
+  originalTitle?: string | undefined
+  isAdult?: boolean | undefined
+  startYear?: number | undefined
+  endYear?: number | undefined
+  runtimeMinutes?: number | undefined
+  genres?: string[] | undefined
+  averageRating?: number | undefined
+  numVotes?: number | undefined
 }
 
 interface IMDBPerson {
-  $id?: string
+  $id?: string | undefined
   nconst: string
   primaryName: string
-  birthYear?: number
-  deathYear?: number
-  primaryProfession?: string[]
-  knownForTitles?: string[]
+  birthYear?: number | undefined
+  deathYear?: number | undefined
+  primaryProfession?: string[] | undefined
+  knownForTitles?: string[] | undefined
 }
 
 interface IMDBCast {
-  $id?: string
+  $id?: string | undefined
   tconst: string
   nconst: string
-  ordering?: number
-  category?: string
-  job?: string
-  characters?: string[]
+  ordering?: number | undefined
+  category?: string | undefined
+  job?: string | undefined
+  characters?: string[] | undefined
 }
 
 // =============================================================================

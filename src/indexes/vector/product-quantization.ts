@@ -100,9 +100,9 @@ export class ProductQuantizer {
   train(
     vectors: number[][],
     options?: {
-      maxIterations?: number
-      epsilon?: number
-      sampleSize?: number
+      maxIterations?: number | undefined
+      epsilon?: number | undefined
+      sampleSize?: number | undefined
     }
   ): void {
     const maxIterations = options?.maxIterations ?? 25

@@ -33,23 +33,23 @@ import { logger } from './logger'
  */
 export interface SafeRegexOptions {
   /** Maximum allowed pattern length (default: 1000) */
-  maxLength?: number
+  maxLength?: number | undefined
   /** Maximum allowed quantifier depth (default: 2) */
-  maxQuantifierDepth?: number
+  maxQuantifierDepth?: number | undefined
   /** Allow backreferences like \1, \2 (default: false) */
-  allowBackreferences?: boolean
+  allowBackreferences?: boolean | undefined
   /** Maximum star height (nested repetitions) allowed (default: 2) */
-  maxStarHeight?: number
+  maxStarHeight?: number | undefined
   /** Maximum group nesting depth (default: 10) */
-  maxGroupDepth?: number
+  maxGroupDepth?: number | undefined
   /** Maximum total repetitions in pattern (default: 20) */
-  maxRepetitions?: number
+  maxRepetitions?: number | undefined
   /** Maximum complexity score allowed (default: 25) */
-  maxComplexityScore?: number
+  maxComplexityScore?: number | undefined
   /** Maximum character class size (default: 100) */
-  maxCharClassSize?: number
+  maxCharClassSize?: number | undefined
   /** Maximum alternation branches (default: 15) */
-  maxAlternationBranches?: number
+  maxAlternationBranches?: number | undefined
 }
 
 const DEFAULT_OPTIONS: Required<SafeRegexOptions> = {
@@ -760,9 +760,9 @@ export class RegexTimeoutError extends Error {
  */
 export interface RegexExecOptions {
   /** Timeout in milliseconds (default: 1000) */
-  timeoutMs?: number
+  timeoutMs?: number | undefined
   /** Maximum input length to process (default: 100000) */
-  maxInputLength?: number
+  maxInputLength?: number | undefined
 }
 
 const DEFAULT_EXEC_OPTIONS: Required<RegexExecOptions> = {

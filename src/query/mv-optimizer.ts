@@ -45,7 +45,7 @@ export interface MVCandidate {
   definition: MVDefinition
 
   /** MV metadata (if available) */
-  metadata?: MVMetadata
+  metadata?: MVMetadata | undefined
 
   /** How well the MV matches the query (0-1, higher is better) */
   coverageScore: number
@@ -60,16 +60,16 @@ export interface MVCandidate {
   isFullyCovered: boolean
 
   /** Staleness state of the MV */
-  stalenessState?: MVState
+  stalenessState?: MVState | undefined
 
   /** Staleness metrics (if available) */
-  stalenessMetrics?: StalenessMetrics
+  stalenessMetrics?: StalenessMetrics | undefined
 
   /** Estimated query cost using this MV */
-  estimatedCost?: QueryCost
+  estimatedCost?: QueryCost | undefined
 
   /** Cost savings compared to source query (0-1) */
-  costSavings?: number
+  costSavings?: number | undefined
 
   /** Whether the MV is recommended for this query */
   recommended: boolean
@@ -86,13 +86,13 @@ export interface MVOptimizationResult {
   useMV: boolean
 
   /** Selected MV (if useMV is true) */
-  selectedMV?: MVCandidate
+  selectedMV?: MVCandidate | undefined
 
   /** All candidate MVs considered */
   candidates: MVCandidate[]
 
   /** Rewritten filter for MV query (if useMV is true) */
-  rewrittenFilter?: Filter
+  rewrittenFilter?: Filter | undefined
 
   /** Original filter */
   originalFilter: Filter
@@ -101,7 +101,7 @@ export interface MVOptimizationResult {
   sourceCost: QueryCost
 
   /** Cost of querying the selected MV (if applicable) */
-  mvCost?: QueryCost
+  mvCost?: QueryCost | undefined
 
   /** Cost savings achieved (0-1) */
   costSavings: number
@@ -859,7 +859,7 @@ export function createInMemoryMVRegistry(): InMemoryMVRegistry {
 export function wouldBenefitFromMV(
   filter: Filter,
   mvDefinition: MVDefinition,
-  queryOptions?: { hasAggregation?: boolean; hasJoins?: boolean }
+  queryOptions?: { hasAggregation?: boolean | undefined; hasJoins?: boolean | undefined }
 ): boolean {
   // Aggregation queries benefit from aggregation MVs
   if (queryOptions?.hasAggregation && (mvDefinition.$groupBy || mvDefinition.$compute)) {

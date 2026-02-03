@@ -24,7 +24,7 @@ export interface DiscoveredField {
   /** Whether field is a list/array */
   isArray: boolean
   /** Additional type info (precision, scale, etc.) */
-  typeInfo?: Record<string, unknown>
+  typeInfo?: Record<string, unknown> | undefined
 }
 
 /**
@@ -46,7 +46,7 @@ export interface DiscoveredCollection {
   /** Whether this is a ParqueDB-managed file (has $id, $type, etc.) */
   isParqueDB: boolean
   /** Last modified timestamp */
-  lastModified?: Date
+  lastModified?: Date | undefined
 }
 
 /**
@@ -78,37 +78,37 @@ export type PayloadFieldType =
  */
 export interface FieldUIMetadata {
   /** Display label override */
-  label?: string
+  label?: string | undefined
   /** Help text/description */
-  description?: string
+  description?: string | undefined
   /** Whether to hide from list view */
-  hideInList?: boolean
+  hideInList?: boolean | undefined
   /** Whether to hide from form */
-  hideInForm?: boolean
+  hideInForm?: boolean | undefined
   /** Whether field is read-only */
-  readOnly?: boolean
+  readOnly?: boolean | undefined
   /** Column width in list view */
-  width?: number
+  width?: number | undefined
   /** Sort order in form */
-  order?: number
+  order?: number | undefined
   /** Custom admin component */
   admin?: {
-    position?: 'sidebar'
-    width?: string
-    condition?: string
-  }
+    position?: 'sidebar' | undefined
+    width?: string | undefined
+    condition?: string | undefined
+  } | undefined
   /** For select fields: available options */
-  options?: Array<{ label: string; value: string }>
+  options?: Array<{ label: string; value: string }> | undefined
   /** For number fields */
-  min?: number
-  max?: number
-  step?: number
+  min?: number | undefined
+  max?: number | undefined
+  step?: number | undefined
   /** For text fields */
-  minLength?: number
-  maxLength?: number
+  minLength?: number | undefined
+  maxLength?: number | undefined
   /** For relationship fields */
-  relationTo?: string | string[]
-  hasMany?: boolean
+  relationTo?: string | string[] | undefined
+  hasMany?: boolean | undefined
 }
 
 /**
@@ -116,26 +116,26 @@ export interface FieldUIMetadata {
  */
 export interface CollectionUIMetadata {
   /** Display label override */
-  label?: string
+  label?: string | undefined
   /** Singular label */
-  labelSingular?: string
+  labelSingular?: string | undefined
   /** Description */
-  description?: string
+  description?: string | undefined
   /** Admin panel configuration */
   admin?: {
     /** Use as title field */
-    useAsTitle?: string
+    useAsTitle?: string | undefined
     /** Default columns in list view */
-    defaultColumns?: string[]
+    defaultColumns?: string[] | undefined
     /** Enable preview */
-    preview?: boolean
+    preview?: boolean | undefined
     /** Hide from nav */
-    hidden?: boolean
+    hidden?: boolean | undefined
     /** Custom group */
-    group?: string
-  }
+    group?: string | undefined
+  } | undefined
   /** Field-level UI metadata */
-  fields?: Record<string, FieldUIMetadata>
+  fields?: Record<string, FieldUIMetadata> | undefined
 }
 
 /**
@@ -149,12 +149,12 @@ export interface StudioMetadata {
   /** Global settings */
   settings?: {
     /** Theme */
-    theme?: 'light' | 'dark' | 'auto'
+    theme?: 'light' | 'dark' | 'auto' | undefined
     /** Locale */
-    locale?: string
+    locale?: string | undefined
     /** Date format */
-    dateFormat?: string
-  }
+    dateFormat?: string | undefined
+  } | undefined
 }
 
 // =============================================================================
@@ -174,20 +174,20 @@ export interface StudioConfig {
   /** Whether to auto-discover collections */
   autoDiscover: boolean
   /** Explicit collection paths (if not auto-discovering) */
-  collections?: string[]
+  collections?: string[] | undefined
   /** Authentication mode */
   auth: 'none' | 'local' | 'env' | 'oauth'
   /** Local admin credentials (for auth: 'local') */
-  adminEmail?: string
-  adminPassword?: string
+  adminEmail?: string | undefined
+  adminPassword?: string | undefined
   /** Whether to run in read-only mode */
   readOnly: boolean
   /** Enable verbose logging */
   debug: boolean
   /** Theme: 'light' | 'dark' | 'auto' */
-  theme?: 'light' | 'dark' | 'auto'
+  theme?: 'light' | 'dark' | 'auto' | undefined
   /** Default sidebar fields */
-  defaultSidebar?: string[]
+  defaultSidebar?: string[] | undefined
 
   // Multi-database configuration
   /** Enable multi-database mode (path-based routing) */
@@ -195,14 +195,14 @@ export interface StudioConfig {
     /** Enable multi-database mode */
     enabled: boolean
     /** Path prefix for admin routes (default: '/admin') */
-    pathPrefix?: string
+    pathPrefix?: string | undefined
     /** WorkOS JWKS URI for oauth.do authentication */
-    jwksUri?: string
+    jwksUri?: string | undefined
     /** OAuth client ID */
-    clientId?: string
+    clientId?: string | undefined
     /** Default database ID (redirect if accessing /admin directly) */
-    defaultDatabase?: string
-  }
+    defaultDatabase?: string | undefined
+  } | undefined
 }
 
 /**

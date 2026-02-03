@@ -38,7 +38,7 @@ export interface CacheInvalidationSignal {
   /** Version number (monotonically increasing) */
   version: number
   /** Optional entity ID for entity-specific invalidation */
-  entityId?: string
+  entityId?: string | undefined
 }
 
 // =============================================================================
@@ -48,49 +48,49 @@ export interface CacheInvalidationSignal {
 /** Options for create operation */
 export interface DOCreateOptions {
   /** Actor performing the operation */
-  actor?: string
+  actor?: string | undefined
   /** Skip validation */
-  skipValidation?: boolean
+  skipValidation?: boolean | undefined
 }
 
 /** Options for update operation */
 export interface DOUpdateOptions {
   /** Actor performing the operation */
-  actor?: string
+  actor?: string | undefined
   /** Expected version for optimistic concurrency */
-  expectedVersion?: number
+  expectedVersion?: number | undefined
   /** Create if not exists */
-  upsert?: boolean
+  upsert?: boolean | undefined
 }
 
 /** Options for delete operation */
 export interface DODeleteOptions {
   /** Actor performing the operation */
-  actor?: string
+  actor?: string | undefined
   /** Hard delete (permanent) */
-  hard?: boolean
+  hard?: boolean | undefined
   /** Expected version for optimistic concurrency */
-  expectedVersion?: number
+  expectedVersion?: number | undefined
 }
 
 /** Options for link operation */
 export interface DOLinkOptions {
   /** Actor performing the operation */
-  actor?: string
+  actor?: string | undefined
   /**
    * How the relationship was matched (SHREDDED)
    * - 'exact': Precise match (user explicitly linked)
    * - 'fuzzy': Approximate match (entity resolution, text similarity)
    */
-  matchMode?: 'exact' | 'fuzzy'
+  matchMode?: 'exact' | 'fuzzy' | undefined
   /**
    * Similarity score for fuzzy matches (SHREDDED)
    * Range: 0.0 to 1.0
    * Only meaningful when matchMode is 'fuzzy'
    */
-  similarity?: number
+  similarity?: number | undefined
   /** Edge data (remaining metadata in Variant) */
-  data?: Record<string, unknown>
+  data?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -172,10 +172,10 @@ export interface TransactionSnapshot {
       | 'pending_row_group'
     ns: string
     id: string
-    predicate?: string
-    toNs?: string
-    toId?: string
-    beforeState?: StoredEntity | StoredRelationship | null
+    predicate?: string | undefined
+    toNs?: string | undefined
+    toId?: string | undefined
+    beforeState?: StoredEntity | StoredRelationship | null | undefined
   }>
   pendingR2Paths: string[]
 }

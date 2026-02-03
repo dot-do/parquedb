@@ -70,22 +70,22 @@ export type IsolationLevel =
  */
 export interface TransactionOptions {
   /** Optional transaction ID (auto-generated if not provided) */
-  id?: string
+  id?: string | undefined
 
   /** Timeout in milliseconds (default: 30000) */
-  timeout?: number
+  timeout?: number | undefined
 
   /** Isolation level (default: 'read_committed') */
-  isolation?: IsolationLevel
+  isolation?: IsolationLevel | undefined
 
   /** Whether to allow nested transactions via savepoints */
-  allowNested?: boolean
+  allowNested?: boolean | undefined
 
   /** Actor performing the transaction */
-  actor?: string
+  actor?: string | undefined
 
   /** Custom metadata to attach to the transaction */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -99,13 +99,13 @@ export interface TransactionOperation<T = unknown> {
   target: string
 
   /** Entity or resource ID */
-  id?: string
+  id?: string | undefined
 
   /** State before the operation (for rollback) */
-  beforeState?: T
+  beforeState?: T | undefined
 
   /** State after the operation */
-  afterState?: T
+  afterState?: T | undefined
 
   /** Operation timestamp */
   timestamp: Date
@@ -235,7 +235,7 @@ export interface DatabaseTransaction extends Transaction {
   create<T = Record<string, unknown>>(
     namespace: string,
     data: T,
-    options?: { actor?: string }
+    options?: { actor?: string | undefined }
   ): Promise<T & { $id: string }>
 
   /**
@@ -245,7 +245,7 @@ export interface DatabaseTransaction extends Transaction {
     namespace: string,
     id: string,
     update: Record<string, unknown>,
-    options?: { actor?: string; expectedVersion?: number }
+    options?: { actor?: string | undefined; expectedVersion?: number | undefined }
   ): Promise<T | null>
 
   /**
@@ -254,7 +254,7 @@ export interface DatabaseTransaction extends Transaction {
   delete(
     namespace: string,
     id: string,
-    options?: { actor?: string; soft?: boolean }
+    options?: { actor?: string | undefined; soft?: boolean | undefined }
   ): Promise<{ deletedCount: number }>
 
   /**
@@ -311,7 +311,7 @@ interface TransactionState {
   options: TransactionOptions
   operations: TransactionOperation[]
   savepoints: Savepoint[]
-  timeoutHandle?: ReturnType<typeof setTimeout>
+  timeoutHandle?: ReturnType<typeof setTimeout> | undefined
 }
 
 /**
@@ -699,9 +699,9 @@ export async function withRetry<TContext, TTx extends Transaction, TResult>(
   provider: TransactionProvider<TContext, TTx>,
   fn: (tx: TTx) => Promise<TResult>,
   options: TransactionOptions & {
-    maxRetries?: number
-    retryDelay?: number
-    shouldRetry?: (error: unknown) => boolean
+    maxRetries?: number | undefined
+    retryDelay?: number | undefined
+    shouldRetry?: ((error: unknown) => boolean) | undefined
   } = {}
 ): Promise<TResult> {
   const {

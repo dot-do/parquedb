@@ -218,13 +218,13 @@ export interface SnapshotInfo {
   timestamp: Date
 
   /** Operation that created this snapshot */
-  operation?: string
+  operation?: string | undefined
 
   /** Number of records in this snapshot */
-  recordCount?: number
+  recordCount?: number | undefined
 
   /** Summary of changes */
-  summary?: Record<string, unknown>
+  summary?: Record<string, unknown> | undefined
 }
 
 /** Entity schema definition */
@@ -233,22 +233,22 @@ export interface EntitySchema {
   name: string
 
   /** Schema version */
-  version?: number
+  version?: number | undefined
 
   /** Field definitions */
   fields: SchemaField[]
 
   /** Primary key field(s) */
-  primaryKey?: string[]
+  primaryKey?: string[] | undefined
 
   /** Partition key field(s) */
-  partitionBy?: string[]
+  partitionBy?: string[] | undefined
 
   /** Sort key field(s) */
-  sortBy?: string[]
+  sortBy?: string[] | undefined
 
   /** Additional properties */
-  properties?: Record<string, string>
+  properties?: Record<string, string> | undefined
 }
 
 /** Schema field definition */
@@ -260,19 +260,19 @@ export interface SchemaField {
   type: SchemaFieldType
 
   /** Whether the field is required */
-  required?: boolean
+  required?: boolean | undefined
 
   /** Whether the field is nullable */
-  nullable?: boolean
+  nullable?: boolean | undefined
 
   /** Default value */
-  default?: unknown
+  default?: unknown | undefined
 
   /** Field documentation */
-  doc?: string
+  doc?: string | undefined
 
   /** Field ID (for Iceberg) */
-  id?: number
+  id?: number | undefined
 }
 
 /** Supported field types */
@@ -298,16 +298,16 @@ export type SchemaFieldType =
 /** Compaction options */
 export interface CompactOptions {
   /** Target file size in bytes */
-  targetFileSize?: number
+  targetFileSize?: number | undefined
 
   /** Maximum files to compact per run */
-  maxFiles?: number
+  maxFiles?: number | undefined
 
   /** Only compact files smaller than this size */
-  minFileSize?: number
+  minFileSize?: number | undefined
 
   /** Dry run (don't actually compact) */
-  dryRun?: boolean
+  dryRun?: boolean | undefined
 }
 
 /** Compaction result */
@@ -331,13 +331,13 @@ export interface CompactResult {
 /** Vacuum options */
 export interface VacuumOptions {
   /** Retain snapshots newer than this duration (ms) */
-  retentionMs?: number
+  retentionMs?: number | undefined
 
   /** Minimum snapshots to keep */
-  minSnapshots?: number
+  minSnapshots?: number | undefined
 
   /** Dry run (don't actually delete) */
-  dryRun?: boolean
+  dryRun?: boolean | undefined
 }
 
 /** Vacuum result */
@@ -364,10 +364,10 @@ export interface BackendStats {
   fileCount: number
 
   /** Number of snapshots/versions */
-  snapshotCount?: number
+  snapshotCount?: number | undefined
 
   /** Last modified time */
-  lastModified?: Date
+  lastModified?: Date | undefined
 
   /** Backend-specific stats */
   [key: string]: unknown
@@ -383,10 +383,10 @@ export interface BaseBackendConfig {
   storage: StorageBackend
 
   /** Base path/location for data */
-  location?: string
+  location?: string | undefined
 
   /** Read-only mode */
-  readOnly?: boolean
+  readOnly?: boolean | undefined
 }
 
 /** Native backend configuration */
@@ -399,36 +399,36 @@ export interface IcebergBackendConfig extends BaseBackendConfig {
   type: 'iceberg'
 
   /** Iceberg catalog configuration */
-  catalog?: IcebergCatalogConfig
+  catalog?: IcebergCatalogConfig | undefined
 
   /** Warehouse location */
-  warehouse?: string
+  warehouse?: string | undefined
 
   /** Default database/namespace */
-  database?: string
+  database?: string | undefined
 
   /** Timeout for acquiring write locks in milliseconds (default: 30000) */
-  writeLockTimeoutMs?: number
+  writeLockTimeoutMs?: number | undefined
 }
 
 /** Iceberg catalog configuration */
 export type IcebergCatalogConfig =
   | { type: 'filesystem' }
-  | { type: 'r2-data-catalog'; accountId: string; apiToken: string; bucketName?: string }
-  | { type: 'rest'; uri: string; credential?: string; warehouse?: string }
+  | { type: 'r2-data-catalog'; accountId: string; apiToken: string; bucketName?: string | undefined }
+  | { type: 'rest'; uri: string; credential?: string | undefined; warehouse?: string | undefined }
 
 /** Delta Lake backend configuration */
 export interface DeltaBackendConfig extends BaseBackendConfig {
   type: 'delta'
 
   /** Maximum number of retries on commit conflict (default: 10) */
-  maxRetries?: number
+  maxRetries?: number | undefined
 
   /** Base backoff time in ms for exponential backoff (default: 100) */
-  baseBackoffMs?: number
+  baseBackoffMs?: number | undefined
 
   /** Maximum backoff time in ms (default: 10000) */
-  maxBackoffMs?: number
+  maxBackoffMs?: number | undefined
 }
 
 /** Union of all backend configurations */
@@ -519,7 +519,7 @@ export interface EntityBackendCapabilities {
   externalQueryEngines: boolean
 
   /** List of compatible query engines (e.g., ['duckdb', 'spark', 'snowflake']) */
-  compatibleEngines?: string[]
+  compatibleEngines?: string[] | undefined
 }
 
 /**

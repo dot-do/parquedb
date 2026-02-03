@@ -22,7 +22,7 @@ interface MockR2Object {
   size: number
   eTag: string
   uploaded: Date
-  body?: ReadableStream
+  body?: ReadableStream | undefined
   arrayBuffer(): Promise<ArrayBuffer>
   text(): Promise<string>
 }
@@ -30,34 +30,34 @@ interface MockR2Object {
 interface MockR2ListResult {
   objects: MockR2Object[]
   truncated: boolean
-  cursor?: string
+  cursor?: string | undefined
 }
 
 interface MockR2HttpMetadata {
-  contentType?: string
-  contentLanguage?: string
-  contentDisposition?: string
-  contentEncoding?: string
-  cacheControl?: string
-  cacheExpiry?: Date
+  contentType?: string | undefined
+  contentLanguage?: string | undefined
+  contentDisposition?: string | undefined
+  contentEncoding?: string | undefined
+  cacheControl?: string | undefined
+  cacheExpiry?: Date | undefined
 }
 
 interface MockR2PutOptions {
-  httpMetadata?: MockR2HttpMetadata
-  customMetadata?: Record<string, string>
-  md5?: string
-  sha1?: string
-  sha256?: string
-  sha384?: string
-  sha512?: string
-  onlyIf?: R2Conditional
+  httpMetadata?: MockR2HttpMetadata | undefined
+  customMetadata?: Record<string, string> | undefined
+  md5?: string | undefined
+  sha1?: string | undefined
+  sha256?: string | undefined
+  sha384?: string | undefined
+  sha512?: string | undefined
+  onlyIf?: R2Conditional | undefined
 }
 
 interface R2Conditional {
-  etagMatches?: string
-  etagDoesNotMatch?: string
-  uploadedBefore?: Date
-  uploadedAfter?: Date
+  etagMatches?: string | undefined
+  etagDoesNotMatch?: string | undefined
+  uploadedBefore?: Date | undefined
+  uploadedAfter?: Date | undefined
 }
 
 // Error types for R2 operations
@@ -103,15 +103,15 @@ interface FailureConfig {
   /** How to fail */
   mode: FailureMode
   /** Error message or details */
-  message?: string
+  message?: string | undefined
   /** Number of times to fail before succeeding (default: Infinity) */
-  failCount?: number
+  failCount?: number | undefined
   /** Specific keys to fail on (empty = all keys) */
-  keys?: string[]
+  keys?: string[] | undefined
   /** For partial writes: percentage of data to write (0-100) */
-  partialPercent?: number
+  partialPercent?: number | undefined
   /** Timeout duration in ms (for timeout mode) */
-  timeoutMs?: number
+  timeoutMs?: number | undefined
 }
 
 class FailableR2Bucket {
@@ -377,8 +377,8 @@ interface CompactionResult {
   success: boolean
   filesProcessed: string[]
   filesFailed: string[]
-  outputFile?: string
-  error?: string
+  outputFile?: string | undefined
+  error?: string | undefined
   retryable: boolean
 }
 

@@ -29,7 +29,7 @@ export class MigrationManager {
    */
   async createMigration(args: {
     name: string
-    batch?: number
+    batch?: number | undefined
   }): Promise<MigrationRecord> {
     const { name, batch = 1 } = args
 

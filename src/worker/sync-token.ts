@@ -55,7 +55,7 @@ export interface TokenPayload {
   userId: string
   expiresAt: string
   /** Unique token ID (nonce) for replay protection */
-  jti?: string
+  jti?: string | undefined
 }
 
 /**
@@ -72,13 +72,13 @@ interface TokenData extends TokenPayload {
  * Only requires SYNC_SECRET from the full Env
  */
 export interface TokenEnv {
-  SYNC_SECRET?: string
+  SYNC_SECRET?: string | undefined
   /**
    * Optional KV namespace for cross-isolate nonce tracking.
    * When provided, used nonces are stored in KV for stronger replay protection.
    * Falls back to in-memory tracking when not available.
    */
-  USED_TOKENS?: KVNamespace
+  USED_TOKENS?: KVNamespace | undefined
 }
 
 // =============================================================================
@@ -399,7 +399,7 @@ export async function signDownloadToken(payload: TokenPayload, env: TokenEnv): P
 export async function verifyUploadToken(
   token: string,
   env: TokenEnv,
-  options?: { checkReplay?: boolean }
+  options?: { checkReplay?: boolean | undefined }
 ): Promise<TokenPayload | null> {
   const checkReplay = options?.checkReplay !== false
   return verifyToken(token, 'upload', env, checkReplay)

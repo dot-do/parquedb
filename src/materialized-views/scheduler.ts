@@ -55,22 +55,22 @@ export interface ScheduledView {
   nextRefreshAt: number
 
   /** Last refresh time */
-  lastRefreshAt?: number
+  lastRefreshAt?: number | undefined
 
   /** Last refresh duration in milliseconds */
-  lastRefreshDurationMs?: number
+  lastRefreshDurationMs?: number | undefined
 
   /** Number of consecutive failures */
   consecutiveFailures: number
 
   /** Last error message if any */
-  lastError?: string
+  lastError?: string | undefined
 
   /** Whether the schedule is enabled */
   enabled: boolean
 
   /** Retry configuration */
-  retryConfig?: RetryConfig
+  retryConfig?: RetryConfig | undefined
 }
 
 /**
@@ -112,28 +112,28 @@ export interface MVSchedulerConfig {
   /**
    * Optional callback when a refresh completes successfully
    */
-  onRefreshComplete?: (viewName: ViewName, durationMs: number) => Promise<void>
+  onRefreshComplete?: ((viewName: ViewName, durationMs: number) => Promise<void>) | undefined
 
   /**
    * Optional callback when a refresh fails
    */
-  onRefreshError?: (viewName: ViewName, error: Error) => Promise<void>
+  onRefreshError?: ((viewName: ViewName, error: Error) => Promise<void>) | undefined
 
   /**
    * Optional callback when a view is disabled due to too many failures
    */
-  onViewDisabled?: (viewName: ViewName, reason: string) => Promise<void>
+  onViewDisabled?: ((viewName: ViewName, reason: string) => Promise<void>) | undefined
 
   /**
    * Default retry configuration for all views
    */
-  defaultRetryConfig?: RetryConfig
+  defaultRetryConfig?: RetryConfig | undefined
 
   /**
    * Minimum interval between alarm checks (prevents excessive DO wakeups)
    * @default 1000 (1 second)
    */
-  minAlarmIntervalMs?: number
+  minAlarmIntervalMs?: number | undefined
 }
 
 /**
@@ -150,7 +150,7 @@ export interface AlarmProcessingResult {
   skipped: ViewName[]
 
   /** Next alarm time (if any views remain scheduled) */
-  nextAlarmAt?: number
+  nextAlarmAt?: number | undefined
 }
 
 /**
@@ -176,7 +176,7 @@ export interface SchedulerStats {
   failedRefreshes: number
 
   /** Next scheduled refresh */
-  nextRefreshAt?: number
+  nextRefreshAt?: number | undefined
 }
 
 // =============================================================================

@@ -282,12 +282,12 @@ export interface PartitionedQueueConfig {
   partitionIndex: number
   /** Base configuration passed to handleCompactionQueue */
   compactionConfig?: {
-    windowSizeMs?: number
-    minFilesToCompact?: number
-    maxWaitTimeMs?: number
-    targetFormat?: 'native' | 'iceberg' | 'delta'
-    namespacePrefix?: string
-  }
+    windowSizeMs?: number | undefined
+    minFilesToCompact?: number | undefined
+    maxWaitTimeMs?: number | undefined
+    targetFormat?: 'native' | 'iceberg' | 'delta' | undefined
+    namespacePrefix?: string | undefined
+  } | undefined
 }
 
 /**
@@ -308,8 +308,8 @@ export interface PartitionedQueueConfig {
  * ```
  */
 export function getPartitionConfigFromEnv(env: {
-  NUM_PARTITIONS?: string
-  PARTITION_INDEX?: string
+  NUM_PARTITIONS?: string | undefined
+  PARTITION_INDEX?: string | undefined
 }): {
   numPartitions: number
   partitionIndex: number

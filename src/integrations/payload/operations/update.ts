@@ -124,10 +124,10 @@ export async function updateGlobal<T = Record<string, unknown>>(
   args: {
     slug: string
     data: Record<string, unknown>
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
-    draft?: boolean
-    locale?: string
-    select?: Record<string, boolean>
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
+    draft?: boolean | undefined
+    locale?: string | undefined
+    select?: Record<string, boolean> | undefined
   }
 ): Promise<T | null> {
   const { slug, data, req, draft, locale, select } = args
@@ -203,10 +203,10 @@ export async function updateVersion<T = Record<string, unknown>>(
   args: {
     collection: string
     id: string | number
-    versionData?: Record<string, unknown>
-    locale?: string
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
-    select?: Record<string, boolean>
+    versionData?: Record<string, unknown> | undefined
+    locale?: string | undefined
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
+    select?: Record<string, boolean> | undefined
   }
 ): Promise<T | null> {
   const { collection, id, versionData, locale, req } = args
@@ -258,10 +258,10 @@ export async function updateGlobalVersion<T = Record<string, unknown>>(
   args: {
     slug: string
     id: string | number
-    versionData?: Record<string, unknown>
-    locale?: string
-    req?: { transactionID?: string | number; user?: Record<string, unknown> }
-    select?: Record<string, boolean>
+    versionData?: Record<string, unknown> | undefined
+    locale?: string | undefined
+    req?: { transactionID?: string | number | undefined; user?: Record<string, unknown> | undefined } | undefined
+    select?: Record<string, boolean> | undefined
   }
 ): Promise<T | null> {
   const { id, versionData, locale, req } = args
@@ -353,7 +353,7 @@ export async function upsert<T = Record<string, unknown>>(
  * Get actor from request context
  */
 function getActor(
-  req: { user?: Record<string, unknown> } | undefined,
+  req: { user?: Record<string, unknown> | undefined } | undefined,
   config: ResolvedAdapterConfig
 ): EntityId {
   if (req?.user && typeof req.user === 'object' && 'id' in req.user) {

@@ -39,9 +39,9 @@ const TEST_SCHEMA: ParquetSchema = {
 /** Test record type */
 interface TestRecord {
   id: string
-  value?: number
-  status?: string
-  model?: string
+  value?: number | undefined
+  status?: string | undefined
+  model?: string | undefined
 }
 
 /** Create a test record */

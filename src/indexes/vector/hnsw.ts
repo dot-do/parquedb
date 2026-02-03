@@ -82,7 +82,7 @@ export interface VectorIndexMemoryOptions {
   /** Maximum memory in bytes */
   maxBytes?: number | undefined
   /** Callback when a node is evicted from cache */
-  onEvict?: (nodeId: number) => void | undefined | undefined
+  onEvict?: ((nodeId: number) => void | undefined | undefined) | undefined
 }
 
 /**
@@ -132,7 +132,7 @@ export interface IncrementalUpdateOptions {
   /** Row group number remapping after compaction (oldRowGroup -> newRowGroup) */
   rowGroupRemapping?: Map<number, number> | undefined
   /** Progress callback */
-  onProgress?: (processed: number, total: number) => void | undefined | undefined
+  onProgress?: ((processed: number, total: number) => void | undefined | undefined) | undefined
 }
 
 interface HNSWNode {
@@ -1524,7 +1524,7 @@ export class VectorIndex {
       rowGroup: number
       rowOffset: number
     }>,
-    options?: { onProgress?: (processed: number) => void }
+    options?: { onProgress?: ((processed: number) => void) | undefined }
   ): Promise<void> {
     this.clear()
 

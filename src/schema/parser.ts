@@ -80,9 +80,9 @@ const KNOWN_META_FIELDS = new Set([
  */
 export interface ValidationOptions {
   /** Strict mode - fail on unknown fields */
-  strict?: boolean
+  strict?: boolean | undefined
   /** Check relationship targets exist */
-  checkRelationships?: boolean
+  checkRelationships?: boolean | undefined
 }
 
 /**
@@ -855,7 +855,7 @@ export interface InferredField {
   type: string
   required: boolean
   isArray: boolean
-  nested?: InferredSchema
+  nested?: InferredSchema | undefined
 }
 
 /**
@@ -870,13 +870,13 @@ export interface InferredSchema {
  */
 export interface InferSchemaOptions {
   /** Number of documents to sample (default: 100) */
-  sampleSize?: number
+  sampleSize?: number | undefined
   /** Fields to mark as required if present in all samples */
-  detectRequired?: boolean
+  detectRequired?: boolean | undefined
   /** Infer nested object schemas */
-  inferNested?: boolean
+  inferNested?: boolean | undefined
   /** Maximum depth for nested schema inference (default: 5) */
-  maxDepth?: number
+  maxDepth?: number | undefined
 }
 
 /**
@@ -1100,7 +1100,7 @@ export function inferSchemaFromCollections(
  */
 export interface NestedFieldDefinition extends FieldDefinition {
   /** Nested schema for object types */
-  properties?: Record<string, FieldDef>
+  properties?: Record<string, FieldDef> | undefined
 }
 
 /**
@@ -1110,7 +1110,7 @@ export interface NestedFieldDefinition extends FieldDefinition {
  * @param def - Field definition (may include nested properties)
  * @returns Parsed field with optional nested schema
  */
-export function parseNestedField(name: string, def: FieldDef | NestedFieldDefinition): ParsedField & { properties?: Map<string, ParsedField> } {
+export function parseNestedField(name: string, def: FieldDef | NestedFieldDefinition): ParsedField & { properties?: Map<string, ParsedField> | undefined } {
   // First parse as regular field
   const baseParsed = parseFieldFromDef(name, def)
 
@@ -1286,7 +1286,7 @@ export function validateEntityFull(
   parsedSchema: ParsedSchema,
   typeName: string,
   entity: unknown,
-  options?: { validateCoreFields?: boolean }
+  options?: { validateCoreFields?: boolean | undefined }
 ): ValidationResult {
   const allErrors: ValidationError[] = []
 

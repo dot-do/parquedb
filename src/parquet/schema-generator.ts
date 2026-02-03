@@ -66,19 +66,19 @@ export interface SchemaGeneratorOptions {
    * Include $data Variant column for flexible data storage
    * Default: true
    */
-  includeDataVariant?: boolean
+  includeDataVariant?: boolean | undefined
 
   /**
    * Include audit columns (createdAt, updatedAt, etc.)
    * Default: true
    */
-  includeAuditColumns?: boolean
+  includeAuditColumns?: boolean | undefined
 
   /**
    * Include soft delete columns (deletedAt, deletedBy)
    * Default: true
    */
-  includeSoftDeleteColumns?: boolean
+  includeSoftDeleteColumns?: boolean | undefined
 }
 
 // =============================================================================

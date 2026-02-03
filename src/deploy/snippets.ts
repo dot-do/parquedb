@@ -36,12 +36,12 @@ export interface Snippet {
  * Snippet rule for triggering execution
  */
 export interface SnippetRule {
-  id?: string
-  description?: string
+  id?: string | undefined
+  description?: string | undefined
   enabled: boolean
   expression: string
   snippet_name: string
-  last_updated?: string
+  last_updated?: string | undefined
 }
 
 /**
@@ -53,7 +53,7 @@ export interface SnippetsConfig {
   /** Zone ID (hexadecimal string from Cloudflare dashboard) */
   zoneId: string
   /** Base URL for Cloudflare API (default: https://api.cloudflare.com/client/v4) */
-  apiBaseUrl?: string
+  apiBaseUrl?: string | undefined
 }
 
 /**
@@ -65,7 +65,7 @@ export interface CreateSnippetOptions {
   /** JavaScript code to deploy */
   code: string
   /** Optional filename for the main module (default: snippet.js) */
-  mainModule?: string
+  mainModule?: string | undefined
 }
 
 /**
@@ -81,9 +81,9 @@ export interface CreateRulesOptions {
  */
 export interface DeployResult {
   success: boolean
-  snippet?: Snippet
-  rules?: SnippetRule[]
-  error?: string
+  snippet?: Snippet | undefined
+  rules?: SnippetRule[] | undefined
+  error?: string | undefined
 }
 
 // =============================================================================
@@ -333,9 +333,9 @@ export class SnippetsClient {
     code: string
     rule?: {
       expression: string
-      description?: string
-      enabled?: boolean
-    }
+      description?: string | undefined
+      enabled?: boolean | undefined
+    } | undefined
   }): Promise<DeployResult> {
     try {
       // Create or update the snippet

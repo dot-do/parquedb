@@ -169,9 +169,9 @@ interface WorkingAggregate {
   dateKey: string
   granularity: TimeGranularity
   scorerName: string
-  suiteName?: string
-  modelId?: string
-  promptId?: string
+  suiteName?: string | undefined
+  modelId?: string | undefined
+  promptId?: string | undefined
   scores: number[] // Raw scores for percentile calculation
   evalIds: Set<number>
   runIds: Set<number>
@@ -216,7 +216,7 @@ export class EvalScoresMV {
    * @param options - Refresh options
    * @returns Refresh result with statistics
    */
-  async refresh(options: { full?: boolean } = {}): Promise<RefreshResult> {
+  async refresh(options: { full?: boolean | undefined } = {}): Promise<RefreshResult> {
     const startTime = Date.now()
     let recordsProcessed = 0
     let aggregatesUpdated = 0
@@ -513,7 +513,7 @@ export class EvalScoresMV {
    * @param options - Query options for time range
    * @returns Score summary
    */
-  async getSummary(options: { from?: Date; to?: Date } = {}): Promise<EvalScoreSummary> {
+  async getSummary(options: { from?: Date | undefined; to?: Date | undefined } = {}): Promise<EvalScoreSummary> {
     const aggregates = await this.getAggregates({
       from: options.from,
       to: options.to,
@@ -706,7 +706,7 @@ export class EvalScoresMV {
    * @param options - Query options for time range
    * @returns Array of scorer performance stats sorted by average score
    */
-  async getScorerPerformance(options: { from?: Date; to?: Date } = {}): Promise<ScorerPerformance[]> {
+  async getScorerPerformance(options: { from?: Date | undefined; to?: Date | undefined } = {}): Promise<ScorerPerformance[]> {
     const summary = await this.getSummary(options)
 
     const performances: ScorerPerformance[] = []

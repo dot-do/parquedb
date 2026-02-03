@@ -595,28 +595,28 @@ export interface DefineViewInput {
   $from: string
 
   /** Relations to expand (denormalize) */
-  $expand?: string[]
+  $expand?: string[] | undefined
 
   /** Rename expanded field prefixes */
-  $flatten?: Record<string, string>
+  $flatten?: Record<string, string> | undefined
 
   /** Filter to apply to source data */
-  $filter?: Filter
+  $filter?: Filter | undefined
 
   /** Fields to select */
-  $select?: Record<string, string>
+  $select?: Record<string, string> | undefined
 
   /** Group by dimensions */
-  $groupBy?: GroupBySpec[]
+  $groupBy?: GroupBySpec[] | undefined
 
   /** Computed aggregates */
-  $compute?: Record<string, AggregateExpr>
+  $compute?: Record<string, AggregateExpr> | undefined
 
   /** Unnest an array field */
-  $unnest?: string
+  $unnest?: string | undefined
 
   /** Refresh configuration */
-  $refresh?: RefreshConfig
+  $refresh?: RefreshConfig | undefined
 }
 
 /**
@@ -855,7 +855,7 @@ export class MVBuilder {
   /**
    * Set scheduled refresh mode with cron schedule
    */
-  scheduled(schedule: string, options?: { strategy?: 'replace' | 'append'; gracePeriod?: string }): this {
+  scheduled(schedule: string, options?: { strategy?: 'replace' | 'append' | undefined; gracePeriod?: string | undefined }): this {
     this._refresh.mode = 'scheduled'
     this._refresh.schedule = schedule
     if (options?.strategy) this._refresh.strategy = options.strategy

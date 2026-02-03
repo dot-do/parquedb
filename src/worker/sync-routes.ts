@@ -289,8 +289,8 @@ export function validateFilePath(filePath: string): void {
 
 interface RegisterRequest {
   name: string
-  visibility?: Visibility
-  slug?: string
+  visibility?: Visibility | undefined
+  slug?: string | undefined
   owner: string
 }
 
@@ -299,7 +299,7 @@ interface UploadUrlsRequest {
   files: Array<{
     path: string
     size: number
-    contentType?: string
+    contentType?: string | undefined
   }>
 }
 
@@ -970,7 +970,7 @@ export async function handleDownload(
 
 interface UserInfo {
   id: string
-  username?: string
+  username?: string | undefined
 }
 
 /**

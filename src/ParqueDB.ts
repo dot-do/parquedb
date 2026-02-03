@@ -168,7 +168,7 @@ export interface IParqueDB {
     namespace: string,
     filter: Filter,
     update: UpdateInput<T>,
-    options?: { returnDocument?: 'before' | 'after' }
+    options?: { returnDocument?: 'before' | 'after' | undefined }
   ): Promise<Entity<T> | null>
 
   upsertMany<T = Record<string, unknown>>(
@@ -182,7 +182,7 @@ export interface IParqueDB {
   restore<T = Record<string, unknown>>(
     namespace: string,
     id: string,
-    options?: { actor?: EntityId }
+    options?: { actor?: EntityId | undefined }
   ): Promise<Entity<T> | null>
 
   ingestStream<T = Record<string, unknown>>(

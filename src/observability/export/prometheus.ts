@@ -177,7 +177,7 @@ function createHistogramBuckets(
  */
 export function exportAIUsageToPrometheus(
   aggregates: AIUsageAggregate[],
-  options: { timestamp?: number; includeMetadata?: boolean } = {}
+  options: { timestamp?: number | undefined; includeMetadata?: boolean | undefined } = {}
 ): string {
   const lines: string[] = []
   const timestamp = options.timestamp ?? Date.now()
@@ -282,7 +282,7 @@ export function exportAIUsageToPrometheus(
  */
 export function exportAIStatsToPrometheus(
   stats: AIRequestsStats,
-  options: { timestamp?: number } = {}
+  options: { timestamp?: number | undefined } = {}
 ): string {
   const lines: string[] = []
   const timestamp = options.timestamp ?? Date.now()
@@ -352,7 +352,7 @@ export function exportAIStatsToPrometheus(
  */
 export function exportCompactionToPrometheus(
   metrics: Map<string, CompactionMetrics> | CompactionMetrics[],
-  options: { timestamp?: number; namespaces?: string[] } = {}
+  options: { timestamp?: number | undefined; namespaces?: string[] | undefined } = {}
 ): string {
   const lines: string[] = []
   const timestamp = options.timestamp ?? Date.now()

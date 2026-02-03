@@ -63,17 +63,17 @@ interface MigrationJob {
 }
 
 interface MigrationRequest {
-  from?: BackendType | 'auto'
+  from?: BackendType | 'auto' | undefined
   to: BackendType
-  namespaces?: string[]
-  batchSize?: number
-  deleteSource?: boolean
+  namespaces?: string[] | undefined
+  batchSize?: number | undefined
+  deleteSource?: boolean | undefined
 }
 
 interface Env {
   BUCKET: R2Bucket
   /** JWKS URI for JWT token verification */
-  JWKS_URI?: string
+  JWKS_URI?: string | undefined
 }
 
 // =============================================================================

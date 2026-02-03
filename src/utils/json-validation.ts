@@ -222,11 +222,11 @@ export function parseArrayOrThrow(json: string, context?: string): unknown[] {
  */
 export type JsonSchema = {
   type: 'object'
-  properties?: Record<string, { type: 'string' | 'number' | 'boolean' | 'array' | 'object'; required?: boolean }>
-  additionalProperties?: boolean
+  properties?: Record<string, { type: 'string' | 'number' | 'boolean' | 'array' | 'object'; required?: boolean | undefined }> | undefined
+  additionalProperties?: boolean | undefined
 } | {
   type: 'array'
-  items?: { type: 'string' | 'number' | 'boolean' | 'object' }
+  items?: { type: 'string' | 'number' | 'boolean' | 'object' } | undefined
 } | {
   type: 'string' | 'number' | 'boolean'
 }

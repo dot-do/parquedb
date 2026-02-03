@@ -15,7 +15,7 @@ import type { ResolvedAdapterConfig } from '../types'
  * Falls back to the config's defaultActor if no user is present.
  */
 export function getActor(
-  req: { user?: Record<string, unknown> } | undefined,
+  req: { user?: Record<string, unknown> | undefined } | undefined,
   config: ResolvedAdapterConfig
 ): EntityId {
   if (req?.user && typeof req.user === 'object' && 'id' in req.user) {

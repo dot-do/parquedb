@@ -36,49 +36,49 @@ export interface BackpressureConfig {
    * Maximum DO dispatches per second allowed
    * @default 100
    */
-  dispatchesPerSecond?: number
+  dispatchesPerSecond?: number | undefined
 
   /**
    * Time window for rate limiting in milliseconds
    * @default 1000 (1 second)
    */
-  rateLimitWindowMs?: number
+  rateLimitWindowMs?: number | undefined
 
   /**
    * Number of pending windows that triggers backpressure
    * @default 50
    */
-  backpressureThreshold?: number
+  backpressureThreshold?: number | undefined
 
   /**
    * Consecutive workflow failures before circuit opens
    * @default 5
    */
-  circuitBreakerThreshold?: number
+  circuitBreakerThreshold?: number | undefined
 
   /**
    * Base delay in ms when circuit is open
    * @default 5000 (5 seconds)
    */
-  circuitBreakerBaseDelayMs?: number
+  circuitBreakerBaseDelayMs?: number | undefined
 
   /**
    * Maximum delay in ms for exponential backoff
    * @default 60000 (60 seconds)
    */
-  circuitBreakerMaxDelayMs?: number
+  circuitBreakerMaxDelayMs?: number | undefined
 
   /**
    * Time window for counting failures in ms
    * @default 60000 (60 seconds)
    */
-  failureWindowMs?: number
+  failureWindowMs?: number | undefined
 
   /**
    * Namespaces considered high-priority (processed even under backpressure)
    * @default []
    */
-  highPriorityNamespaces?: string[]
+  highPriorityNamespaces?: string[] | undefined
 }
 
 /**
@@ -115,10 +115,10 @@ export interface BackpressureStatus {
  */
 export interface WorkflowExecutionResult<T> {
   success: boolean
-  result?: T
-  error?: Error
-  skipped?: boolean
-  reason?: 'rate_limited' | 'circuit_open' | 'backpressure'
+  result?: T | undefined
+  error?: Error | undefined
+  skipped?: boolean | undefined
+  reason?: 'rate_limited' | 'circuit_open' | 'backpressure' | undefined
 }
 
 /**
@@ -149,7 +149,7 @@ interface CircuitBreakerState {
   failureTimestamps: number[]
 
   /** Time when circuit opened */
-  openedAt?: number
+  openedAt?: number | undefined
 
   /** Current backoff multiplier for exponential backoff */
   backoffMultiplier: number

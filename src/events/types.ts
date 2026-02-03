@@ -40,7 +40,7 @@ export interface EventBatch {
   /** Number of events */
   count: number
   /** Serialized size in bytes (after encoding) */
-  sizeBytes?: number
+  sizeBytes?: number | undefined
 }
 
 /**
@@ -92,7 +92,7 @@ export interface EventManifest {
   /** Ordered list of segments (oldest first) */
   segments: EventSegment[]
   /** Last compaction timestamp (events before this are in data/rels.parquet) */
-  compactedThrough?: number
+  compactedThrough?: number | undefined
   /** Next segment sequence number */
   nextSeq: number
   /** Total event count across all segments */
@@ -130,13 +130,13 @@ export interface WalRow {
  */
 export interface EventWriterConfig {
   /** Maximum events to buffer before flush (default: 1000) */
-  maxBufferSize?: number
+  maxBufferSize?: number | undefined
   /** Maximum bytes to buffer before flush (default: 1MB) */
-  maxBufferBytes?: number
+  maxBufferBytes?: number | undefined
   /** Maximum time to buffer before flush in ms (default: 5000) */
-  flushIntervalMs?: number
+  flushIntervalMs?: number | undefined
   /** Size threshold for writing directly to R2 vs SQLite (default: 512KB) */
-  r2ThresholdBytes?: number
+  r2ThresholdBytes?: number | undefined
 }
 
 /**
@@ -158,13 +158,13 @@ export const DEFAULT_WRITER_CONFIG: Required<EventWriterConfig> = {
  */
 export interface CompactionConfig {
   /** How often to run compaction (default: '1h') */
-  interval?: string
+  interval?: string | undefined
   /** How long to retain events after compaction (default: '30d') */
-  retention?: string
+  retention?: string | undefined
   /** Minimum events before compaction triggers (default: 10000) */
-  minEvents?: number
+  minEvents?: number | undefined
   /** Maximum segment age before compaction (default: '24h') */
-  maxSegmentAge?: string
+  maxSegmentAge?: string | undefined
 }
 
 // =============================================================================
@@ -176,9 +176,9 @@ export interface CompactionConfig {
  */
 export interface DatasetConfig {
   /** Enable events (WAL + time-travel). Default: false (read-only snapshot) */
-  events?: boolean
+  events?: boolean | undefined
   /** Compaction settings (only used if events: true) */
-  compaction?: CompactionConfig
+  compaction?: CompactionConfig | undefined
 }
 
 /**
@@ -197,7 +197,7 @@ export const DEFAULT_DATASET_CONFIG: DatasetConfig = {
  */
 export interface TimeTravelOptions {
   /** Query state at this timestamp (ms since epoch) */
-  at?: number
+  at?: number | undefined
 }
 
 /**
@@ -262,7 +262,7 @@ export interface EventVersionMetadata {
   /** Schema version when this event was created */
   schemaVersion: number
   /** If event was upgraded, the original version */
-  upgradedFrom?: number
+  upgradedFrom?: number | undefined
 }
 
 /**
@@ -272,9 +272,9 @@ export interface EventVersioningConfig {
   /** Current event schema version */
   currentVersion: number
   /** Minimum supported version for reading */
-  minVersion?: number
+  minVersion?: number | undefined
   /** Whether to fail on unknown/unsupported versions */
-  strict?: boolean
+  strict?: boolean | undefined
 }
 
 // =============================================================================
@@ -286,11 +286,11 @@ export interface EventVersioningConfig {
  */
 export interface EventSourcingConfig {
   /** Enable snapshot creation during replay (default: true) */
-  enableSnapshots?: boolean
+  enableSnapshots?: boolean | undefined
   /** Number of events before creating a snapshot (default: 100) */
-  snapshotThreshold?: number
+  snapshotThreshold?: number | undefined
   /** Maximum snapshots to retain per entity (default: 3) */
-  maxSnapshotsPerEntity?: number
+  maxSnapshotsPerEntity?: number | undefined
   /** Event versioning configuration */
-  versioning?: EventVersioningConfig
+  versioning?: EventVersioningConfig | undefined
 }

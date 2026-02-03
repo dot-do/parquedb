@@ -337,9 +337,9 @@ describe('Search Client', () => {
         price: number
       }
       interface ProductFilters {
-        category?: string
-        price_gte?: number
-        price_lte?: number
+        category?: string | undefined
+        price_gte?: number | undefined
+        price_lte?: number | undefined
       }
 
       interface Category {
@@ -347,7 +347,7 @@ describe('Search Client', () => {
         name: string
       }
       interface CategoryFilters {
-        parent?: string
+        parent?: string | undefined
       }
 
       const client = createSearchClient<{
@@ -1375,8 +1375,8 @@ describe('Search Client', () => {
       }
 
       interface CustomFilters {
-        minPrice?: number
-        maxPrice?: number
+        minPrice?: number | undefined
+        maxPrice?: number | undefined
       }
 
       const client = createSearchClient<{

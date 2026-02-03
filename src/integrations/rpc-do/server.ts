@@ -95,7 +95,7 @@ export interface ParqueDBRPCSchema {
  */
 export interface CollectionSchema {
   name: string
-  fields?: Record<string, string>
+  fields?: Record<string, string> | undefined
 }
 
 /**
@@ -155,7 +155,7 @@ export interface RPCCollectionAPI<T extends object = Record<string, unknown>> {
   find(filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
   findOne(filter?: Filter, options?: FindOptions): Promise<Entity<T> | null>
   get(id: string): Promise<Entity<T> | null>
-  create(data: Partial<T> & { $type?: string; name?: string }): Promise<Entity<T>>
+  create(data: Partial<T> & { $type?: string | undefined; name?: string | undefined }): Promise<Entity<T>>
   update(id: string, update: UpdateInput<T>): Promise<Entity<T> | null>
   delete(id: string): Promise<DeleteResult>
   count(filter?: Filter): Promise<number>
@@ -171,36 +171,36 @@ export interface RPCCollectionAPI<T extends object = Record<string, unknown>> {
  * Options for create operations
  */
 export interface CreateOptions {
-  actor?: string
-  skipValidation?: boolean
+  actor?: string | undefined
+  skipValidation?: boolean | undefined
 }
 
 /**
  * Options for update operations
  */
 export interface UpdateOptions {
-  actor?: string
-  expectedVersion?: number
-  upsert?: boolean
+  actor?: string | undefined
+  expectedVersion?: number | undefined
+  upsert?: boolean | undefined
 }
 
 /**
  * Options for delete operations
  */
 export interface DeleteOptions {
-  actor?: string
-  hard?: boolean
-  expectedVersion?: number
+  actor?: string | undefined
+  hard?: boolean | undefined
+  expectedVersion?: number | undefined
 }
 
 /**
  * Options for link operations
  */
 export interface LinkOptions {
-  actor?: string
-  matchMode?: 'exact' | 'fuzzy'
-  similarity?: number
-  data?: Record<string, unknown>
+  actor?: string | undefined
+  matchMode?: 'exact' | 'fuzzy' | undefined
+  similarity?: number | undefined
+  data?: Record<string, unknown> | undefined
 }
 
 // =============================================================================
@@ -212,11 +212,11 @@ export interface LinkOptions {
  */
 export interface ParqueDBRPCConfig {
   /** R2 bucket binding name */
-  bucketBinding?: string
+  bucketBinding?: string | undefined
   /** Default actor for operations */
-  defaultActor?: string
+  defaultActor?: string | undefined
   /** Enable debug logging */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 /**
@@ -494,35 +494,35 @@ export interface ParqueDBDOInterface {
   create(
     ns: string,
     data: CreateInput,
-    options?: { actor?: string; skipValidation?: boolean }
+    options?: { actor?: string | undefined; skipValidation?: boolean | undefined }
   ): Promise<Entity>
   createMany(
     ns: string,
     items: CreateInput[],
-    options?: { actor?: string; skipValidation?: boolean }
+    options?: { actor?: string | undefined; skipValidation?: boolean | undefined }
   ): Promise<Entity[]>
   update(
     ns: string,
     id: string,
     update: UpdateInput,
-    options?: { actor?: string; expectedVersion?: number; upsert?: boolean }
+    options?: { actor?: string | undefined; expectedVersion?: number | undefined; upsert?: boolean | undefined }
   ): Promise<Entity>
   delete(
     ns: string,
     id: string,
-    options?: { actor?: string; hard?: boolean; expectedVersion?: number }
+    options?: { actor?: string | undefined; hard?: boolean | undefined; expectedVersion?: number | undefined }
   ): Promise<DeleteResult>
   link(
     fromId: string,
     predicate: string,
     toId: string,
-    options?: { actor?: string; matchMode?: 'exact' | 'fuzzy'; similarity?: number; data?: Record<string, unknown> }
+    options?: { actor?: string | undefined; matchMode?: 'exact' | 'fuzzy' | undefined; similarity?: number | undefined; data?: Record<string, unknown> | undefined }
   ): Promise<void>
   unlink(
     fromId: string,
     predicate: string,
     toId: string,
-    options?: { actor?: string }
+    options?: { actor?: string | undefined }
   ): Promise<void>
   getRelationships(
     ns: string,

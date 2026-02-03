@@ -103,25 +103,25 @@ export interface WorkerErrorsStatsExtended extends WorkerErrorStats {
  */
 export interface WorkerErrorsConfig {
   /** Custom error patterns for classification (merged with defaults) */
-  errorPatterns?: ErrorPattern[]
+  errorPatterns?: ErrorPattern[] | undefined
   /** Maximum errors to retain in memory (default: 10000) */
-  maxErrors?: number
+  maxErrors?: number | undefined
   /** Window size for rolling stats in ms (default: 60000 = 1 minute) */
-  statsWindowMs?: number
+  statsWindowMs?: number | undefined
   /** Namespaces to listen for error events (default: ['logs', 'errors', 'workers']) */
-  sourceNamespaces?: string[]
+  sourceNamespaces?: string[] | undefined
   /** Storage backend for writing Parquet files (optional - enables persistence) */
-  storage?: StorageBackend
+  storage?: StorageBackend | undefined
   /** Base path for error files (e.g., 'errors/workers') - required if storage is set */
-  datasetPath?: string
+  datasetPath?: string | undefined
   /** Number of records to buffer before flushing (default: 500) */
-  flushThreshold?: number
+  flushThreshold?: number | undefined
   /** Maximum time to buffer records in ms (default: 30000) */
-  flushIntervalMs?: number
+  flushIntervalMs?: number | undefined
   /** Compression codec for Parquet (default: 'lz4') */
-  compression?: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd'
+  compression?: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd' | undefined
   /** Target row group size (default: 5000) */
-  rowGroupSize?: number
+  rowGroupSize?: number | undefined
 }
 
 const DEFAULT_CONFIG = {

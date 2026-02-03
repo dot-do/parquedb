@@ -334,7 +334,7 @@ export function getReverseRelatedIds(
   targetId: string,
   relatedNs: string,
   relatedField: string,
-  options?: { includeDeleted?: boolean }
+  options?: { includeDeleted?: boolean | undefined }
 ): string[] {
   const sourceIds = getFromReverseRelIndex(ctx.reverseRelIndex, targetId, relatedNs, relatedField)
   const result: string[] = []

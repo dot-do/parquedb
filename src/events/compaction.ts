@@ -36,7 +36,7 @@ export interface CompactorOptions {
   /** Manifest manager */
   manifest: ManifestManager
   /** Compaction configuration */
-  config?: CompactionConfig
+  config?: CompactionConfig | undefined
 }
 
 /**
@@ -54,7 +54,7 @@ export interface CompactionResult {
   /** Segments that were compacted */
   segmentsCompacted: EventSegment[]
   /** Snapshot path (if created) */
-  snapshotPath?: string
+  snapshotPath?: string | undefined
   /** Duration in milliseconds */
   durationMs: number
 }
@@ -320,9 +320,9 @@ export class EventCompactor {
     /** Writer for outputting compacted state */
     stateWriter: StateWriter
     /** Create a snapshot (default: true) */
-    createSnapshot?: boolean
+    createSnapshot?: boolean | undefined
     /** Delete compacted segments (default: false - requires manual cleanup) */
-    deleteSegments?: boolean
+    deleteSegments?: boolean | undefined
   }): Promise<CompactionResult> {
     const startTime = Date.now()
     const { throughTimestamp, stateWriter, createSnapshot = true, deleteSegments = false } = options
@@ -402,7 +402,7 @@ export class EventCompactor {
   /**
    * Check if compaction is needed
    */
-  async needsCompaction(): Promise<{ needed: boolean; reason?: string }> {
+  async needsCompaction(): Promise<{ needed: boolean; reason?: string | undefined }> {
     await this.options.manifest.load() // Ensure manifest is loaded
     const summary = await this.options.manifest.getSummary()
 

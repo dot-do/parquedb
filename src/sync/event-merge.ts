@@ -51,13 +51,13 @@ export type CustomMergeFn = (
  */
 export interface MergeOptions {
   /** Resolution strategy for conflicts (default: no auto-resolution) */
-  readonly resolutionStrategy?: ResolutionStrategy
+  readonly resolutionStrategy?: ResolutionStrategy | undefined
 
   /** Whether to auto-merge commutative operations (default: true) */
-  readonly autoMergeCommutative?: boolean
+  readonly autoMergeCommutative?: boolean | undefined
 
   /** Custom merge function for specific targets */
-  readonly customMerge?: CustomMergeFn
+  readonly customMerge?: CustomMergeFn | undefined
 }
 
 /**
@@ -68,7 +68,7 @@ export interface MergeTargetResult {
   readonly success: boolean
 
   /** Combined operations (if auto-merged) */
-  readonly combinedOps?: UpdateOps
+  readonly combinedOps?: UpdateOps | undefined
 
   /** Conflicts that were detected */
   readonly conflicts: readonly ConflictInfo[]
@@ -105,7 +105,7 @@ export interface MergeConflict extends ConflictInfo {
   readonly resolved: boolean
 
   /** Resolution if resolved */
-  readonly resolution?: ConflictResolution
+  readonly resolution?: ConflictResolution | undefined
 }
 
 /**

@@ -36,9 +36,9 @@ export interface ReplayOptions {
   /** Target timestamp to replay to */
   at: number
   /** Starting state (if known) */
-  currentState?: Variant | null
+  currentState?: Variant | null | undefined
   /** Starting timestamp (when currentState was captured) */
-  currentTs?: number
+  currentTs?: number | undefined
 }
 
 /**
@@ -48,9 +48,9 @@ export interface BatchReplayOptions {
   /** Target timestamp to replay to */
   at: number
   /** Map of target -> current state */
-  currentStates?: Map<string, Variant | null>
+  currentStates?: Map<string, Variant | null> | undefined
   /** Timestamp when current states were captured */
-  currentTs?: number
+  currentTs?: number | undefined
 }
 
 /**
@@ -58,9 +58,9 @@ export interface BatchReplayOptions {
  */
 export interface ReplayEventsOptions {
   /** Target timestamp to replay to (defaults to current time) */
-  at?: number
+  at?: number | undefined
   /** Use snapshot if available within this age (ms, default: Infinity) */
-  maxSnapshotAge?: number
+  maxSnapshotAge?: number | undefined
 }
 
 /**
@@ -105,7 +105,7 @@ export interface VersioningConfig {
   /** Current event schema version */
   currentVersion: number
   /** Upgrader function to migrate events to newer versions */
-  upgrader?: EventUpgrader
+  upgrader?: EventUpgrader | undefined
 }
 
 /**
@@ -115,11 +115,11 @@ export interface ExtendedReplayResult extends ReplayResult {
   /** Whether a snapshot was used */
   usedSnapshot: boolean
   /** Snapshot timestamp if used */
-  snapshotTs?: number
+  snapshotTs?: number | undefined
   /** Events replayed from snapshot (if snapshot was used) */
-  eventsFromSnapshot?: number
+  eventsFromSnapshot?: number | undefined
   /** Version of the final state */
-  version?: number
+  version?: number | undefined
 }
 
 // =============================================================================
@@ -155,8 +155,8 @@ export class EventReplayer {
   constructor(
     eventSource: EventSource,
     options?: {
-      snapshotStorage?: SnapshotStorage
-      versioning?: VersioningConfig
+      snapshotStorage?: SnapshotStorage | undefined
+      versioning?: VersioningConfig | undefined
     }
   ) {
     this.eventSource = eventSource
@@ -253,7 +253,7 @@ export class EventReplayer {
    */
   async getStateHistory(
     target: string,
-    options?: { minTs?: number; maxTs?: number }
+    options?: { minTs?: number | undefined; maxTs?: number | undefined }
   ): Promise<Array<{ ts: number; state: Variant | null; op: string }>> {
     const events = await this.eventSource.getEventsForTarget(
       target,
@@ -288,7 +288,7 @@ export class EventReplayer {
    */
   async replayWithSnapshot(
     target: string,
-    options: ReplayOptions & { createSnapshot?: boolean; snapshotThreshold?: number }
+    options: ReplayOptions & { createSnapshot?: boolean | undefined; snapshotThreshold?: number | undefined }
   ): Promise<ExtendedReplayResult> {
     const { at, createSnapshot = true, snapshotThreshold = 100 } = options
 
@@ -815,7 +815,7 @@ export async function replayEventsWithSnapshots(
   snapshotStorage: SnapshotStorage,
   namespace: string,
   entityId: string,
-  options?: ReplayEventsOptions & { createSnapshot?: boolean }
+  options?: ReplayEventsOptions & { createSnapshot?: boolean | undefined }
 ): Promise<ExtendedReplayResult> {
   const target = entityTarget(namespace, entityId)
   const at = options?.at ?? Date.now()
@@ -855,7 +855,7 @@ export async function getEntityHistory(
   eventSource: EventSource,
   namespace: string,
   entityId: string,
-  options?: { minTs?: number; maxTs?: number }
+  options?: { minTs?: number | undefined; maxTs?: number | undefined }
 ): Promise<Array<{ ts: number; state: Variant | null; op: string }>> {
   const target = entityTarget(namespace, entityId)
   const replayer = new EventReplayer(eventSource)

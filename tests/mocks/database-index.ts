@@ -21,29 +21,29 @@ export interface MockDatabaseInfo {
   /** Human-readable name */
   name: string
   /** Description */
-  description?: string | null
+  description?: string | null | undefined
   /** R2 bucket name */
   bucket: string
   /** Path prefix within bucket */
-  prefix?: string
+  prefix?: string | undefined
   /** When database was created */
   createdAt: Date
   /** When database was last updated */
-  updatedAt?: Date
+  updatedAt?: Date | undefined
   /** Who created the database */
-  createdBy?: string
+  createdBy?: string | undefined
   /** Last access time */
-  lastAccessedAt?: Date
+  lastAccessedAt?: Date | undefined
   /** Number of entities */
-  entityCount?: number
+  entityCount?: number | undefined
   /** Visibility level */
-  visibility?: Visibility
+  visibility?: Visibility | undefined
   /** URL-friendly slug */
-  slug?: string
+  slug?: string | undefined
   /** Owner username */
-  owner?: string
+  owner?: string | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -74,12 +74,12 @@ export interface MockDatabaseIndexOptions {
    * If true, returns a functional in-memory implementation.
    * If false (default), returns spy-only mocks.
    */
-  functional?: boolean
+  functional?: boolean | undefined
 
   /**
    * Initial databases to populate
    */
-  initialDatabases?: MockDatabaseInfo[]
+  initialDatabases?: MockDatabaseInfo[] | undefined
 }
 
 // =============================================================================

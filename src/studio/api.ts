@@ -57,7 +57,7 @@ export interface DatabaseApiEnv {
   /** DatabaseIndex Durable Object namespace */
   DATABASE_INDEX: DurableObjectNamespace<DatabaseIndexDO>
   /** Default R2 bucket for new databases */
-  DEFAULT_BUCKET?: string
+  DEFAULT_BUCKET?: string | undefined
 }
 
 /**
@@ -77,13 +77,13 @@ export interface CreateDatabaseBody {
   /** Human-readable name */
   name: string
   /** Description */
-  description?: string
+  description?: string | undefined
   /** URL-friendly slug for public access */
-  slug?: string
+  slug?: string | undefined
   /** Visibility level */
-  visibility?: Visibility
+  visibility?: Visibility | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -91,21 +91,21 @@ export interface CreateDatabaseBody {
  */
 export interface UpdateDatabaseBody {
   /** New name */
-  name?: string
+  name?: string | undefined
   /** New description */
-  description?: string
+  description?: string | undefined
   /** New visibility level */
-  visibility?: Visibility
+  visibility?: Visibility | undefined
   /** New URL-friendly slug */
-  slug?: string
+  slug?: string | undefined
   /** Stats to update */
   stats?: {
-    sizeBytes?: number
-    collectionCount?: number
-    entityCount?: number
-  }
+    sizeBytes?: number | undefined
+    collectionCount?: number | undefined
+    entityCount?: number | undefined
+  } | undefined
   /** Custom metadata to merge */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**

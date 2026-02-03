@@ -24,9 +24,9 @@ export interface NormalizedVectorQuery {
   /** Number of results to return */
   topK: number
   /** Minimum score threshold */
-  minScore?: number
+  minScore?: number | undefined
   /** HNSW efSearch parameter */
-  efSearch?: number
+  efSearch?: number | undefined
 }
 
 /**
@@ -38,7 +38,7 @@ export interface VectorFilterNormalizationResult {
   /** Whether text was converted to embedding */
   textEmbedded: boolean
   /** The normalized vector query parameters */
-  vectorQuery?: NormalizedVectorQuery
+  vectorQuery?: NormalizedVectorQuery | undefined
 }
 
 // =============================================================================
@@ -57,8 +57,8 @@ export function extractVectorQuery(filter: Filter): {
   query: number[] | string
   field: string
   topK: number
-  minScore?: number
-  efSearch?: number
+  minScore?: number | undefined
+  efSearch?: number | undefined
 } | null {
   if (!filter.$vector) {
     return null

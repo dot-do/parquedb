@@ -77,9 +77,9 @@ export interface AnomalyEvent {
   /** Detailed description */
   description: string
   /** Model ID (if applicable) */
-  modelId?: string
+  modelId?: string | undefined
   /** Provider ID (if applicable) */
-  providerId?: string
+  providerId?: string | undefined
   /** Current value that triggered the anomaly */
   currentValue: number
   /** Expected/baseline value */
@@ -87,13 +87,13 @@ export interface AnomalyEvent {
   /** Threshold that was exceeded */
   threshold: number
   /** How many standard deviations from mean */
-  stdDeviations?: number
+  stdDeviations?: number | undefined
   /** Window statistics at time of detection */
-  windowStats?: WindowStats
+  windowStats?: WindowStats | undefined
   /** Timestamp when anomaly was detected */
   timestamp: number
   /** Additional context */
-  context?: Record<string, unknown>
+  context?: Record<string, unknown> | undefined
 }
 
 /**
@@ -123,27 +123,27 @@ export interface WindowStats {
  */
 export interface AnomalyObservation {
   /** Model identifier */
-  modelId?: string
+  modelId?: string | undefined
   /** Provider identifier */
-  providerId?: string
+  providerId?: string | undefined
   /** Request latency in milliseconds */
-  latencyMs?: number
+  latencyMs?: number | undefined
   /** Cost in USD */
-  costUSD?: number
+  costUSD?: number | undefined
   /** Error rate (0-1) */
-  errorRate?: number
+  errorRate?: number | undefined
   /** Token usage count */
-  tokenUsage?: number
+  tokenUsage?: number | undefined
   /** Success rate (0-1) */
-  successRate?: number
+  successRate?: number | undefined
   /** Cache hit rate (0-1) */
-  cacheHitRate?: number
+  cacheHitRate?: number | undefined
   /** Request count (for rate-based metrics) */
-  requestCount?: number
+  requestCount?: number | undefined
   /** Timestamp (defaults to now) */
-  timestamp?: number
+  timestamp?: number | undefined
   /** Additional context to include in anomaly events */
-  context?: Record<string, unknown>
+  context?: Record<string, unknown> | undefined
 }
 
 /**
@@ -242,35 +242,35 @@ export interface AnomalyDetectorConfig {
    * Size of the rolling window for baseline calculation
    * @default 100
    */
-  windowSize?: number
+  windowSize?: number | undefined
 
   /**
    * Anomaly detection thresholds
    */
-  thresholds?: Partial<AnomalyThresholds>
+  thresholds?: Partial<AnomalyThresholds> | undefined
 
   /**
    * Callback when anomaly is detected
    */
-  onAnomaly?: (anomaly: AnomalyEvent) => void | Promise<void>
+  onAnomaly?: ((anomaly: AnomalyEvent) => void | Promise<void>) | undefined
 
   /**
    * Whether to log anomalies to console
    * @default true
    */
-  logAnomalies?: boolean
+  logAnomalies?: boolean | undefined
 
   /**
    * Minimum interval between alerts of same type (ms)
    * @default 300000 (5 minutes)
    */
-  dedupeIntervalMs?: number
+  dedupeIntervalMs?: number | undefined
 
   /**
    * Whether to track per-model statistics
    * @default true
    */
-  perModelStats?: boolean
+  perModelStats?: boolean | undefined
 }
 
 /**
@@ -279,7 +279,7 @@ export interface AnomalyDetectorConfig {
 export interface ResolvedAnomalyDetectorConfig {
   windowSize: number
   thresholds: AnomalyThresholds
-  onAnomaly?: (anomaly: AnomalyEvent) => void | Promise<void>
+  onAnomaly?: ((anomaly: AnomalyEvent) => void | Promise<void>) | undefined
   logAnomalies: boolean
   dedupeIntervalMs: number
   perModelStats: boolean
@@ -310,7 +310,7 @@ export interface AnomalyDetectorStats {
   modelStats?: Map<string, {
     latency: WindowStats | null
     cost: WindowStats | null
-  }>
+  }> | undefined
   /** Start time of the detector */
   startedAt: number
   /** Last observation time */
@@ -976,8 +976,8 @@ export class AnomalyDetector {
     currentValue: number
     expectedValue: number
     threshold: number
-    stdDeviations?: number
-    windowStats?: WindowStats
+    stdDeviations?: number | undefined
+    windowStats?: WindowStats | undefined
     observation: AnomalyObservation
     timestamp: number
   }): AnomalyEvent {
@@ -1133,15 +1133,15 @@ export function createAnomalyDetectorWithWebhook(
  * Create an observation from AIMetrics data
  */
 export function createObservationFromMetrics(metrics: {
-  modelId?: string
-  providerId?: string
-  latency?: { avg?: number; p50?: number; p99?: number }
-  errorRate?: number
-  tokens?: { avgTotalTokens?: number; totalTokens?: number }
-  cost?: { avgCostUSD?: number; totalCostUSD?: number }
-  cacheHitRatio?: number
-  successRate?: number
-  totalRequests?: number
+  modelId?: string | undefined
+  providerId?: string | undefined
+  latency?: { avg?: number | undefined; p50?: number | undefined; p99?: number | undefined } | undefined
+  errorRate?: number | undefined
+  tokens?: { avgTotalTokens?: number | undefined; totalTokens?: number | undefined } | undefined
+  cost?: { avgCostUSD?: number | undefined; totalCostUSD?: number | undefined } | undefined
+  cacheHitRatio?: number | undefined
+  successRate?: number | undefined
+  totalRequests?: number | undefined
 }): AnomalyObservation {
   return {
     modelId: metrics.modelId,

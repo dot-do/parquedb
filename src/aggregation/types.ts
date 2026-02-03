@@ -342,9 +342,9 @@ export interface UnwindOptions {
   /** Path to array field (use $fieldName) */
   path: string
   /** Include documents where array is null or empty */
-  preserveNullAndEmptyArrays?: boolean
+  preserveNullAndEmptyArrays?: boolean | undefined
   /** Include index of array element */
-  includeArrayIndex?: string
+  includeArrayIndex?: string | undefined
 }
 
 /**
@@ -450,8 +450,8 @@ export interface BucketStage {
   $bucket: {
     groupBy: string
     boundaries: unknown[]
-    default?: string
-    output?: Record<string, unknown>
+    default?: string | undefined
+    output?: Record<string, unknown> | undefined
   }
 }
 
@@ -611,46 +611,46 @@ export function isSampleStage(stage: AggregationStage): stage is SampleStage {
  */
 export interface AggregationOptions {
   /** Maximum time in milliseconds */
-  maxTimeMs?: number
+  maxTimeMs?: number | undefined
 
   /** Allow disk use for large aggregations */
-  allowDiskUse?: boolean
+  allowDiskUse?: boolean | undefined
 
   /** Hint for index */
-  hint?: string | Record<string, 1 | -1>
+  hint?: string | Record<string, 1 | -1> | undefined
 
   /** Include soft-deleted entities */
-  includeDeleted?: boolean
+  includeDeleted?: boolean | undefined
 
   /** Time-travel: query as of specific time */
-  asOf?: Date
+  asOf?: Date | undefined
 
   /** Explain without executing */
-  explain?: boolean
+  explain?: boolean | undefined
 
   /** Batch size for cursor */
-  batchSize?: number
+  batchSize?: number | undefined
 
   /** Collation options */
   collation?: {
     locale: string
-    strength?: 1 | 2 | 3 | 4 | 5
-    caseLevel?: boolean
-    numericOrdering?: boolean
-  }
+    strength?: 1 | 2 | 3 | 4 | 5 | undefined
+    caseLevel?: boolean | undefined
+    numericOrdering?: boolean | undefined
+  } | undefined
 
   /**
    * Index manager for index-aware $match stage execution.
    * When provided, the aggregation executor will attempt to use
    * secondary indexes (hash, sst, fts, vector) for the first $match stage.
    */
-  indexManager?: IndexManager
+  indexManager?: IndexManager | undefined
 
   /**
    * Namespace for index lookups.
    * Required when indexManager is provided.
    */
-  namespace?: string
+  namespace?: string | undefined
 }
 
 /**
@@ -660,9 +660,9 @@ export interface AggregationExplain {
   /** Stages in the pipeline */
   stages: {
     name: string
-    inputCount?: number
-    outputCount?: number
-    durationMs?: number
+    inputCount?: number | undefined
+    outputCount?: number | undefined
+    durationMs?: number | undefined
   }[]
 
   /** Total execution time */

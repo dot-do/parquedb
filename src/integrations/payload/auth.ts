@@ -43,23 +43,23 @@ export interface OAuthJWTPayload {
   /** User ID (subject) */
   sub: string
   /** Email address */
-  email?: string
+  email?: string | undefined
   /** Display name */
-  name?: string
+  name?: string | undefined
   /** First name */
-  firstName?: string
+  firstName?: string | undefined
   /** Last name */
-  lastName?: string
+  lastName?: string | undefined
   /** Profile picture URL */
-  profilePictureUrl?: string
+  profilePictureUrl?: string | undefined
   /** Organization ID */
-  org_id?: string
+  org_id?: string | undefined
   /** User roles */
-  roles?: string[]
+  roles?: string[] | undefined
   /** Fine-grained permissions */
-  permissions?: string[]
+  permissions?: string[] | undefined
   /** Custom metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
   /** Issuer */
   iss: string
   /** Audience (client ID) */
@@ -76,15 +76,15 @@ export interface OAuthJWTPayload {
 export interface OAuthUser {
   id: string
   email: string
-  name?: string
-  firstName?: string
-  lastName?: string
-  profilePictureUrl?: string
-  roles?: string[]
-  permissions?: string[]
-  organizationId?: string
+  name?: string | undefined
+  firstName?: string | undefined
+  lastName?: string | undefined
+  profilePictureUrl?: string | undefined
+  roles?: string[] | undefined
+  permissions?: string[] | undefined
+  organizationId?: string | undefined
   externalId: string
-  lastLoginAt?: Date
+  lastLoginAt?: Date | undefined
   createdAt: Date
   updatedAt: Date
 }
@@ -103,57 +103,57 @@ export interface OAuthConfig {
    * OAuth client ID (audience claim in JWT)
    * If not provided, audience check is skipped
    */
-  clientId?: string
+  clientId?: string | undefined
 
   /**
    * Cookie name for oauth.do token
    * @default 'auth'
    */
-  cookieName?: string
+  cookieName?: string | undefined
 
   /**
    * Roles that grant admin access
    * Users without these roles cannot access Payload admin
    * @default ['admin']
    */
-  adminRoles?: string[]
+  adminRoles?: string[] | undefined
 
   /**
    * Roles that grant editor access (read/write but limited settings)
    * @default ['editor']
    */
-  editorRoles?: string[]
+  editorRoles?: string[] | undefined
 
   /**
    * Allow any authenticated user to access admin
    * @default false
    */
-  allowAllAuthenticated?: boolean
+  allowAllAuthenticated?: boolean | undefined
 
   /**
    * Custom function to check if user can access admin
    */
-  canAccessAdmin?: (user: OAuthJWTPayload) => boolean | Promise<boolean>
+  canAccessAdmin?: ((user: OAuthJWTPayload) => boolean | Promise<boolean>) | undefined
 
   /**
    * Sync user data to Payload on each login
    * @default true
    */
-  syncUserOnLogin?: boolean
+  syncUserOnLogin?: boolean | undefined
 
   /**
    * Clock tolerance for JWT verification (seconds)
    * @default 60
    */
-  clockTolerance?: number
+  clockTolerance?: number | undefined
 }
 
 /**
  * Resolved configuration with defaults
  */
 interface ResolvedOAuthConfig extends Required<Omit<OAuthConfig, 'clientId' | 'canAccessAdmin'>> {
-  clientId?: string
-  canAccessAdmin?: (user: OAuthJWTPayload) => boolean | Promise<boolean>
+  clientId?: string | undefined
+  canAccessAdmin?: ((user: OAuthJWTPayload) => boolean | Promise<boolean>) | undefined
 }
 
 // =============================================================================
@@ -265,7 +265,7 @@ async function withAbortTimeout<T>(
 async function verifyJWTWithTimeout(
   token: string,
   jwks: ReturnType<typeof createRemoteJWKSet>,
-  options: { clockTolerance?: number; audience?: string },
+  options: { clockTolerance?: number | undefined; audience?: string | undefined },
   timeoutMs: number = JWKS_FETCH_TIMEOUT_MS
 ): Promise<JWTVerifyResult<JWTPayload>> {
   return withAbortTimeout(
@@ -295,11 +295,11 @@ async function verifyJWTWithTimeout(
 export async function verifyOAuthToken(
   token: string,
   config: ResolvedOAuthConfig
-): Promise<{ valid: boolean; payload?: OAuthJWTPayload; error?: string }> {
+): Promise<{ valid: boolean; payload?: OAuthJWTPayload | undefined; error?: string | undefined }> {
   try {
     const jwks = getJWKS(config.jwksUri)
 
-    const verifyOptions: { clockTolerance?: number; audience?: string } = {}
+    const verifyOptions: { clockTolerance?: number | undefined; audience?: string | undefined } = {}
     if (config.clockTolerance) {
       verifyOptions.clockTolerance = config.clockTolerance
     }
@@ -560,7 +560,7 @@ export function oauthUsers(config: OAuthConfig) {
     },
     access: {
       // Only admins can manage users
-      read: ({ req }: { req: { user?: OAuthUser | null } }) => {
+      read: ({ req }: { req: { user?: OAuthUser | null | undefined } }) => {
         const user = req.user
         if (!user) return false
         const role = getPayloadRole(
@@ -570,7 +570,7 @@ export function oauthUsers(config: OAuthConfig) {
         return role === 'admin'
       },
       create: () => false, // Users are created via oauth.do
-      update: ({ req }: { req: { user?: OAuthUser | null } }) => {
+      update: ({ req }: { req: { user?: OAuthUser | null | undefined } }) => {
         const user = req.user
         if (!user) return false
         const role = getPayloadRole(

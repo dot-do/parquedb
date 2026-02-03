@@ -73,11 +73,11 @@ export interface CacheStats {
  */
 export interface ReadOptions {
   /** Skip cache lookup (force R2 fetch) */
-  skipCache?: boolean
+  skipCache?: boolean | undefined
   /** Custom cache TTL override */
-  ttl?: number
+  ttl?: number | undefined
   /** Type of content for cache configuration */
-  type?: 'data' | 'metadata' | 'bloom'
+  type?: 'data' | 'metadata' | 'bloom' | undefined
 }
 
 // =============================================================================

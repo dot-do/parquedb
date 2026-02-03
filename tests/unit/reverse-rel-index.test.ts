@@ -22,23 +22,23 @@ import type { Entity, EntityId, Schema } from '../../src/types'
 // =============================================================================
 
 interface Author {
-  bio?: string
+  bio?: string | undefined
   // Reverse relationship
-  posts?: Record<string, EntityId>
+  posts?: Record<string, EntityId> | undefined
 }
 
 interface Post {
   title: string
   content: string
   // Forward relationship
-  author?: Record<string, EntityId>
-  tags?: Record<string, EntityId>
+  author?: Record<string, EntityId> | undefined
+  tags?: Record<string, EntityId> | undefined
 }
 
 interface Tag {
   slug: string
   // Reverse relationship
-  posts?: Record<string, EntityId>
+  posts?: Record<string, EntityId> | undefined
 }
 
 // =============================================================================

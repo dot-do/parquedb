@@ -17,7 +17,7 @@ export interface CreateDatabaseModalProps {
   /** Callback when database is created */
   onCreate: (database: DatabaseInfo) => void
   /** API endpoint for creating database */
-  apiEndpoint?: string
+  apiEndpoint?: string | undefined
 }
 
 /**
@@ -72,7 +72,7 @@ export function CreateDatabaseModal({
       })
 
       if (!response.ok) {
-        const data = await response.json().catch(() => ({})) as { error?: string }
+        const data = await response.json().catch(() => ({})) as { error?: string | undefined }
         const error = new Error(data.error || `Failed to create database (${response.status})`)
 
         // Retry on server errors (5xx) but not on client errors (4xx)

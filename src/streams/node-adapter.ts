@@ -56,30 +56,30 @@ export interface NodeStreamAdapterOptions {
    * High water mark for buffering (bytes)
    * @default 16384 (16KB)
    */
-  highWaterMark?: number
+  highWaterMark?: number | undefined
 
   /**
    * Object mode - when true, streams operate on objects instead of bytes
    * @default false
    */
-  objectMode?: boolean
+  objectMode?: boolean | undefined
 
   /**
    * Encoding for string data
    * @default undefined (binary)
    */
-  encoding?: BufferEncoding
+  encoding?: BufferEncoding | undefined
 
   /**
    * Whether to handle errors by propagating them
    * @default true
    */
-  propagateErrors?: boolean
+  propagateErrors?: boolean | undefined
 
   /**
    * Custom signal for aborting operations
    */
-  signal?: AbortSignal
+  signal?: AbortSignal | undefined
 }
 
 /**

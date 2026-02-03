@@ -58,13 +58,13 @@ export interface IcebergCommitConfig {
   tableLocation: string
 
   /** Maximum OCC retries (default: 10) */
-  maxRetries?: number
+  maxRetries?: number | undefined
 
   /** Base backoff in ms for OCC retries (default: 100) */
-  baseBackoffMs?: number
+  baseBackoffMs?: number | undefined
 
   /** Max backoff in ms for OCC retries (default: 5000) */
-  maxBackoffMs?: number
+  maxBackoffMs?: number | undefined
 }
 
 /**
@@ -89,16 +89,16 @@ export interface IcebergCommitResult {
   success: boolean
 
   /** New snapshot ID (if successful) */
-  snapshotId?: number
+  snapshotId?: number | undefined
 
   /** New sequence number (if successful) */
-  sequenceNumber?: number
+  sequenceNumber?: number | undefined
 
   /** Path to the new metadata file (if successful) */
-  metadataPath?: string
+  metadataPath?: string | undefined
 
   /** Error message (if failed) */
-  error?: string
+  error?: string | undefined
 }
 
 // =============================================================================
@@ -684,9 +684,9 @@ export async function commitToIcebergTable(config: {
   storage: StorageBackend
   tableLocation: string
   dataFiles: DataFileInfo[]
-  maxRetries?: number
-  baseBackoffMs?: number
-  maxBackoffMs?: number
+  maxRetries?: number | undefined
+  baseBackoffMs?: number | undefined
+  maxBackoffMs?: number | undefined
 }): Promise<IcebergCommitResult> {
   const committer = new IcebergCommitter({
     storage: config.storage,

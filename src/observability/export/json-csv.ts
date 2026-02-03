@@ -41,9 +41,9 @@ export function exportAIUsageToJSON(
 
   // Group by model/provider
   const namespaces: Record<string, {
-    latest?: Record<string, number>
-    timeSeries?: Record<string, JSONMetricSeries>
-    metadata?: Record<string, unknown>
+    latest?: Record<string, number> | undefined
+    timeSeries?: Record<string, JSONMetricSeries> | undefined
+    metadata?: Record<string, unknown> | undefined
   }> = {}
 
   // Apply time range filter
@@ -204,9 +204,9 @@ export function exportCompactionToJSON(
   const now = Date.now()
 
   const namespaces: Record<string, {
-    latest?: Record<string, number>
-    timeSeries?: Record<string, JSONMetricSeries>
-    metadata?: Record<string, unknown>
+    latest?: Record<string, number> | undefined
+    timeSeries?: Record<string, JSONMetricSeries> | undefined
+    metadata?: Record<string, unknown> | undefined
   }> = {}
 
   for (const [namespace, metrics] of latestMetrics) {

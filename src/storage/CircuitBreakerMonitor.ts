@@ -42,7 +42,7 @@ export interface CircuitStateChangeEvent {
   /** Timestamp of the change */
   timestamp: number
   /** Reason for the change (if known) */
-  reason?: string
+  reason?: string | undefined
 }
 
 /**
@@ -62,9 +62,9 @@ export interface CircuitHealth {
   /** Success rate (0-1) */
   successRate: number
   /** Time until next recovery attempt (for OPEN state) */
-  timeToRecoveryMs?: number
+  timeToRecoveryMs?: number | undefined
   /** Last state change timestamp */
-  lastStateChangeTime?: number
+  lastStateChangeTime?: number | undefined
 }
 
 /**
@@ -107,7 +107,7 @@ export class CircuitBreakerMonitor {
   private maxHistorySize: number
   private stateChangeCallbacks: CircuitStateChangeCallback[] = []
 
-  constructor(options?: { maxHistorySize?: number }) {
+  constructor(options?: { maxHistorySize?: number | undefined }) {
     this.maxHistorySize = options?.maxHistorySize ?? 100
   }
 
@@ -418,7 +418,7 @@ export class CircuitBreakerMonitor {
 /**
  * Create a circuit breaker monitor
  */
-export function createCircuitBreakerMonitor(options?: { maxHistorySize?: number }): CircuitBreakerMonitor {
+export function createCircuitBreakerMonitor(options?: { maxHistorySize?: number | undefined }): CircuitBreakerMonitor {
   return new CircuitBreakerMonitor(options)
 }
 

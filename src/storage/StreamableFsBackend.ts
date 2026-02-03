@@ -120,7 +120,7 @@ export class StreamableFsBackend implements StreamableBackend {
     const highWaterMark = options?.highWaterMark ?? DEFAULT_HIGH_WATER_MARK
 
     // Create Node.js read stream options
-    const nodeOptions: { start?: number; end?: number; highWaterMark: number } = {
+    const nodeOptions: { start?: number | undefined; end?: number | undefined; highWaterMark: number } = {
       highWaterMark,
     }
 

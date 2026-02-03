@@ -35,10 +35,10 @@ export interface SearchResult<T> {
   total: number
   limit: number
   offset: number
-  facets?: Record<string, { value: string; count: number }[]>
-  stats?: Record<string, { min: number; max: number; avg: number }>
-  timing?: Record<string, number>
-  didYouMean?: string
+  facets?: Record<string, { value: string; count: number }[]> | undefined
+  stats?: Record<string, { min: number; max: number; avg: number }> | undefined
+  timing?: Record<string, number> | undefined
+  didYouMean?: string | undefined
 }
 
 /** Suggest response */
@@ -49,13 +49,13 @@ export interface SuggestResult {
 
 /** Base options for all searches */
 export interface SearchOptions {
-  limit?: number
-  offset?: number
-  sort?: string
-  facets?: string[]
-  stats?: string[]
-  timing?: boolean
-  highlight?: boolean
+  limit?: number | undefined
+  offset?: number | undefined
+  sort?: string | undefined
+  facets?: string[] | undefined
+  stats?: string[] | undefined
+  timing?: boolean | undefined
+  highlight?: boolean | undefined
 }
 
 // =============================================================================
@@ -65,9 +65,9 @@ export interface SearchOptions {
 /** Define a searchable field */
 export interface SearchField<T = unknown> {
   type: 'text' | 'keyword' | 'number' | 'date' | 'boolean' | 'array'
-  filterable?: boolean
-  facetable?: boolean
-  sortable?: boolean
+  filterable?: boolean | undefined
+  facetable?: boolean | undefined
+  sortable?: boolean | undefined
 }
 
 /** Schema for a dataset */
@@ -87,7 +87,7 @@ export type DocType<S extends DatasetSchema> = {
 export type FilterableFields<S extends DatasetSchema> = {
   [K in keyof S as S[K]['filterable'] extends true ? K : never]?:
     S[K]['type'] extends 'text' | 'keyword' ? string | string[]
-    : S[K]['type'] extends 'number' ? number | { gte?: number; lte?: number }
+    : S[K]['type'] extends 'number' ? number | { gte?: number | undefined; lte?: number | undefined }
     : S[K]['type'] extends 'boolean' ? boolean
     : never
 }
@@ -163,22 +163,22 @@ export interface UNSPSCCode {
 // =============================================================================
 
 export interface IMDBFilters {
-  type?: string | string[]
-  year_gte?: number
-  year_lte?: number
-  runtime_gte?: number
-  runtime_lte?: number
+  type?: string | string[] | undefined
+  year_gte?: number | undefined
+  year_lte?: number | undefined
+  runtime_gte?: number | undefined
+  runtime_lte?: number | undefined
 }
 
 export interface ONETFilters {
-  code?: string | string[]
+  code?: string | string[] | undefined
 }
 
 export interface UNSPSCFilters {
-  segment?: string | string[]
-  family?: string | string[]
-  class?: string | string[]
-  commodity?: string | string[]
+  segment?: string | string[] | undefined
+  family?: string | string[] | undefined
+  class?: string | string[] | undefined
+  commodity?: string | string[] | undefined
 }
 
 // =============================================================================
@@ -199,7 +199,7 @@ export interface DatasetClient<T, F = Record<string, unknown>> {
   vector(embedding: number[], options?: SearchOptions): Promise<SearchResult<T>>
 
   /** Hybrid search */
-  hybrid(query: string, embedding: number[], options?: F & SearchOptions & { fts_weight?: number }): Promise<SearchResult<T>>
+  hybrid(query: string, embedding: number[], options?: F & SearchOptions & { fts_weight?: number | undefined }): Promise<SearchResult<T>>
 }
 
 // =============================================================================
@@ -275,7 +275,7 @@ function createDatasetClient<T, F>(
   client.hybrid = async (
     query: string,
     embedding: number[],
-    options?: F & SearchOptions & { fts_weight?: number }
+    options?: F & SearchOptions & { fts_weight?: number | undefined }
   ): Promise<SearchResult<T>> => {
     const url = buildUrl(baseUrl, dataset, {
       ...options,
@@ -294,7 +294,7 @@ function createDatasetClient<T, F>(
 // =============================================================================
 
 export interface SearchClientConfig {
-  baseUrl?: string
+  baseUrl?: string | undefined
 }
 
 export interface BuiltinSearchClient {
@@ -429,7 +429,7 @@ export async function hybridSearch<T = unknown>(
   dataset: string,
   q: string,
   embedding: number[],
-  options?: SearchOptions & { fts_weight?: number },
+  options?: SearchOptions & { fts_weight?: number | undefined },
   baseUrl = DEFAULT_BASE_URL
 ): Promise<SearchResult<T>> {
   const url = buildUrl(baseUrl, dataset, { ...options, q, vector: embedding, mode: 'hybrid' })

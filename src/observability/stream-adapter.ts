@@ -43,8 +43,8 @@ export interface StreamEvent {
 export interface QueryStreamEvent extends StreamEvent {
   category: 'query'
   context: QueryContext
-  result?: QueryResult
-  error?: Error
+  result?: QueryResult | undefined
+  error?: Error | undefined
 }
 
 /**
@@ -53,8 +53,8 @@ export interface QueryStreamEvent extends StreamEvent {
 export interface MutationStreamEvent extends StreamEvent {
   category: 'mutation'
   context: MutationContext
-  result?: MutationResult
-  error?: Error
+  result?: MutationResult | undefined
+  error?: Error | undefined
 }
 
 /**
@@ -63,8 +63,8 @@ export interface MutationStreamEvent extends StreamEvent {
 export interface StorageStreamEvent extends StreamEvent {
   category: 'storage'
   context: StorageContext
-  result?: StorageResult
-  error?: Error
+  result?: StorageResult | undefined
+  error?: Error | undefined
 }
 
 /**
@@ -84,19 +84,19 @@ export type ObservabilityStreamEvent =
  */
 export interface StreamAdapterConfig {
   /** Maximum events to buffer (default: 10000) */
-  maxBufferSize?: number
+  maxBufferSize?: number | undefined
   /** Whether to include full context in events (default: true) */
-  includeFullContext?: boolean
+  includeFullContext?: boolean | undefined
   /** Filter events by category */
-  categories?: Array<'query' | 'mutation' | 'storage'>
+  categories?: Array<'query' | 'mutation' | 'storage'> | undefined
   /** Filter events by type */
-  types?: Array<'start' | 'end' | 'error'>
+  types?: Array<'start' | 'end' | 'error'> | undefined
   /** Custom filter function */
-  filter?: (event: ObservabilityStreamEvent) => boolean
+  filter?: ((event: ObservabilityStreamEvent) => boolean) | undefined
   /** Batch size for batch processing (default: 100) */
-  batchSize?: number
+  batchSize?: number | undefined
   /** Batch timeout in ms (default: 1000) */
-  batchTimeoutMs?: number
+  batchTimeoutMs?: number | undefined
 }
 
 /**
@@ -721,7 +721,7 @@ export class AsyncIteratorAdapter implements StreamAdapter {
  */
 export interface PollingAdapterConfig extends StreamAdapterConfig {
   /** Polling interval in ms (default: 100) */
-  pollingIntervalMs?: number
+  pollingIntervalMs?: number | undefined
 }
 
 /**

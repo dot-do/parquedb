@@ -390,7 +390,7 @@ async function continueMerge(
 async function applyResolvedChanges(
   storage: InstanceType<typeof import('../../storage/FsBackend').FsBackend>,
   state: Awaited<ReturnType<typeof import('../../sync/merge-state').loadMergeState>>
-): Promise<{ success: boolean; commitHash?: string; error?: string }> {
+): Promise<{ success: boolean; commitHash?: string | undefined; error?: string | undefined }> {
   if (!state) {
     return { success: false, error: 'No merge state provided' }
   }

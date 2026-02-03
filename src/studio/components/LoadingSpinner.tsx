@@ -32,17 +32,17 @@ export type SpinnerSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl'
  */
 export interface LoadingSpinnerProps {
   /** Size of the spinner */
-  size?: SpinnerSize
+  size?: SpinnerSize | undefined
   /** Optional loading message */
-  message?: string
+  message?: string | undefined
   /** Whether to center the spinner in its container */
-  centered?: boolean
+  centered?: boolean | undefined
   /** Whether to show a full-page overlay */
-  overlay?: boolean
+  overlay?: boolean | undefined
   /** Additional CSS class name */
-  className?: string
+  className?: string | undefined
   /** Additional inline styles */
-  style?: React.CSSProperties
+  style?: React.CSSProperties | undefined
 }
 
 /**

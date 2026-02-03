@@ -60,7 +60,7 @@ export interface RelationshipMetadata {
    * })
    * ```
    */
-  matchMode?: MatchMode
+  matchMode?: MatchMode | undefined
 
   /**
    * Similarity score for fuzzy matches (0.0 to 1.0)
@@ -80,7 +80,7 @@ export interface RelationshipMetadata {
    * })
    * ```
    */
-  similarity?: number
+  similarity?: number | undefined
 
   /**
    * Type of match that produced this relationship
@@ -92,7 +92,7 @@ export interface RelationshipMetadata {
    * - 'id-match': Matched by external ID
    * - 'manual': Manually created by user
    */
-  matchedType?: string
+  matchedType?: string | undefined
 
   /**
    * Additional metadata fields
@@ -115,9 +115,9 @@ export interface RelationshipMetadata {
  */
 export interface ShreddedRelationshipFields {
   /** How the relationship was matched */
-  matchMode?: MatchMode
+  matchMode?: MatchMode | undefined
   /** Similarity score for fuzzy matches (0.0 to 1.0) */
-  similarity?: number
+  similarity?: number | undefined
 }
 
 /**
@@ -146,26 +146,26 @@ export function isValidSimilarity(value: unknown): value is number {
  */
 export interface RelationshipFilter {
   /** Filter by source namespace */
-  fromNs?: string
+  fromNs?: string | undefined
   /** Filter by source entity ID */
-  fromId?: string
+  fromId?: string | undefined
   /** Filter by predicate name */
-  predicate?: string
+  predicate?: string | undefined
   /** Filter by target namespace */
-  toNs?: string
+  toNs?: string | undefined
   /** Filter by target entity ID */
-  toId?: string
+  toId?: string | undefined
 
   // Shredded field filters (support predicate pushdown)
 
   /** Filter by match mode */
-  matchMode?: MatchMode
+  matchMode?: MatchMode | undefined
   /** Filter by exact similarity score */
-  similarity?: number
+  similarity?: number | undefined
   /** Filter by minimum similarity (inclusive) */
-  minSimilarity?: number
+  minSimilarity?: number | undefined
   /** Filter by maximum similarity (inclusive) */
-  maxSimilarity?: number
+  maxSimilarity?: number | undefined
 }
 
 // =============================================================================
@@ -177,15 +177,15 @@ export interface RelationshipFilter {
  */
 export interface RelationshipQueryOptions {
   /** Maximum number of relationships to return */
-  limit?: number
+  limit?: number | undefined
   /** Number of relationships to skip (for pagination) */
-  offset?: number
+  offset?: number | undefined
   /** Sort field */
-  sortBy?: 'similarity' | 'createdAt' | 'predicate'
+  sortBy?: 'similarity' | 'createdAt' | 'predicate' | undefined
   /** Sort direction */
-  sortDirection?: 'asc' | 'desc'
+  sortDirection?: 'asc' | 'desc' | undefined
   /** Include deleted relationships */
-  includeDeleted?: boolean
+  includeDeleted?: boolean | undefined
 }
 
 // =============================================================================
@@ -199,11 +199,11 @@ export interface RelationshipQueryResult<T = RelationshipWithMetadata> {
   /** Matching relationships */
   items: T[]
   /** Total count of matching relationships (if available) */
-  total?: number
+  total?: number | undefined
   /** Whether there are more results */
   hasMore: boolean
   /** Cursor for next page */
-  nextCursor?: string
+  nextCursor?: string | undefined
 }
 
 // =============================================================================
@@ -222,39 +222,39 @@ export interface RelationshipWithMetadata {
   /** Source entity ID */
   fromId: string
   /** Source entity type */
-  fromType?: string
+  fromType?: string | undefined
   /** Source entity display name */
-  fromName?: string
+  fromName?: string | undefined
 
   /** Outbound relationship name (e.g., "author", "category") */
   predicate: string
   /** Inbound relationship name (e.g., "posts", "items") */
-  reverse?: string
+  reverse?: string | undefined
 
   /** Target namespace */
   toNs: string
   /** Target entity ID */
   toId: string
   /** Target entity type */
-  toType?: string
+  toType?: string | undefined
   /** Target entity display name */
-  toName?: string
+  toName?: string | undefined
 
   // ===========================================================================
   // Shredded Fields (top-level columns for efficient querying)
   // ===========================================================================
 
   /** How the relationship was matched (SHREDDED) */
-  matchMode?: MatchMode
+  matchMode?: MatchMode | undefined
   /** Similarity score for fuzzy matches (SHREDDED) */
-  similarity?: number
+  similarity?: number | undefined
 
   // ===========================================================================
   // Variant Data (remaining metadata)
   // ===========================================================================
 
   /** Additional edge properties stored in Variant column */
-  data?: Record<string, unknown>
+  data?: Record<string, unknown> | undefined
 
   // ===========================================================================
   // Audit Fields
@@ -263,11 +263,11 @@ export interface RelationshipWithMetadata {
   /** When the relationship was created */
   createdAt: Date
   /** Who created the relationship */
-  createdBy?: string
+  createdBy?: string | undefined
   /** Soft delete timestamp */
-  deletedAt?: Date
+  deletedAt?: Date | undefined
   /** Who deleted the relationship */
-  deletedBy?: string
+  deletedBy?: string | undefined
   /** Optimistic concurrency version */
   version: number
 }

@@ -16,7 +16,7 @@ interface TestUser {
   name: string
   age: number
   status: string
-  email?: string
+  email?: string | undefined
 }
 
 const testUsers: TestUser[] = [

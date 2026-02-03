@@ -104,10 +104,10 @@ export interface FilterResult {
  */
 export interface ShreddedPushdownOptions {
   /** Starting field ID for shredded columns (default: 1000) */
-  startingFieldId?: number
+  startingFieldId?: number | undefined
 
   /** Enable verbose logging for debugging */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 // =============================================================================

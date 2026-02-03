@@ -93,7 +93,7 @@ interface Condition {
   field: string
   op: QueryOp
   value: unknown
-  negated?: boolean  // true for notWhere conditions
+  negated?: boolean | undefined  // true for notWhere conditions
 }
 
 /** Array operator types */
@@ -123,9 +123,9 @@ interface BuilderState {
   modConditions: ModCondition[]
   orGroups: Condition[][]
   sort: SortSpec
-  limit?: number
-  skip?: number
-  project?: Projection
+  limit?: number | undefined
+  skip?: number | undefined
+  project?: Projection | undefined
 }
 
 /**

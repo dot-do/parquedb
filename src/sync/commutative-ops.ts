@@ -28,14 +28,14 @@ import { deepEqual, compareValues } from '../utils'
  * Note: Fields are mutable internally to allow combination operations
  */
 export interface UpdateOps {
-  $set?: Record<string, unknown>
-  $unset?: Record<string, unknown>
-  $inc?: Record<string, number>
-  $addToSet?: Record<string, unknown>
-  $push?: Record<string, unknown>
-  $pull?: Record<string, unknown>
-  $min?: Record<string, unknown>
-  $max?: Record<string, unknown>
+  $set?: Record<string, unknown> | undefined
+  $unset?: Record<string, unknown> | undefined
+  $inc?: Record<string, number> | undefined
+  $addToSet?: Record<string, unknown> | undefined
+  $push?: Record<string, unknown> | undefined
+  $pull?: Record<string, unknown> | undefined
+  $min?: Record<string, unknown> | undefined
+  $max?: Record<string, unknown> | undefined
   [key: string]: unknown
 }
 

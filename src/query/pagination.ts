@@ -13,15 +13,15 @@ import { sortEntities } from './sort'
  */
 export interface PaginationOptions {
   /** Sort specification */
-  sort?: SortSpec
+  sort?: SortSpec | undefined
   /** Maximum number of results */
-  limit?: number
+  limit?: number | undefined
   /** Number of results to skip (offset) */
-  skip?: number
+  skip?: number | undefined
   /** Cursor for pagination (alternative to skip) */
-  cursor?: string
+  cursor?: string | undefined
   /** Field to use for cursor (default: '$id') */
-  cursorField?: string
+  cursorField?: string | undefined
 }
 
 /**
@@ -41,7 +41,7 @@ export interface PaginationOptions {
  * // { items: [...], hasMore: true, nextCursor: '10', total: 100 }
  * ```
  */
-export function applyPagination<T extends { $id?: string }>(
+export function applyPagination<T extends { $id?: string | undefined }>(
   items: T[],
   options?: PaginationOptions
 ): PaginatedResult<T> {
@@ -123,11 +123,11 @@ export function extractPaginationOptions<T>(options?: FindOptions<T>): Paginatio
  */
 export interface OffsetPaginationOptions {
   /** Sort specification */
-  sort?: SortSpec
+  sort?: SortSpec | undefined
   /** Maximum number of results */
-  limit?: number
+  limit?: number | undefined
   /** Numeric offset cursor (e.g., "0", "10", "20") */
-  cursor?: string
+  cursor?: string | undefined
 }
 
 /**
@@ -141,7 +141,7 @@ export interface OffsetPaginatedResult<T> {
   /** Whether there are more results */
   hasMore: boolean
   /** Cursor for next page (numeric offset string) */
-  nextCursor?: string
+  nextCursor?: string | undefined
 }
 
 /**

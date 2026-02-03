@@ -54,7 +54,7 @@ export interface StoredWindowState {
   writers: string[]
   lastActivityAt: number
   totalSize: number
-  processingStatus?: StoredProcessingStatus
+  processingStatus?: StoredProcessingStatus | undefined
 }
 
 export interface StoredState {
@@ -63,7 +63,7 @@ export interface StoredState {
   knownWriters: string[]
   writerLastSeen: Record<string, number>
   /** Namespace priority: 0 (critical) to 3 (background). Default: 2 */
-  priority?: NamespacePriority
+  priority?: NamespacePriority | undefined
 }
 
 /**
@@ -74,7 +74,7 @@ export interface StoredMetadata {
   namespace: string
   knownWriters: string[]
   writerLastSeen: Record<string, number>
-  priority?: NamespacePriority
+  priority?: NamespacePriority | undefined
 }
 
 export interface UpdateRequest {

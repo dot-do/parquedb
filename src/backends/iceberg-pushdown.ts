@@ -212,7 +212,7 @@ export function canSkipRowGroup(
 function findColumnMetadata(
   rowGroup: RowGroupMetadata,
   columnName: string
-): { statistics?: ColumnStatistics } | undefined {
+): { statistics?: ColumnStatistics | undefined } | undefined {
   return rowGroup.columns.find(
     col =>
       col.pathInSchema.join('.') === columnName ||

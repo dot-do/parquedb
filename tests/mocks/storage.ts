@@ -74,17 +74,17 @@ export interface MockStorageBackendOptions {
    * If true, returns a functional in-memory implementation.
    * If false (default), returns spy-only mocks that return sensible defaults.
    */
-  functional?: boolean
+  functional?: boolean | undefined
 
   /**
    * Backend type identifier
    */
-  type?: string
+  type?: string | undefined
 
   /**
    * Initial data to populate
    */
-  initialData?: Map<string, Uint8Array>
+  initialData?: Map<string, Uint8Array> | undefined
 }
 
 // =============================================================================

@@ -40,10 +40,10 @@ export interface CacheConfig {
   staleWhileRevalidate: boolean
 
   /** Maximum size to cache (bytes, 0 = no limit) */
-  maxCacheSize?: number
+  maxCacheSize?: number | undefined
 
   /** Enable compression for cached responses */
-  compression?: boolean
+  compression?: boolean | undefined
 }
 
 /**
@@ -125,7 +125,7 @@ export interface AdvancedCacheConfig {
   defaults: CacheConfig
 
   /** Per-type overrides */
-  overrides?: Partial<Record<CacheContentType, Partial<ContentTypeCacheConfig>>>
+  overrides?: Partial<Record<CacheContentType, Partial<ContentTypeCacheConfig>>> | undefined
 }
 
 // =============================================================================
@@ -176,7 +176,7 @@ export class CacheStrategy {
    */
   async getCacheHeaders(
     type: CacheContentType,
-    options?: { etag?: string; size?: number }
+    options?: { etag?: string | undefined; size?: number | undefined }
   ): Promise<Headers> {
     const headers = new Headers()
     const ttl = this.getTtl(type)
@@ -342,7 +342,7 @@ export class CacheStrategy {
    */
   createCacheKey(
     path: string,
-    options?: { version?: string; range?: { start: number; end: number } }
+    options?: { version?: string | undefined; range?: { start: number; end: number } | undefined }
   ): Request {
     let url = `https://parquedb/${path}`
 
@@ -367,8 +367,8 @@ export class CacheStrategy {
    */
   parseCacheKey(key: Request): {
     path: string
-    version?: string
-    range?: { start: number; end: number }
+    version?: string | undefined
+    range?: { start: number; end: number } | undefined
   } {
     const url = new URL(key.url)
     const path = url.pathname.replace(/^\//, '')
@@ -444,10 +444,10 @@ export class CacheStrategy {
  * Create a CacheStrategy from environment configuration
  */
 export function createCacheStrategy(env?: {
-  CACHE_DATA_TTL?: string
-  CACHE_METADATA_TTL?: string
-  CACHE_BLOOM_TTL?: string
-  CACHE_STALE_WHILE_REVALIDATE?: string
+  CACHE_DATA_TTL?: string | undefined
+  CACHE_METADATA_TTL?: string | undefined
+  CACHE_BLOOM_TTL?: string | undefined
+  CACHE_STALE_WHILE_REVALIDATE?: string | undefined
 }): CacheStrategy {
   const config: CacheConfig = {
     dataTtl: env?.CACHE_DATA_TTL ? parseInt(env.CACHE_DATA_TTL, 10) : DEFAULT_CACHE_CONFIG.dataTtl,

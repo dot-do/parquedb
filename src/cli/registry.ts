@@ -38,9 +38,9 @@ export interface Command {
   /** Command execution function - returns exit code (0 = success) */
   execute: (args: ParsedArgs) => Promise<number>
   /** Optional aliases for the command */
-  aliases?: string[]
+  aliases?: string[] | undefined
   /** Optional category for grouping in help (e.g., 'Database', 'Data', 'Utilities') */
-  category?: string
+  category?: string | undefined
 }
 
 // =============================================================================

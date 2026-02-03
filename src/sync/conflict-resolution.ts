@@ -46,10 +46,10 @@ export interface ConflictResolution {
   readonly requiresManualResolution: boolean
 
   /** Optional explanation of the resolution */
-  readonly explanation?: string
+  readonly explanation?: string | undefined
 
   /** Original conflict information */
-  readonly conflict?: ConflictInfo
+  readonly conflict?: ConflictInfo | undefined
 }
 
 // =============================================================================

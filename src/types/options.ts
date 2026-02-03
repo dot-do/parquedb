@@ -40,15 +40,15 @@ export interface Projection {
 /** Options for populating related entities */
 export interface PopulateOptions {
   /** Maximum related entities to include */
-  limit?: number
+  limit?: number | undefined
   /** Sort order for related entities */
-  sort?: SortSpec
+  sort?: SortSpec | undefined
   /** Cursor for pagination */
-  cursor?: string
+  cursor?: string | undefined
   /** Filter for related entities */
-  filter?: Filter
+  filter?: Filter | undefined
   /** Nested populate */
-  populate?: PopulateSpec
+  populate?: PopulateSpec | undefined
 }
 
 /** Populate specification */
@@ -94,40 +94,40 @@ export type PopulateSpec =
  */
 export interface FindOptions<T = unknown> {
   /** Filter (alternative to passing filter as first arg) */
-  filter?: Filter
+  filter?: Filter | undefined
 
   /** Sort order */
-  sort?: SortSpec
+  sort?: SortSpec | undefined
 
   /** Maximum number of results */
-  limit?: number
+  limit?: number | undefined
 
   /** Number of results to skip (offset) */
-  skip?: number
+  skip?: number | undefined
 
   /** Cursor for pagination (alternative to skip) */
-  cursor?: string
+  cursor?: string | undefined
 
   /** Field projection */
-  project?: Projection
+  project?: Projection | undefined
 
   /** Populate related entities */
-  populate?: PopulateSpec
+  populate?: PopulateSpec | undefined
 
   /** Include soft-deleted entities */
-  includeDeleted?: boolean
+  includeDeleted?: boolean | undefined
 
   /** Time-travel: query as of specific time */
-  asOf?: Date
+  asOf?: Date | undefined
 
   /** Explain query plan without executing */
-  explain?: boolean
+  explain?: boolean | undefined
 
   /** Hint for index to use */
-  hint?: string | { [field: string]: 1 | -1 }
+  hint?: string | { [field: string]: 1 | -1 } | undefined
 
   /** Maximum time in milliseconds */
-  maxTimeMs?: number
+  maxTimeMs?: number | undefined
 }
 
 // =============================================================================
@@ -139,19 +139,19 @@ export interface FindOptions<T = unknown> {
  */
 export interface GetOptions {
   /** Include soft-deleted entity */
-  includeDeleted?: boolean
+  includeDeleted?: boolean | undefined
 
   /** Time-travel: get entity as of specific time */
-  asOf?: Date
+  asOf?: Date | undefined
 
   /** Hydrate related entities (fetch full entity, not just link) */
-  hydrate?: string[]
+  hydrate?: string[] | undefined
 
   /** Maximum inbound references to inline */
-  maxInbound?: number
+  maxInbound?: number | undefined
 
   /** Field projection */
-  project?: Projection
+  project?: Projection | undefined
 }
 
 // =============================================================================
@@ -163,28 +163,28 @@ export interface GetOptions {
  */
 export interface RelatedOptions {
   /** Predicate name (for outbound) */
-  predicate?: string
+  predicate?: string | undefined
 
   /** Reverse name (for inbound) */
-  reverse?: string
+  reverse?: string | undefined
 
   /** Maximum results */
-  limit?: number
+  limit?: number | undefined
 
   /** Cursor for pagination */
-  cursor?: string
+  cursor?: string | undefined
 
   /** Filter related entities */
-  filter?: Filter
+  filter?: Filter | undefined
 
   /** Sort order */
-  sort?: SortSpec
+  sort?: SortSpec | undefined
 
   /** Include soft-deleted relationships */
-  includeDeleted?: boolean
+  includeDeleted?: boolean | undefined
 
   /** Time-travel */
-  asOf?: Date
+  asOf?: Date | undefined
 }
 
 // =============================================================================
@@ -201,10 +201,10 @@ export type ValidationMode = 'strict' | 'permissive' | 'warn'
  */
 export interface CreateOptions {
   /** Actor performing the create (for audit) */
-  actor?: EntityId
+  actor?: EntityId | undefined
 
   /** Skip validation entirely */
-  skipValidation?: boolean
+  skipValidation?: boolean | undefined
 
   /**
    * Enable schema validation on write (default: true when schema is provided)
@@ -214,10 +214,10 @@ export interface CreateOptions {
    * - true: Same as 'strict'
    * - false: Same as skipValidation
    */
-  validateOnWrite?: boolean | ValidationMode
+  validateOnWrite?: boolean | ValidationMode | undefined
 
   /** Return the created entity (default: true) */
-  returnDocument?: boolean
+  returnDocument?: boolean | undefined
 }
 
 // =============================================================================
@@ -229,19 +229,19 @@ export interface CreateOptions {
  */
 export interface UpdateOptions {
   /** Actor performing the update (for audit) */
-  actor?: EntityId
+  actor?: EntityId | undefined
 
   /** Expected version for optimistic concurrency */
-  expectedVersion?: number
+  expectedVersion?: number | undefined
 
   /** Create if not exists (upsert) */
-  upsert?: boolean
+  upsert?: boolean | undefined
 
   /** Return the updated document */
-  returnDocument?: 'before' | 'after'
+  returnDocument?: 'before' | 'after' | undefined
 
   /** Skip validation entirely */
-  skipValidation?: boolean
+  skipValidation?: boolean | undefined
 
   /**
    * Enable schema validation on write (default: true when schema is provided)
@@ -251,10 +251,10 @@ export interface UpdateOptions {
    * - true: Same as 'strict'
    * - false: Same as skipValidation
    */
-  validateOnWrite?: boolean | ValidationMode
+  validateOnWrite?: boolean | ValidationMode | undefined
 
   /** Array filters for positional updates */
-  arrayFilters?: Filter[]
+  arrayFilters?: Filter[] | undefined
 }
 
 // =============================================================================
@@ -266,13 +266,13 @@ export interface UpdateOptions {
  */
 export interface DeleteOptions {
   /** Actor performing the delete (for audit) */
-  actor?: EntityId
+  actor?: EntityId | undefined
 
   /** Hard delete (permanent, skip soft delete) */
-  hard?: boolean
+  hard?: boolean | undefined
 
   /** Expected version for optimistic concurrency */
-  expectedVersion?: number
+  expectedVersion?: number | undefined
 }
 
 // =============================================================================
@@ -284,13 +284,13 @@ export interface DeleteOptions {
  */
 export interface BulkOptions {
   /** Continue on error */
-  ordered?: boolean
+  ordered?: boolean | undefined
 
   /** Actor performing the operations */
-  actor?: EntityId
+  actor?: EntityId | undefined
 
   /** Skip validation */
-  skipValidation?: boolean
+  skipValidation?: boolean | undefined
 }
 
 // =============================================================================
@@ -302,22 +302,22 @@ export interface BulkOptions {
  */
 export interface HistoryOptions {
   /** Start of time range */
-  from?: Date
+  from?: Date | undefined
 
   /** End of time range */
-  to?: Date
+  to?: Date | undefined
 
   /** Maximum number of events */
-  limit?: number
+  limit?: number | undefined
 
   /** Cursor for pagination */
-  cursor?: string
+  cursor?: string | undefined
 
   /** Filter by operation type */
-  op?: 'CREATE' | 'UPDATE' | 'DELETE'
+  op?: 'CREATE' | 'UPDATE' | 'DELETE' | undefined
 
   /** Filter by actor */
-  actor?: EntityId
+  actor?: EntityId | undefined
 }
 
 // =============================================================================
@@ -329,27 +329,27 @@ export interface HistoryOptions {
  */
 export interface AggregateOptions {
   /** Maximum time in milliseconds */
-  maxTimeMs?: number
+  maxTimeMs?: number | undefined
 
   /** Allow disk use for large aggregations */
-  allowDiskUse?: boolean
+  allowDiskUse?: boolean | undefined
 
   /** Hint for index */
-  hint?: string | { [field: string]: 1 | -1 }
+  hint?: string | { [field: string]: 1 | -1 } | undefined
 
   /** Include soft-deleted entities */
-  includeDeleted?: boolean
+  includeDeleted?: boolean | undefined
 
   /** Time-travel */
-  asOf?: Date
+  asOf?: Date | undefined
 
   /** Explain without executing */
-  explain?: boolean
+  explain?: boolean | undefined
 
   /**
    * Index manager for index-aware $match stage execution.
    * When provided, the aggregation executor will attempt to use
    * secondary indexes (hash, sst, fts, vector) for the first $match stage.
    */
-  indexManager?: import('../indexes/manager').IndexManager
+  indexManager?: import('../indexes/manager').IndexManager | undefined
 }

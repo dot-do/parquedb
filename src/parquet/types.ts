@@ -64,18 +64,18 @@ export interface ParquetFieldSchema {
   /** Field type */
   type: ParquetPrimitiveType | ParquetLogicalType
   /** Whether field is optional */
-  optional?: boolean
+  optional?: boolean | undefined
   /** For FIXED_LEN_BYTE_ARRAY */
-  typeLength?: number
+  typeLength?: number | undefined
   /** For DECIMAL */
-  precision?: number
-  scale?: number
+  precision?: number | undefined
+  scale?: number | undefined
   /** Field encoding */
-  encoding?: EncodingType
+  encoding?: EncodingType | undefined
   /** Field compression */
-  compression?: CompressionCodec
+  compression?: CompressionCodec | undefined
   /** Repetition type for nested structures */
-  repetitionType?: 'REQUIRED' | 'OPTIONAL' | 'REPEATED'
+  repetitionType?: 'REQUIRED' | 'OPTIONAL' | 'REPEATED' | undefined
 }
 
 /** Parquet schema definition */
@@ -102,19 +102,19 @@ export interface ColumnChunkMetadata {
   /** Compression codec */
   codec: CompressionCodec
   /** Statistics for the column */
-  statistics?: ColumnStatistics
+  statistics?: ColumnStatistics | undefined
 }
 
 /** Column statistics */
 export interface ColumnStatistics {
   /** Minimum value (encoded) */
-  min?: unknown
+  min?: unknown | undefined
   /** Maximum value (encoded) */
-  max?: unknown
+  max?: unknown | undefined
   /** Number of null values */
-  nullCount?: number
+  nullCount?: number | undefined
   /** Number of distinct values (approximate) */
-  distinctCount?: number
+  distinctCount?: number | undefined
 }
 
 /** Row group metadata */
@@ -126,13 +126,13 @@ export interface RowGroupMetadata {
   /** Column chunk metadata */
   columns: ColumnChunkMetadata[]
   /** Sorting columns (if any) */
-  sortingColumns?: SortingColumn[]
+  sortingColumns?: SortingColumn[] | undefined
   /** File offset of row group */
-  fileOffset?: number
+  fileOffset?: number | undefined
   /** Total compressed size */
-  totalCompressedSize?: number
+  totalCompressedSize?: number | undefined
   /** Ordinal in the file */
-  ordinal?: number
+  ordinal?: number | undefined
 }
 
 /** Sorting column specification */
@@ -156,33 +156,33 @@ export interface ParquetMetadata {
   /** Row group metadata */
   rowGroups: RowGroupMetadata[]
   /** Key-value metadata */
-  keyValueMetadata?: KeyValueMetadata[]
+  keyValueMetadata?: KeyValueMetadata[] | undefined
   /** Creator application */
-  createdBy?: string
+  createdBy?: string | undefined
 }
 
 /** Schema element in metadata */
 export interface ParquetSchemaElement {
   /** Element type */
-  type?: ParquetPrimitiveType
+  type?: ParquetPrimitiveType | undefined
   /** Type length for fixed-length types */
-  typeLength?: number
+  typeLength?: number | undefined
   /** Repetition type */
-  repetitionType?: 'REQUIRED' | 'OPTIONAL' | 'REPEATED'
+  repetitionType?: 'REQUIRED' | 'OPTIONAL' | 'REPEATED' | undefined
   /** Element name */
   name: string
   /** Number of children (for groups) */
-  numChildren?: number
+  numChildren?: number | undefined
   /** Converted type (legacy logical type) */
-  convertedType?: string
+  convertedType?: string | undefined
   /** Scale for DECIMAL */
-  scale?: number
+  scale?: number | undefined
   /** Precision for DECIMAL */
-  precision?: number
+  precision?: number | undefined
   /** Field ID */
-  fieldId?: number
+  fieldId?: number | undefined
   /** Logical type */
-  logicalType?: ParquetLogicalType
+  logicalType?: ParquetLogicalType | undefined
 }
 
 /** Key-value metadata pair */
@@ -200,25 +200,25 @@ export interface ParquetReaderOptions {
   /** Storage backend for reading bytes */
   storage: StorageBackend
   /** Default columns to read */
-  columns?: string[]
+  columns?: string[] | undefined
   /** Default row groups to read */
-  rowGroups?: number[]
+  rowGroups?: number[] | undefined
 }
 
 /** Options for reading Parquet data */
 export interface ReadOptions {
   /** Columns to read (default: all) */
-  columns?: string[]
+  columns?: string[] | undefined
   /** Row groups to read (default: all) */
-  rowGroups?: number[]
+  rowGroups?: number[] | undefined
   /** Skip rows at the beginning */
-  offset?: number
+  offset?: number | undefined
   /** Maximum rows to return */
-  limit?: number
+  limit?: number | undefined
   /** Filter predicate for row-level filtering */
-  filter?: RowFilter
+  filter?: RowFilter | undefined
   /** Whether to include row group metadata in results */
-  includeRowGroupMetadata?: boolean
+  includeRowGroupMetadata?: boolean | undefined
 }
 
 /** Row filter for predicate pushdown */
@@ -228,7 +228,7 @@ export interface RowFilter {
   /** Filter operator */
   op: 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'isNull' | 'isNotNull'
   /** Filter value */
-  value?: unknown
+  value?: unknown | undefined
 }
 
 // =============================================================================
@@ -238,27 +238,27 @@ export interface RowFilter {
 /** Options for ParquetWriter */
 export interface ParquetWriterOptions {
   /** Compression codec */
-  compression?: 'lz4' | 'snappy' | 'gzip' | 'zstd' | 'none'
+  compression?: 'lz4' | 'snappy' | 'gzip' | 'zstd' | 'none' | undefined
   /** Row group size (number of rows per group) */
-  rowGroupSize?: number
+  rowGroupSize?: number | undefined
   /** Use dictionary encoding */
-  dictionary?: boolean
+  dictionary?: boolean | undefined
   /** Page size in bytes */
-  pageSize?: number
+  pageSize?: number | undefined
   /** Enable statistics */
-  statistics?: boolean
+  statistics?: boolean | undefined
   /** Key-value metadata to include */
-  metadata?: Record<string, string>
+  metadata?: Record<string, string> | undefined
   /**
    * Enable column indexes (ColumnIndex) for page-level predicate pushdown
    * Default: true - enables hyparquet's parquetQuery() to skip pages based on min/max values
    */
-  columnIndex?: boolean
+  columnIndex?: boolean | undefined
   /**
    * Enable offset indexes (OffsetIndex) for efficient page location lookup
    * Default: true - required when columnIndex is enabled per Parquet spec
    */
-  offsetIndex?: boolean
+  offsetIndex?: boolean | undefined
 }
 
 /** Result of write operation */
@@ -333,11 +333,11 @@ export type ParqueDBToParquetType = {
 /** Options for creating entity schema */
 export interface CreateEntitySchemaOptions {
   /** Type definition from ParqueDB schema */
-  typeDef?: TypeDefinition
+  typeDef?: TypeDefinition | undefined
   /** Fields to shred from Variant for columnar efficiency */
-  shredFields?: string[]
+  shredFields?: string[] | undefined
   /** Additional columns to include */
-  additionalColumns?: ParquetSchema
+  additionalColumns?: ParquetSchema | undefined
 }
 
 // =============================================================================
@@ -362,17 +362,17 @@ export interface TypedWriteOptions extends ParquetWriterOptions {
    * This enables flexible querying of non-shredded fields.
    * @default true
    */
-  includeDataVariant?: boolean
+  includeDataVariant?: boolean | undefined
 
   /**
    * Include audit columns (createdAt, createdBy, updatedAt, updatedBy, version).
    * @default true
    */
-  includeAuditColumns?: boolean
+  includeAuditColumns?: boolean | undefined
 
   /**
    * Include soft delete columns (deletedAt, deletedBy).
    * @default true
    */
-  includeSoftDeleteColumns?: boolean
+  includeSoftDeleteColumns?: boolean | undefined
 }

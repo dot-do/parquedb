@@ -216,9 +216,9 @@ interface Event {
   ts: number
   op: 'CREATE' | 'UPDATE' | 'DELETE'
   target: string
-  before?: Record<string, unknown>
-  after?: Record<string, unknown>
-  actor?: string
+  before?: Record<string, unknown> | undefined
+  after?: Record<string, unknown> | undefined
+  actor?: string | undefined
 }
 
 interface Entity {
@@ -229,8 +229,8 @@ interface Entity {
   createdBy: string
   updatedAt: Date
   updatedBy: string
-  deletedAt?: Date
-  deletedBy?: string
+  deletedAt?: Date | undefined
+  deletedBy?: string | undefined
   version: number
   [key: string]: unknown
 }

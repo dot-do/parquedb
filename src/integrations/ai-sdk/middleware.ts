@@ -120,7 +120,7 @@ function getExpirationDate(ttlSeconds: number): Date {
 function extractResponseText(result: LanguageModelGenerateResult): string | undefined {
   // Try common response text locations
   return result.text ??
-    (result.response as { text?: string })?.text ??
+    (result.response as { text?: string | undefined })?.text ??
     undefined
 }
 
@@ -458,7 +458,7 @@ interface LogRequestOptions {
   collection: string
   level: 'minimal' | 'standard' | 'verbose'
   metadata: Record<string, unknown>
-  onLog?: (entry: LogEntry) => void | Promise<void>
+  onLog?: ((entry: LogEntry) => void | Promise<void>) | undefined
   entry: Omit<LogEntry, '$id' | '$type' | 'name' | 'timestamp' | 'metadata'>
 }
 
@@ -537,12 +537,12 @@ async function logRequest(options: LogRequestOptions): Promise<void> {
 export async function queryCacheEntries(
   db: ParqueDBMiddlewareOptions['db'],
   options?: {
-    collection?: string
-    modelId?: string
-    limit?: number
-    sortBy?: 'createdAt' | 'hitCount' | 'lastAccessedAt'
-    sortOrder?: 'asc' | 'desc'
-    includeExpired?: boolean
+    collection?: string | undefined
+    modelId?: string | undefined
+    limit?: number | undefined
+    sortBy?: 'createdAt' | 'hitCount' | 'lastAccessedAt' | undefined
+    sortOrder?: 'asc' | 'desc' | undefined
+    includeExpired?: boolean | undefined
   }
 ): Promise<CacheEntry[]> {
   const collection = options?.collection ?? DEFAULT_CACHE_COLLECTION
@@ -592,14 +592,14 @@ export async function queryCacheEntries(
 export async function queryLogEntries(
   db: ParqueDBMiddlewareOptions['db'],
   options?: {
-    collection?: string
-    modelId?: string
-    requestType?: 'generate' | 'stream'
-    since?: Date
-    until?: Date
-    limit?: number
-    errorsOnly?: boolean
-    cachedOnly?: boolean
+    collection?: string | undefined
+    modelId?: string | undefined
+    requestType?: 'generate' | 'stream' | undefined
+    since?: Date | undefined
+    until?: Date | undefined
+    limit?: number | undefined
+    errorsOnly?: boolean | undefined
+    cachedOnly?: boolean | undefined
   }
 ): Promise<LogEntry[]> {
   const collection = options?.collection ?? DEFAULT_LOG_COLLECTION
@@ -652,7 +652,7 @@ export async function queryLogEntries(
 export async function clearExpiredCache(
   db: ParqueDBMiddlewareOptions['db'],
   options?: {
-    collection?: string
+    collection?: string | undefined
   }
 ): Promise<number> {
   const collection = options?.collection ?? DEFAULT_CACHE_COLLECTION
@@ -678,15 +678,15 @@ export async function clearExpiredCache(
 export async function getCacheStats(
   db: ParqueDBMiddlewareOptions['db'],
   options?: {
-    collection?: string
+    collection?: string | undefined
   }
 ): Promise<{
   totalEntries: number
   activeEntries: number
   expiredEntries: number
   totalHits: number
-  oldestEntry?: Date
-  newestEntry?: Date
+  oldestEntry?: Date | undefined
+  newestEntry?: Date | undefined
 }> {
   const collection = options?.collection ?? DEFAULT_CACHE_COLLECTION
   const now = new Date()

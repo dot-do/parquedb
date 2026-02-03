@@ -171,7 +171,7 @@ export interface RecordContentInput {
   modelId: string
 
   /** Provider ID */
-  providerId?: string
+  providerId?: string | undefined
 
   /** Type of content */
   contentType: GeneratedContentType
@@ -180,55 +180,55 @@ export interface RecordContentInput {
   content: string | Record<string, unknown>
 
   /** Token count for the generated content */
-  tokenCount?: number
+  tokenCount?: number | undefined
 
   /** Prompt token count */
-  promptTokenCount?: number
+  promptTokenCount?: number | undefined
 
   /** Total token count */
-  totalTokenCount?: number
+  totalTokenCount?: number | undefined
 
   /** Finish reason */
-  finishReason?: FinishReason
+  finishReason?: FinishReason | undefined
 
   /** Latency in milliseconds */
-  latencyMs?: number
+  latencyMs?: number | undefined
 
   /** Whether this was a streaming response */
-  isStreaming?: boolean
+  isStreaming?: boolean | undefined
 
   /** Whether this was served from cache */
-  isCached?: boolean
+  isCached?: boolean | undefined
 
   /** Content classification */
-  classification?: ContentClassification
+  classification?: ContentClassification | undefined
 
   /** Tool name (for tool calls/results) */
-  toolName?: string
+  toolName?: string | undefined
 
   /** Tool call ID */
-  toolCallId?: string
+  toolCallId?: string | undefined
 
   /** Language detected */
-  language?: string
+  language?: string | undefined
 
   /** Session/conversation ID */
-  sessionId?: string
+  sessionId?: string | undefined
 
   /** User ID */
-  userId?: string
+  userId?: string | undefined
 
   /** Application/source */
-  source?: string
+  source?: string | undefined
 
   /** Custom ID (auto-generated if not provided) */
-  id?: string
+  id?: string | undefined
 
   /** Custom timestamp (defaults to now) */
-  timestamp?: number
+  timestamp?: number | undefined
 
   /** Additional metadata */
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -310,17 +310,17 @@ export interface GeneratedContentMVConfig {
   /** Base path for content files (e.g., 'ai/generated') */
   datasetPath: string
   /** Number of records to buffer before flushing (default: 500) */
-  flushThreshold?: number
+  flushThreshold?: number | undefined
   /** Maximum time to buffer records in ms (default: 30000) */
-  flushIntervalMs?: number
+  flushIntervalMs?: number | undefined
   /** Compression codec for Parquet (default: 'lz4') */
-  compression?: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd'
+  compression?: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd' | undefined
   /** Target row group size (default: 5000) */
-  rowGroupSize?: number
+  rowGroupSize?: number | undefined
   /** ID generator function (default: uses ULID) */
-  generateId?: () => string
+  generateId?: (() => string) | undefined
   /** Hash function for content deduplication */
-  hashContent?: (content: string) => string
+  hashContent?: ((content: string) => string) | undefined
 }
 
 /**

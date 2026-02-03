@@ -21,7 +21,7 @@ interface MockFile {
   path: string
   size: number
   mtime: Date
-  content?: Uint8Array
+  content?: Uint8Array | undefined
 }
 
 interface MockStorage {

@@ -23,7 +23,7 @@ import {
  */
 export interface WorkersAIProviderOptions {
   /** Model to use (default: @cf/baai/bge-m3) */
-  model?: string
+  model?: string | undefined
 }
 
 /**
@@ -112,13 +112,13 @@ export interface AISDKProviderOptions {
   /** The embed function from AI SDK */
   embed: AISDKEmbedFunction
   /** The embedMany function from AI SDK (optional, falls back to multiple embed calls) */
-  embedMany?: AISDKEmbedManyFunction
+  embedMany?: AISDKEmbedManyFunction | undefined
   /** The model to use */
   model: unknown
   /** Dimensions of the model's embeddings */
   dimensions: number
   /** Model identifier string */
-  modelId?: string
+  modelId?: string | undefined
 }
 
 /**
@@ -195,11 +195,11 @@ export interface CustomProviderOptions {
   /** Function to generate a single embedding */
   embed: (text: string) => Promise<number[]>
   /** Function to generate batch embeddings (optional) */
-  embedBatch?: (texts: string[]) => Promise<number[][]>
+  embedBatch?: ((texts: string[]) => Promise<number[][]>) | undefined
   /** Dimensions of the embeddings */
   dimensions: number
   /** Model identifier */
-  model?: string
+  model?: string | undefined
 }
 
 /**

@@ -16,10 +16,10 @@ import { vi, type Mock } from 'vitest'
  */
 export interface MockUser {
   id: string
-  email?: string
-  name?: string
-  picture?: string
-  provider?: string
+  email?: string | undefined
+  name?: string | undefined
+  picture?: string | undefined
+  provider?: string | undefined
   [key: string]: unknown
 }
 
@@ -28,7 +28,7 @@ export interface MockUser {
  */
 export interface CsrfValidationResult {
   valid: boolean
-  reason?: string
+  reason?: string | undefined
 }
 
 /**
@@ -63,12 +63,12 @@ export interface MockAuthServiceOptions {
   /**
    * Initial user (null for unauthenticated)
    */
-  user?: MockUser | null
+  user?: MockUser | null | undefined
 
   /**
    * If true, returns functional implementation
    */
-  functional?: boolean
+  functional?: boolean | undefined
 }
 
 /**
@@ -78,12 +78,12 @@ export interface MockCsrfServiceOptions {
   /**
    * Initial validity state (default: true)
    */
-  valid?: boolean
+  valid?: boolean | undefined
 
   /**
    * Reason for invalid state
    */
-  reason?: string
+  reason?: string | undefined
 }
 
 // =============================================================================

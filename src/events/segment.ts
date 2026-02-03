@@ -39,9 +39,9 @@ export interface SegmentWriterOptions {
   /** Dataset name (used for path prefix) */
   dataset: string
   /** Path prefix for segments (default: 'events') */
-  prefix?: string
+  prefix?: string | undefined
   /** Sequence number padding (default: 4 digits) */
-  seqPadding?: number
+  seqPadding?: number | undefined
 }
 
 /**

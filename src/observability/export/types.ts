@@ -56,7 +56,7 @@ export interface PrometheusMetricDef {
   name: string
   help: string
   type: PrometheusMetricType
-  labels?: string[]
+  labels?: string[] | undefined
 }
 
 /**
@@ -66,7 +66,7 @@ export interface PrometheusMetricValue {
   name: string
   labels: Record<string, string>
   value: number
-  timestamp?: number
+  timestamp?: number | undefined
 }
 
 /**
@@ -97,9 +97,9 @@ export interface PrometheusHistogram {
  */
 export interface OTelResourceAttributes {
   'service.name': string
-  'service.version'?: string
-  'service.namespace'?: string
-  'deployment.environment'?: string
+  'service.version'?: string | undefined
+  'service.namespace'?: string | undefined
+  'deployment.environment'?: string | undefined
   [key: string]: string | number | boolean | undefined
 }
 
@@ -122,8 +122,8 @@ export interface OTelMetric {
   unit: string
   data: {
     dataPoints: OTelDataPoint[]
-    aggregationTemporality?: 'AGGREGATION_TEMPORALITY_DELTA' | 'AGGREGATION_TEMPORALITY_CUMULATIVE'
-    isMonotonic?: boolean
+    aggregationTemporality?: 'AGGREGATION_TEMPORALITY_DELTA' | 'AGGREGATION_TEMPORALITY_CUMULATIVE' | undefined
+    isMonotonic?: boolean | undefined
   }
 }
 
@@ -133,10 +133,10 @@ export interface OTelMetric {
 export interface OTelMetricsPayload {
   resourceMetrics: Array<{
     resource: {
-      attributes: Array<{ key: string; value: { stringValue?: string; intValue?: number; boolValue?: boolean } }>
+      attributes: Array<{ key: string; value: { stringValue?: string | undefined; intValue?: number | undefined; boolValue?: boolean | undefined } }>
     }
     scopeMetrics: Array<{
-      scope: { name: string; version?: string }
+      scope: { name: string; version?: string | undefined }
       metrics: OTelMetric[]
     }>
   }>
@@ -148,18 +148,18 @@ export interface OTelMetricsPayload {
 export interface OTelSpan {
   traceId: string
   spanId: string
-  parentSpanId?: string
+  parentSpanId?: string | undefined
   name: string
   kind: 'SPAN_KIND_INTERNAL' | 'SPAN_KIND_SERVER' | 'SPAN_KIND_CLIENT' | 'SPAN_KIND_PRODUCER' | 'SPAN_KIND_CONSUMER'
   startTimeUnixNano: bigint | number
   endTimeUnixNano: bigint | number
-  attributes: Array<{ key: string; value: { stringValue?: string; intValue?: number; boolValue?: boolean } }>
-  status?: { code: 'STATUS_CODE_OK' | 'STATUS_CODE_ERROR'; message?: string }
+  attributes: Array<{ key: string; value: { stringValue?: string | undefined; intValue?: number | undefined; boolValue?: boolean | undefined } }>
+  status?: { code: 'STATUS_CODE_OK' | 'STATUS_CODE_ERROR'; message?: string | undefined } | undefined
   events?: Array<{
     timeUnixNano: bigint | number
     name: string
-    attributes?: Array<{ key: string; value: { stringValue?: string; intValue?: number; boolValue?: boolean } }>
-  }>
+    attributes?: Array<{ key: string; value: { stringValue?: string | undefined; intValue?: number | undefined; boolValue?: boolean | undefined } }> | undefined
+  }> | undefined
 }
 
 /**
@@ -168,10 +168,10 @@ export interface OTelSpan {
 export interface OTelTracePayload {
   resourceSpans: Array<{
     resource: {
-      attributes: Array<{ key: string; value: { stringValue?: string; intValue?: number; boolValue?: boolean } }>
+      attributes: Array<{ key: string; value: { stringValue?: string | undefined; intValue?: number | undefined; boolValue?: boolean | undefined } }>
     }
     scopeSpans: Array<{
-      scope: { name: string; version?: string }
+      scope: { name: string; version?: string | undefined }
       spans: OTelSpan[]
     }>
   }>
@@ -192,11 +192,11 @@ export interface GrafanaQueryRequest {
     /** Metric name or query expression */
     target: string
     /** Query type */
-    type?: 'timeseries' | 'table'
+    type?: 'timeseries' | 'table' | undefined
     /** Format */
-    format?: 'time_series' | 'table'
+    format?: 'time_series' | 'table' | undefined
     /** Additional payload */
-    payload?: Record<string, unknown>
+    payload?: Record<string, unknown> | undefined
   }>
   /** Time range */
   range: {
@@ -209,7 +209,7 @@ export interface GrafanaQueryRequest {
   /** Maximum data points */
   maxDataPoints: number
   /** Scoped vars */
-  scopedVars?: Record<string, { text: string; value: string }>
+  scopedVars?: Record<string, { text: string; value: string }> | undefined
 }
 
 /**
@@ -218,17 +218,17 @@ export interface GrafanaQueryRequest {
 export interface GrafanaTimeSeriesResponse {
   target: string
   datapoints: Array<[number, number]> // [value, timestamp]
-  refId?: string
+  refId?: string | undefined
 }
 
 /**
  * Grafana table response
  */
 export interface GrafanaTableResponse {
-  columns: Array<{ text: string; type?: string }>
+  columns: Array<{ text: string; type?: string | undefined }>
   rows: unknown[][]
   type: 'table'
-  refId?: string
+  refId?: string | undefined
 }
 
 /**
@@ -245,8 +245,8 @@ export interface GrafanaAnnotationRequest {
     name: string
     datasource: string
     enable: boolean
-    iconColor?: string
-    query?: string
+    iconColor?: string | undefined
+    query?: string | undefined
   }
 }
 
@@ -255,10 +255,10 @@ export interface GrafanaAnnotationRequest {
  */
 export interface GrafanaAnnotation {
   time: number
-  timeEnd?: number
+  timeEnd?: number | undefined
   title: string
-  text?: string
-  tags?: string[]
+  text?: string | undefined
+  tags?: string[] | undefined
 }
 
 /**
@@ -267,7 +267,7 @@ export interface GrafanaAnnotation {
 export interface GrafanaVariableRequest {
   payload: {
     target: string
-    variables?: Record<string, { text: string; value: string }>
+    variables?: Record<string, { text: string; value: string }> | undefined
   }
   range: { from: string; to: string }
 }
@@ -303,10 +303,10 @@ export interface SSEAlertEvent {
   type: 'alert'
   timestamp: number
   severity: 'info' | 'warning' | 'critical'
-  namespace?: string
+  namespace?: string | undefined
   title: string
   message: string
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -324,7 +324,7 @@ export interface SSEErrorEvent {
   type: 'error'
   timestamp: number
   error: string
-  code?: string
+  code?: string | undefined
 }
 
 /**
@@ -343,9 +343,9 @@ export type WSMessageType = 'subscribe' | 'unsubscribe' | 'metric' | 'alert' | '
 export interface WSSubscribeMessage {
   type: 'subscribe'
   id: string
-  namespaces?: string[]
-  metrics?: string[]
-  interval?: number
+  namespaces?: string[] | undefined
+  metrics?: string[] | undefined
+  interval?: number | undefined
 }
 
 /**
@@ -374,7 +374,7 @@ export interface WSAlertMessage {
   type: 'alert'
   timestamp: number
   severity: 'info' | 'warning' | 'critical'
-  namespace?: string
+  namespace?: string | undefined
   title: string
   message: string
 }
@@ -385,7 +385,7 @@ export interface WSAlertMessage {
 export interface WSErrorMessage {
   type: 'error'
   error: string
-  code?: string
+  code?: string | undefined
 }
 
 /**
@@ -395,7 +395,7 @@ export interface WSAckMessage {
   type: 'ack'
   id: string
   status: 'subscribed' | 'unsubscribed' | 'error'
-  message?: string
+  message?: string | undefined
 }
 
 /**
@@ -418,19 +418,19 @@ export type WSMessage =
  */
 export interface JSONExportOptions {
   /** Namespaces to include (all if not specified) */
-  namespaces?: string[]
+  namespaces?: string[] | undefined
   /** Metrics to include (all if not specified) */
-  metrics?: string[]
+  metrics?: string[] | undefined
   /** Time range */
-  timeRange?: TimeRange
+  timeRange?: TimeRange | undefined
   /** Resolution for time-series data */
-  resolution?: Resolution
+  resolution?: Resolution | undefined
   /** Maximum data points per series */
-  maxDataPoints?: number
+  maxDataPoints?: number | undefined
   /** Include metadata */
-  includeMetadata?: boolean
+  includeMetadata?: boolean | undefined
   /** Pretty print JSON */
-  pretty?: boolean
+  pretty?: boolean | undefined
 }
 
 /**
@@ -439,7 +439,7 @@ export interface JSONExportOptions {
 export interface JSONMetricSeries {
   metric: string
   namespace: string
-  labels?: Record<string, string>
+  labels?: Record<string, string> | undefined
   dataPoints: Array<{
     timestamp: number
     value: number
@@ -455,9 +455,9 @@ export interface JSONExportPayload {
   exportedAt: string
   options: JSONExportOptions
   namespaces: Record<string, {
-    latest?: Record<string, number>
-    timeSeries?: Record<string, JSONMetricSeries>
-    metadata?: Record<string, unknown>
+    latest?: Record<string, number> | undefined
+    timeSeries?: Record<string, JSONMetricSeries> | undefined
+    metadata?: Record<string, unknown> | undefined
   }>
 }
 
@@ -470,17 +470,17 @@ export interface JSONExportPayload {
  */
 export interface CSVExportOptions {
   /** Namespaces to include */
-  namespaces?: string[]
+  namespaces?: string[] | undefined
   /** Metrics to include */
-  metrics?: string[]
+  metrics?: string[] | undefined
   /** Time range */
-  timeRange?: TimeRange
+  timeRange?: TimeRange | undefined
   /** Include header row */
-  includeHeader?: boolean
+  includeHeader?: boolean | undefined
   /** Delimiter (default: comma) */
-  delimiter?: ',' | '\t' | ';'
+  delimiter?: ',' | '\t' | ';' | undefined
   /** Quote character (default: double quote) */
-  quoteChar?: '"' | "'"
+  quoteChar?: '"' | "'" | undefined
 }
 
 // =============================================================================
@@ -499,13 +499,13 @@ export interface DashboardConfig {
   namespaces: string[]
   /** Health thresholds */
   thresholds?: {
-    degraded?: Record<string, number>
-    unhealthy?: Record<string, number>
-  }
+    degraded?: Record<string, number> | undefined
+    unhealthy?: Record<string, number> | undefined
+  } | undefined
   /** Time range for charts */
-  timeRange?: TimeRange
+  timeRange?: TimeRange | undefined
   /** Chart resolution */
-  resolution?: Resolution
+  resolution?: Resolution | undefined
 }
 
 /**
@@ -558,13 +558,13 @@ export interface ExportAPIConfig {
     origins: string[]
     methods: string[]
     headers: string[]
-  }
+  } | undefined
   /** Authentication configuration */
   auth?: {
     type: 'none' | 'bearer' | 'basic' | 'api-key'
     /** Header name for API key auth */
-    apiKeyHeader?: string
-  }
+    apiKeyHeader?: string | undefined
+  } | undefined
 }
 
 /**

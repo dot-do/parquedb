@@ -164,12 +164,12 @@ export interface FsxReadOptions {
   /**
    * Text encoding (if reading as string)
    */
-  encoding?: 'utf-8' | 'utf8' | null
+  encoding?: 'utf-8' | 'utf8' | null | undefined
 
   /**
    * AbortSignal for cancellation
    */
-  signal?: AbortSignal
+  signal?: AbortSignal | undefined
 }
 
 /**
@@ -179,44 +179,44 @@ export interface FsxWriteOptions {
   /**
    * File mode (permissions)
    */
-  mode?: number
+  mode?: number | undefined
 
   /**
    * Text encoding for string data
    */
-  encoding?: 'utf-8' | 'utf8'
+  encoding?: 'utf-8' | 'utf8' | undefined
 
   /**
    * Create parent directories if needed
    */
-  recursive?: boolean
+  recursive?: boolean | undefined
 
   /**
    * Content type (MIME)
    */
-  contentType?: string
+  contentType?: string | undefined
 
   /**
    * Custom metadata
    */
-  metadata?: Record<string, string>
+  metadata?: Record<string, string> | undefined
 
   /**
    * Storage tier to use
    */
-  tier?: FsxStorageTier
+  tier?: FsxStorageTier | undefined
 
   /**
    * Only write if file doesn't exist
    */
-  exclusive?: boolean
+  exclusive?: boolean | undefined
 
   /**
    * Only write if current file's etag matches this value (conditional write).
    * This enables atomic compare-and-swap operations.
    * If the etag doesn't match, the write fails with ECONFLICT error.
    */
-  ifMatch?: string
+  ifMatch?: string | undefined
 }
 
 /**
@@ -250,12 +250,12 @@ export interface FsxMkdirOptions {
   /**
    * Create parent directories (mkdir -p)
    */
-  recursive?: boolean
+  recursive?: boolean | undefined
 
   /**
    * Directory mode (permissions)
    */
-  mode?: number
+  mode?: number | undefined
 }
 
 /**
@@ -265,12 +265,12 @@ export interface FsxRmdirOptions {
   /**
    * Remove non-empty directories (rm -rf)
    */
-  recursive?: boolean
+  recursive?: boolean | undefined
 
   /**
    * Force removal without errors for non-existent
    */
-  force?: boolean
+  force?: boolean | undefined
 }
 
 /**
@@ -280,17 +280,17 @@ export interface FsxReaddirOptions {
   /**
    * Return FsxDirent objects instead of strings
    */
-  withFileTypes?: boolean
+  withFileTypes?: boolean | undefined
 
   /**
    * Include hidden files (starting with .)
    */
-  includeHidden?: boolean
+  includeHidden?: boolean | undefined
 
   /**
    * Recursively list all files
    */
-  recursive?: boolean
+  recursive?: boolean | undefined
 }
 
 /**
@@ -300,17 +300,17 @@ export interface FsxCopyOptions {
   /**
    * Copy directories recursively
    */
-  recursive?: boolean
+  recursive?: boolean | undefined
 
   /**
    * Overwrite existing files
    */
-  force?: boolean
+  force?: boolean | undefined
 
   /**
    * Preserve timestamps and permissions
    */
-  preserveTimestamps?: boolean
+  preserveTimestamps?: boolean | undefined
 }
 
 /**
@@ -320,32 +320,32 @@ export interface FsxGlobOptions {
   /**
    * Base directory for glob
    */
-  cwd?: string
+  cwd?: string | undefined
 
   /**
    * Include dotfiles
    */
-  dot?: boolean
+  dot?: boolean | undefined
 
   /**
    * Return absolute paths
    */
-  absolute?: boolean
+  absolute?: boolean | undefined
 
   /**
    * Only return directories
    */
-  onlyDirectories?: boolean
+  onlyDirectories?: boolean | undefined
 
   /**
    * Only return files
    */
-  onlyFiles?: boolean
+  onlyFiles?: boolean | undefined
 
   /**
    * Patterns to ignore
    */
-  ignore?: string[]
+  ignore?: string[] | undefined
 }
 
 // =============================================================================
@@ -414,22 +414,22 @@ export interface FsxStats {
   /**
    * ETag/version identifier
    */
-  etag?: string
+  etag?: string | undefined
 
   /**
    * Content type (MIME)
    */
-  contentType?: string
+  contentType?: string | undefined
 
   /**
    * Custom metadata
    */
-  metadata?: Record<string, string>
+  metadata?: Record<string, string> | undefined
 
   /**
    * Storage tier
    */
-  tier?: FsxStorageTier
+  tier?: FsxStorageTier | undefined
 }
 
 /**
@@ -444,7 +444,7 @@ export interface FsxDirent {
   /**
    * Entry path (when using recursive)
    */
-  path?: string
+  path?: string | undefined
 
   /**
    * Is regular file
@@ -590,17 +590,17 @@ export interface FsxError extends Error {
   /**
    * Path that caused the error
    */
-  path?: string
+  path?: string | undefined
 
   /**
    * System call that failed
    */
-  syscall?: string
+  syscall?: string | undefined
 
   /**
    * Error number
    */
-  errno?: number
+  errno?: number | undefined
 }
 
 // =============================================================================
@@ -624,22 +624,22 @@ export interface FsxOptions {
   /**
    * Root path prefix
    */
-  root?: string
+  root?: string | undefined
 
   /**
    * Default storage tier for new files
    */
-  defaultTier?: FsxStorageTier
+  defaultTier?: FsxStorageTier | undefined
 
   /**
    * Maximum size for hot tier (SQLite inlining)
    */
-  hotThreshold?: number
+  hotThreshold?: number | undefined
 
   /**
    * Enable caching
    */
-  cache?: boolean
+  cache?: boolean | undefined
 }
 
 /**

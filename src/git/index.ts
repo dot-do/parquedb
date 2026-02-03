@@ -34,9 +34,9 @@
 
 // Placeholder types for planned features
 export interface HookConfig {
-  preCommit?: boolean
-  prePush?: boolean
-  postMerge?: boolean
+  preCommit?: boolean | undefined
+  prePush?: boolean | undefined
+  postMerge?: boolean | undefined
 }
 
 export interface WorktreeInfo {
@@ -49,7 +49,7 @@ export type MergeDriverType = 'ours' | 'theirs' | 'union'
 
 export interface MergeResult {
   success: boolean
-  conflicts?: string[]
+  conflicts?: string[] | undefined
 }
 
 // Placeholder functions - to be implemented

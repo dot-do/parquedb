@@ -78,7 +78,7 @@ export abstract class BaseEntityBackend implements EntityBackend {
   // Constructor
   // ===========================================================================
 
-  constructor(config: { storage: StorageBackend; location?: string; readOnly?: boolean }) {
+  constructor(config: { storage: StorageBackend; location?: string | undefined; readOnly?: boolean | undefined }) {
     this.storage = config.storage
     this.location = config.location ?? ''
     this.readOnly = config.readOnly ?? false
@@ -572,7 +572,7 @@ export abstract class BaseEntityBackend implements EntityBackend {
    */
   protected applyPagination<T>(
     entities: Entity<T>[],
-    options?: { skip?: number; limit?: number }
+    options?: { skip?: number | undefined; limit?: number | undefined }
   ): Entity<T>[] {
     let result = entities
     if (options?.skip) {

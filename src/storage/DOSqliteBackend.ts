@@ -134,7 +134,7 @@ export interface DOSqliteBackendOptions {
   /**
    * Path prefix for all operations
    */
-  prefix?: string
+  prefix?: string | undefined
 }
 
 /**

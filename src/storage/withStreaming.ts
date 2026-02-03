@@ -34,7 +34,7 @@ export interface WithStreamingOptions {
    * Default chunk size for streaming reads
    * @default 65536 (64KB)
    */
-  defaultHighWaterMark?: number
+  defaultHighWaterMark?: number | undefined
 }
 
 /**

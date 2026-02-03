@@ -114,7 +114,7 @@ export async function branchCommand(parsed: ParsedArgs): Promise<number> {
  */
 async function listBranches(
   branchManager: Awaited<ReturnType<typeof import('../../sync/branch-manager').createBranchManager>>,
-  options: { all?: boolean; remote?: boolean }
+  options: { all?: boolean | undefined; remote?: boolean | undefined }
 ): Promise<number> {
   const branches = await branchManager.list()
 

@@ -78,7 +78,7 @@ export interface EventOperationsContext {
    * Optional callback invoked after each event is recorded.
    * Used for materialized view integration to emit events to the MV system.
    */
-  onEvent?: (event: Event) => void | Promise<void>
+  onEvent?: ((event: Event) => void | Promise<void>) | undefined
 }
 
 // =============================================================================
@@ -326,7 +326,7 @@ export function maybeRotateEventLog(ctx: EventOperationsContext): void {
  */
 export function archiveEvents(
   ctx: EventOperationsContext,
-  options?: { olderThan?: Date; maxEvents?: number }
+  options?: { olderThan?: Date | undefined; maxEvents?: number | undefined }
 ): ArchiveEventsResult {
   const now = Date.now()
   const olderThanTs = options?.olderThan?.getTime() ?? (now - ctx.eventLogConfig.maxAge)

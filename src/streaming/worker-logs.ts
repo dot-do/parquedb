@@ -91,7 +91,7 @@ export interface TailRequest {
   /** Request headers */
   headers: Record<string, string>
   /** Cloudflare-specific request properties */
-  cf?: Record<string, unknown>
+  cf?: Record<string, unknown> | undefined
 }
 
 /**
@@ -109,7 +109,7 @@ export interface FetchEventInfo {
   /** Request details */
   request: TailRequest
   /** Response details */
-  response?: TailResponse
+  response?: TailResponse | undefined
 }
 
 /**
@@ -132,7 +132,7 @@ export interface TailItem {
    * Diagnostics channel events (fetch subrequests, binding calls, etc.)
    * @see https://developers.cloudflare.com/workers/observability/logs/tail-workers/
    */
-  diagnosticsChannelEvents?: unknown[]
+  diagnosticsChannelEvents?: unknown[] | undefined
 }
 
 /**
@@ -260,15 +260,15 @@ export interface WorkerLogsMVConfig {
   /** Base path for log files (e.g., 'logs/workers') */
   datasetPath: string
   /** Number of records to buffer before flushing (default: 1000) */
-  flushThreshold?: number
+  flushThreshold?: number | undefined
   /** Maximum time to buffer records in ms (default: 30000) */
-  flushIntervalMs?: number
+  flushIntervalMs?: number | undefined
   /** Compression codec for Parquet (default: 'lz4') */
-  compression?: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd'
+  compression?: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd' | undefined
   /** Target row group size (default: 5000) */
-  rowGroupSize?: number
+  rowGroupSize?: number | undefined
   /** ID generator function (default: uses ULID) */
-  generateId?: () => string
+  generateId?: (() => string) | undefined
 }
 
 /**

@@ -78,28 +78,28 @@ export interface FullRefreshOptions {
    * Maximum rows to process per batch (for memory efficiency)
    * @default 10000
    */
-  batchSize?: number
+  batchSize?: number | undefined
 
   /**
    * Row group size for output Parquet file
    * @default 5000
    */
-  rowGroupSize?: number
+  rowGroupSize?: number | undefined
 
   /**
    * Progress callback for long-running refreshes
    */
-  onProgress?: (progress: RefreshProgress) => void
+  onProgress?: ((progress: RefreshProgress) => void) | undefined
 
   /**
    * Abort signal for cancellation
    */
-  signal?: AbortSignal
+  signal?: AbortSignal | undefined
 
   /**
    * Schema for the output Parquet file (inferred from first batch if not provided)
    */
-  outputSchema?: ParquetSchema
+  outputSchema?: ParquetSchema | undefined
 
   /**
    * Enable chunked reading for large datasets.
@@ -107,7 +107,7 @@ export interface FullRefreshOptions {
    * This is more memory efficient for large datasets.
    * @default false (for backwards compatibility)
    */
-  chunkedReading?: boolean
+  chunkedReading?: boolean | undefined
 
   /**
    * Threshold in rows above which chunked reading is automatically enabled.
@@ -116,7 +116,7 @@ export interface FullRefreshOptions {
    * Set to 0 to always use chunked reading when available.
    * @default 100000 (100k rows)
    */
-  chunkedReadingThreshold?: number
+  chunkedReadingThreshold?: number | undefined
 }
 
 /**
@@ -130,16 +130,16 @@ export interface RefreshProgress {
   rowsProcessed: number
 
   /** Total rows (if known) */
-  totalRows?: number
+  totalRows?: number | undefined
 
   /** Percentage complete (0-100) */
   percent: number
 
   /** Current batch number */
-  batch?: number
+  batch?: number | undefined
 
   /** Total batches (if known) */
-  totalBatches?: number
+  totalBatches?: number | undefined
 }
 
 /**
@@ -165,7 +165,7 @@ export interface FullRefreshResult {
   sourceRowsRead: number
 
   /** Error message if refresh failed */
-  error?: string
+  error?: string | undefined
 }
 
 // =============================================================================
@@ -1270,9 +1270,9 @@ export interface ViewRecoveryResult {
   /** Action taken during recovery */
   action: 'none' | 'restored_backup' | 'deleted_backup' | 'deleted_temp'
   /** View name (for batch recovery) */
-  viewName?: string
+  viewName?: string | undefined
   /** Error message if recovery failed */
-  error?: string
+  error?: string | undefined
 }
 
 /**

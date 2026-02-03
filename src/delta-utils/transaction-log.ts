@@ -30,9 +30,9 @@ export interface AddAction {
     size: number
     modificationTime: number
     dataChange: boolean
-    partitionValues?: Record<string, string>
-    stats?: string // JSON encoded statistics
-    tags?: Record<string, string>
+    partitionValues?: Record<string, string> | undefined
+    stats?: string | undefined // JSON encoded statistics
+    tags?: Record<string, string> | undefined
   }
 }
 
@@ -44,9 +44,9 @@ export interface RemoveAction {
     path: string
     deletionTimestamp: number
     dataChange: boolean
-    partitionValues?: Record<string, string>
-    extendedFileMetadata?: boolean
-    size?: number
+    partitionValues?: Record<string, string> | undefined
+    extendedFileMetadata?: boolean | undefined
+    size?: number | undefined
   }
 }
 
@@ -56,13 +56,13 @@ export interface RemoveAction {
 export interface MetadataAction {
   metaData: {
     id: string
-    name?: string
-    description?: string
-    format: { provider: string; options?: Record<string, string> }
+    name?: string | undefined
+    description?: string | undefined
+    format: { provider: string; options?: Record<string, string> | undefined }
     schemaString: string
     partitionColumns: string[]
-    configuration?: Record<string, string>
-    createdTime?: number
+    configuration?: Record<string, string> | undefined
+    createdTime?: number | undefined
   }
 }
 
@@ -83,10 +83,10 @@ export interface CommitInfoAction {
   commitInfo: {
     timestamp: number
     operation: string
-    operationParameters?: Record<string, string>
-    readVersion?: number
-    isolationLevel?: string
-    isBlindAppend?: boolean
+    operationParameters?: Record<string, string> | undefined
+    readVersion?: number | undefined
+    isolationLevel?: string | undefined
+    isBlindAppend?: boolean | undefined
   }
 }
 
@@ -115,8 +115,8 @@ export interface Commit {
 export interface Snapshot {
   version: number
   files: AddAction['add'][]
-  metadata?: MetadataAction['metaData']
-  protocol?: ProtocolAction['protocol']
+  metadata?: MetadataAction['metaData'] | undefined
+  protocol?: ProtocolAction['protocol'] | undefined
 }
 
 /**
@@ -451,9 +451,9 @@ export function createAddAction(params: {
   size: number
   modificationTime: number
   dataChange: boolean
-  partitionValues?: Record<string, string>
-  stats?: FileStats
-  tags?: Record<string, string>
+  partitionValues?: Record<string, string> | undefined
+  stats?: FileStats | undefined
+  tags?: Record<string, string> | undefined
 }): AddAction {
   // Validate path
   if (params.path.startsWith('/')) {
@@ -525,9 +525,9 @@ export function createRemoveAction(params: {
   path: string
   deletionTimestamp: number
   dataChange: boolean
-  partitionValues?: Record<string, string>
-  extendedFileMetadata?: boolean
-  size?: number
+  partitionValues?: Record<string, string> | undefined
+  extendedFileMetadata?: boolean | undefined
+  size?: number | undefined
 }): RemoveAction {
   const action: RemoveAction = {
     remove: {

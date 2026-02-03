@@ -15,9 +15,9 @@ export interface DatasetConfig {
   source: string
   prefix: string
   /** Relationship predicates for graph navigation */
-  predicates?: Record<string, string[]>
+  predicates?: Record<string, string[]> | undefined
   /** Singular form of predicates (for *Scores field lookup) */
-  singular?: Record<string, string>
+  singular?: Record<string, string> | undefined
 }
 
 // =============================================================================

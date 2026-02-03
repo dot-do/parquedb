@@ -63,7 +63,7 @@ export interface AvailableBindings {
   hasCDNBucket: boolean
   hasDurableObjects: boolean
   hasAI: boolean
-  r2BucketName?: string
+  r2BucketName?: string | undefined
 }
 
 /**

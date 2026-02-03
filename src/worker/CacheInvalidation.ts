@@ -48,7 +48,7 @@ export interface InvalidationResult {
   /** Whether the invalidation was successful */
   success: boolean
   /** Error message if invalidation failed */
-  error?: string
+  error?: string | undefined
   /** Time taken in milliseconds */
   durationMs: number
 }
@@ -137,9 +137,9 @@ export class CacheInvalidator {
     private cache: Cache,
     private options: {
       /** Log invalidation events */
-      logInvalidations?: boolean
+      logInvalidations?: boolean | undefined
       /** Callback when invalidation occurs */
-      onInvalidate?: (ns: string, paths: string[]) => void
+      onInvalidate?: ((ns: string, paths: string[]) => void) | undefined
     } = {}
   ) {}
 
@@ -341,7 +341,7 @@ export class CacheInvalidator {
    * @param ns - Namespace to clear (or undefined for all)
    */
   clearQueryExecutorCache(
-    queryExecutor: { invalidateCache: (ns: string) => void; clearCache?: () => void },
+    queryExecutor: { invalidateCache: (ns: string) => void; clearCache?: (() => void) | undefined },
     ns?: string
   ): void {
     if (ns) {
@@ -388,8 +388,8 @@ export class CacheInvalidator {
 export function createCacheInvalidator(
   cache: Cache,
   options?: {
-    logInvalidations?: boolean
-    onInvalidate?: (ns: string, paths: string[]) => void
+    logInvalidations?: boolean | undefined
+    onInvalidate?: ((ns: string, paths: string[]) => void) | undefined
   }
 ): CacheInvalidator {
   return new CacheInvalidator(cache, options)
