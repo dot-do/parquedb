@@ -32,6 +32,14 @@
 
 import type { Event, EventOp } from '../types/entity'
 import { parseEntityTarget, isRelationshipTarget, parseRelTarget } from '../types/entity'
+import {
+  DEFAULT_STREAMING_BATCH_SIZE,
+  DEFAULT_STREAMING_BATCH_TIMEOUT_MS,
+  DEFAULT_STREAMING_MAX_BUFFER_SIZE,
+  DEFAULT_MAX_RETRIES,
+  DEFAULT_RETRY_BASE_DELAY,
+  DEFAULT_RETRY_MAX_DELAY,
+} from '../constants'
 
 // =============================================================================
 // Types
@@ -109,13 +117,13 @@ export type ErrorHandler = (error: Error, context?: { mvName?: string; batch?: E
  * Default configuration values
  */
 const DEFAULT_CONFIG: Required<StreamingRefreshConfig> = {
-  batchSize: 100,
-  batchTimeoutMs: 500,
-  maxBufferSize: 1000,
+  batchSize: DEFAULT_STREAMING_BATCH_SIZE,
+  batchTimeoutMs: DEFAULT_STREAMING_BATCH_TIMEOUT_MS,
+  maxBufferSize: DEFAULT_STREAMING_MAX_BUFFER_SIZE,
   retry: {
-    maxAttempts: 3,
-    baseDelayMs: 100,
-    maxDelayMs: 5000,
+    maxAttempts: DEFAULT_MAX_RETRIES,
+    baseDelayMs: DEFAULT_RETRY_BASE_DELAY,
+    maxDelayMs: DEFAULT_RETRY_MAX_DELAY,
   },
 }
 

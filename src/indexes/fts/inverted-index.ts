@@ -10,6 +10,7 @@ import type { IndexDefinition } from '../types'
 import type { Posting, DocumentStats, CorpusStats, TokenizerOptions } from './types'
 import { tokenize } from './tokenizer'
 import { logger } from '../../utils/logger'
+import { DEFAULT_FTS_MIN_WORD_LENGTH, DEFAULT_FTS_MAX_WORD_LENGTH } from '../../constants'
 
 // =============================================================================
 // Inverted Index
@@ -42,8 +43,8 @@ export class InvertedIndex {
   ) {
     this.tokenizerOptions = {
       language: definition.ftsOptions?.language ?? 'en',
-      minWordLength: definition.ftsOptions?.minWordLength ?? 2,
-      maxWordLength: definition.ftsOptions?.maxWordLength ?? 50,
+      minWordLength: definition.ftsOptions?.minWordLength ?? DEFAULT_FTS_MIN_WORD_LENGTH,
+      maxWordLength: definition.ftsOptions?.maxWordLength ?? DEFAULT_FTS_MAX_WORD_LENGTH,
       stem: true,
     }
   }

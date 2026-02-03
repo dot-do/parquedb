@@ -10,7 +10,7 @@
  */
 
 import type { Entity } from './entity'
-import type { StorageBackend } from './storage'
+import type { StorageBackend, ReadonlyStorageBackend } from './storage'
 import type { ParqueDBDOStub } from './worker'
 
 // =============================================================================
@@ -147,6 +147,16 @@ export function asBodyInit(data: Uint8Array): BodyInit {
  */
 export function asStorageBackend<T>(adapter: T): StorageBackend {
   return adapter as unknown as StorageBackend
+}
+
+/**
+ * Cast read-only storage adapter to ReadonlyStorageBackend.
+ * Use for CDN adapters and other read-only storage implementations.
+ *
+ * @remarks Safe when the adapter correctly implements all ReadonlyStorageBackend methods.
+ */
+export function asReadonlyStorageBackend<T>(adapter: T): ReadonlyStorageBackend {
+  return adapter as unknown as ReadonlyStorageBackend
 }
 
 /**

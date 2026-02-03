@@ -23,6 +23,7 @@ import {
   parseRelation as _parseRelation,
   isRelationString as _isRelationString,
 } from '../types/schema'
+import { DEFAULT_SCHEMA_SAMPLE_SIZE, DEFAULT_SCHEMA_MAX_DEPTH } from '../constants'
 
 // Re-export parsing helpers from types/schema
 export { parseFieldType, parseRelation, isRelationString } from '../types/schema'
@@ -881,10 +882,10 @@ export function inferSchema(
   options: InferSchemaOptions = {}
 ): InferredSchema {
   const {
-    sampleSize = 100,
+    sampleSize = DEFAULT_SCHEMA_SAMPLE_SIZE,
     detectRequired = true,
     inferNested = true,
-    maxDepth = 5,
+    maxDepth = DEFAULT_SCHEMA_MAX_DEPTH,
   } = options
 
   if (!documents || documents.length === 0) {

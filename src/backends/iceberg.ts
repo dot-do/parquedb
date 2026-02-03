@@ -774,195 +774,33 @@ export class IcebergBackend implements EntityBackend {
         // Invalidate cache to get fresh metadata
         this.tableCache.delete(ns)
 
-        // Read current version-hint.text and its ETag for OCC
-        let expectedVersionHintEtag: string | null = null
-        try {
-          const stat = await this.storage.stat(versionHintPath)
-          expectedVersionHintEtag = stat?.etag ?? null
-        } catch {
-          // File doesn't exist yet (new table)
-          expectedVersionHintEtag = null
-        }
+        // Get current version hint ETag for OCC
+        let expectedVersionHintEtag = await this.getVersionHintEtag(versionHintPath)
 
-        let metadata = await this.getTableMetadata(ns)
         // Ensure table exists
+        let metadata = await this.getTableMetadata(ns)
         if (!metadata) {
           metadata = await this.createTable(ns)
           // Re-read the version hint ETag after table creation
-          try {
-            const stat = await this.storage.stat(versionHintPath)
-            expectedVersionHintEtag = stat?.etag ?? null
-          } catch {
-            // Intentionally ignored: File doesn't exist (table just created without version hint)
-            expectedVersionHintEtag = null
-          }
+          expectedVersionHintEtag = await this.getVersionHintEtag(versionHintPath)
         }
 
-        // Step 1: Write entities to Parquet file (safe - unique path)
-      const dataFileId = generateUUID()
-      const dataFilePath = `${location}/data/${dataFileId}.parquet`
+        // Write data file, manifests, and build new snapshot
+        const commitResult = await this.prepareCommit(location, metadata, entities)
 
-      // Build parquet schema and data
-      const parquetSchema = buildEntityParquetSchema()
-      const rows = entities.map(entity => entityToRow(entity))
+        // Try to commit atomically
+        const committed = await this.tryCommit(
+          ns,
+          versionHintPath,
+          expectedVersionHintEtag,
+          commitResult.newMetadata,
+          commitResult.metadataPath
+        )
 
-      // Write parquet file
-      const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
-      const writeResult = await writer.write(dataFilePath, rows, parquetSchema)
-
-      // Step 2: Create manifest entry
-      const sequenceNumber = (metadata['last-sequence-number'] ?? 0) + 1
-      const snapshotId = this.generateSnapshotId()
-
-      const manifestGenerator = new ManifestGenerator({
-        sequenceNumber,
-        snapshotId,
-      })
-
-      manifestGenerator.addDataFile({
-        'file-path': dataFilePath,
-        'file-format': 'parquet',
-        'record-count': entities.length,
-        'file-size-in-bytes': writeResult.size,
-        partition: {},
-      })
-
-      const manifestResult = manifestGenerator.generate()
-
-      // Step 3: Write manifest file in Avro format (required for DuckDB/Spark/Snowflake interop)
-      const manifestId = generateUUID()
-      const manifestPath = `${location}/metadata/${manifestId}-m0.avro`
-
-      // Write manifest entries as Avro binary
-      const manifestContent = encodeManifestToAvro(manifestResult.entries, sequenceNumber)
-      await this.storage.write(manifestPath, manifestContent)
-
-      // Step 4: Create manifest list that includes manifests from parent snapshot
-      const manifestListGenerator = new ManifestListGenerator({
-        snapshotId,
-        sequenceNumber,
-      })
-
-      // Add the new manifest
-      manifestListGenerator.addManifestWithStats(
-        manifestPath,
-        manifestContent.length,
-        0, // partition spec ID
-        manifestResult.summary,
-        false // not a delete manifest
-      )
-
-      // Include manifests from parent snapshot (to inherit existing data)
-      const currentSnapshotId = metadata['current-snapshot-id']
-      if (currentSnapshotId) {
-        const parentSnapshot = getSnapshotById(metadata, currentSnapshotId)
-        if (parentSnapshot?.['manifest-list']) {
-          try {
-            const parentManifestListData = await this.storage.read(parentSnapshot['manifest-list'])
-            const parentManifests = decodeManifestListFromAvroOrJson(parentManifestListData)
-            for (const manifest of parentManifests) {
-              // Add parent manifest to new manifest list
-              manifestListGenerator.addManifestWithStats(
-                manifest['manifest-path'],
-                manifest['manifest-length'],
-                manifest['partition-spec-id'] ?? 0,
-                {
-                  addedFiles: manifest['added-files-count'] ?? 0,
-                  existingFiles: manifest['existing-files-count'] ?? 0,
-                  deletedFiles: manifest['deleted-files-count'] ?? 0,
-                  addedRows: manifest['added-rows-count'] ?? 0,
-                  existingRows: manifest['existing-rows-count'] ?? 0,
-                  deletedRows: manifest['deleted-rows-count'] ?? 0,
-                },
-                manifest.content === 1 // is delete manifest
-              )
-            }
-          } catch {
-            // Parent manifest list not found or invalid
-          }
-        }
-      }
-
-      // Step 5: Write manifest list in Avro format
-      const manifestListId = generateUUID()
-      const manifestListPath = `${location}/metadata/snap-${snapshotId}-${manifestListId}.avro`
-
-      const manifestListContent = encodeManifestListToAvro(manifestListGenerator.getManifests())
-      await this.storage.write(manifestListPath, manifestListContent)
-
-      // Step 6: Build new snapshot
-      const existingSnapshot = currentSnapshotId ? getSnapshotById(metadata, currentSnapshotId) : undefined
-      const existingSummary = existingSnapshot?.summary as Record<string, string> | undefined
-      const prevTotalRecords = existingSummary?.['total-records'] ? parseInt(existingSummary['total-records']) : 0
-      const prevTotalSize = existingSummary?.['total-files-size'] ? parseInt(existingSummary['total-files-size']) : 0
-      const prevTotalFiles = existingSummary?.['total-data-files'] ? parseInt(existingSummary['total-data-files']) : 0
-
-      const snapshotBuilder = new SnapshotBuilder({
-        sequenceNumber,
-        snapshotId,
-        parentSnapshotId: currentSnapshotId ?? undefined,
-        manifestListPath,
-        operation: 'append',
-        schemaId: metadata['current-schema-id'],
-      })
-
-      snapshotBuilder.setSummary(
-        1, // added files
-        0, // deleted files
-        entities.length, // added records
-        0, // deleted records
-        writeResult.size, // added size
-        0, // removed size
-        prevTotalRecords + entities.length, // total records
-        prevTotalSize + writeResult.size, // total size
-        prevTotalFiles + 1 // total files
-      )
-
-      const newSnapshot = snapshotBuilder.build()
-
-      // Step 7: Update metadata with new snapshot
-      const newMetadata: TableMetadata = {
-        ...metadata,
-        'last-sequence-number': sequenceNumber,
-        'last-updated-ms': Date.now(),
-        'current-snapshot-id': snapshotId,
-        snapshots: [...metadata.snapshots, newSnapshot],
-        'snapshot-log': [
-          ...(metadata['snapshot-log'] ?? []),
-          { 'timestamp-ms': Date.now(), 'snapshot-id': snapshotId },
-        ],
-      }
-
-        // Step 8: Write new metadata file (safe - unique path)
-        const metadataVersion = sequenceNumber
-        const metadataUuid = generateUUID()
-        const metadataPath = `${location}/metadata/${metadataVersion}-${metadataUuid}.metadata.json`
-
-        const metadataJson = JSON.stringify(newMetadata, null, 2)
-        await this.storage.write(metadataPath, new TextEncoder().encode(metadataJson))
-
-        // Step 9: Atomically update version-hint.text using conditional write
-        // This is the critical atomic operation that prevents concurrent write corruption
-        try {
-          await this.storage.writeConditional(
-            versionHintPath,
-            new TextEncoder().encode(metadataPath),
-            expectedVersionHintEtag
-          )
-          // Success! Update cache and return
-          this.tableCache.set(ns, newMetadata)
+        if (committed) {
           return
-        } catch (error) {
-          // Check if this is an ETag mismatch (version conflict)
-          if (isETagMismatchError(error)) {
-            // Another process updated the table - retry with fresh metadata
-            // Note: Orphaned files (dataFilePath, manifestPath, etc.) will be
-            // cleaned up by vacuum operations, consistent with Iceberg's design
-            continue
-          }
-          // Re-throw other errors
-          throw error
         }
+        // Conflict detected, retry with fresh metadata
       }
 
       throw new CommitConflictError(
@@ -974,6 +812,269 @@ export class IcebergBackend implements EntityBackend {
       )
     } finally {
       releaseLock()
+    }
+  }
+
+  /**
+   * Get the ETag of version-hint.text for OCC
+   */
+  private async getVersionHintEtag(versionHintPath: string): Promise<string | null> {
+    try {
+      const stat = await this.storage.stat(versionHintPath)
+      return stat?.etag ?? null
+    } catch {
+      // File doesn't exist yet (new table)
+      return null
+    }
+  }
+
+  /**
+   * Prepare a commit by writing data file, manifests, and building metadata
+   */
+  private async prepareCommit<T>(
+    location: string,
+    metadata: TableMetadata,
+    entities: Entity<T>[]
+  ): Promise<{
+    newMetadata: TableMetadata
+    metadataPath: string
+  }> {
+    // Step 1: Write entities to Parquet file
+    const dataFileId = generateUUID()
+    const dataFilePath = `${location}/data/${dataFileId}.parquet`
+    const parquetSchema = buildEntityParquetSchema()
+    const rows = entities.map(entity => entityToRow(entity))
+    const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
+    const writeResult = await writer.write(dataFilePath, rows, parquetSchema)
+
+    // Step 2: Create and write manifest
+    const sequenceNumber = (metadata['last-sequence-number'] ?? 0) + 1
+    const snapshotId = this.generateSnapshotId()
+    const manifestPath = await this.writeManifest(location, dataFilePath, writeResult.size, entities.length, sequenceNumber, snapshotId)
+
+    // Step 3: Create and write manifest list (including parent manifests)
+    const manifestListPath = await this.writeManifestList(location, metadata, manifestPath, sequenceNumber, snapshotId)
+
+    // Step 4: Build new snapshot
+    const newSnapshot = this.buildSnapshot(metadata, sequenceNumber, snapshotId, manifestListPath, entities.length, writeResult.size)
+
+    // Step 5: Build new metadata
+    const newMetadata = this.buildNewMetadata(metadata, sequenceNumber, snapshotId, newSnapshot)
+
+    // Step 6: Write metadata file
+    const metadataPath = await this.writeMetadataFile(location, sequenceNumber, newMetadata)
+
+    return { newMetadata, metadataPath }
+  }
+
+  /**
+   * Write manifest file and return its path
+   */
+  private async writeManifest(
+    location: string,
+    dataFilePath: string,
+    fileSize: number,
+    recordCount: number,
+    sequenceNumber: number,
+    snapshotId: number
+  ): Promise<string> {
+    const manifestGenerator = new ManifestGenerator({ sequenceNumber, snapshotId })
+    manifestGenerator.addDataFile({
+      'file-path': dataFilePath,
+      'file-format': 'parquet',
+      'record-count': recordCount,
+      'file-size-in-bytes': fileSize,
+      partition: {},
+    })
+    const manifestResult = manifestGenerator.generate()
+
+    const manifestId = generateUUID()
+    const manifestPath = `${location}/metadata/${manifestId}-m0.avro`
+    const manifestContent = encodeManifestToAvro(manifestResult.entries, sequenceNumber)
+    await this.storage.write(manifestPath, manifestContent)
+
+    return manifestPath
+  }
+
+  /**
+   * Write manifest list including parent manifests and return its path
+   */
+  private async writeManifestList(
+    location: string,
+    metadata: TableMetadata,
+    newManifestPath: string,
+    sequenceNumber: number,
+    snapshotId: number
+  ): Promise<string> {
+    const manifestListGenerator = new ManifestListGenerator({ snapshotId, sequenceNumber })
+
+    // Get manifest content size for stats
+    const manifestStat = await this.storage.stat(newManifestPath)
+    const manifestSize = manifestStat?.size ?? 0
+
+    // Add the new manifest
+    manifestListGenerator.addManifestWithStats(
+      newManifestPath,
+      manifestSize,
+      0, // partition spec ID
+      { addedFiles: 1, existingFiles: 0, deletedFiles: 0, addedRows: 0, existingRows: 0, deletedRows: 0 },
+      false // not a delete manifest
+    )
+
+    // Include manifests from parent snapshot
+    await this.addParentManifests(manifestListGenerator, metadata)
+
+    const manifestListId = generateUUID()
+    const manifestListPath = `${location}/metadata/snap-${snapshotId}-${manifestListId}.avro`
+    const manifestListContent = encodeManifestListToAvro(manifestListGenerator.getManifests())
+    await this.storage.write(manifestListPath, manifestListContent)
+
+    return manifestListPath
+  }
+
+  /**
+   * Add manifests from parent snapshot to manifest list generator
+   */
+  private async addParentManifests(
+    manifestListGenerator: ManifestListGenerator,
+    metadata: TableMetadata
+  ): Promise<void> {
+    const currentSnapshotId = metadata['current-snapshot-id']
+    if (!currentSnapshotId) return
+
+    const parentSnapshot = getSnapshotById(metadata, currentSnapshotId)
+    if (!parentSnapshot?.['manifest-list']) return
+
+    try {
+      const parentManifestListData = await this.storage.read(parentSnapshot['manifest-list'])
+      const parentManifests = decodeManifestListFromAvroOrJson(parentManifestListData)
+      for (const manifest of parentManifests) {
+        manifestListGenerator.addManifestWithStats(
+          manifest['manifest-path'],
+          manifest['manifest-length'],
+          manifest['partition-spec-id'] ?? 0,
+          {
+            addedFiles: manifest['added-files-count'] ?? 0,
+            existingFiles: manifest['existing-files-count'] ?? 0,
+            deletedFiles: manifest['deleted-files-count'] ?? 0,
+            addedRows: manifest['added-rows-count'] ?? 0,
+            existingRows: manifest['existing-rows-count'] ?? 0,
+            deletedRows: manifest['deleted-rows-count'] ?? 0,
+          },
+          manifest.content === 1 // is delete manifest
+        )
+      }
+    } catch {
+      // Parent manifest list not found or invalid
+    }
+  }
+
+  /**
+   * Build a new snapshot with summary stats
+   */
+  private buildSnapshot(
+    metadata: TableMetadata,
+    sequenceNumber: number,
+    snapshotId: number,
+    manifestListPath: string,
+    addedRecords: number,
+    addedSize: number
+  ): Snapshot {
+    const currentSnapshotId = metadata['current-snapshot-id']
+    const existingSnapshot = currentSnapshotId ? getSnapshotById(metadata, currentSnapshotId) : undefined
+    const existingSummary = existingSnapshot?.summary as Record<string, string> | undefined
+    const prevTotalRecords = existingSummary?.['total-records'] ? parseInt(existingSummary['total-records']) : 0
+    const prevTotalSize = existingSummary?.['total-files-size'] ? parseInt(existingSummary['total-files-size']) : 0
+    const prevTotalFiles = existingSummary?.['total-data-files'] ? parseInt(existingSummary['total-data-files']) : 0
+
+    const snapshotBuilder = new SnapshotBuilder({
+      sequenceNumber,
+      snapshotId,
+      parentSnapshotId: currentSnapshotId ?? undefined,
+      manifestListPath,
+      operation: 'append',
+      schemaId: metadata['current-schema-id'],
+    })
+
+    snapshotBuilder.setSummary(
+      1, // added files
+      0, // deleted files
+      addedRecords,
+      0, // deleted records
+      addedSize,
+      0, // removed size
+      prevTotalRecords + addedRecords,
+      prevTotalSize + addedSize,
+      prevTotalFiles + 1
+    )
+
+    return snapshotBuilder.build()
+  }
+
+  /**
+   * Build new table metadata with the new snapshot
+   */
+  private buildNewMetadata(
+    metadata: TableMetadata,
+    sequenceNumber: number,
+    snapshotId: number,
+    newSnapshot: Snapshot
+  ): TableMetadata {
+    return {
+      ...metadata,
+      'last-sequence-number': sequenceNumber,
+      'last-updated-ms': Date.now(),
+      'current-snapshot-id': snapshotId,
+      snapshots: [...metadata.snapshots, newSnapshot],
+      'snapshot-log': [
+        ...(metadata['snapshot-log'] ?? []),
+        { 'timestamp-ms': Date.now(), 'snapshot-id': snapshotId },
+      ],
+    }
+  }
+
+  /**
+   * Write metadata file and return its path
+   */
+  private async writeMetadataFile(
+    location: string,
+    sequenceNumber: number,
+    metadata: TableMetadata
+  ): Promise<string> {
+    const metadataUuid = generateUUID()
+    const metadataPath = `${location}/metadata/${sequenceNumber}-${metadataUuid}.metadata.json`
+    const metadataJson = JSON.stringify(metadata, null, 2)
+    await this.storage.write(metadataPath, new TextEncoder().encode(metadataJson))
+    return metadataPath
+  }
+
+  /**
+   * Try to commit by atomically updating version-hint.text
+   * Returns true if commit succeeded, false if conflict detected
+   */
+  private async tryCommit(
+    ns: string,
+    versionHintPath: string,
+    expectedEtag: string | null,
+    newMetadata: TableMetadata,
+    metadataPath: string
+  ): Promise<boolean> {
+    try {
+      await this.storage.writeConditional(
+        versionHintPath,
+        new TextEncoder().encode(metadataPath),
+        expectedEtag
+      )
+      // Success! Update cache
+      this.tableCache.set(ns, newMetadata)
+      return true
+    } catch (error) {
+      if (isETagMismatchError(error)) {
+        // Conflict - another process updated the table
+        // Orphaned files will be cleaned up by vacuum
+        return false
+      }
+      throw error
     }
   }
 

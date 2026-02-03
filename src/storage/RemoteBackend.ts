@@ -25,6 +25,7 @@ import type {
   RmdirOptions,
 } from '../types/storage'
 import { NotFoundError, PermissionDeniedError, NetworkError, PathTraversalError } from './errors'
+import { DEFAULT_REMOTE_CACHE_TTL, DEFAULT_REMOTE_TIMEOUT } from '../constants'
 
 // =============================================================================
 // Types
@@ -81,14 +82,14 @@ export class RemoteBackend implements StorageBackend {
   private fetch: typeof globalThis.fetch
   private statCache: Map<string, CachedStat> = new Map()
 
-  private static CACHE_TTL = 60000 // 1 minute
+  private static CACHE_TTL = DEFAULT_REMOTE_CACHE_TTL
 
   constructor(options: RemoteBackendOptions) {
     // Ensure baseUrl doesn't end with slash
     this.baseUrl = options.baseUrl.replace(/\/$/, '')
     this.token = options.token
     this.headers = options.headers ?? {}
-    this.timeout = options.timeout ?? 30000
+    this.timeout = options.timeout ?? DEFAULT_REMOTE_TIMEOUT
     this.fetch = options.fetch ?? globalThis.fetch
   }
 

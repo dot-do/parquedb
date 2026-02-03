@@ -23,7 +23,7 @@ import type {
 } from './types'
 import { CommitConflictError } from './types'
 import { AlreadyExistsError } from '../storage/errors'
-import type { Entity, EntityId, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
+import type { Entity, EntityId, EntityData, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
 import type { Filter } from '../types/filter'
 import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions } from '../types/options'
 import type { Update } from '../types/update'
@@ -189,7 +189,7 @@ export class DeltaBackend implements EntityBackend {
   // Read Operations
   // ===========================================================================
 
-  async get<T = Record<string, unknown>>(
+  async get<T extends EntityData = EntityData>(
     ns: string,
     id: string,
     options?: GetOptions
@@ -198,7 +198,7 @@ export class DeltaBackend implements EntityBackend {
     return entities[0] ?? null
   }
 
-  async find<T = Record<string, unknown>>(
+  async find<T extends EntityData = EntityData>(
     ns: string,
     filter?: Filter,
     options?: FindOptions
@@ -241,7 +241,7 @@ export class DeltaBackend implements EntityBackend {
   // Write Operations
   // ===========================================================================
 
-  async create<T = Record<string, unknown>>(
+  async create<T extends EntityData = EntityData>(
     ns: string,
     input: CreateInput<T>,
     options?: CreateOptions
@@ -271,7 +271,7 @@ export class DeltaBackend implements EntityBackend {
     return entity
   }
 
-  async update<T = Record<string, unknown>>(
+  async update<T extends EntityData = EntityData>(
     ns: string,
     id: string,
     update: Update,
@@ -342,7 +342,7 @@ export class DeltaBackend implements EntityBackend {
   // Batch Operations
   // ===========================================================================
 
-  async bulkCreate<T = Record<string, unknown>>(
+  async bulkCreate<T extends EntityData = EntityData>(
     ns: string,
     inputs: CreateInput<T>[],
     options?: CreateOptions
@@ -581,34 +581,120 @@ export class DeltaBackend implements EntityBackend {
     }
 
     const startTime = Date.now()
-    const targetSize = options?.targetFileSize ?? 128 * 1024 * 1024 // 128MB default
-    const minFileSize = options?.minFileSize ?? targetSize / 4
-    const maxFiles = options?.maxFiles ?? 100
-    const dryRun = options?.dryRun ?? false
+    const compactOptions = this.normalizeCompactOptions(options)
 
     const currentVersion = await this.getCurrentVersion(ns)
     if (currentVersion < 0) {
-      return {
-        filesCompacted: 0,
-        filesCreated: 0,
-        bytesBefore: 0,
-        bytesAfter: 0,
-        durationMs: Date.now() - startTime,
-      }
+      return this.emptyCompactResult(startTime)
     }
 
     const tableLocation = this.getTableLocation(ns)
 
-    // Get active file paths (relative) at current version
-    const activeFilePaths = await this.getActiveFilesAtVersion(ns, currentVersion)
+    // Analyze files to find candidates for compaction
+    const analysis = await this.analyzeFilesForCompaction(ns, tableLocation, currentVersion, compactOptions.minFileSize)
 
-    // Get file stats to identify small files
-    interface FileInfo {
-      path: string
-      size: number
+    // Check if compaction is needed
+    if (analysis.smallFiles.length < 2) {
+      return {
+        filesCompacted: 0,
+        filesCreated: 0,
+        bytesBefore: analysis.totalBytes,
+        bytesAfter: analysis.totalBytes,
+        durationMs: Date.now() - startTime,
+      }
     }
 
-    const fileInfos: FileInfo[] = []
+    // Select files to compact
+    const filesToCompact = analysis.smallFiles.slice(0, compactOptions.maxFiles)
+    const bytesBefore = filesToCompact.reduce((sum, f) => sum + f.size, 0)
+
+    // Return early for dry run
+    if (compactOptions.dryRun) {
+      return {
+        filesCompacted: filesToCompact.length,
+        filesCreated: 1,
+        bytesBefore,
+        bytesAfter: bytesBefore,
+        durationMs: Date.now() - startTime,
+      }
+    }
+
+    // Read entities from files to compact
+    const entities = await this.readEntitiesFromFiles(tableLocation, filesToCompact)
+    if (entities.length === 0) {
+      return {
+        filesCompacted: 0,
+        filesCreated: 0,
+        bytesBefore,
+        bytesAfter: bytesBefore,
+        durationMs: Date.now() - startTime,
+      }
+    }
+
+    // Perform compaction
+    const result = await this.performCompaction(
+      ns,
+      tableLocation,
+      currentVersion,
+      entities,
+      filesToCompact,
+      compactOptions
+    )
+
+    return {
+      filesCompacted: filesToCompact.length,
+      filesCreated: 1,
+      bytesBefore,
+      bytesAfter: result.bytesAfter,
+      durationMs: Date.now() - startTime,
+    }
+  }
+
+  /**
+   * Normalize compact options with defaults
+   */
+  private normalizeCompactOptions(options?: CompactOptions): {
+    targetFileSize: number
+    minFileSize: number
+    maxFiles: number
+    dryRun: boolean
+  } {
+    const targetFileSize = options?.targetFileSize ?? 128 * 1024 * 1024 // 128MB default
+    return {
+      targetFileSize,
+      minFileSize: options?.minFileSize ?? targetFileSize / 4,
+      maxFiles: options?.maxFiles ?? 100,
+      dryRun: options?.dryRun ?? false,
+    }
+  }
+
+  /**
+   * Create empty compact result
+   */
+  private emptyCompactResult(startTime: number): CompactResult {
+    return {
+      filesCompacted: 0,
+      filesCreated: 0,
+      bytesBefore: 0,
+      bytesAfter: 0,
+      durationMs: Date.now() - startTime,
+    }
+  }
+
+  /**
+   * Analyze files to find candidates for compaction
+   */
+  private async analyzeFilesForCompaction(
+    ns: string,
+    tableLocation: string,
+    currentVersion: number,
+    minFileSize: number
+  ): Promise<{
+    smallFiles: Array<{ path: string; size: number }>
+    totalBytes: number
+  }> {
+    const activeFilePaths = await this.getActiveFilesAtVersion(ns, currentVersion)
+    const fileInfos: Array<{ path: string; size: number }> = []
     let totalBytes = 0
 
     for (const relativePath of activeFilePaths) {
@@ -620,40 +706,19 @@ export class DeltaBackend implements EntityBackend {
       }
     }
 
-    // Filter to small files only
     const smallFiles = fileInfos.filter(f => f.size < minFileSize)
+    return { smallFiles, totalBytes }
+  }
 
-    // Need at least 2 small files to compact
-    if (smallFiles.length < 2) {
-      return {
-        filesCompacted: 0,
-        filesCreated: 0,
-        bytesBefore: totalBytes,
-        bytesAfter: totalBytes,
-        durationMs: Date.now() - startTime,
-      }
-    }
-
-    // Limit number of files to compact
-    const filesToCompact = smallFiles.slice(0, maxFiles)
-    let bytesBefore = 0
-    for (const f of filesToCompact) {
-      bytesBefore += f.size
-    }
-
-    if (dryRun) {
-      return {
-        filesCompacted: filesToCompact.length,
-        filesCreated: 1,
-        bytesBefore,
-        bytesAfter: bytesBefore, // Estimate same size
-        durationMs: Date.now() - startTime,
-      }
-    }
-
-    // Read all entities from small files
+  /**
+   * Read entities from a list of files
+   */
+  private async readEntitiesFromFiles(
+    tableLocation: string,
+    files: Array<{ path: string; size: number }>
+  ): Promise<Entity[]> {
     const entities: Entity[] = []
-    for (const fileInfo of filesToCompact) {
+    for (const fileInfo of files) {
       const fullPath = `${tableLocation}/${fileInfo.path}`
       try {
         const rows = await readParquet<Record<string, unknown>>(this.storage, fullPath)
@@ -664,21 +729,23 @@ export class DeltaBackend implements EntityBackend {
         // Skip unreadable files
       }
     }
+    return entities
+  }
 
-    if (entities.length === 0) {
-      return {
-        filesCompacted: 0,
-        filesCreated: 0,
-        bytesBefore,
-        bytesAfter: bytesBefore,
-        durationMs: Date.now() - startTime,
-      }
-    }
-
+  /**
+   * Perform the actual compaction operation
+   */
+  private async performCompaction(
+    ns: string,
+    tableLocation: string,
+    currentVersion: number,
+    entities: Entity[],
+    filesToCompact: Array<{ path: string; size: number }>,
+    options: { targetFileSize: number; minFileSize: number }
+  ): Promise<{ bytesAfter: number }> {
     // Write combined entities to new file
     const dataFileId = this.generateUUID()
     const newDataFilePath = `${tableLocation}/${dataFileId}.parquet`
-
     const parquetSchema = buildEntityParquetSchema()
     const rows = entities.map(entity => entityToRow(entity))
 
@@ -686,52 +753,16 @@ export class DeltaBackend implements EntityBackend {
     const writeResult = await writer.write(newDataFilePath, rows, parquetSchema)
     const bytesAfter = writeResult.size
 
-    // Create commit with remove actions for old files and add action for new file
-    const actions: DeltaAction[] = []
+    // Build compaction commit actions
+    const actions = this.buildCompactionActions(
+      filesToCompact,
+      dataFileId,
+      bytesAfter,
+      currentVersion,
+      options
+    )
 
-    // Remove actions for compacted files
-    for (const fileInfo of filesToCompact) {
-      const remove: RemoveAction = {
-        remove: {
-          path: fileInfo.path,
-          deletionTimestamp: Date.now(),
-          dataChange: false, // Data didn't change, just reorganized
-        },
-      }
-      actions.push(remove)
-    }
-
-    // Add action for new combined file
-    const add: AddAction = {
-      add: {
-        path: `${dataFileId}.parquet`,
-        size: bytesAfter,
-        modificationTime: Date.now(),
-        dataChange: false,
-      },
-    }
-    actions.push(add)
-
-    // Commit info
-    const commitInfo: CommitInfoAction = {
-      commitInfo: {
-        timestamp: Date.now(),
-        operation: 'OPTIMIZE',
-        operationParameters: {
-          targetFileSize: targetSize,
-          minFileSize: minFileSize,
-        },
-        readVersion: currentVersion,
-        isBlindAppend: false,
-        operationMetrics: {
-          numFilesRemoved: String(filesToCompact.length),
-          numFilesAdded: '1',
-        },
-      },
-    }
-    actions.push(commitInfo)
-
-    // Write commit
+    // Commit the compaction
     const newVersion = currentVersion + 1
     const commitContent = actions.map(a => JSON.stringify(a)).join('\n')
     const commitPath = `${tableLocation}/_delta_log/${this.formatVersion(newVersion)}.json`
@@ -744,18 +775,65 @@ export class DeltaBackend implements EntityBackend {
       )
       this.versionCache.set(ns, newVersion)
     } catch (error) {
-      // Clean up orphaned new file on conflict
       await this.storage.delete(newDataFilePath).catch(() => {})
       throw error
     }
 
-    return {
-      filesCompacted: filesToCompact.length,
-      filesCreated: 1,
-      bytesBefore,
-      bytesAfter,
-      durationMs: Date.now() - startTime,
+    return { bytesAfter }
+  }
+
+  /**
+   * Build actions for compaction commit
+   */
+  private buildCompactionActions(
+    filesToCompact: Array<{ path: string; size: number }>,
+    newDataFileId: string,
+    newFileSize: number,
+    readVersion: number,
+    options: { targetFileSize: number; minFileSize: number }
+  ): DeltaAction[] {
+    const actions: DeltaAction[] = []
+
+    // Remove actions for compacted files
+    for (const fileInfo of filesToCompact) {
+      actions.push({
+        remove: {
+          path: fileInfo.path,
+          deletionTimestamp: Date.now(),
+          dataChange: false,
+        },
+      })
     }
+
+    // Add action for new combined file
+    actions.push({
+      add: {
+        path: `${newDataFileId}.parquet`,
+        size: newFileSize,
+        modificationTime: Date.now(),
+        dataChange: false,
+      },
+    })
+
+    // Commit info
+    actions.push({
+      commitInfo: {
+        timestamp: Date.now(),
+        operation: 'OPTIMIZE',
+        operationParameters: {
+          targetFileSize: options.targetFileSize,
+          minFileSize: options.minFileSize,
+        },
+        readVersion,
+        isBlindAppend: false,
+        operationMetrics: {
+          numFilesRemoved: String(filesToCompact.length),
+          numFilesAdded: '1',
+        },
+      },
+    })
+
+    return actions
   }
 
   async vacuum(ns: string, options?: VacuumOptions): Promise<VacuumResult> {
@@ -1068,158 +1146,59 @@ export class DeltaBackend implements EntityBackend {
     if (entities.length === 0) return
     const tableLocation = this.getTableLocation(ns)
 
-    // OCC: Retry loop with exponential backoff
     let retries = 0
-    // Track last error for debugging (used implicitly for retry logic)
     let dataFilePath: string | null = null
 
     while (retries <= this.maxRetries) {
-      // Invalidate version cache to get fresh version on retry
+      // Invalidate version cache on retry
       if (retries > 0) {
         this.versionCache.delete(ns)
       }
 
       const currentVersion = await this.getCurrentVersion(ns)
       const isNewTable = currentVersion < 0
-
-      // Create directories if new table
-      if (isNewTable) {
-        await this.storage.mkdir(tableLocation).catch(() => {})
-        await this.storage.mkdir(`${tableLocation}/_delta_log`).catch(() => {})
-      }
-
-      // Determine version for this commit
       const newVersion = isNewTable ? 0 : currentVersion + 1
 
-      // Step 1: Write entities to Parquet file (only on first attempt or if we cleaned up)
-      if (!dataFilePath) {
-        const dataFileId = this.generateUUID()
-        dataFilePath = `${tableLocation}/${dataFileId}.parquet`
-
-        // Build parquet schema and data
-        const parquetSchema = buildEntityParquetSchema()
-        const rows = entities.map(entity => entityToRow(entity))
-
-        // Write parquet file
-        const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
-        await writer.write(dataFilePath, rows, parquetSchema)
-      }
-
-      // Get relative path for add action
-      const dataFileRelativePath = dataFilePath.slice(tableLocation.length + 1)
-      const stat = await this.storage.stat(dataFilePath)
-
-      // Step 2: Create add action
-      const add: AddAction = {
-        add: {
-          path: dataFileRelativePath,
-          size: stat?.size ?? 0,
-          modificationTime: Date.now(),
-          dataChange: true,
-        },
-      }
-
-      // Step 3: Create commit info
-      const commitInfo: CommitInfoAction = {
-        commitInfo: {
-          timestamp: Date.now(),
-          operation,
-          operationParameters: {},
-          readVersion: isNewTable ? undefined : currentVersion,
-          isBlindAppend: true,
-        },
-      }
-
-      // Step 4: Build actions array
-      const actions: DeltaAction[] = []
-
-      // First commit (version 0) needs protocol and metadata
+      // Ensure table directories exist
       if (isNewTable) {
-        const protocol: ProtocolAction = {
-          protocol: {
-            minReaderVersion: 1,
-            minWriterVersion: 2,
-          },
-        }
-
-        const deltaSchema = this.createDefaultDeltaSchema()
-        const metaData: MetaDataAction = {
-          metaData: {
-            id: this.generateUUID(),
-            schemaString: JSON.stringify(deltaSchema),
-            partitionColumns: [],
-            createdTime: Date.now(),
-          },
-        }
-
-        actions.push(protocol)
-        actions.push(metaData)
+        await this.ensureTableDirectories(tableLocation)
       }
 
-      actions.push(add)
-      actions.push(commitInfo)
+      // Write data file (only on first attempt)
+      if (!dataFilePath) {
+        dataFilePath = await this.writeDataFile(tableLocation, entities)
+      }
 
-      // Step 5: Write commit file with OCC (ifNoneMatch prevents overwriting existing commit)
-      const commitContent = actions.map(a => JSON.stringify(a)).join('\n')
-      const commitPath = `${tableLocation}/_delta_log/${this.formatVersion(newVersion)}.json`
+      // Build commit actions
+      const actions = await this.buildCommitActions(
+        tableLocation,
+        dataFilePath,
+        operation,
+        isNewTable,
+        currentVersion
+      )
 
-      try {
-        await this.storage.write(
-          commitPath,
-          new TextEncoder().encode(commitContent),
-          { ifNoneMatch: '*' }
-        )
+      // Try to commit
+      const committed = await this.tryDeltaCommit(tableLocation, newVersion, actions)
 
-        // Success! Update version cache
+      if (committed) {
         this.versionCache.set(ns, newVersion)
-
-        // Check if we should create a checkpoint (at version 10, 20, 30, etc.)
+        // Create checkpoint if needed
         if (newVersion > 0 && newVersion % CHECKPOINT_THRESHOLD === 0) {
           await this.createCheckpoint(ns, newVersion)
         }
+        return
+      }
 
-        return // Commit succeeded
-      } catch (error) {
-        // Check if this is a conflict error (file already exists)
-        if (error instanceof AlreadyExistsError || this.isConflictError(error)) {
-          // Track error for potential debugging
-          retries++
-
-          if (retries <= this.maxRetries) {
-            // Exponential backoff with jitter
-            const backoffMs = Math.min(
-              this.baseBackoffMs * Math.pow(2, retries - 1) + Math.random() * this.baseBackoffMs,
-              this.maxBackoffMs
-            )
-            await this.sleep(backoffMs)
-            continue
-          }
-        }
-
-        // Non-conflict error or max retries exceeded
-        // Clean up orphaned parquet file
-        if (dataFilePath) {
-          await this.storage.delete(dataFilePath).catch(() => {})
-        }
-
-        if (retries > this.maxRetries) {
-          throw new CommitConflictError(
-            `Commit conflict for namespace '${ns}' at version ${currentVersion + 1} after ${retries} retries exceeded`,
-            ns,
-            currentVersion + 1,
-            retries
-          )
-        }
-
-        throw error
+      // Conflict detected - retry with backoff
+      retries++
+      if (retries <= this.maxRetries) {
+        await this.backoffDelay(retries)
       }
     }
 
-    // Clean up orphaned parquet file on max retries
-    if (dataFilePath) {
-      await this.storage.delete(dataFilePath).catch(() => {})
-    }
-
+    // Max retries exceeded - cleanup and throw
+    await this.cleanupOrphanedFile(dataFilePath)
     const finalVersion = await this.getCurrentVersion(ns)
     throw new CommitConflictError(
       `Commit conflict for namespace '${ns}' at version ${finalVersion + 1} after ${retries} retries exceeded`,
@@ -1227,6 +1206,161 @@ export class DeltaBackend implements EntityBackend {
       finalVersion + 1,
       retries
     )
+  }
+
+  /**
+   * Ensure table directories exist
+   */
+  private async ensureTableDirectories(tableLocation: string): Promise<void> {
+    await this.storage.mkdir(tableLocation).catch(() => {})
+    await this.storage.mkdir(`${tableLocation}/_delta_log`).catch(() => {})
+  }
+
+  /**
+   * Write entities to a Parquet data file
+   */
+  private async writeDataFile<T>(
+    tableLocation: string,
+    entities: Entity<T>[]
+  ): Promise<string> {
+    const dataFileId = this.generateUUID()
+    const dataFilePath = `${tableLocation}/${dataFileId}.parquet`
+    const parquetSchema = buildEntityParquetSchema()
+    const rows = entities.map(entity => entityToRow(entity))
+    const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
+    await writer.write(dataFilePath, rows, parquetSchema)
+    return dataFilePath
+  }
+
+  /**
+   * Build commit actions for append operation
+   */
+  private async buildCommitActions(
+    tableLocation: string,
+    dataFilePath: string,
+    operation: string,
+    isNewTable: boolean,
+    currentVersion: number
+  ): Promise<DeltaAction[]> {
+    const actions: DeltaAction[] = []
+
+    // First commit needs protocol and metadata
+    if (isNewTable) {
+      actions.push(this.createProtocolAction())
+      actions.push(this.createMetadataAction())
+    }
+
+    // Add data file action
+    const dataFileRelativePath = dataFilePath.slice(tableLocation.length + 1)
+    const stat = await this.storage.stat(dataFilePath)
+    actions.push(this.createAddAction(dataFileRelativePath, stat?.size ?? 0))
+
+    // Add commit info
+    actions.push(this.createCommitInfoAction(operation, isNewTable ? undefined : currentVersion))
+
+    return actions
+  }
+
+  /**
+   * Create protocol action for new table
+   */
+  private createProtocolAction(): ProtocolAction {
+    return {
+      protocol: {
+        minReaderVersion: 1,
+        minWriterVersion: 2,
+      },
+    }
+  }
+
+  /**
+   * Create metadata action for new table
+   */
+  private createMetadataAction(): MetaDataAction {
+    return {
+      metaData: {
+        id: this.generateUUID(),
+        schemaString: JSON.stringify(this.createDefaultDeltaSchema()),
+        partitionColumns: [],
+        createdTime: Date.now(),
+      },
+    }
+  }
+
+  /**
+   * Create add action for data file
+   */
+  private createAddAction(path: string, size: number): AddAction {
+    return {
+      add: {
+        path,
+        size,
+        modificationTime: Date.now(),
+        dataChange: true,
+      },
+    }
+  }
+
+  /**
+   * Create commit info action
+   */
+  private createCommitInfoAction(operation: string, readVersion?: number): CommitInfoAction {
+    return {
+      commitInfo: {
+        timestamp: Date.now(),
+        operation,
+        operationParameters: {},
+        readVersion,
+        isBlindAppend: true,
+      },
+    }
+  }
+
+  /**
+   * Try to write commit file atomically
+   * Returns true if successful, false if conflict
+   */
+  private async tryDeltaCommit(
+    tableLocation: string,
+    version: number,
+    actions: DeltaAction[]
+  ): Promise<boolean> {
+    const commitContent = actions.map(a => JSON.stringify(a)).join('\n')
+    const commitPath = `${tableLocation}/_delta_log/${this.formatVersion(version)}.json`
+
+    try {
+      await this.storage.write(
+        commitPath,
+        new TextEncoder().encode(commitContent),
+        { ifNoneMatch: '*' }
+      )
+      return true
+    } catch (error) {
+      if (error instanceof AlreadyExistsError || this.isConflictError(error)) {
+        return false
+      }
+      throw error
+    }
+  }
+
+  /**
+   * Apply exponential backoff delay with jitter
+   */
+  private async backoffDelay(retryCount: number): Promise<void> {
+    const backoffMs = Math.min(
+      this.baseBackoffMs * Math.pow(2, retryCount - 1) + Math.random() * this.baseBackoffMs,
+      this.maxBackoffMs
+    )
+    await this.sleep(backoffMs)
+  }
+
+  /**
+   * Clean up orphaned data file
+   */
+  private async cleanupOrphanedFile(filePath: string | null): Promise<void> {
+    if (filePath) {
+      await this.storage.delete(filePath).catch(() => {})
+    }
   }
 
   /**
@@ -1805,7 +1939,7 @@ class DeltaSnapshotBackend implements EntityBackend {
   async initialize(): Promise<void> {}
   async close(): Promise<void> {}
 
-  async get<T = Record<string, unknown>>(
+  async get<T extends EntityData = EntityData>(
     ns: string,
     id: string,
     _options?: GetOptions
@@ -1817,7 +1951,7 @@ class DeltaSnapshotBackend implements EntityBackend {
     return entities[0] ?? null
   }
 
-  async find<T = Record<string, unknown>>(
+  async find<T extends EntityData = EntityData>(
     ns: string,
     filter?: Filter,
     options?: FindOptions

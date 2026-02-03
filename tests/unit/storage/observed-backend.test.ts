@@ -641,4 +641,197 @@ describe('ObservedBackend', () => {
       expect(deleted).toBe(true)
     })
   })
+
+  // ===========================================================================
+  // MultipartBackend Support
+  // ===========================================================================
+
+  describe('MultipartBackend support', () => {
+    // Create a mock backend that supports multipart uploads
+    function createMockMultipartBackend(): MemoryBackend & {
+      createMultipartUpload: (path: string) => Promise<{
+        uploadId: string
+        uploadPart: (partNumber: number, data: Uint8Array) => Promise<{ partNumber: number; etag: string; size: number }>
+        complete: (parts: { partNumber: number; etag: string; size: number }[]) => Promise<{ etag: string; size: number }>
+        abort: () => Promise<void>
+      }>
+    } {
+      const backend = new MemoryBackend()
+      const uploads = new Map<string, { path: string; parts: Map<number, Uint8Array> }>()
+      let uploadCounter = 0
+
+      return Object.assign(backend, {
+        createMultipartUpload: async (path: string) => {
+          const uploadId = `upload-${++uploadCounter}`
+          uploads.set(uploadId, { path, parts: new Map() })
+
+          return {
+            uploadId,
+            uploadPart: async (partNumber: number, data: Uint8Array) => {
+              const upload = uploads.get(uploadId)
+              if (!upload) throw new Error('Upload not found')
+              upload.parts.set(partNumber, data)
+              return {
+                partNumber,
+                etag: `etag-${partNumber}`,
+                size: data.length,
+              }
+            },
+            complete: async (parts: { partNumber: number; etag: string; size: number }[]) => {
+              const upload = uploads.get(uploadId)
+              if (!upload) throw new Error('Upload not found')
+
+              // Combine parts in order
+              const sortedParts = [...parts].sort((a, b) => a.partNumber - b.partNumber)
+              const totalSize = sortedParts.reduce((sum, p) => sum + (upload.parts.get(p.partNumber)?.length || 0), 0)
+              const combined = new Uint8Array(totalSize)
+              let offset = 0
+              for (const part of sortedParts) {
+                const data = upload.parts.get(part.partNumber)
+                if (data) {
+                  combined.set(data, offset)
+                  offset += data.length
+                }
+              }
+
+              // Write to backend
+              const result = await backend.write(upload.path, combined)
+              uploads.delete(uploadId)
+
+              return {
+                etag: result.etag,
+                size: result.size,
+              }
+            },
+            abort: async () => {
+              uploads.delete(uploadId)
+            },
+          }
+        },
+      })
+    }
+
+    it('should detect multipart support when inner backend has createMultipartUpload', () => {
+      const multipartBackend = createMockMultipartBackend()
+      const observed = new ObservedBackend(multipartBackend)
+
+      // Check that isMultipart returns true
+      expect('createMultipartUpload' in observed).toBe(true)
+    })
+
+    it('should NOT have createMultipartUpload when inner backend does not support it', () => {
+      const simpleBackend = new MemoryBackend()
+      const observed = new ObservedBackend(simpleBackend)
+
+      // MemoryBackend doesn't have createMultipartUpload
+      expect('createMultipartUpload' in observed.inner).toBe(false)
+    })
+
+    it('should delegate createMultipartUpload to inner backend', async () => {
+      const multipartBackend = createMockMultipartBackend()
+      const observed = new ObservedBackend(multipartBackend) as ObservedBackend & {
+        createMultipartUpload: typeof multipartBackend.createMultipartUpload
+      }
+
+      const upload = await observed.createMultipartUpload('test/multipart.txt')
+      expect(upload.uploadId).toBe('upload-1')
+    })
+
+    it('should dispatch onWrite hooks for uploadPart operations', async () => {
+      const multipartBackend = createMockMultipartBackend()
+      const observed = new ObservedBackend(multipartBackend) as ObservedBackend & {
+        createMultipartUpload: typeof multipartBackend.createMultipartUpload
+      }
+
+      const upload = await observed.createMultipartUpload('test/multipart.txt')
+      await upload.uploadPart(1, textToBytes('part one'))
+
+      // Should have dispatched a write hook for uploadPart
+      const uploadPartHooks = hookCalls.filter(h => h.context.operationType === 'uploadPart')
+      expect(uploadPartHooks).toHaveLength(1)
+      expect(uploadPartHooks[0]!.method).toBe('onWrite')
+      expect(uploadPartHooks[0]!.result!.bytesTransferred).toBe(8) // 'part one'.length
+    })
+
+    it('should dispatch onWrite hooks for complete operations', async () => {
+      const multipartBackend = createMockMultipartBackend()
+      const observed = new ObservedBackend(multipartBackend) as ObservedBackend & {
+        createMultipartUpload: typeof multipartBackend.createMultipartUpload
+      }
+
+      const upload = await observed.createMultipartUpload('test/multipart.txt')
+      const part1 = await upload.uploadPart(1, textToBytes('part1'))
+      const part2 = await upload.uploadPart(2, textToBytes('part2'))
+
+      hookCalls.length = 0 // Reset to check only complete hook
+
+      await upload.complete([part1, part2])
+
+      // Should have dispatched a write hook for complete
+      const completeHooks = hookCalls.filter(h => h.context.operationType === 'multipartComplete')
+      expect(completeHooks).toHaveLength(1)
+      expect(completeHooks[0]!.method).toBe('onWrite')
+    })
+
+    it('should dispatch onDelete hooks for abort operations', async () => {
+      const multipartBackend = createMockMultipartBackend()
+      const observed = new ObservedBackend(multipartBackend) as ObservedBackend & {
+        createMultipartUpload: typeof multipartBackend.createMultipartUpload
+      }
+
+      const upload = await observed.createMultipartUpload('test/multipart.txt')
+      await upload.uploadPart(1, textToBytes('data'))
+
+      hookCalls.length = 0 // Reset to check only abort hook
+
+      await upload.abort()
+
+      // Should have dispatched a delete hook for abort
+      const abortHooks = hookCalls.filter(h => h.context.operationType === 'multipartAbort')
+      expect(abortHooks).toHaveLength(1)
+      expect(abortHooks[0]!.method).toBe('onDelete')
+    })
+
+    it('should dispatch onStorageError when uploadPart fails', async () => {
+      const multipartBackend = createMockMultipartBackend()
+      // Override uploadPart to fail
+      const originalCreate = multipartBackend.createMultipartUpload.bind(multipartBackend)
+      multipartBackend.createMultipartUpload = async (path: string) => {
+        const upload = await originalCreate(path)
+        return {
+          ...upload,
+          uploadPart: async () => {
+            throw new Error('Upload part failed')
+          },
+        }
+      }
+
+      const observed = new ObservedBackend(multipartBackend) as ObservedBackend & {
+        createMultipartUpload: typeof multipartBackend.createMultipartUpload
+      }
+
+      const upload = await observed.createMultipartUpload('test/multipart.txt')
+      await expect(upload.uploadPart(1, textToBytes('data'))).rejects.toThrow('Upload part failed')
+
+      const errorHooks = hookCalls.filter(h => h.method === 'onStorageError')
+      expect(errorHooks).toHaveLength(1)
+      expect(errorHooks[0]!.context.operationType).toBe('uploadPart')
+    })
+
+    it('should complete multipart upload and write data correctly', async () => {
+      const multipartBackend = createMockMultipartBackend()
+      const observed = new ObservedBackend(multipartBackend) as ObservedBackend & {
+        createMultipartUpload: typeof multipartBackend.createMultipartUpload
+      }
+
+      const upload = await observed.createMultipartUpload('test/multipart.txt')
+      const part1 = await upload.uploadPart(1, textToBytes('Hello, '))
+      const part2 = await upload.uploadPart(2, textToBytes('World!'))
+      await upload.complete([part1, part2])
+
+      // Verify the data was written correctly
+      const data = await observed.read('test/multipart.txt')
+      expect(bytesToText(data)).toBe('Hello, World!')
+    })
+  })
 })

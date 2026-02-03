@@ -26,6 +26,12 @@
  */
 
 import type { EmbeddingProvider } from './provider'
+import {
+  DEFAULT_EMBEDDING_BATCH_SIZE,
+  DEFAULT_EMBEDDING_PROCESS_DELAY,
+  DEFAULT_EMBEDDING_PRIORITY,
+  DEFAULT_MAX_RETRIES,
+} from '../constants'
 
 // =============================================================================
 // Types
@@ -177,9 +183,9 @@ export class EmbeddingQueue {
     this.storage = storage
     this.config = {
       ...config,
-      batchSize: config.batchSize ?? 10,
-      retryAttempts: config.retryAttempts ?? 3,
-      processDelay: config.processDelay ?? 1000,
+      batchSize: config.batchSize ?? DEFAULT_EMBEDDING_BATCH_SIZE,
+      retryAttempts: config.retryAttempts ?? DEFAULT_MAX_RETRIES,
+      processDelay: config.processDelay ?? DEFAULT_EMBEDDING_PROCESS_DELAY,
       fieldSeparator: config.fieldSeparator ?? '\n\n',
     }
   }
@@ -213,7 +219,7 @@ export class EmbeddingQueue {
    * @param entityId - Entity ID
    * @param priority - Optional priority (lower = higher priority)
    */
-  async enqueue(entityType: string, entityId: string, priority = 100): Promise<void> {
+  async enqueue(entityType: string, entityId: string, priority = DEFAULT_EMBEDDING_PRIORITY): Promise<void> {
     const key = this.getQueueKey(entityType, entityId)
 
     // Check if already queued
@@ -316,7 +322,7 @@ export class EmbeddingQueue {
       .filter(item => item.attempts < this.config.retryAttempts)
       // Sort by priority (lower first), then by createdAt (older first)
       .sort((a, b) => {
-        const priorityDiff = (a.priority ?? 100) - (b.priority ?? 100)
+        const priorityDiff = (a.priority ?? DEFAULT_EMBEDDING_PRIORITY) - (b.priority ?? DEFAULT_EMBEDDING_PRIORITY)
         if (priorityDiff !== 0) return priorityDiff
         return a.createdAt - b.createdAt
       })

@@ -1,5 +1,29 @@
 /**
  * MongoDB-style filter operators for ParqueDB
+ *
+ * This module provides a comprehensive set of query operators compatible with
+ * MongoDB's query language. Filters can be used with find(), findOne(), updateMany(),
+ * deleteMany(), and other query methods.
+ *
+ * @module types/filter
+ *
+ * @example
+ * ```typescript
+ * // Simple equality
+ * { status: 'published' }
+ *
+ * // Comparison operators
+ * { score: { $gte: 100, $lt: 1000 } }
+ *
+ * // Logical operators
+ * { $or: [{ status: 'published' }, { featured: true }] }
+ *
+ * // String operators
+ * { title: { $regex: /^Hello/i } }
+ *
+ * // Array operators
+ * { tags: { $all: ['tech', 'database'] } }
+ * ```
  */
 
 // Type imports from entity module (types used in filter definitions)
@@ -8,47 +32,152 @@
 // Comparison Operators
 // =============================================================================
 
-/** Equality comparison */
+/**
+ * Equality comparison operator
+ *
+ * Matches values that are equal to the specified value.
+ * Equivalent to direct field comparison: `{ field: value }` is same as `{ field: { $eq: value } }`
+ *
+ * @typeParam T - Type of the value being compared
+ *
+ * @example
+ * ```typescript
+ * // Match posts with exactly 100 views
+ * { views: { $eq: 100 } }
+ * ```
+ */
 export interface EqOperator<T = unknown> {
   $eq: T
 }
 
-/** Not equal comparison */
+/**
+ * Not-equal comparison operator
+ *
+ * Matches values that are not equal to the specified value.
+ *
+ * @typeParam T - Type of the value being compared
+ *
+ * @example
+ * ```typescript
+ * // Match posts not in draft status
+ * { status: { $ne: 'draft' } }
+ * ```
+ */
 export interface NeOperator<T = unknown> {
   $ne: T
 }
 
-/** Greater than comparison */
+/**
+ * Greater-than comparison operator
+ *
+ * Matches values that are greater than the specified value.
+ * Works with numbers, dates, and strings (lexicographic comparison).
+ *
+ * @typeParam T - Type of the value being compared
+ *
+ * @example
+ * ```typescript
+ * // Match posts with more than 100 views
+ * { views: { $gt: 100 } }
+ *
+ * // Match posts created after a date
+ * { createdAt: { $gt: new Date('2024-01-01') } }
+ * ```
+ */
 export interface GtOperator<T = unknown> {
   $gt: T
 }
 
-/** Greater than or equal comparison */
+/**
+ * Greater-than-or-equal comparison operator
+ *
+ * Matches values that are greater than or equal to the specified value.
+ *
+ * @typeParam T - Type of the value being compared
+ *
+ * @example
+ * ```typescript
+ * // Match posts with 100 or more views
+ * { views: { $gte: 100 } }
+ * ```
+ */
 export interface GteOperator<T = unknown> {
   $gte: T
 }
 
-/** Less than comparison */
+/**
+ * Less-than comparison operator
+ *
+ * Matches values that are less than the specified value.
+ *
+ * @typeParam T - Type of the value being compared
+ *
+ * @example
+ * ```typescript
+ * // Match posts with fewer than 10 comments
+ * { commentCount: { $lt: 10 } }
+ * ```
+ */
 export interface LtOperator<T = unknown> {
   $lt: T
 }
 
-/** Less than or equal comparison */
+/**
+ * Less-than-or-equal comparison operator
+ *
+ * Matches values that are less than or equal to the specified value.
+ *
+ * @typeParam T - Type of the value being compared
+ *
+ * @example
+ * ```typescript
+ * // Match posts with 10 or fewer comments
+ * { commentCount: { $lte: 10 } }
+ * ```
+ */
 export interface LteOperator<T = unknown> {
   $lte: T
 }
 
-/** In array comparison */
+/**
+ * In-array comparison operator
+ *
+ * Matches any value that exists in the specified array.
+ *
+ * @typeParam T - Type of the values in the array
+ *
+ * @example
+ * ```typescript
+ * // Match posts with status 'published' or 'featured'
+ * { status: { $in: ['published', 'featured'] } }
+ * ```
+ */
 export interface InOperator<T = unknown> {
   $in: T[]
 }
 
-/** Not in array comparison */
+/**
+ * Not-in-array comparison operator
+ *
+ * Matches values that do not exist in the specified array.
+ *
+ * @typeParam T - Type of the values in the array
+ *
+ * @example
+ * ```typescript
+ * // Match posts that are not draft or archived
+ * { status: { $nin: ['draft', 'archived'] } }
+ * ```
+ */
 export interface NinOperator<T = unknown> {
   $nin: T[]
 }
 
-/** All comparison operators */
+/**
+ * Union of all comparison operators
+ *
+ * @typeParam T - Type of the value being compared
+ */
 export type ComparisonOperator<T = unknown> =
   | EqOperator<T>
   | NeOperator<T>
@@ -63,28 +192,82 @@ export type ComparisonOperator<T = unknown> =
 // String Operators
 // =============================================================================
 
-/** Regex match */
+/**
+ * Regular expression match operator
+ *
+ * Matches strings using regular expression patterns.
+ *
+ * @example
+ * ```typescript
+ * // Case-insensitive regex
+ * { title: { $regex: /^hello/i } }
+ *
+ * // With options string
+ * { title: { $regex: '^hello', $options: 'i' } }
+ * ```
+ */
 export interface RegexOperator {
+  /**
+   * Regular expression pattern (string or RegExp object)
+   */
   $regex: string | RegExp
+
+  /**
+   * Regex options (i=insensitive, m=multiline, s=dotall)
+   * Only used when $regex is a string
+   */
   $options?: string
 }
 
-/** Starts with prefix */
+/**
+ * Starts-with string operator
+ *
+ * Matches strings that begin with the specified prefix.
+ * More efficient than $regex for prefix matching.
+ *
+ * @example
+ * ```typescript
+ * // Match titles starting with "Hello"
+ * { title: { $startsWith: 'Hello' } }
+ * ```
+ */
 export interface StartsWithOperator {
   $startsWith: string
 }
 
-/** Ends with suffix */
+/**
+ * Ends-with string operator
+ *
+ * Matches strings that end with the specified suffix.
+ *
+ * @example
+ * ```typescript
+ * // Match emails ending with @example.com
+ * { email: { $endsWith: '@example.com' } }
+ * ```
+ */
 export interface EndsWithOperator {
   $endsWith: string
 }
 
-/** Contains substring */
+/**
+ * Contains substring operator
+ *
+ * Matches strings that contain the specified substring anywhere.
+ *
+ * @example
+ * ```typescript
+ * // Match content containing "database"
+ * { content: { $contains: 'database' } }
+ * ```
+ */
 export interface ContainsOperator {
   $contains: string
 }
 
-/** All string operators */
+/**
+ * Union of all string operators
+ */
 export type StringOperator =
   | RegexOperator
   | StartsWithOperator
@@ -95,22 +278,59 @@ export type StringOperator =
 // Array Operators
 // =============================================================================
 
-/** Array contains all values */
+/**
+ * Array contains-all operator
+ *
+ * Matches arrays that contain all of the specified elements.
+ *
+ * @typeParam T - Type of array elements
+ *
+ * @example
+ * ```typescript
+ * // Match posts tagged with both 'tech' and 'database'
+ * { tags: { $all: ['tech', 'database'] } }
+ * ```
+ */
 export interface AllOperator<T = unknown> {
   $all: T[]
 }
 
-/** Array element matches filter */
+/**
+ * Array element match operator
+ *
+ * Matches arrays where at least one element satisfies the filter.
+ * Used for querying arrays of objects.
+ *
+ * @example
+ * ```typescript
+ * // Match posts with a comment scored above 10
+ * { comments: { $elemMatch: { score: { $gt: 10 } } } }
+ * ```
+ */
 export interface ElemMatchOperator {
   $elemMatch: Filter
 }
 
-/** Array has specific size */
+/**
+ * Array size operator
+ *
+ * Matches arrays with exactly the specified number of elements.
+ *
+ * @example
+ * ```typescript
+ * // Match posts with exactly 3 tags
+ * { tags: { $size: 3 } }
+ * ```
+ */
 export interface SizeOperator {
   $size: number
 }
 
-/** All array operators */
+/**
+ * Union of all array operators
+ *
+ * @typeParam T - Type of array elements
+ */
 export type ArrayOperator<T = unknown> =
   | AllOperator<T>
   | ElemMatchOperator
@@ -120,17 +340,52 @@ export type ArrayOperator<T = unknown> =
 // Existence Operators
 // =============================================================================
 
-/** Field exists check */
+/**
+ * Field existence operator
+ *
+ * Checks whether a field exists or is absent in the document.
+ *
+ * @example
+ * ```typescript
+ * // Match posts that have a publishedAt field
+ * { publishedAt: { $exists: true } }
+ *
+ * // Match posts without a deletedAt field
+ * { deletedAt: { $exists: false } }
+ * ```
+ */
 export interface ExistsOperator {
+  /**
+   * True to match documents with the field present,
+   * false to match documents where the field is absent
+   */
   $exists: boolean
 }
 
-/** Type check */
+/**
+ * Type check operator
+ *
+ * Matches values that are of the specified BSON/JSON type.
+ *
+ * @example
+ * ```typescript
+ * // Match posts where views is a number
+ * { views: { $type: 'number' } }
+ *
+ * // Match posts where tags is an array
+ * { tags: { $type: 'array' } }
+ * ```
+ */
 export interface TypeOperator {
+  /**
+   * Expected type name
+   */
   $type: 'null' | 'boolean' | 'number' | 'string' | 'array' | 'object' | 'date'
 }
 
-/** Existence operators */
+/**
+ * Union of existence and type checking operators
+ */
 export type ExistenceOperator =
   | ExistsOperator
   | TypeOperator
@@ -139,18 +394,54 @@ export type ExistenceOperator =
 // Special Operators
 // =============================================================================
 
-/** Full-text search */
+/**
+ * Full-text search operator
+ *
+ * Performs text search across FTS-indexed fields using stemming,
+ * tokenization, and relevance scoring.
+ *
+ * Requires an FTS index to be created on the collection.
+ *
+ * @example
+ * ```typescript
+ * // Simple text search
+ * { $text: { $search: 'parquet database performance' } }
+ *
+ * // With language and minimum score
+ * { $text: { $search: 'database', $language: 'english', $minScore: 0.5 } }
+ * ```
+ */
 export interface TextOperator {
   $text: {
-    /** Search query string */
+    /**
+     * Search query string
+     * Supports phrase matching with quotes: "exact phrase"
+     * Supports term exclusion with minus: -excluded
+     */
     $search: string
-    /** Language for stemming/stopwords */
+
+    /**
+     * Language for stemming and stopword removal
+     * @default 'english'
+     */
     $language?: string
-    /** Case sensitive matching */
+
+    /**
+     * Whether to perform case-sensitive matching
+     * @default false
+     */
     $caseSensitive?: boolean
-    /** Diacritic sensitive matching */
+
+    /**
+     * Whether to treat diacritical marks as distinct
+     * @default false
+     */
     $diacriticSensitive?: boolean
-    /** Minimum score threshold (0-1) */
+
+    /**
+     * Minimum relevance score threshold (0-1)
+     * Results with scores below this are filtered out
+     */
     $minScore?: number
   }
 }
@@ -164,20 +455,69 @@ export interface TextOperator {
  */
 export type HybridSearchStrategy = 'pre-filter' | 'post-filter' | 'auto'
 
-/** Vector similarity search */
+/**
+ * Vector similarity search operator
+ *
+ * Performs approximate nearest neighbor (ANN) search using vector embeddings.
+ * Requires a vector index to be created on the target field.
+ *
+ * @example
+ * ```typescript
+ * // Search with a pre-computed vector
+ * {
+ *   $vector: {
+ *     query: [0.1, 0.2, 0.3, ...],  // 1536-dimensional vector
+ *     field: 'embedding',
+ *     topK: 10,
+ *     minScore: 0.7
+ *   }
+ * }
+ *
+ * // Search with text (auto-embedding)
+ * {
+ *   $vector: {
+ *     query: 'semantic search query',
+ *     field: 'embedding',
+ *     topK: 10
+ *   }
+ * }
+ * ```
+ */
 export interface VectorOperator {
   $vector: {
-    /** Query vector (or text for auto-embedding if embedder is configured) */
+    /**
+     * Query vector or text for auto-embedding
+     * If string, will be embedded using the configured embedding model
+     */
     query: number[] | string
-    /** Field containing vectors */
+
+    /**
+     * Name of the field containing embedding vectors
+     */
     field: string
-    /** Number of results */
+
+    /**
+     * Number of nearest neighbors to return
+     */
     topK: number
-    /** Minimum similarity threshold (0-1) */
+
+    /**
+     * Minimum similarity score threshold (0-1)
+     * Results with lower similarity are filtered out
+     */
     minScore?: number
-    /** Hybrid search strategy */
+
+    /**
+     * Strategy for combining with metadata filters
+     * @default 'auto'
+     */
     strategy?: HybridSearchStrategy
-    /** HNSW efSearch parameter for search quality/speed tradeoff */
+
+    /**
+     * HNSW efSearch parameter for quality/speed tradeoff
+     * Higher values = better recall but slower search
+     * @default 100
+     */
     efSearch?: number
 
     // Legacy format support (deprecated, use query/field/topK instead)
@@ -192,21 +532,50 @@ export interface VectorOperator {
   }
 }
 
-/** Geospatial near query */
+/**
+ * Geospatial proximity query operator
+ *
+ * Finds documents near a geographic point, optionally within a distance range.
+ * Requires a geospatial index on the target field.
+ *
+ * @example
+ * ```typescript
+ * // Find locations within 10km of San Francisco
+ * {
+ *   location: {
+ *     $geo: {
+ *       $near: { lng: -122.4194, lat: 37.7749 },
+ *       $maxDistance: 10000  // 10km in meters
+ *     }
+ *   }
+ * }
+ * ```
+ */
 export interface GeoOperator {
   $geo: {
+    /**
+     * Center point for proximity search
+     */
     $near: {
+      /** Longitude (-180 to 180) */
       lng: number
+      /** Latitude (-90 to 90) */
       lat: number
     }
-    /** Maximum distance in meters */
+    /**
+     * Maximum distance from center point in meters
+     */
     $maxDistance?: number
-    /** Minimum distance in meters */
+    /**
+     * Minimum distance from center point in meters
+     */
     $minDistance?: number
   }
 }
 
-/** Special operators */
+/**
+ * Union of special search operators (text, vector, geo)
+ */
 export type SpecialOperator =
   | TextOperator
   | VectorOperator
@@ -216,27 +585,69 @@ export type SpecialOperator =
 // Logical Operators
 // =============================================================================
 
-/** AND - all conditions must match */
+/**
+ * Logical AND operator
+ *
+ * All conditions in the array must match for a document to be included.
+ *
+ * @example
+ * ```typescript
+ * // Match published posts with more than 100 views
+ * { $and: [{ status: 'published' }, { views: { $gt: 100 } }] }
+ * ```
+ */
 export interface AndOperator {
   $and: Filter[]
 }
 
-/** OR - any condition must match */
+/**
+ * Logical OR operator
+ *
+ * At least one condition in the array must match for inclusion.
+ *
+ * @example
+ * ```typescript
+ * // Match posts that are either published or featured
+ * { $or: [{ status: 'published' }, { featured: true }] }
+ * ```
+ */
 export interface OrOperator {
   $or: Filter[]
 }
 
-/** NOT - condition must not match */
+/**
+ * Logical NOT operator
+ *
+ * Inverts the condition - matches documents that don't satisfy the filter.
+ *
+ * @example
+ * ```typescript
+ * // Match posts that are NOT drafts
+ * { $not: { status: 'draft' } }
+ * ```
+ */
 export interface NotOperator {
   $not: Filter
 }
 
-/** NOR - none of conditions must match */
+/**
+ * Logical NOR operator
+ *
+ * None of the conditions must match - inverse of OR.
+ *
+ * @example
+ * ```typescript
+ * // Match posts that are neither draft nor archived
+ * { $nor: [{ status: 'draft' }, { status: 'archived' }] }
+ * ```
+ */
 export interface NorOperator {
   $nor: Filter[]
 }
 
-/** Logical operators */
+/**
+ * Union of all logical operators
+ */
 export type LogicalOperator =
   | AndOperator
   | OrOperator
@@ -247,14 +658,26 @@ export type LogicalOperator =
 // Field Filter
 // =============================================================================
 
-/** All operators that can be applied to a field */
+/**
+ * Union of all operators that can be applied to a field
+ *
+ * @typeParam T - Type of the field value
+ */
 export type FieldOperator<T = unknown> =
   | ComparisonOperator<T>
   | StringOperator
   | ArrayOperator<T>
   | ExistenceOperator
 
-/** A field filter value (either direct value for equality or operator) */
+/**
+ * A field filter value
+ *
+ * Can be either:
+ * - A direct value for equality matching: `{ field: 'value' }`
+ * - An operator object: `{ field: { $gt: 10 } }`
+ *
+ * @typeParam T - Type of the field value
+ */
 export type FieldFilter<T = unknown> = T | FieldOperator<T>
 
 // =============================================================================
@@ -314,35 +737,60 @@ export interface Filter {
 // Type Guards
 // =============================================================================
 
-/** Check if value is a comparison operator */
+/**
+ * Type guard to check if a value is a comparison operator
+ *
+ * @param value - Value to check
+ * @returns True if value is a ComparisonOperator
+ */
 export function isComparisonOperator(value: unknown): value is ComparisonOperator {
   if (typeof value !== 'object' || value === null) return false
   const keys = Object.keys(value)
   return keys.length === 1 && keys[0] !== undefined && ['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin'].includes(keys[0])
 }
 
-/** Check if value is a string operator */
+/**
+ * Type guard to check if a value is a string operator
+ *
+ * @param value - Value to check
+ * @returns True if value is a StringOperator
+ */
 export function isStringOperator(value: unknown): value is StringOperator {
   if (typeof value !== 'object' || value === null) return false
   const keys = Object.keys(value)
   return keys.some(k => ['$regex', '$startsWith', '$endsWith', '$contains'].includes(k))
 }
 
-/** Check if value is an array operator */
+/**
+ * Type guard to check if a value is an array operator
+ *
+ * @param value - Value to check
+ * @returns True if value is an ArrayOperator
+ */
 export function isArrayOperator(value: unknown): value is ArrayOperator {
   if (typeof value !== 'object' || value === null) return false
   const keys = Object.keys(value)
   return keys.length === 1 && keys[0] !== undefined && ['$all', '$elemMatch', '$size'].includes(keys[0])
 }
 
-/** Check if value is an existence operator */
+/**
+ * Type guard to check if a value is an existence operator
+ *
+ * @param value - Value to check
+ * @returns True if value is an ExistenceOperator
+ */
 export function isExistenceOperator(value: unknown): value is ExistenceOperator {
   if (typeof value !== 'object' || value === null) return false
   const keys = Object.keys(value)
   return keys.length === 1 && keys[0] !== undefined && ['$exists', '$type'].includes(keys[0])
 }
 
-/** Check if value is any field operator (not a plain value) */
+/**
+ * Type guard to check if a value is any field operator (not a plain value)
+ *
+ * @param value - Value to check
+ * @returns True if value is a FieldOperator
+ */
 export function isFieldOperator(value: unknown): value is FieldOperator {
   return (
     isComparisonOperator(value) ||
@@ -352,12 +800,22 @@ export function isFieldOperator(value: unknown): value is FieldOperator {
   )
 }
 
-/** Check if filter has logical operators */
+/**
+ * Check if a filter contains logical operators ($and, $or, $not, $nor)
+ *
+ * @param filter - Filter to check
+ * @returns True if filter uses logical operators
+ */
 export function hasLogicalOperators(filter: Filter): boolean {
   return '$and' in filter || '$or' in filter || '$not' in filter || '$nor' in filter
 }
 
-/** Check if filter has special operators */
+/**
+ * Check if a filter contains special operators ($text, $vector, $geo)
+ *
+ * @param filter - Filter to check
+ * @returns True if filter uses special operators
+ */
 export function hasSpecialOperators(filter: Filter): boolean {
   return '$text' in filter || '$vector' in filter || '$geo' in filter
 }

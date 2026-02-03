@@ -444,6 +444,194 @@ export type BackendConfig =
 export type CreateBackendFn = (config: BackendConfig) => Promise<EntityBackend>
 
 // =============================================================================
+// Entity Backend Capabilities
+// =============================================================================
+
+/**
+ * Entity backend capabilities
+ *
+ * Describes what features an entity backend supports at runtime.
+ * Use getEntityBackendCapabilities() to query a backend's capabilities.
+ */
+export interface EntityBackendCapabilities {
+  /** Backend type identifier (e.g., 'native', 'iceberg', 'delta') */
+  type: BackendType
+
+  // ---------------------------------------------------------------------------
+  // Core Capabilities (from EntityBackend interface)
+  // ---------------------------------------------------------------------------
+
+  /** Whether the backend supports time-travel queries */
+  timeTravel: boolean
+
+  /** Whether the backend supports schema evolution */
+  schemaEvolution: boolean
+
+  /** Whether the backend is read-only */
+  readOnly: boolean
+
+  // ---------------------------------------------------------------------------
+  // Optional Operations
+  // ---------------------------------------------------------------------------
+
+  /** Whether the backend supports snapshots */
+  snapshots: boolean
+
+  /** Whether the backend supports setting schemas */
+  setSchema: boolean
+
+  /** Whether the backend supports compaction */
+  compact: boolean
+
+  /** Whether the backend supports vacuum/cleanup */
+  vacuum: boolean
+
+  /** Whether the backend supports statistics */
+  stats: boolean
+
+  // ---------------------------------------------------------------------------
+  // Table Format Features
+  // ---------------------------------------------------------------------------
+
+  /** Whether the backend supports ACID transactions */
+  acidTransactions: boolean
+
+  /** Whether the backend supports partitioning */
+  partitioning: boolean
+
+  /** Whether the backend supports column statistics */
+  columnStatistics: boolean
+
+  /** Whether the backend supports merge-on-read */
+  mergeOnRead: boolean
+
+  /** Whether the backend supports copy-on-write */
+  copyOnWrite: boolean
+
+  // ---------------------------------------------------------------------------
+  // Interoperability
+  // ---------------------------------------------------------------------------
+
+  /** Whether the backend is compatible with external query engines */
+  externalQueryEngines: boolean
+
+  /** List of compatible query engines (e.g., ['duckdb', 'spark', 'snowflake']) */
+  compatibleEngines?: string[]
+}
+
+/**
+ * Get the capabilities of an entity backend
+ *
+ * This function introspects an EntityBackend instance to determine
+ * what features it supports at runtime.
+ *
+ * @example
+ * ```typescript
+ * const backend = await createIcebergBackend(config)
+ * const caps = getEntityBackendCapabilities(backend)
+ *
+ * if (caps.timeTravel) {
+ *   // Query historical data
+ *   const snapshot = await backend.snapshot?.('users', version)
+ * }
+ *
+ * if (caps.compact) {
+ *   // Run compaction
+ *   await backend.compact?.('users')
+ * }
+ * ```
+ */
+export function getEntityBackendCapabilities(backend: EntityBackend): EntityBackendCapabilities {
+  const type = backend.type
+
+  // Detect optional operations via method presence
+  const snapshots = typeof backend.snapshot === 'function' && typeof backend.listSnapshots === 'function'
+  const setSchema = typeof backend.setSchema === 'function'
+  const compact = typeof backend.compact === 'function'
+  const vacuum = typeof backend.vacuum === 'function'
+  const stats = typeof backend.stats === 'function'
+
+  // Backend-specific capability profiles
+  const profiles: Record<BackendType, Partial<EntityBackendCapabilities>> = {
+    native: {
+      acidTransactions: false,
+      partitioning: false,
+      columnStatistics: true,
+      mergeOnRead: false,
+      copyOnWrite: true,
+      externalQueryEngines: false,
+      compatibleEngines: [],
+    },
+    iceberg: {
+      acidTransactions: true,
+      partitioning: true,
+      columnStatistics: true,
+      mergeOnRead: true,
+      copyOnWrite: true,
+      externalQueryEngines: true,
+      compatibleEngines: ['duckdb', 'spark', 'snowflake', 'trino', 'presto', 'athena'],
+    },
+    delta: {
+      acidTransactions: true,
+      partitioning: true,
+      columnStatistics: true,
+      mergeOnRead: false,
+      copyOnWrite: true,
+      externalQueryEngines: true,
+      compatibleEngines: ['duckdb', 'spark', 'databricks'],
+    },
+  }
+
+  const profile = profiles[type] ?? profiles.native
+
+  return {
+    type,
+    timeTravel: backend.supportsTimeTravel,
+    schemaEvolution: backend.supportsSchemaEvolution,
+    readOnly: backend.readOnly,
+    snapshots,
+    setSchema,
+    compact,
+    vacuum,
+    stats,
+    ...profile,
+  } as EntityBackendCapabilities
+}
+
+/**
+ * Check if an entity backend supports a specific capability
+ *
+ * @example
+ * ```typescript
+ * if (hasEntityBackendCapability(backend, 'timeTravel')) {
+ *   // Use time-travel queries
+ * }
+ * ```
+ */
+export function hasEntityBackendCapability(
+  backend: EntityBackend,
+  capability: keyof Omit<EntityBackendCapabilities, 'type' | 'compatibleEngines'>
+): boolean {
+  const caps = getEntityBackendCapabilities(backend)
+  return caps[capability] === true
+}
+
+/**
+ * Check if an entity backend is compatible with a specific query engine
+ *
+ * @example
+ * ```typescript
+ * if (isCompatibleWithEngine(backend, 'duckdb')) {
+ *   // Use DuckDB to query the data
+ * }
+ * ```
+ */
+export function isCompatibleWithEngine(backend: EntityBackend, engine: string): boolean {
+  const caps = getEntityBackendCapabilities(backend)
+  return caps.compatibleEngines?.includes(engine.toLowerCase()) ?? false
+}
+
+// =============================================================================
 // Backend Errors
 // =============================================================================
 

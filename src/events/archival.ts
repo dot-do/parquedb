@@ -18,6 +18,7 @@ import type { EventSegment } from './types'
 import type { SegmentStorage } from './segment'
 import type { ManifestManager } from './manifest'
 import { logger as _logger } from '../utils/logger'
+import { DEFAULT_ARCHIVE_AFTER_DAYS, DEFAULT_RETENTION_DAYS } from '../constants'
 
 // =============================================================================
 // Types
@@ -105,8 +106,8 @@ export interface PurgeResult {
  * Default archival policy
  */
 const DEFAULT_POLICY: Required<ArchivalPolicy> = {
-  archiveAfterDays: 7,
-  retentionDays: 365,
+  archiveAfterDays: DEFAULT_ARCHIVE_AFTER_DAYS,
+  retentionDays: DEFAULT_RETENTION_DAYS,
 }
 
 /**

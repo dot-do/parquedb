@@ -1523,4 +1523,151 @@ describe('R2Backend Stale Upload Cleanup (Unit Tests)', () => {
     expect(cleaned).toBe(0)
     expect(backend.activeUploadCount).toBe(0)
   })
+
+  it('should enforce maxActiveUploads limit', async () => {
+    const { mockBucket } = createMockBucket()
+    const backend = new R2Backend(mockBucket, { maxActiveUploads: 2 })
+
+    // Start two uploads (at capacity)
+    await backend.startMultipartUpload('test/file1.bin')
+    await backend.startMultipartUpload('test/file2.bin')
+    expect(backend.activeUploadCount).toBe(2)
+
+    // Third should fail
+    await expect(backend.startMultipartUpload('test/file3.bin')).rejects.toThrow(
+      /Maximum active uploads limit reached/
+    )
+    expect(backend.activeUploadCount).toBe(2)
+  })
+
+  it('should allow new uploads after completing existing ones when at capacity', async () => {
+    const { mockBucket } = createMockBucket()
+    const backend = new R2Backend(mockBucket, { maxActiveUploads: 2 })
+
+    // Start two uploads (at capacity)
+    const uploadId1 = await backend.startMultipartUpload('test/file1.bin')
+    await backend.startMultipartUpload('test/file2.bin')
+    expect(backend.activeUploadCount).toBe(2)
+
+    // Complete one upload
+    await backend.completeMultipartUpload('test/file1.bin', uploadId1, [])
+    expect(backend.activeUploadCount).toBe(1)
+
+    // Now we can start a new one
+    await backend.startMultipartUpload('test/file3.bin')
+    expect(backend.activeUploadCount).toBe(2)
+  })
+
+  it('should allow new uploads after stale cleanup when at capacity', async () => {
+    const { mockBucket, abortedUploadIds } = createMockBucket()
+    const backend = new R2Backend(mockBucket, { maxActiveUploads: 2, multipartUploadTTL: 100 })
+
+    // Start two uploads (at capacity)
+    await backend.startMultipartUpload('test/stale1.bin')
+    await backend.startMultipartUpload('test/stale2.bin')
+    expect(backend.activeUploadCount).toBe(2)
+
+    // Advance time past the TTL
+    vi.advanceTimersByTime(150)
+
+    // Starting a new upload should first clean up the stale ones, then succeed
+    await backend.startMultipartUpload('test/fresh.bin')
+    expect(backend.activeUploadCount).toBe(1)
+    expect(abortedUploadIds).toHaveLength(2)
+  })
+
+  it('should use default maxActiveUploads of 100', async () => {
+    const { mockBucket } = createMockBucket()
+    const backend = new R2Backend(mockBucket)
+
+    // Start 100 uploads (should succeed)
+    for (let i = 0; i < 100; i++) {
+      await backend.startMultipartUpload(`test/file${i}.bin`)
+    }
+    expect(backend.activeUploadCount).toBe(100)
+
+    // 101st should fail
+    await expect(backend.startMultipartUpload('test/file100.bin')).rejects.toThrow(
+      /Maximum active uploads limit reached/
+    )
+  })
+
+  it('should clear all uploads with clearAllUploads', async () => {
+    const { mockBucket, abortedUploadIds } = createMockBucket()
+    const backend = new R2Backend(mockBucket)
+
+    // Start several uploads
+    await backend.startMultipartUpload('test/file1.bin')
+    await backend.startMultipartUpload('test/file2.bin')
+    await backend.startMultipartUpload('test/file3.bin')
+    expect(backend.activeUploadCount).toBe(3)
+
+    // Clear all
+    const cleared = backend.clearAllUploads()
+    expect(cleared).toBe(3)
+    expect(backend.activeUploadCount).toBe(0)
+    expect(abortedUploadIds).toHaveLength(3)
+  })
+
+  it('should return 0 when clearing empty uploads', () => {
+    const { mockBucket } = createMockBucket()
+    const backend = new R2Backend(mockBucket)
+
+    const cleared = backend.clearAllUploads()
+    expect(cleared).toBe(0)
+    expect(backend.activeUploadCount).toBe(0)
+  })
+
+  it('should handle abort errors gracefully during clearAllUploads', async () => {
+    let uploadCounter = 0
+    const mockBucket: R2Bucket = {
+      async get() { return null },
+      async head() { return null },
+      async put() { return null },
+      async delete() {},
+      async list() {
+        return { objects: [], truncated: false, delimitedPrefixes: [] }
+      },
+      async createMultipartUpload(key: string) {
+        const uploadId = `upload-${++uploadCounter}`
+        return {
+          key,
+          uploadId,
+          async uploadPart(partNumber: number) {
+            return { partNumber, etag: `etag-${partNumber}` }
+          },
+          async abort() {
+            throw new Error('R2 abort failed')
+          },
+          async complete() {
+            return {
+              key,
+              version: 'v1',
+              size: 100,
+              etag: 'final-etag',
+              httpEtag: '"final-etag"',
+              uploaded: new Date(),
+              storageClass: 'Standard' as const,
+              checksums: {},
+              writeHttpMetadata: () => {},
+            }
+          },
+        }
+      },
+      resumeMultipartUpload() {
+        throw new Error('not implemented')
+      },
+    }
+
+    const backend = new R2Backend(mockBucket)
+
+    await backend.startMultipartUpload('test/file1.bin')
+    await backend.startMultipartUpload('test/file2.bin')
+    expect(backend.activeUploadCount).toBe(2)
+
+    // Should not throw even though abort fails
+    const cleared = backend.clearAllUploads()
+    expect(cleared).toBe(2)
+    expect(backend.activeUploadCount).toBe(0)
+  })
 })

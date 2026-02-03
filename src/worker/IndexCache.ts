@@ -21,6 +21,7 @@ import type { IndexDefinition, FTSSearchResult } from '../indexes/types'
 import { FTSIndex } from '../indexes/fts/search'
 import { logger } from '../utils/logger'
 import { safeJsonParse, isRecord } from '../utils/json-validation'
+import { DEFAULT_INDEX_CACHE_MAX_BYTES, DEFAULT_FTS_SEARCH_LIMIT } from '../constants'
 
 // =============================================================================
 // Types
@@ -121,7 +122,7 @@ export class IndexCache {
     private storage: IndexStorageAdapter,
     options?: { maxCacheBytes?: number }
   ) {
-    this.maxCacheBytes = options?.maxCacheBytes ?? 50 * 1024 * 1024
+    this.maxCacheBytes = options?.maxCacheBytes ?? DEFAULT_INDEX_CACHE_MAX_BYTES
   }
 
   // ===========================================================================
@@ -311,7 +312,7 @@ export class IndexCache {
     const index = await this.loadFTSIndex(dataset, entry)
     logger.debug(`[FTS] Index loaded: ready=${index.ready}, docCount=${index.documentCount}, vocabSize=${index.vocabularySize}`)
     const results = index.search(condition.$search, {
-      limit: options?.limit ?? 100,
+      limit: options?.limit ?? DEFAULT_FTS_SEARCH_LIMIT,
     })
     logger.debug(`[FTS] Search results: ${results.length} matches`)
     return results

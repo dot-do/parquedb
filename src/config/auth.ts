@@ -17,6 +17,8 @@ let _actorResolver: ActorResolver | null = null
 
 /**
  * Set the global actor resolver
+ * @param resolver - The actor resolver function to set
+ * @returns void
  */
 export function setActorResolver(resolver: ActorResolver): void {
   _actorResolver = resolver

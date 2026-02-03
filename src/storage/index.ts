@@ -28,6 +28,8 @@ export type {
   MultipartUpload,
   UploadedPart,
   Transaction,
+  // Capability types
+  StorageCapabilities,
 } from '../types/storage'
 
 // Re-export type guards
@@ -35,6 +37,12 @@ export {
   isStreamable,
   isMultipart,
   isTransactional,
+} from '../types/storage'
+
+// Re-export capability introspection
+export {
+  getStorageCapabilities,
+  hasStorageCapability,
 } from '../types/storage'
 
 // Re-export storage paths

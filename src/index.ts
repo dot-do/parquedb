@@ -79,9 +79,15 @@ export {
   R2OperationError,
   R2ETagMismatchError,
   R2NotFoundError,
+  // Capability introspection
+  getStorageCapabilities,
+  hasStorageCapability,
+  isStreamable,
+  isMultipart,
+  isTransactional,
   // FsxBackend,
 } from './storage'
-export type { R2BackendOptions } from './storage'
+export type { R2BackendOptions, StorageCapabilities } from './storage'
 
 // =============================================================================
 // Schema
@@ -560,6 +566,10 @@ export {
   IcebergBackend,
   createIcebergBackend,
   createR2IcebergBackend,
+  // Capability introspection
+  getEntityBackendCapabilities,
+  hasEntityBackendCapability,
+  isCompatibleWithEngine,
   // Types
   type EntityBackend,
   type BackendType,
@@ -577,6 +587,7 @@ export {
   type VacuumOptions,
   type VacuumResult,
   type BackendStats,
+  type EntityBackendCapabilities,
 } from './backends'
 
 // =============================================================================

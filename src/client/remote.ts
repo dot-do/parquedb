@@ -195,10 +195,8 @@ class RemoteCollectionImpl<T = Record<string, unknown>> implements RemoteCollect
 
       // For now, return empty results
       // Full implementation would use hyparquet to read and filter
-      console.warn('RemoteCollection.find: Full Parquet reading not yet implemented')
       return { items: [], total: 0, hasMore: false }
-    } catch (error) {
-      console.error(`Failed to read collection ${this.namespace}:`, error)
+    } catch {
       return { items: [], total: 0, hasMore: false }
     }
   }

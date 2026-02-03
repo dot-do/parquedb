@@ -1236,7 +1236,15 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Legacy validation method for backward compatibility
+   * Legacy validation method for backward compatibility.
+   *
+   * This method performs field-level validation using direct schema inspection
+   * rather than the SchemaValidator class. It checks for required fields and
+   * validates field types according to the schema definition.
+   *
+   * @param _namespace - The namespace being validated (unused, for signature compatibility)
+   * @param data - The create input data to validate against the schema
+   * @throws {ValidationError} When a required field is missing or type mismatch occurs
    */
   private legacyValidateAgainstSchema(_namespace: string, data: CreateInput): void {
     const typeName = data.$type
@@ -1267,7 +1275,15 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Check if a field is required based on its definition
+   * Check if a field is required based on its schema definition.
+   *
+   * A field is considered required if:
+   * - The string definition contains "!" (e.g., "string!")
+   * - The object definition has `required: true`
+   * - The object definition has a type string containing "!"
+   *
+   * @param fieldDef - The field definition from the schema (string or object)
+   * @returns True if the field is required, false otherwise
    */
   private isFieldRequired(fieldDef: unknown): boolean {
     if (typeof fieldDef === 'string') {
@@ -1282,7 +1298,14 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Check if a field has a default value
+   * Check if a field has a default value defined in its schema.
+   *
+   * A field has a default if:
+   * - The string definition contains "=" (e.g., "string = 'default'")
+   * - The object definition has a `default` property
+   *
+   * @param fieldDef - The field definition from the schema (string or object)
+   * @returns True if the field has a default value, false otherwise
    */
   private hasDefault(fieldDef: unknown): boolean {
     if (typeof fieldDef === 'string') {
@@ -1295,7 +1318,17 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Validate field value against its type definition
+   * Validate a field value against its type definition from the schema.
+   *
+   * Performs type checking for primitive types (string, number, boolean, date)
+   * and validates relationship reference formats. Skips validation for
+   * relationship-type fields that use the "->" or "<-" syntax.
+   *
+   * @param fieldName - The name of the field being validated
+   * @param value - The actual value to validate
+   * @param fieldDef - The field definition from the schema
+   * @param typeName - The entity type name (for error messages)
+   * @throws {ValidationError} When the value type doesn't match the expected type
    */
   private validateFieldType(fieldName: string, value: unknown, fieldDef: unknown, typeName: string): void {
     let expectedType: string | undefined
@@ -1418,7 +1451,16 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Apply default values from schema
+   * Apply default values from the schema to create input data.
+   *
+   * Iterates through all fields defined in the schema for the given type
+   * and applies default values for any fields not already present in the data.
+   * Defaults can be specified as:
+   * - String format: "type = defaultValue" (e.g., "number = 0")
+   * - Object format: { type: "...", default: value }
+   *
+   * @param data - The create input data to augment with defaults
+   * @returns A new object with default values applied where needed
    */
   private applySchemaDefaults<T>(data: CreateInput<T>): CreateInput<T> {
     const typeName = data.$type
@@ -1650,8 +1692,25 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Hydrate reverse relationship fields for an entity
-   * This handles both schema-defined reverse relationships and dynamic lookups.
+   * Hydrate reverse relationship fields for an entity.
+   *
+   * This method populates relationship fields with actual entity references,
+   * handling both schema-defined reverse relationships (using "<-" syntax)
+   * and dynamic lookups for relationships not defined in the schema.
+   *
+   * For schema-defined reverse relationships, it:
+   * 1. Parses the relationship definition (e.g., "<- Post.author[]")
+   * 2. Uses the reverse relationship index for O(1) lookup
+   * 3. Builds a RelSet with $count, entity links, and optional $next cursor
+   *
+   * For dynamic relationships, it searches across all fields in the
+   * related namespace that reference this entity.
+   *
+   * @param entity - The entity to hydrate with relationship data
+   * @param fullId - The full entity ID (e.g., "users/123")
+   * @param hydrateFields - Array of field names to hydrate
+   * @param maxInbound - Maximum number of inbound references to include per field
+   * @returns The entity with hydrated relationship fields
    */
   private hydrateEntity<T>(
     entity: Entity<T>,
@@ -1765,8 +1824,22 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Reconstruct entity state at a specific point in time
-   * This method also tracks snapshot usage stats for optimization metrics.
+   * Reconstruct entity state at a specific point in time using event sourcing.
+   *
+   * This method implements time-travel queries by replaying events from the
+   * event log up to the specified timestamp. It uses an optimization strategy
+   * that leverages snapshots when available to minimize event replay.
+   *
+   * Algorithm:
+   * 1. Retrieve all events for the entity, sorted by timestamp and ID
+   * 2. Find the target event index (last event at or before asOf time)
+   * 3. If a snapshot exists before the target, use it as the starting point
+   * 4. Replay events from the starting point to the target
+   * 5. Track query statistics for snapshot optimization metrics
+   *
+   * @param fullId - The full entity ID (e.g., "namespace/entityId")
+   * @param asOf - The point in time to reconstruct the entity state
+   * @returns The entity state at the specified time, or null if it didn't exist
    */
   private reconstructEntityAtTime(fullId: string, asOf: Date): Entity | null {
     const [ns, ...idParts] = fullId.split('/')
@@ -1868,7 +1941,19 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Flush pending events to storage
+   * Flush pending events to storage in a transactional manner.
+   *
+   * This method writes all buffered events to persistent storage using
+   * a three-step transactional approach:
+   * 1. Write to the main event log
+   * 2. Write entity data for each affected namespace
+   * 3. Write namespace-specific event logs
+   *
+   * If any write fails, the method performs a rollback by:
+   * - Removing events from the in-memory event store
+   * - Restoring entity states to their pre-operation values
+   *
+   * @throws {Error} Propagates storage errors after rollback completes
    */
   private async flushEvents(): Promise<void> {
     if (this.pendingEvents.length === 0) return
@@ -1941,8 +2026,19 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Schedule a flush of pending events (used for batching)
-   * Returns a promise that resolves when the flush is complete
+   * Schedule a batched flush of pending events using microtask timing.
+   *
+   * This method enables efficient batching of multiple synchronous operations
+   * by deferring the actual flush to a microtask. When multiple operations
+   * occur in the same synchronous execution context, they share a single
+   * flush operation.
+   *
+   * Behavior:
+   * - Returns immediately if inside a transaction (flush deferred to commit)
+   * - Returns existing promise if a flush is already scheduled
+   * - Otherwise, schedules a new flush via Promise.resolve().then()
+   *
+   * @returns A promise that resolves when the flush completes
    */
   private scheduleFlush(): Promise<void> {
     // Don't schedule if in a transaction - wait for commit
@@ -2031,7 +2127,18 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Check and perform event log rotation if limits are exceeded
+   * Check and perform event log rotation if configured limits are exceeded.
+   *
+   * This method implements automatic event log maintenance based on two criteria:
+   * 1. Age-based rotation: Events older than `maxAge` are rotated
+   * 2. Count-based rotation: Events exceeding `maxEvents` limit are rotated
+   *
+   * Rotated events are either:
+   * - Archived to the archived events store (if `archiveOnRotation` is true)
+   * - Discarded (if `archiveOnRotation` is false)
+   *
+   * The method modifies the events array in place to maintain references
+   * held by other components.
    */
   private maybeRotateEventLog(): void {
     const { maxEvents, maxAge, archiveOnRotation } = this.eventLogConfig
@@ -2683,8 +2790,19 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Extract non-operator fields from filter to include in created documents
-   * Helper for upsert operations
+   * Extract non-operator fields from a filter for use in document creation.
+   *
+   * When performing an upsert that results in an insert, the filter conditions
+   * often contain field values that should be included in the new document.
+   * This method extracts those simple equality conditions (non-operator fields)
+   * from the filter.
+   *
+   * Example:
+   * - Input: { name: "Alice", age: { $gt: 18 }, status: "active" }
+   * - Output: { name: "Alice", status: "active" }
+   *
+   * @param filter - The MongoDB-style filter object
+   * @returns An object containing only the non-operator field values
    */
   private extractFilterFields(filter: Filter): Record<string, unknown> {
     const filterFields: Record<string, unknown> = {}
@@ -2698,8 +2816,22 @@ export class ParqueDBImpl {
   }
 
   /**
-   * Build create data for upsert insert operations
-   * Combines filter fields, $set, $setOnInsert, and applies other operators
+   * Build create data for upsert insert operations.
+   *
+   * When an upsert operation results in an insert (no matching document found),
+   * this method constructs the initial document data by combining:
+   * 1. Filter fields (extracted equality conditions)
+   * 2. $set operator values
+   * 3. $setOnInsert operator values (only applied on insert)
+   * 4. Processed results of other update operators:
+   *    - $inc: Starts from 0 and applies increment
+   *    - $push: Creates array with the pushed element(s)
+   *    - $addToSet: Creates array with the element
+   *    - $currentDate: Sets to current timestamp
+   *
+   * @param filterFields - Field values extracted from the filter
+   * @param update - The update input containing operators
+   * @returns The constructed document data for creation
    */
   private buildUpsertCreateData<T = Record<string, unknown>>(
     filterFields: Record<string, unknown>,

@@ -25,14 +25,35 @@ import type {
 } from './types/r2'
 import { validateRange, InvalidRangeError } from './validation'
 import { toError, normalizePrefix, applyPrefix, stripPrefix } from './utils'
-import { MIN_PART_SIZE, DEFAULT_PART_SIZE, MAX_PARTS, DEFAULT_MULTIPART_UPLOAD_TTL } from '../constants'
+import {
+  MIN_PART_SIZE,
+  DEFAULT_PART_SIZE,
+  MAX_PARTS,
+  DEFAULT_MULTIPART_UPLOAD_TTL,
+  DEFAULT_MAX_ACTIVE_UPLOADS,
+  R2_APPEND_MAX_RETRIES,
+  R2_APPEND_BASE_DELAY_MS,
+} from '../constants'
+import {
+  NotFoundError,
+  ETagMismatchError,
+  OperationError,
+  StorageErrorCode,
+} from './errors'
+
+// =============================================================================
+// Backward Compatibility Aliases
+// =============================================================================
+// These classes extend the unified error types but maintain the legacy class names
+// for backward compatibility with existing code that catches these specific types.
 
 /**
  * Error thrown when an R2 operation fails
+ *
+ * @deprecated Use OperationError from './errors' instead.
+ * This class is maintained for backward compatibility.
  */
-export class R2OperationError extends Error {
-  override readonly name = 'R2OperationError'
-  readonly operation: string
+export class R2OperationError extends OperationError {
   readonly key?: string
   readonly underlyingCause?: Error
 
@@ -42,9 +63,10 @@ export class R2OperationError extends Error {
     key?: string,
     cause?: Error
   ) {
-    super(message)
+    super(message, operation, key, cause)
     Object.setPrototypeOf(this, R2OperationError.prototype)
-    this.operation = operation
+    // Override the name after super() call to preserve backend-specific name
+    Object.defineProperty(this, 'name', { value: 'R2OperationError', writable: false, enumerable: true })
     this.key = key
     this.underlyingCause = cause
   }
@@ -52,27 +74,41 @@ export class R2OperationError extends Error {
 
 /**
  * Error thrown when a conditional write fails due to ETag mismatch
+ *
+ * @deprecated Use ETagMismatchError from './errors' instead.
+ * This class is maintained for backward compatibility.
  */
-export class R2ETagMismatchError extends Error {
-  override readonly name = 'R2ETagMismatchError'
+export class R2ETagMismatchError extends ETagMismatchError {
+  readonly key: string
+
   constructor(
-    public readonly key: string,
-    public readonly expectedEtag: string | null,
-    public readonly actualEtag: string | null
+    key: string,
+    expectedEtag: string | null,
+    actualEtag: string | null
   ) {
-    super(`ETag mismatch for ${key}: expected ${expectedEtag}, got ${actualEtag}`)
+    super(key, expectedEtag, actualEtag)
     Object.setPrototypeOf(this, R2ETagMismatchError.prototype)
+    // Override the name after super() call to preserve backend-specific name
+    Object.defineProperty(this, 'name', { value: 'R2ETagMismatchError', writable: false, enumerable: true })
+    this.key = key
   }
 }
 
 /**
  * Error thrown when an object is not found
+ *
+ * @deprecated Use NotFoundError from './errors' instead.
+ * This class is maintained for backward compatibility.
  */
-export class R2NotFoundError extends Error {
-  override readonly name = 'R2NotFoundError'
-  constructor(public readonly key: string) {
-    super(`Object not found: ${key}`)
+export class R2NotFoundError extends NotFoundError {
+  readonly key: string
+
+  constructor(key: string, cause?: Error) {
+    super(key, cause)
     Object.setPrototypeOf(this, R2NotFoundError.prototype)
+    // Override the name after super() call to preserve backend-specific name
+    Object.defineProperty(this, 'name', { value: 'R2NotFoundError', writable: false, enumerable: true })
+    this.key = key
   }
 }
 
@@ -84,6 +120,8 @@ export interface R2BackendOptions {
   prefix?: string
   /** TTL for multipart uploads in milliseconds (default: 30 minutes). Uploads older than this are cleaned up automatically. */
   multipartUploadTTL?: number
+  /** Maximum number of concurrent multipart uploads to track (default: 100). Prevents unbounded memory growth. */
+  maxActiveUploads?: number
 }
 
 /**
@@ -94,11 +132,13 @@ export class R2Backend implements StorageBackend, MultipartBackend {
   private readonly bucket: R2Bucket
   private readonly prefix: string
   private readonly multipartUploadTTL: number
+  private readonly maxActiveUploads: number
 
   constructor(bucket: R2Bucket, options?: R2BackendOptions) {
     this.bucket = bucket
     this.prefix = normalizePrefix(options?.prefix)
     this.multipartUploadTTL = options?.multipartUploadTTL ?? DEFAULT_MULTIPART_UPLOAD_TTL
+    this.maxActiveUploads = options?.maxActiveUploads ?? DEFAULT_MAX_ACTIVE_UPLOADS
   }
 
   /**
@@ -364,10 +404,8 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     const key = this.withPrefix(path)
     // Increased retry count to handle high concurrency scenarios
     // With exponential backoff, this allows for up to ~1.5 seconds of retries
-    const MAX_RETRIES = 10
-    const BASE_DELAY_MS = 10
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt < R2_APPEND_MAX_RETRIES; attempt++) {
       try {
         const existing = await this.bucket.get(key, undefined)
 
@@ -421,9 +459,9 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         }
 
         // For transient errors (network issues, etc.), retry if we have attempts left
-        if (attempt < MAX_RETRIES - 1) {
+        if (attempt < R2_APPEND_MAX_RETRIES - 1) {
           // Exponential backoff with jitter
-          const delay = BASE_DELAY_MS * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5)
+          const delay = R2_APPEND_BASE_DELAY_MS * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5)
           await new Promise(resolve => setTimeout(resolve, delay))
           continue
         }
@@ -678,12 +716,22 @@ export class R2Backend implements StorageBackend, MultipartBackend {
    *
    * @param path - The object path/key
    * @returns The upload ID for this multipart upload session
+   * @throws R2OperationError if max active uploads limit is reached after cleanup
    */
   async startMultipartUpload(path: string): Promise<string> {
     const key = this.withPrefix(path)
 
     // Lazily clean up stale uploads before creating a new one
     this.cleanupStaleUploads()
+
+    // Check if we're at capacity after cleanup
+    if (this.activeUploads.size >= this.maxActiveUploads) {
+      throw new R2OperationError(
+        `Maximum active uploads limit reached (${this.maxActiveUploads}). Complete or abort existing uploads first.`,
+        'startMultipartUpload',
+        path
+      )
+    }
 
     try {
       const r2Upload = await this.bucket.createMultipartUpload(key, undefined)
@@ -844,6 +892,22 @@ export class R2Backend implements StorageBackend, MultipartBackend {
    */
   get activeUploadCount(): number {
     return this.activeUploads.size
+  }
+
+  /**
+   * Clear all tracked multipart uploads, aborting them on the server.
+   * Useful for graceful shutdown or testing cleanup.
+   *
+   * @returns The number of uploads that were cleared
+   */
+  clearAllUploads(): number {
+    const count = this.activeUploads.size
+    for (const [uploadId, entry] of this.activeUploads) {
+      // Best-effort abort on the server side; fire-and-forget
+      entry.upload.abort().catch(() => {})
+      this.activeUploads.delete(uploadId)
+    }
+    return count
   }
 
   // ===========================================================================

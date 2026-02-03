@@ -8,10 +8,15 @@
 // =============================================================================
 
 /**
- * Storage backend interface
- * Implementations: FsBackend, FsxBackend, R2Backend, S3Backend, MemoryBackend
+ * Read-only storage backend interface
+ *
+ * Use this interface for adapters that only need read access (e.g., CDN adapters,
+ * read replicas, query executors). This avoids the need for stub implementations
+ * of write methods.
+ *
+ * Implementations: CdnR2StorageAdapter, read-only wrappers
  */
-export interface StorageBackend {
+export interface ReadonlyStorageBackend {
   /** Backend type identifier */
   readonly type: string
 
@@ -56,7 +61,13 @@ export interface StorageBackend {
    * List files with prefix
    */
   list(prefix: string, options?: ListOptions): Promise<ListResult>
+}
 
+/**
+ * Storage backend interface
+ * Implementations: FsBackend, FsxBackend, R2Backend, S3Backend, MemoryBackend
+ */
+export interface StorageBackend extends ReadonlyStorageBackend {
   // =========================================================================
   // Write Operations
   // =========================================================================
@@ -337,19 +348,259 @@ export interface Transaction {
 // Type Guards
 // =============================================================================
 
+/**
+ * Check if a backend is read-only (implements ReadonlyStorageBackend but not full StorageBackend)
+ *
+ * Use this to detect CDN adapters and other read-only storage implementations.
+ */
+export function isReadonlyBackend(backend: ReadonlyStorageBackend): boolean {
+  return (
+    typeof (backend as StorageBackend).write !== 'function' ||
+    typeof (backend as StorageBackend).delete !== 'function'
+  )
+}
+
+/**
+ * Check if a backend supports write operations (implements full StorageBackend)
+ */
+export function isWritableBackend(backend: ReadonlyStorageBackend): backend is StorageBackend {
+  return (
+    typeof (backend as StorageBackend).write === 'function' &&
+    typeof (backend as StorageBackend).delete === 'function' &&
+    typeof (backend as StorageBackend).mkdir === 'function'
+  )
+}
+
 /** Check if backend supports streaming */
 export function isStreamable(backend: StorageBackend): backend is StreamableBackend {
-  return 'createReadStream' in backend && 'createWriteStream' in backend
+  return (
+    typeof (backend as StreamableBackend).createReadStream === 'function' &&
+    typeof (backend as StreamableBackend).createWriteStream === 'function'
+  )
 }
 
 /** Check if backend supports multipart uploads */
 export function isMultipart(backend: StorageBackend): backend is MultipartBackend {
-  return 'createMultipartUpload' in backend
+  return typeof (backend as MultipartBackend).createMultipartUpload === 'function'
 }
 
 /** Check if backend supports transactions */
 export function isTransactional(backend: StorageBackend): backend is TransactionalBackend {
-  return 'beginTransaction' in backend
+  return typeof (backend as TransactionalBackend).beginTransaction === 'function'
+}
+
+// =============================================================================
+// Storage Capabilities
+// =============================================================================
+
+/**
+ * Storage backend capabilities
+ *
+ * Describes what features a storage backend supports at runtime.
+ * Use getStorageCapabilities() to query a backend's capabilities.
+ */
+export interface StorageCapabilities {
+  /** Backend type identifier (e.g., 'memory', 'r2', 'fs', 'fsx') */
+  type: string
+
+  // ---------------------------------------------------------------------------
+  // Core Capabilities
+  // ---------------------------------------------------------------------------
+
+  /** Whether the backend supports atomic writes */
+  atomicWrites: boolean
+
+  /** Whether the backend supports conditional writes (ETag-based) */
+  conditionalWrites: boolean
+
+  /** Whether the backend supports byte-range reads */
+  rangeReads: boolean
+
+  /** Whether the backend supports append operations */
+  append: boolean
+
+  // ---------------------------------------------------------------------------
+  // Extended Capabilities
+  // ---------------------------------------------------------------------------
+
+  /** Whether the backend supports streaming reads/writes */
+  streaming: boolean
+
+  /** Whether the backend supports multipart uploads for large files */
+  multipart: boolean
+
+  /** Whether the backend supports transactions */
+  transactions: boolean
+
+  // ---------------------------------------------------------------------------
+  // Directory Operations
+  // ---------------------------------------------------------------------------
+
+  /** Whether the backend has real directory support (vs virtual/prefix-based) */
+  realDirectories: boolean
+
+  /** Whether mkdir is required before writing files */
+  requiresMkdir: boolean
+
+  // ---------------------------------------------------------------------------
+  // Performance Characteristics
+  // ---------------------------------------------------------------------------
+
+  /** Whether list operations are efficient (vs scanning all keys) */
+  efficientList: boolean
+
+  /** Whether stat operations are efficient (single operation vs read) */
+  efficientStat: boolean
+
+  /** Maximum file size supported in bytes (undefined = unlimited) */
+  maxFileSize?: number
+
+  /** Maximum concurrent operations recommended (undefined = unlimited) */
+  maxConcurrency?: number
+}
+
+/**
+ * Get the capabilities of a storage backend
+ *
+ * This function introspects a StorageBackend instance to determine
+ * what features it supports at runtime.
+ *
+ * @example
+ * ```typescript
+ * const backend = new R2Backend(bucket)
+ * const caps = getStorageCapabilities(backend)
+ *
+ * if (caps.multipart) {
+ *   // Use multipart upload for large files
+ * }
+ *
+ * if (caps.conditionalWrites) {
+ *   // Use optimistic concurrency control
+ * }
+ * ```
+ */
+export function getStorageCapabilities(backend: StorageBackend): StorageCapabilities {
+  const type = backend.type
+
+  // Detect extended capabilities via type guards
+  const streaming = isStreamable(backend)
+  const multipart = isMultipart(backend)
+  const transactions = isTransactional(backend)
+
+  // Backend-specific capability profiles
+  const profiles: Record<string, Partial<StorageCapabilities>> = {
+    memory: {
+      atomicWrites: true,
+      conditionalWrites: true,
+      rangeReads: true,
+      append: true,
+      realDirectories: true,
+      requiresMkdir: false,
+      efficientList: true,
+      efficientStat: true,
+    },
+    fs: {
+      atomicWrites: true,
+      conditionalWrites: true,
+      rangeReads: true,
+      append: true,
+      realDirectories: true,
+      requiresMkdir: true,
+      efficientList: true,
+      efficientStat: true,
+    },
+    fsx: {
+      atomicWrites: true,
+      conditionalWrites: true,
+      rangeReads: true,
+      append: true,
+      realDirectories: false,
+      requiresMkdir: false,
+      efficientList: true,
+      efficientStat: true,
+    },
+    r2: {
+      atomicWrites: true,
+      conditionalWrites: true,
+      rangeReads: true,
+      append: true, // via read-modify-write
+      realDirectories: false,
+      requiresMkdir: false,
+      efficientList: true,
+      efficientStat: true,
+      maxFileSize: 5 * 1024 * 1024 * 1024 * 1024, // 5TB
+    },
+    's3': {
+      atomicWrites: true,
+      conditionalWrites: true,
+      rangeReads: true,
+      append: true, // via read-modify-write
+      realDirectories: false,
+      requiresMkdir: false,
+      efficientList: true,
+      efficientStat: true,
+      maxFileSize: 5 * 1024 * 1024 * 1024 * 1024, // 5TB
+    },
+    'do-sqlite': {
+      atomicWrites: true,
+      conditionalWrites: true,
+      rangeReads: true,
+      append: true,
+      realDirectories: false,
+      requiresMkdir: false,
+      efficientList: true,
+      efficientStat: true,
+      maxFileSize: 128 * 1024 * 1024, // 128MB per DO
+    },
+    remote: {
+      atomicWrites: false, // read-only
+      conditionalWrites: false,
+      rangeReads: true,
+      append: false,
+      realDirectories: false,
+      requiresMkdir: false,
+      efficientList: true,
+      efficientStat: true,
+    },
+  }
+
+  // Get profile for this backend type, or use sensible defaults
+  const profile = profiles[type] ?? {
+    atomicWrites: true,
+    conditionalWrites: true,
+    rangeReads: true,
+    append: true,
+    realDirectories: false,
+    requiresMkdir: false,
+    efficientList: true,
+    efficientStat: true,
+  }
+
+  return {
+    type,
+    streaming,
+    multipart,
+    transactions,
+    ...profile,
+  } as StorageCapabilities
+}
+
+/**
+ * Check if a backend supports a specific capability
+ *
+ * @example
+ * ```typescript
+ * if (hasCapability(backend, 'multipart')) {
+ *   // Use multipart uploads
+ * }
+ * ```
+ */
+export function hasStorageCapability(
+  backend: StorageBackend,
+  capability: keyof Omit<StorageCapabilities, 'type' | 'maxFileSize' | 'maxConcurrency'>
+): boolean {
+  const caps = getStorageCapabilities(backend)
+  return caps[capability] === true
 }
 
 // =============================================================================

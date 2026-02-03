@@ -119,6 +119,8 @@ interface CacheEntry {
   timestamp: number
 }
 
+import { DEFAULT_EMBEDDING_CACHE_SIZE, DEFAULT_EMBEDDING_CACHE_TTL } from '../constants'
+
 /**
  * LRU cache for query embeddings
  *
@@ -131,8 +133,8 @@ export class QueryEmbeddingCache {
   private readonly ttlMs: number
 
   constructor(options: QueryEmbeddingCacheOptions = {}) {
-    this.maxSize = options.maxSize ?? 1000
-    this.ttlMs = options.ttlMs ?? 5 * 60 * 1000 // 5 minutes default
+    this.maxSize = options.maxSize ?? DEFAULT_EMBEDDING_CACHE_SIZE
+    this.ttlMs = options.ttlMs ?? DEFAULT_EMBEDDING_CACHE_TTL
   }
 
   /**

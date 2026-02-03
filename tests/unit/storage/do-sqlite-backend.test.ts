@@ -17,6 +17,16 @@ import {
   type SqlStorage,
   type SqlStatement,
 } from '../../../src/storage/DOSqliteBackend'
+import {
+  StorageError,
+  NotFoundError,
+  ETagMismatchError,
+  AlreadyExistsError,
+  isStorageError,
+  isNotFoundError,
+  isETagMismatchError,
+  isAlreadyExistsError,
+} from '../../../src/storage/errors'
 
 // =============================================================================
 // Mock SqlStorage Implementation
@@ -701,6 +711,50 @@ describe('DOSqliteBackend', () => {
       expect(err.path).toBe('test/path.txt')
       expect(err.message).toContain('test/path.txt')
       expect(err).toBeInstanceOf(Error)
+    })
+
+    // Test unified error hierarchy
+    describe('unified error inheritance', () => {
+      it('DOSqliteNotFoundError should extend NotFoundError and StorageError', () => {
+        const err = new DOSqliteNotFoundError('test/path.txt')
+        expect(err).toBeInstanceOf(NotFoundError)
+        expect(err).toBeInstanceOf(StorageError)
+        expect(err).toBeInstanceOf(Error)
+      })
+
+      it('DOSqliteETagMismatchError should extend ETagMismatchError and StorageError', () => {
+        const err = new DOSqliteETagMismatchError('test/path.txt', 'expected', 'actual')
+        expect(err).toBeInstanceOf(ETagMismatchError)
+        expect(err).toBeInstanceOf(StorageError)
+        expect(err).toBeInstanceOf(Error)
+      })
+
+      it('DOSqliteFileExistsError should extend AlreadyExistsError and StorageError', () => {
+        const err = new DOSqliteFileExistsError('test/path.txt')
+        expect(err).toBeInstanceOf(AlreadyExistsError)
+        expect(err).toBeInstanceOf(StorageError)
+        expect(err).toBeInstanceOf(Error)
+      })
+
+      it('unified type guards should work with DOSqlite errors', () => {
+        const notFoundErr = new DOSqliteNotFoundError('test.txt')
+        expect(isStorageError(notFoundErr)).toBe(true)
+        expect(isNotFoundError(notFoundErr)).toBe(true)
+        expect(isETagMismatchError(notFoundErr)).toBe(false)
+        expect(isAlreadyExistsError(notFoundErr)).toBe(false)
+
+        const mismatchErr = new DOSqliteETagMismatchError('test.txt', 'a', 'b')
+        expect(isStorageError(mismatchErr)).toBe(true)
+        expect(isNotFoundError(mismatchErr)).toBe(false)
+        expect(isETagMismatchError(mismatchErr)).toBe(true)
+        expect(isAlreadyExistsError(mismatchErr)).toBe(false)
+
+        const existsErr = new DOSqliteFileExistsError('test.txt')
+        expect(isStorageError(existsErr)).toBe(true)
+        expect(isNotFoundError(existsErr)).toBe(false)
+        expect(isETagMismatchError(existsErr)).toBe(false)
+        expect(isAlreadyExistsError(existsErr)).toBe(true)
+      })
     })
   })
 

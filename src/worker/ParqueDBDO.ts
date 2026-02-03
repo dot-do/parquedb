@@ -34,6 +34,10 @@ import type {
   UpdateInput,
   CreateInput,
   Variant,
+  CreateOptions,
+  UpdateOptions,
+  DeleteOptions,
+  DeleteResult,
 } from '../types'
 import { entityTarget, relTarget } from '../types'
 import type { Env, FlushConfig } from '../types/worker'
@@ -101,32 +105,34 @@ function generateULID(): string {
 // Types
 // =============================================================================
 
-/** Options for create operation */
-export interface DOCreateOptions {
-  /** Actor performing the operation */
+/**
+ * DO-specific create options.
+ * Extends the standard CreateOptions with additional DO-specific behavior.
+ * @deprecated Use CreateOptions from '../types' directly for consistency
+ */
+export interface DOCreateOptions extends Omit<CreateOptions, 'actor'> {
+  /** Actor performing the operation (string in DO context) */
   actor?: string
-  /** Skip validation */
-  skipValidation?: boolean
 }
 
-/** Options for update operation */
-export interface DOUpdateOptions {
-  /** Actor performing the operation */
+/**
+ * DO-specific update options.
+ * Extends the standard UpdateOptions with additional DO-specific behavior.
+ * @deprecated Use UpdateOptions from '../types' directly for consistency
+ */
+export interface DOUpdateOptions extends Omit<UpdateOptions, 'actor' | 'returnDocument'> {
+  /** Actor performing the operation (string in DO context) */
   actor?: string
-  /** Expected version for optimistic concurrency */
-  expectedVersion?: number
-  /** Create if not exists */
-  upsert?: boolean
 }
 
-/** Options for delete operation */
-export interface DODeleteOptions {
-  /** Actor performing the operation */
+/**
+ * DO-specific delete options.
+ * Extends the standard DeleteOptions with additional DO-specific behavior.
+ * @deprecated Use DeleteOptions from '../types' directly for consistency
+ */
+export interface DODeleteOptions extends Omit<DeleteOptions, 'actor'> {
+  /** Actor performing the operation (string in DO context) */
   actor?: string
-  /** Hard delete (permanent) */
-  hard?: boolean
-  /** Expected version for optimistic concurrency */
-  expectedVersion?: number
 }
 
 /** Options for link operation */
@@ -995,13 +1001,13 @@ export class ParqueDBDO extends DurableObject<Env> {
    * @param ns - Namespace
    * @param id - Entity ID (without namespace prefix)
    * @param options - Delete options
-   * @returns True if deleted
+   * @returns DeleteResult with deletedCount (consistent with local ParqueDB API)
    */
   async delete(
     ns: string,
     id: string,
     options: DODeleteOptions = {}
-  ): Promise<boolean> {
+  ): Promise<DeleteResult> {
     await this.ensureInitialized()
 
     const now = new Date().toISOString()
@@ -1029,7 +1035,7 @@ export class ParqueDBDO extends DurableObject<Env> {
     }
 
     if (!current) {
-      return false
+      return { deletedCount: 0 }
     }
 
     // Check version for optimistic concurrency
@@ -1072,7 +1078,88 @@ export class ParqueDBDO extends DurableObject<Env> {
 
     await this.maybeScheduleFlush()
 
-    return true
+    return { deletedCount: 1 }
+  }
+
+  /**
+   * Delete multiple entities matching a filter
+   *
+   * Note: This is a simplified implementation that deletes by IDs.
+   * For complex filtering, use QueryExecutor to find matching entities first.
+   *
+   * @param ns - Namespace
+   * @param ids - Array of entity IDs to delete
+   * @param options - Delete options
+   * @returns DeleteResult with total deletedCount
+   */
+  async deleteMany(
+    ns: string,
+    ids: string[],
+    options: DODeleteOptions = {}
+  ): Promise<DeleteResult> {
+    let deletedCount = 0
+
+    for (const id of ids) {
+      const result = await this.delete(ns, id, options)
+      deletedCount += result.deletedCount
+    }
+
+    return { deletedCount }
+  }
+
+  /**
+   * Restore a soft-deleted entity
+   *
+   * @param ns - Namespace
+   * @param id - Entity ID (without namespace prefix)
+   * @param options - Restore options
+   * @returns Restored entity or null if not found
+   */
+  async restore(
+    ns: string,
+    id: string,
+    options: { actor?: string } = {}
+  ): Promise<Entity | null> {
+    await this.ensureInitialized()
+
+    const actor = options.actor || 'system/anonymous'
+
+    // Get current entity state from events
+    const currentEntity = await this.getEntityFromEvents(ns, id)
+    if (!currentEntity) {
+      return null // Entity doesn't exist
+    }
+
+    if (!currentEntity.deletedAt) {
+      return currentEntity // Entity is not deleted, return as-is
+    }
+
+    // Create a restore event (UPDATE that removes deletedAt/deletedBy)
+    const { deletedAt: _deletedAt, deletedBy: _deletedBy, ...rest } = currentEntity
+    const restoredData = {
+      ...rest,
+      updatedAt: new Date(),
+      updatedBy: actor as EntityId,
+      version: currentEntity.version + 1,
+    }
+
+    await this.appendEvent({
+      id: generateULID(),
+      ts: Date.now(),
+      op: 'UPDATE',
+      target: entityTarget(ns, id),
+      before: { $type: currentEntity.$type, name: currentEntity.name, deletedAt: currentEntity.deletedAt } as Variant,
+      after: { $type: currentEntity.$type, name: currentEntity.name } as Variant,
+      actor: actor as string,
+    })
+
+    // Signal cache invalidation
+    this.signalCacheInvalidation(ns, 'entity', id)
+    this.invalidateCache(ns, id)
+
+    await this.maybeScheduleFlush()
+
+    return restoredData as Entity
   }
 
   // ===========================================================================

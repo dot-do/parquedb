@@ -11,6 +11,11 @@ import type { TokenizerOptions } from './types'
 import { tokenizeQuery } from './tokenizer'
 import { InvertedIndex } from './inverted-index'
 import { BM25Scorer } from './scoring'
+import {
+  DEFAULT_FTS_MIN_WORD_LENGTH,
+  DEFAULT_FTS_MAX_WORD_LENGTH,
+  DEFAULT_FTS_SEARCH_LIMIT,
+} from '../../constants'
 
 // =============================================================================
 // FTS Index
@@ -35,8 +40,8 @@ export class FTSIndex {
     this.scorer = new BM25Scorer()
     this.tokenizerOptions = {
       language: definition.ftsOptions?.language ?? 'en',
-      minWordLength: definition.ftsOptions?.minWordLength ?? 2,
-      maxWordLength: definition.ftsOptions?.maxWordLength ?? 50,
+      minWordLength: definition.ftsOptions?.minWordLength ?? DEFAULT_FTS_MIN_WORD_LENGTH,
+      maxWordLength: definition.ftsOptions?.maxWordLength ?? DEFAULT_FTS_MAX_WORD_LENGTH,
       stem: true,
     }
   }
@@ -80,7 +85,7 @@ export class FTSIndex {
    * @returns Ranked search results
    */
   search(query: string, options: FTSSearchOptions = {}): FTSSearchResult[] {
-    const { limit = 100, minScore = 0 } = options
+    const { limit = DEFAULT_FTS_SEARCH_LIMIT, minScore = 0 } = options
 
     // Tokenize query
     const queryTerms = tokenizeQuery(query, this.tokenizerOptions)
@@ -201,7 +206,7 @@ export class FTSIndex {
     // Sort by score
     results.sort((a, b) => b.score - a.score)
 
-    return results.slice(0, options.limit ?? 100)
+    return results.slice(0, options.limit ?? DEFAULT_FTS_SEARCH_LIMIT)
   }
 
   /**

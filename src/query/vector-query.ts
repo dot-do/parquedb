@@ -7,6 +7,7 @@
 
 import type { Filter } from '../types/filter'
 import type { EmbeddingProvider } from '../embeddings/provider'
+import { DEFAULT_VECTOR_TOP_K } from '../constants'
 
 // =============================================================================
 // Types
@@ -81,7 +82,7 @@ export function extractVectorQuery(filter: Filter): {
     return {
       query: vq.$near,
       field: vq.$field ?? 'embedding',
-      topK: vq.$k ?? 10,
+      topK: vq.$k ?? DEFAULT_VECTOR_TOP_K,
       minScore: vq.$minScore,
       efSearch: vq.efSearch,
     }

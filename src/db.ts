@@ -275,7 +275,7 @@ export const DEFAULT_COLLECTION_OPTIONS: Required<CollectionOptions> = {
  * Extract $options from a collection schema
  * Returns default options if not specified or for flexible collections
  */
-export function extractCollectionOptions(schema: CollectionSchema): CollectionOptions {
+export function extractCollectionOptions(schema: CollectionSchema): Required<CollectionOptions> {
   if (schema === 'flexible') {
     return { ...DEFAULT_COLLECTION_OPTIONS }
   }

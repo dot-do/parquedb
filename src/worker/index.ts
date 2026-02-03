@@ -18,6 +18,8 @@ import type { ParqueDBDOStub } from '../types/worker'
 import { handleBenchmarkRequest } from './benchmark'
 import { handleDatasetBenchmarkRequest } from './benchmark-datasets'
 import { handleIndexedBenchmarkRequest } from './benchmark-indexed'
+import { handleBackendsBenchmarkRequest } from './benchmark-backends'
+import { handleDatasetBackendsBenchmarkRequest } from './benchmark-datasets-backends'
 import type { Filter } from '../types/filter'
 import type {
   FindOptions,
@@ -753,6 +755,20 @@ export default {
       // =======================================================================
       if (path === '/benchmark-indexed') {
         return handleIndexedBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleIndexedBenchmarkRequest>[1])
+      }
+
+      // =======================================================================
+      // Benchmark Backends - Compare Native/Iceberg/Delta (Synthetic Data)
+      // =======================================================================
+      if (path === '/benchmark/backends') {
+        return handleBackendsBenchmarkRequest(request, env.CDN_BUCKET)
+      }
+
+      // =======================================================================
+      // Benchmark Datasets + Backends - Real Data Across All Formats
+      // =======================================================================
+      if (path === '/benchmark/datasets/backends') {
+        return handleDatasetBackendsBenchmarkRequest(request, env.BUCKET)
       }
 
       // =======================================================================

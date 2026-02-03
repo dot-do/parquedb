@@ -91,7 +91,9 @@ export function applyUpdate<T extends Record<string, unknown>>(
 
 /**
  * Validate an update operation
+ * @param update - The update operation to validate
  * @throws Error if update is invalid
+ * @returns void
  */
 export function validateUpdate(update: UpdateInput): void {
   validateUpdateOperators(update)
@@ -103,6 +105,9 @@ export function validateUpdate(update: UpdateInput): void {
 
 /**
  * Sort an array in place using comparison values
+ * @param arr - The array to sort
+ * @param sort - Sort direction or field-based sort specification
+ * @returns void
  * @internal
  */
 export function sortArray(arr: unknown[], sort: 1 | -1 | Record<string, 1 | -1>): void {
@@ -131,6 +136,9 @@ export function sortArray(arr: unknown[], sort: 1 | -1 | Record<string, 1 | -1>)
 
 /**
  * Apply $slice to an array (in place)
+ * @param arr - The array to slice
+ * @param slice - The slice parameter (positive keeps first N, negative keeps last N, 0 clears)
+ * @returns void
  * @internal
  */
 export function applySlice(arr: unknown[], slice: number): void {

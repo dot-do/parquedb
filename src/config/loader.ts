@@ -290,6 +290,8 @@ export function getConfig(): ParqueDBConfig | null {
 
 /**
  * Set config manually (useful for testing or explicit configuration)
+ * @param config - The configuration to set
+ * @returns void
  */
 export function setConfig(config: ParqueDBConfig): void {
   _config = config
@@ -298,6 +300,7 @@ export function setConfig(config: ParqueDBConfig): void {
 
 /**
  * Clear cached config (useful for testing)
+ * @returns void
  */
 export function clearConfig(): void {
   _config = null

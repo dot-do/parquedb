@@ -8,6 +8,7 @@
 import type { SyncManifest } from './manifest'
 import type { Visibility } from '../types/visibility'
 import { asBodyInit } from '../types/cast'
+import { DEFAULT_REMOTE_TIMEOUT } from '../constants'
 
 // =============================================================================
 // Types
@@ -125,7 +126,7 @@ export class SyncClient {
   constructor(config: SyncClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '')
     this.token = config.token
-    this.timeout = config.timeout ?? 30000
+    this.timeout = config.timeout ?? DEFAULT_REMOTE_TIMEOUT
   }
 
   // ===========================================================================

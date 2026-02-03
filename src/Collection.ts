@@ -38,6 +38,7 @@
 import type {
   Entity,
   EntityId,
+  EntityData,
   CreateInput,
   UpdateResult,
   DeleteResult,
@@ -62,6 +63,7 @@ import { matchesFilter as canonicalMatchesFilter } from './query/filter'
 import { QueryBuilder } from './query/builder'
 import { executeAggregation, executeAggregationWithIndex, type AggregationStage } from './aggregation'
 import { applyOperators } from './mutation/operators'
+import { DEFAULT_PAGINATE_LIMIT, DEFAULT_MAX_INBOUND } from './constants'
 
 // Re-export AggregationStage for backwards compatibility
 export type { AggregationStage } from './aggregation'
@@ -294,7 +296,7 @@ function applyProjection<T>(entity: Entity<T>, projection: Projection): Entity<T
  * const post = await posts.get('post-123')
  * const newPost = await posts.create({ $type: 'Post', name: 'Hello', title: 'Hello World' })
  */
-export class Collection<T = Record<string, unknown>> {
+export class Collection<T extends EntityData = EntityData> {
   private storage: Map<string, Entity<T>>
 
   constructor(
@@ -434,7 +436,7 @@ export class Collection<T = Record<string, unknown>> {
       }
     }
 
-    const limit = options?.limit ?? 20
+    const limit = options?.limit ?? DEFAULT_PAGINATE_LIMIT
 
     // Get total count (ignoring limit/skip/cursor for the count)
     const total = await this.count(filter)
@@ -571,7 +573,7 @@ export class Collection<T = Record<string, unknown>> {
     }
 
     // Add inbound relationships as reverse predicates
-    const maxInbound = options?.maxInbound ?? 10
+    const maxInbound = options?.maxInbound ?? DEFAULT_MAX_INBOUND
     if (maxInbound > 0) {
       const inboundRels = allRels.filter(r => r.to === entityId)
       const reverseGroups = new Map<string, Array<{ displayName: string; sourceId: EntityId }>>()

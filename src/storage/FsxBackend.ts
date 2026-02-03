@@ -22,6 +22,11 @@ import type {
 } from '../types/storage'
 import type { Fsx, FsxStorageTier, FsxError } from './types/fsx'
 import { validateRange } from './validation'
+import {
+  NotFoundError,
+  AlreadyExistsError,
+  ETagMismatchError,
+} from './errors'
 
 /**
  * Options for FsxBackend
@@ -272,7 +277,7 @@ export class FsxBackend implements StorageBackend {
     if (options?.ifNoneMatch === '*') {
       const fileExists = await this.fsx.exists(fullPath)
       if (fileExists) {
-        throw new Error('File already exists')
+        throw new AlreadyExistsError(path)
       }
       return this.write(path, data, options)
     }
@@ -281,10 +286,14 @@ export class FsxBackend implements StorageBackend {
     if (expectedVersion === null) {
       // Expected file to not exist
       try {
-        await this.fsx.stat(fullPath)
+        const stats = await this.fsx.stat(fullPath)
         // File exists but we expected it not to
-        throw new Error('Version mismatch: file exists but expected it not to')
+        throw new ETagMismatchError(path, null, stats.etag ?? null)
       } catch (err) {
+        // Re-throw our own errors
+        if (err instanceof ETagMismatchError) {
+          throw err
+        }
         const fsxErr = err as FsxError
         if (fsxErr.code === 'ENOENT') {
           // File doesn't exist, write it
@@ -294,11 +303,24 @@ export class FsxBackend implements StorageBackend {
       }
     } else {
       // Check if current version matches expected
-      const stats = await this.fsx.stat(fullPath)
-      if (stats.etag !== expectedVersion) {
-        throw new Error(`Version mismatch: expected ${expectedVersion}, got ${stats.etag}`)
+      try {
+        const stats = await this.fsx.stat(fullPath)
+        if (stats.etag !== expectedVersion) {
+          throw new ETagMismatchError(path, expectedVersion, stats.etag ?? null)
+        }
+        return this.write(path, data, options)
+      } catch (err) {
+        // Re-throw our own errors
+        if (err instanceof ETagMismatchError) {
+          throw err
+        }
+        const fsxErr = err as FsxError
+        if (fsxErr.code === 'ENOENT') {
+          // File doesn't exist but we expected a specific version
+          throw new ETagMismatchError(path, expectedVersion, null)
+        }
+        throw err
       }
-      return this.write(path, data, options)
     }
   }
 

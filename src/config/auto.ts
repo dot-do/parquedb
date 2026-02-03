@@ -254,6 +254,7 @@ async function createServerStorage(): Promise<StorageBackend | undefined> {
 
 /**
  * Reset the auto-configured instance (useful for testing)
+ * @returns void
  */
 export function resetDB(): void {
   _db = null

@@ -63,6 +63,12 @@ export const MAX_PARTS = 10000
  */
 export const DEFAULT_MULTIPART_UPLOAD_TTL = 30 * 60 * 1000
 
+/**
+ * Default maximum number of concurrent multipart uploads to track
+ * Prevents unbounded memory growth from incomplete uploads
+ */
+export const DEFAULT_MAX_ACTIVE_UPLOADS = 100
+
 // =============================================================================
 // Cache
 // =============================================================================
@@ -237,3 +243,201 @@ export const DEFAULT_RETRY_MULTIPLIER = 2
  * Default jitter factor for retry delays
  */
 export const DEFAULT_RETRY_JITTER_FACTOR = 0.5
+
+// =============================================================================
+// Pagination Constants
+// =============================================================================
+
+/**
+ * Default limit for paginate() method
+ */
+export const DEFAULT_PAGINATE_LIMIT = 20
+
+/**
+ * Default limit for FTS search results
+ */
+export const DEFAULT_FTS_SEARCH_LIMIT = 100
+
+// =============================================================================
+// Full-Text Search Constants
+// =============================================================================
+
+/**
+ * Default minimum word length for FTS tokenization
+ */
+export const DEFAULT_FTS_MIN_WORD_LENGTH = 2
+
+/**
+ * Default maximum word length for FTS tokenization
+ */
+export const DEFAULT_FTS_MAX_WORD_LENGTH = 50
+
+// =============================================================================
+// Schema Inference Constants
+// =============================================================================
+
+/**
+ * Default sample size for schema inference
+ */
+export const DEFAULT_SCHEMA_SAMPLE_SIZE = 100
+
+/**
+ * Default maximum depth for nested schema inference
+ */
+export const DEFAULT_SCHEMA_MAX_DEPTH = 5
+
+// =============================================================================
+// Embedding Constants
+// =============================================================================
+
+/**
+ * Default cache size for query embeddings
+ */
+export const DEFAULT_EMBEDDING_CACHE_SIZE = 1000
+
+/**
+ * Default TTL for embedding cache in milliseconds (5 minutes)
+ */
+export const DEFAULT_EMBEDDING_CACHE_TTL = 5 * 60 * 1000
+
+/**
+ * Default batch size for background embedding processing
+ */
+export const DEFAULT_EMBEDDING_BATCH_SIZE = 10
+
+/**
+ * Default processing delay for background embeddings in milliseconds
+ */
+export const DEFAULT_EMBEDDING_PROCESS_DELAY = 1000
+
+/**
+ * Default priority for embedding queue items
+ */
+export const DEFAULT_EMBEDDING_PRIORITY = 100
+
+// =============================================================================
+// R2 Storage Constants
+// =============================================================================
+
+/**
+ * Maximum retries for R2 append operations
+ */
+export const R2_APPEND_MAX_RETRIES = 10
+
+/**
+ * Base delay for R2 append retry backoff in milliseconds
+ */
+export const R2_APPEND_BASE_DELAY_MS = 10
+
+// =============================================================================
+// Batch Loading Constants
+// =============================================================================
+
+/**
+ * Default batching window in milliseconds
+ */
+export const DEFAULT_BATCH_WINDOW_MS = 10
+
+/**
+ * Default maximum batch size for relationship loading
+ */
+export const DEFAULT_BATCH_MAX_SIZE = 100
+
+// =============================================================================
+// Remote Backend Constants
+// =============================================================================
+
+/**
+ * Default cache TTL for remote backend stat results in milliseconds (1 minute)
+ */
+export const DEFAULT_REMOTE_CACHE_TTL = 60000
+
+/**
+ * Default timeout for remote operations in milliseconds (30 seconds)
+ */
+export const DEFAULT_REMOTE_TIMEOUT = 30000
+
+// =============================================================================
+// Vector Search Constants
+// =============================================================================
+
+/**
+ * Default topK for vector similarity search
+ */
+export const DEFAULT_VECTOR_TOP_K = 10
+
+// =============================================================================
+// Index Cache Constants
+// =============================================================================
+
+/**
+ * Default maximum cache size for indexes in bytes (50MB)
+ */
+export const DEFAULT_INDEX_CACHE_MAX_BYTES = 50 * 1024 * 1024
+
+// =============================================================================
+// Event Archival Constants
+// =============================================================================
+
+/**
+ * Default days after which segments are archived
+ */
+export const DEFAULT_ARCHIVE_AFTER_DAYS = 7
+
+/**
+ * Default days to retain archived segments before purging
+ */
+export const DEFAULT_RETENTION_DAYS = 365
+
+// =============================================================================
+// Streaming Refresh Constants
+// =============================================================================
+
+/**
+ * Default batch size for streaming refresh
+ */
+export const DEFAULT_STREAMING_BATCH_SIZE = 100
+
+/**
+ * Default batch timeout for streaming refresh in milliseconds
+ */
+export const DEFAULT_STREAMING_BATCH_TIMEOUT_MS = 500
+
+/**
+ * Default maximum buffer size for streaming refresh
+ */
+export const DEFAULT_STREAMING_MAX_BUFFER_SIZE = 1000
+
+// =============================================================================
+// Subscription Constants
+// =============================================================================
+
+/**
+ * Maximum subscriptions per WebSocket connection
+ */
+export const MAX_SUBSCRIPTIONS_PER_CONNECTION = 10
+
+/**
+ * Default connection timeout in milliseconds (30 seconds)
+ */
+export const DEFAULT_CONNECTION_TIMEOUT_MS = 30000
+
+/**
+ * Default heartbeat interval in milliseconds (15 seconds)
+ */
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15000
+
+/**
+ * Maximum pending events per subscription
+ */
+export const MAX_PENDING_EVENTS = 1000
+
+/**
+ * Default polling interval for event sources in milliseconds
+ */
+export const DEFAULT_POLLING_INTERVAL_MS = 1000
+
+/**
+ * Default max buffer size for event writer sources
+ */
+export const DEFAULT_EVENT_SOURCE_BUFFER_SIZE = 1000

@@ -60,6 +60,19 @@ export type {
 
   // Factory type
   CreateBackendFn,
+
+  // Capability types
+  EntityBackendCapabilities,
+} from './types'
+
+// =============================================================================
+// Capability Introspection
+// =============================================================================
+
+export {
+  getEntityBackendCapabilities,
+  hasEntityBackendCapability,
+  isCompatibleWithEngine,
 } from './types'
 
 // =============================================================================

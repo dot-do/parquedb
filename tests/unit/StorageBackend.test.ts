@@ -1405,6 +1405,204 @@ describe('StorageBackend (No Implementation)', () => {
 })
 
 // =============================================================================
+// Type Guard Function Tests
+// =============================================================================
+
+import {
+  isStreamable,
+  isMultipart,
+  isTransactional,
+} from '../../src/types/storage'
+import type { StreamableBackend, MultipartBackend, TransactionalBackend } from '../../src/types/storage'
+
+describe('Type Guard Functions', () => {
+  // Create a minimal mock backend for testing
+  const createMockBackend = (): StorageBackend => ({
+    type: 'mock',
+    read: async () => new Uint8Array(),
+    readRange: async () => new Uint8Array(),
+    exists: async () => false,
+    stat: async () => null,
+    list: async () => ({ files: [], hasMore: false }),
+    write: async () => ({ etag: '', size: 0 }),
+    writeAtomic: async () => ({ etag: '', size: 0 }),
+    append: async () => {},
+    delete: async () => false,
+    deletePrefix: async () => 0,
+    mkdir: async () => {},
+    rmdir: async () => {},
+    writeConditional: async () => ({ etag: '', size: 0 }),
+    copy: async () => {},
+    move: async () => {},
+  })
+
+  describe('isStreamable', () => {
+    it('should return true for backends with streaming functions', () => {
+      const streamableBackend: StreamableBackend = {
+        ...createMockBackend(),
+        createReadStream: () => new ReadableStream(),
+        createWriteStream: () => new WritableStream(),
+      }
+
+      expect(isStreamable(streamableBackend)).toBe(true)
+    })
+
+    it('should return false for backends without streaming functions', () => {
+      const backend = createMockBackend()
+
+      expect(isStreamable(backend)).toBe(false)
+    })
+
+    it('should return false when createReadStream is not a function', () => {
+      const backend = {
+        ...createMockBackend(),
+        createReadStream: 'not a function',
+        createWriteStream: () => new WritableStream(),
+      } as unknown as StorageBackend
+
+      expect(isStreamable(backend)).toBe(false)
+    })
+
+    it('should return false when createWriteStream is not a function', () => {
+      const backend = {
+        ...createMockBackend(),
+        createReadStream: () => new ReadableStream(),
+        createWriteStream: { value: 'not a function' },
+      } as unknown as StorageBackend
+
+      expect(isStreamable(backend)).toBe(false)
+    })
+
+    it('should return false when properties are null', () => {
+      const backend = {
+        ...createMockBackend(),
+        createReadStream: null,
+        createWriteStream: null,
+      } as unknown as StorageBackend
+
+      expect(isStreamable(backend)).toBe(false)
+    })
+  })
+
+  describe('isMultipart', () => {
+    it('should return true for backends with multipart upload function', () => {
+      const multipartBackend: MultipartBackend = {
+        ...createMockBackend(),
+        createMultipartUpload: async () => ({
+          uploadId: 'test',
+          uploadPart: async () => ({ partNumber: 1, etag: '', size: 0 }),
+          complete: async () => ({ etag: '', size: 0 }),
+          abort: async () => {},
+        }),
+      }
+
+      expect(isMultipart(multipartBackend)).toBe(true)
+    })
+
+    it('should return false for backends without multipart upload function', () => {
+      const backend = createMockBackend()
+
+      expect(isMultipart(backend)).toBe(false)
+    })
+
+    it('should return false when createMultipartUpload is not a function', () => {
+      const backend = {
+        ...createMockBackend(),
+        createMultipartUpload: 'not a function',
+      } as unknown as StorageBackend
+
+      expect(isMultipart(backend)).toBe(false)
+    })
+
+    it('should return false when createMultipartUpload is an object', () => {
+      const backend = {
+        ...createMockBackend(),
+        createMultipartUpload: { uploadId: 'fake' },
+      } as unknown as StorageBackend
+
+      expect(isMultipart(backend)).toBe(false)
+    })
+
+    it('should return false when createMultipartUpload is undefined', () => {
+      const backend = {
+        ...createMockBackend(),
+        createMultipartUpload: undefined,
+      } as unknown as StorageBackend
+
+      expect(isMultipart(backend)).toBe(false)
+    })
+  })
+
+  describe('isTransactional', () => {
+    it('should return true for backends with transaction function', () => {
+      const transactionalBackend: TransactionalBackend = {
+        ...createMockBackend(),
+        beginTransaction: async () => ({
+          id: 'test',
+          read: async () => new Uint8Array(),
+          write: async () => {},
+          delete: async () => {},
+          commit: async () => {},
+          rollback: async () => {},
+        }),
+      }
+
+      expect(isTransactional(transactionalBackend)).toBe(true)
+    })
+
+    it('should return false for backends without transaction function', () => {
+      const backend = createMockBackend()
+
+      expect(isTransactional(backend)).toBe(false)
+    })
+
+    it('should return false when beginTransaction is not a function', () => {
+      const backend = {
+        ...createMockBackend(),
+        beginTransaction: 'not a function',
+      } as unknown as StorageBackend
+
+      expect(isTransactional(backend)).toBe(false)
+    })
+
+    it('should return false when beginTransaction is a number', () => {
+      const backend = {
+        ...createMockBackend(),
+        beginTransaction: 42,
+      } as unknown as StorageBackend
+
+      expect(isTransactional(backend)).toBe(false)
+    })
+
+    it('should return false when beginTransaction is null', () => {
+      const backend = {
+        ...createMockBackend(),
+        beginTransaction: null,
+      } as unknown as StorageBackend
+
+      expect(isTransactional(backend)).toBe(false)
+    })
+  })
+
+  describe('real backend tests', () => {
+    it('should correctly identify MemoryBackend as non-streamable', () => {
+      const backend = new MemoryBackend()
+      expect(isStreamable(backend)).toBe(false)
+    })
+
+    it('should correctly identify MemoryBackend as non-multipart', () => {
+      const backend = new MemoryBackend()
+      expect(isMultipart(backend)).toBe(false)
+    })
+
+    it('should correctly identify MemoryBackend as non-transactional', () => {
+      const backend = new MemoryBackend()
+      expect(isTransactional(backend)).toBe(false)
+    })
+  })
+})
+
+// =============================================================================
 // Run generic tests against MemoryBackend (will fail in RED phase)
 // =============================================================================
 

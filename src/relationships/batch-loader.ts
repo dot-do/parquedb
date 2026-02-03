@@ -22,6 +22,7 @@
 
 import type { Entity } from '../types/entity'
 import type { GetRelatedOptions, GetRelatedResult } from '../ParqueDB/types'
+import { DEFAULT_BATCH_WINDOW_MS, DEFAULT_BATCH_MAX_SIZE } from '../constants'
 
 // =============================================================================
 // Types
@@ -190,8 +191,8 @@ export class RelationshipBatchLoader {
   constructor(db: BatchLoaderDB, options: BatchLoaderOptions = {}) {
     this.db = db
     this.options = {
-      windowMs: options.windowMs ?? 10,
-      maxBatchSize: options.maxBatchSize ?? 100,
+      windowMs: options.windowMs ?? DEFAULT_BATCH_WINDOW_MS,
+      maxBatchSize: options.maxBatchSize ?? DEFAULT_BATCH_MAX_SIZE,
       deduplicate: options.deduplicate ?? true,
     }
   }

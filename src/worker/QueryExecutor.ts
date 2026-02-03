@@ -16,7 +16,7 @@ import type {
   Projection,
 } from '../types/options'
 import type { EntityRecord, PaginatedResult } from '../types/entity'
-import type { StorageBackend, FileStat, ListResult } from '../types/storage'
+import type { ReadonlyStorageBackend, FileStat, ListResult } from '../types/storage'
 import { ReadPath, NotFoundError } from './ReadPath'
 import { ParquetReader } from '../parquet/reader'
 // Predicate pushdown from hyparquet fork
@@ -244,8 +244,10 @@ export interface QueryPlan {
  * - Reduced load on primary bucket
  *
  * Files in CDN bucket are stored under parquedb/ prefix.
+ *
+ * Implements ReadonlyStorageBackend - only read operations are supported.
  */
-class CdnR2StorageAdapter implements Partial<StorageBackend> {
+class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   readonly type = 'r2-cdn-adapter'
 
   // Stats for debugging
@@ -417,17 +419,6 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
       })),
     }
   }
-
-  // Write operations not needed for reading
-  async write(): Promise<never> { throw new Error('Not implemented') }
-  async writeAtomic(): Promise<never> { throw new Error('Not implemented') }
-  async append(): Promise<never> { throw new Error('Not implemented') }
-  async delete(): Promise<never> { throw new Error('Not implemented') }
-  async deletePrefix(): Promise<never> { throw new Error('Not implemented') }
-  async mkdir(): Promise<never> { throw new Error('Not implemented') }
-  async rmdir(): Promise<never> { throw new Error('Not implemented') }
-  async copy(): Promise<never> { throw new Error('Not implemented') }
-  async move(): Promise<never> { throw new Error('Not implemented') }
 }
 
 export class QueryExecutor {
@@ -439,12 +430,6 @@ export class QueryExecutor {
 
   /** Cache of parsed parquet data (for small files) */
   private dataCache = new Map<string, unknown[]>()
-
-  /** Cache of file sizes for whole-file read decisions - reserved for future optimization */
-  public _fileSizeCache = new Map<string, number>()
-
-  /** Maximum file size for whole-file caching - reserved for future size limits */
-  public static readonly _MAX_CACHE_SIZE_LIMIT = _MAX_CACHE_SIZE
 
   /** R2 storage adapter for ParquetReader */
   private storageAdapter: CdnR2StorageAdapter | null = null
@@ -1839,15 +1824,6 @@ export class QueryExecutor {
     }
 
     return pushdownFilter
-  }
-
-  /**
-   * Extract $id filter for predicate pushdown (legacy method for compatibility)
-   * Returns the filter portion that can be pushed down to Parquet
-   * @internal Reserved for compatibility with older code
-   */
-  public _extractIdFilter(filter: Filter): Filter | null {
-    return this.extractPushdownFilter(filter)
   }
 
   /**

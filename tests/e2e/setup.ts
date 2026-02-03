@@ -30,7 +30,7 @@ import { MemoryBackend } from '../../src/storage/MemoryBackend'
 /**
  * Collection interface - mirrors the ParqueDB Collection API
  */
-export interface RPCCollection<T = Record<string, unknown>> {
+export interface RPCCollection<T extends object = Record<string, unknown>> {
   find(filter?: Filter, options?: FindOptions<T>): Promise<Entity<T>[]>
   findOne(filter?: Filter, options?: FindOptions<T>): Promise<Entity<T> | null>
   get(id: string, options?: GetOptions): Promise<Entity<T>>

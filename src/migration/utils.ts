@@ -123,6 +123,9 @@ export function inferType(value: string): unknown {
 
 /**
  * Parse a CSV line respecting quoted fields
+ * @param line - The CSV line to parse
+ * @param delimiter - Field delimiter (default: ',')
+ * @returns Array of field values
  */
 export function parseCsvLine(line: string, delimiter: string = ','): string[] {
   const fields: string[] = []

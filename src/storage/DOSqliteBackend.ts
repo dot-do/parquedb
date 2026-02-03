@@ -34,41 +34,65 @@ import type {
 } from '../types/storage'
 import { validateRange } from './validation'
 import { generateEtag, globToRegex, normalizeFilePath, normalizePrefix, applyPrefix, stripPrefix } from './utils'
+import {
+  NotFoundError,
+  ETagMismatchError,
+  AlreadyExistsError,
+} from './errors'
+
+// =============================================================================
+// Backward Compatibility Aliases
+// =============================================================================
+// These classes extend the unified error types but maintain the legacy class names
+// for backward compatibility with existing code that catches these specific types.
 
 /**
  * Error thrown when a file is not found
+ *
+ * @deprecated Use NotFoundError from './errors' instead.
+ * This class is maintained for backward compatibility.
  */
-export class DOSqliteNotFoundError extends Error {
-  override readonly name = 'DOSqliteNotFoundError'
-  constructor(public readonly path: string) {
-    super(`File not found: ${path}`)
+export class DOSqliteNotFoundError extends NotFoundError {
+  constructor(path: string, cause?: Error) {
+    super(path, cause)
     Object.setPrototypeOf(this, DOSqliteNotFoundError.prototype)
+    // Override the name after super() call to preserve backend-specific name
+    Object.defineProperty(this, 'name', { value: 'DOSqliteNotFoundError', writable: false, enumerable: true })
   }
 }
 
 /**
  * Error thrown when a conditional write fails due to ETag mismatch
+ *
+ * @deprecated Use ETagMismatchError from './errors' instead.
+ * This class is maintained for backward compatibility.
  */
-export class DOSqliteETagMismatchError extends Error {
-  override readonly name = 'DOSqliteETagMismatchError'
+export class DOSqliteETagMismatchError extends ETagMismatchError {
   constructor(
-    public readonly path: string,
-    public readonly expectedEtag: string | null,
-    public readonly actualEtag: string | null
+    path: string,
+    expectedEtag: string | null,
+    actualEtag: string | null,
+    cause?: Error
   ) {
-    super(`ETag mismatch for ${path}: expected ${expectedEtag}, got ${actualEtag}`)
+    super(path, expectedEtag, actualEtag, cause)
     Object.setPrototypeOf(this, DOSqliteETagMismatchError.prototype)
+    // Override the name after super() call to preserve backend-specific name
+    Object.defineProperty(this, 'name', { value: 'DOSqliteETagMismatchError', writable: false, enumerable: true })
   }
 }
 
 /**
  * Error thrown when file already exists (for ifNoneMatch: '*')
+ *
+ * @deprecated Use AlreadyExistsError from './errors' instead.
+ * This class is maintained for backward compatibility.
  */
-export class DOSqliteFileExistsError extends Error {
-  override readonly name = 'DOSqliteFileExistsError'
-  constructor(public readonly path: string) {
-    super(`File already exists: ${path}`)
+export class DOSqliteFileExistsError extends AlreadyExistsError {
+  constructor(path: string, cause?: Error) {
+    super(path, cause)
     Object.setPrototypeOf(this, DOSqliteFileExistsError.prototype)
+    // Override the name after super() call to preserve backend-specific name
+    Object.defineProperty(this, 'name', { value: 'DOSqliteFileExistsError', writable: false, enumerable: true })
   }
 }
 
