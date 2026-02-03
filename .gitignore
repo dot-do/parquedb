@@ -167,6 +167,8 @@ test-data/
 # Downloaded and processed datasets (can be very large)
 data/
 !data/.gitkeep
+data-v3/
+imdb-1m/
 
 # =============================================================================
 # Backup and Debug Files
