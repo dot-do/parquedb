@@ -100,9 +100,16 @@ export {
 // Re-export datasets config
 export { DATASETS, getDataset, getDatasetIds, type DatasetConfig } from './datasets'
 
-// Export Durable Object for Cloudflare Workers runtime
-// This is required for the DO to be available as a binding
+// Export Durable Objects for Cloudflare Workers runtime
+// These are required for the DOs to be available as bindings
 export { ParqueDBDO } from './ParqueDBDO'
+export {
+  DatabaseIndexDO,
+  getUserDatabaseIndex,
+  type DatabaseInfo,
+  type RegisterDatabaseOptions,
+  type UpdateDatabaseOptions,
+} from './DatabaseIndexDO'
 
 // =============================================================================
 // Worker Implementation
