@@ -75,7 +75,14 @@ import type {
   SnapshotConfig,
 } from './types'
 
-import { DEFAULT_EVENT_LOG_CONFIG, VersionConflictError } from './types'
+import {
+  DEFAULT_EVENT_LOG_CONFIG,
+  VersionConflictError,
+  EntityNotFoundError,
+  ValidationError,
+  RelationshipError,
+  EventError,
+} from './types'
 
 import { validateNamespace, validateFilter, validateUpdateOperators, normalizeNamespace } from './validation'
 import { CollectionImpl } from './collection'
@@ -816,7 +823,10 @@ export class ParqueDBImpl {
       // If expectedVersion > 1 and entity doesn't exist, that's a mismatch
       // (you're expecting a modified entity that doesn't exist)
       if (options?.expectedVersion !== undefined && options.expectedVersion > 1) {
-        throw new VersionConflictError(options.expectedVersion, undefined)
+        throw new VersionConflictError(options.expectedVersion, undefined, {
+          namespace,
+          entityId: id,
+        })
       }
 
       if (options?.upsert) {
@@ -850,7 +860,10 @@ export class ParqueDBImpl {
 
     // Check version for optimistic concurrency (entity exists)
     if (options?.expectedVersion !== undefined && entity.version !== options.expectedVersion) {
-      throw new VersionConflictError(options.expectedVersion, entity.version)
+      throw new VersionConflictError(options.expectedVersion, entity.version, {
+        namespace,
+        entityId: id,
+      })
     }
 
     // Clone the entity before mutating to avoid race conditions with concurrent readers
@@ -965,7 +978,10 @@ export class ParqueDBImpl {
       // If expectedVersion > 1 and entity doesn't exist, that's a mismatch
       // (you're expecting a modified entity that doesn't exist)
       if (options?.expectedVersion !== undefined && options.expectedVersion > 1) {
-        throw new VersionConflictError(options.expectedVersion, undefined)
+        throw new VersionConflictError(options.expectedVersion, undefined, {
+          namespace,
+          entityId: id,
+        })
       }
 
       // Extract the ID part from fullId
@@ -989,7 +1005,10 @@ export class ParqueDBImpl {
 
     // Check version for optimistic concurrency (entity exists)
     if (options?.expectedVersion !== undefined && entity.version !== options.expectedVersion) {
-      throw new VersionConflictError(options.expectedVersion, entity.version)
+      throw new VersionConflictError(options.expectedVersion, entity.version, {
+        namespace,
+        entityId: id,
+      })
     }
 
     const now = new Date()
@@ -1195,12 +1214,14 @@ export class ParqueDBImpl {
       const fieldValue = (data as Record<string, unknown>)[fieldName]
 
       if (isRequired && !hasDefault && fieldValue === undefined) {
-        throw new Error(`Missing required field: ${fieldName}`)
+        throw new ValidationError('create', typeName, `Missing required field: ${fieldName}`, {
+          fieldName,
+        })
       }
 
       // Validate field type
       if (fieldValue !== undefined) {
-        this.validateFieldType(fieldName, fieldValue, fieldDef)
+        this.validateFieldType(fieldName, fieldValue, fieldDef, data.$type || typeName)
       }
     }
   }
@@ -1236,7 +1257,7 @@ export class ParqueDBImpl {
   /**
    * Validate field value against its type definition
    */
-  private validateFieldType(fieldName: string, value: unknown, fieldDef: unknown): void {
+  private validateFieldType(fieldName: string, value: unknown, fieldDef: unknown, typeName: string): void {
     let expectedType: string | undefined
 
     if (typeof fieldDef === 'string') {
@@ -1247,7 +1268,12 @@ export class ParqueDBImpl {
           // Relationship format: { 'Display Name': 'ns/id' }
           for (const [, refValue] of Object.entries(value)) {
             if (typeof refValue !== 'string' || !refValue.includes('/')) {
-              throw new Error(`Invalid relationship reference format for ${fieldName}`)
+              throw new ValidationError(
+                'validation',
+                typeName,
+                'Invalid relationship reference format (must be "ns/id")',
+                { fieldName }
+              )
             }
           }
         }
@@ -1275,7 +1301,11 @@ export class ParqueDBImpl {
       case 'url':
       case 'uuid':
         if (actualType !== 'string') {
-          throw new Error(`Field ${fieldName} must be a string, got ${actualType}`)
+          throw new ValidationError('validation', typeName, 'Type mismatch', {
+            fieldName,
+            expectedType: 'string',
+            actualType,
+          })
         }
         break
       case 'number':
@@ -1283,19 +1313,31 @@ export class ParqueDBImpl {
       case 'float':
       case 'double':
         if (actualType !== 'number') {
-          throw new Error(`Field ${fieldName} must be a number, got ${actualType}`)
+          throw new ValidationError('validation', typeName, 'Type mismatch', {
+            fieldName,
+            expectedType: 'number',
+            actualType,
+          })
         }
         break
       case 'boolean':
         if (actualType !== 'boolean') {
-          throw new Error(`Field ${fieldName} must be a boolean, got ${actualType}`)
+          throw new ValidationError('validation', typeName, 'Type mismatch', {
+            fieldName,
+            expectedType: 'boolean',
+            actualType,
+          })
         }
         break
       case 'date':
       case 'datetime':
       case 'timestamp':
         if (!(value instanceof Date) && actualType !== 'string') {
-          throw new Error(`Field ${fieldName} must be a date, got ${actualType}`)
+          throw new ValidationError('validation', typeName, 'Type mismatch', {
+            fieldName,
+            expectedType: 'date',
+            actualType,
+          })
         }
         break
     }
@@ -1367,7 +1409,12 @@ export class ParqueDBImpl {
         if (typeDef) {
           const fieldDef = typeDef[key]
           if (fieldDef === undefined || (typeof fieldDef === 'string' && !isRelationString(fieldDef))) {
-            throw new Error(`Relationship '${key}' is not defined in schema for type '${typeName}'`)
+            throw new RelationshipError(
+              'Link',
+              typeName,
+              'Relationship is not defined in schema',
+              { relationshipName: key }
+            )
           }
         }
 
@@ -1387,10 +1434,20 @@ export class ParqueDBImpl {
         for (const targetId of values) {
           const targetEntity = this.entities.get(targetId as string)
           if (!targetEntity) {
-            throw new Error(`Target entity '${targetId}' does not exist`)
+            throw new RelationshipError(
+              'Link',
+              typeName,
+              'Target entity does not exist',
+              { entityId: entity.$id as string, relationshipName: key, targetId: targetId as string }
+            )
           }
           if (targetEntity.deletedAt) {
-            throw new Error(`Cannot link to deleted entity '${targetId}'`)
+            throw new RelationshipError(
+              'Link',
+              typeName,
+              'Cannot link to deleted entity',
+              { entityId: entity.$id as string, relationshipName: key, targetId: targetId as string }
+            )
           }
         }
 
@@ -2096,7 +2153,7 @@ export class ParqueDBImpl {
       async getRawEvent(id: string): Promise<{ compressed: boolean; data: Event }> {
         const event = self.events.find(e => e.id === id)
         if (!event) {
-          throw new Error(`Event not found: ${id}`)
+          throw new EventError('Get event', 'Event not found', { eventId: id })
         }
         // Check if payload is large enough to warrant compression (>10KB)
         const eventJson = JSON.stringify(event)
@@ -2418,8 +2475,15 @@ export class ParqueDBImpl {
       async createSnapshot(entityId: EntityId): Promise<Snapshot> {
         const fullId = entityId as string
         const entity = self.entities.get(fullId)
-        if (!entity) throw new Error(`Entity not found: ${entityId}`)
-        if (entity.deletedAt) throw new Error(`Cannot create snapshot of deleted entity: ${entityId}`)
+        if (!entity) {
+          const [ns, ...idParts] = fullId.split('/')
+          throw new EntityNotFoundError(ns, idParts.join('/'))
+        }
+        if (entity.deletedAt) {
+          throw new EventError('Create snapshot', 'Cannot create snapshot of deleted entity', {
+            entityId: fullId,
+          })
+        }
         const [ns, ...idParts] = fullId.split('/')
         const entityEvents = self.events.filter((e) => {
           if (isRelationshipTarget(e.target)) return false
@@ -2441,9 +2505,13 @@ export class ParqueDBImpl {
         const [ns, ...idParts] = fullId.split('/')
         const entityIdPart = idParts.join('/')
         const event = self.events.find((e) => e.id === eventId)
-        if (!event) throw new Error(`Event not found: ${eventId}`)
+        if (!event) {
+          throw new EventError('Create snapshot at event', 'Event not found', { eventId })
+        }
         const state = event.after ? { ...event.after } : null
-        if (!state) throw new Error(`Event has no after state: ${eventId}`)
+        if (!state) {
+          throw new EventError('Create snapshot at event', 'Event has no after state', { eventId })
+        }
         const entityEvents = self.events.filter((e) => {
           if (isRelationshipTarget(e.target)) return false
           const info = parseEntityTarget(e.target)
@@ -2505,7 +2573,9 @@ export class ParqueDBImpl {
       },
       async getRawSnapshot(snapshotId: string): Promise<RawSnapshot> {
         const snapshot = self.snapshots.find((s) => s.id === snapshotId)
-        if (!snapshot) throw new Error(`Snapshot not found: ${snapshotId}`)
+        if (!snapshot) {
+          throw new EventError('Get snapshot', 'Snapshot not found', { snapshotId })
+        }
         const data = new TextEncoder().encode(JSON.stringify(snapshot.state))
         return { id: snapshotId, size: snapshot.size || data.length, data }
       },
@@ -2518,6 +2588,76 @@ export class ParqueDBImpl {
         return { totalSize, snapshotCount, avgSnapshotSize: snapshotCount > 0 ? totalSize / snapshotCount : 0 }
       },
     }
+  }
+
+  /**
+   * Extract non-operator fields from filter to include in created documents
+   * Helper for upsert operations
+   */
+  private extractFilterFields(filter: Filter): Record<string, unknown> {
+    const filterFields: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(filter)) {
+      // Only include simple field values, not operators
+      if (!key.startsWith('$')) {
+        filterFields[key] = value
+      }
+    }
+    return filterFields
+  }
+
+  /**
+   * Build create data for upsert insert operations
+   * Combines filter fields, $set, $setOnInsert, and applies other operators
+   */
+  private buildUpsertCreateData<T = Record<string, unknown>>(
+    filterFields: Record<string, unknown>,
+    update: UpdateInput<T>
+  ): Record<string, unknown> {
+    // Build the base create data
+    const createData: Record<string, unknown> = {
+      $type: 'Unknown',
+      name: 'Upserted',
+      ...filterFields,
+      ...update.$set,
+      ...update.$setOnInsert,
+    }
+
+    // Apply other update operators to the create data
+    // Handle $inc - start from 0
+    if (update.$inc) {
+      for (const [key, value] of Object.entries(update.$inc)) {
+        createData[key] = ((createData[key] as number) || 0) + (value as number)
+      }
+    }
+
+    // Handle $push - create array with single element
+    if (update.$push) {
+      for (const [key, value] of Object.entries(update.$push)) {
+        const pushValue = value as Record<string, unknown>
+        if (value && typeof value === 'object' && '$each' in pushValue) {
+          createData[key] = [...((pushValue.$each as unknown[]) || [])]
+        } else {
+          createData[key] = [value]
+        }
+      }
+    }
+
+    // Handle $addToSet - create array with single element
+    if (update.$addToSet) {
+      for (const [key, value] of Object.entries(update.$addToSet)) {
+        createData[key] = [value]
+      }
+    }
+
+    // Handle $currentDate
+    if (update.$currentDate) {
+      const now = new Date()
+      for (const key of Object.keys(update.$currentDate)) {
+        createData[key] = now
+      }
+    }
+
+    return createData
   }
 
   /**
@@ -2542,22 +2682,8 @@ export class ParqueDBImpl {
       })
     } else {
       // Create new from filter fields and $set values
-      // Extract non-operator fields from filter to include in the created document
-      const filterFields: Record<string, unknown> = {}
-      for (const [key, value] of Object.entries(filter)) {
-        // Only include simple field values, not operators
-        if (!key.startsWith('$')) {
-          filterFields[key] = value
-        }
-      }
-
-      const data: CreateInput<T> = {
-        $type: 'Unknown',
-        name: 'Upserted',
-        ...filterFields,
-        ...update.$set,
-        ...update.$setOnInsert,
-      }
+      const filterFields = this.extractFilterFields(filter)
+      const data: CreateInput<T> = this.buildUpsertCreateData(filterFields, update) as CreateInput<T>
       return this.create<T>(namespace, data)
     }
   }
@@ -2620,58 +2746,9 @@ export class ParqueDBImpl {
           result.modifiedCount++
         } else {
           // Create new entity
-          // Extract non-operator fields from filter to include in the created document
-          const filterFields: Record<string, unknown> = {}
-          for (const [key, value] of Object.entries(item.filter)) {
-            // Only include simple field values, not operators
-            if (!key.startsWith('$')) {
-              filterFields[key] = value
-            }
-          }
-
-          // Build the create data
-          const createData: Record<string, unknown> = {
-            $type: 'Unknown',
-            name: 'Upserted',
-            ...filterFields,
-            ...item.update.$set,
-            ...item.update.$setOnInsert,
-          }
-
-          // Apply other update operators to the create data
-          // Handle $inc - start from 0
-          if (item.update.$inc) {
-            for (const [key, value] of Object.entries(item.update.$inc)) {
-              createData[key] = ((createData[key] as number) || 0) + (value as number)
-            }
-          }
-
-          // Handle $push - create array with single element
-          if (item.update.$push) {
-            for (const [key, value] of Object.entries(item.update.$push)) {
-              const pushValue = value as Record<string, unknown>
-              if (value && typeof value === 'object' && '$each' in pushValue) {
-                createData[key] = [...((pushValue.$each as unknown[]) || [])]
-              } else {
-                createData[key] = [value]
-              }
-            }
-          }
-
-          // Handle $addToSet - create array with single element
-          if (item.update.$addToSet) {
-            for (const [key, value] of Object.entries(item.update.$addToSet)) {
-              createData[key] = [value]
-            }
-          }
-
-          // Handle $currentDate
-          if (item.update.$currentDate) {
-            const now = new Date()
-            for (const key of Object.keys(item.update.$currentDate)) {
-              createData[key] = now
-            }
-          }
+          // Use helper functions to extract filter fields and build create data
+          const filterFields = this.extractFilterFields(item.filter)
+          const createData = this.buildUpsertCreateData(filterFields, item.update)
 
           // Build create options
           const createOptions: CreateOptions = {}
@@ -2797,19 +2874,23 @@ export class ParqueDBImpl {
 
     // Validate targetTime is not in the future
     if (targetTime.getTime() > Date.now()) {
-      throw new Error('Cannot revert to a future time')
+      throw new EventError('Revert entity', 'Cannot revert to a future time', {
+        entityId: fullId,
+      })
     }
 
     // Get entity state at target time
     const stateAtTarget = this.reconstructEntityAtTime(fullId, targetTime)
     if (!stateAtTarget) {
-      throw new Error('Entity did not exist at the target time')
+      throw new EventError('Revert entity', 'Entity did not exist at the target time', {
+        entityId: fullId,
+      })
     }
 
     // Get current entity
     const currentEntity = this.entities.get(fullId)
     if (!currentEntity) {
-      throw new Error('Entity does not exist')
+      throw new EntityNotFoundError(ns, id)
     }
 
     // Apply the revert as an update with metadata marking it as a revert
