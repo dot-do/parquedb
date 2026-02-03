@@ -289,10 +289,10 @@ describe('StorageLockManager', () => {
       expect(result.acquired).toBe(true)
     })
 
-    it('returns true even when no lock exists (idempotent)', async () => {
-      // forceRelease is idempotent - it always succeeds
+    it('returns false when no lock exists', async () => {
+      // forceRelease returns false if there was no lock to release
       const released = await lockManager.forceRelease('merge')
-      expect(released).toBe(true)
+      expect(released).toBe(false)
     })
   })
 
