@@ -1268,3 +1268,31 @@ export function fromViewDefinition(viewDef: ViewDefinition & { options?: Partial
 
   return mvDef
 }
+
+// =============================================================================
+// Stream Processor Types (shared between stream-processor.ts and stream-persistence.ts)
+// =============================================================================
+
+/**
+ * Represents a batch of records that failed to write.
+ * Used by StreamProcessor for retry logic and dead-letter queue.
+ */
+export interface FailedBatch<T> {
+  /** Records that failed to write */
+  records: T[]
+
+  /** Batch number */
+  batchNumber: number
+
+  /** File path that was attempted */
+  filePath: string
+
+  /** The error that caused the failure */
+  error: Error
+
+  /** Timestamp when failure occurred */
+  failedAt: number
+
+  /** Number of retry attempts made */
+  attempts: number
+}

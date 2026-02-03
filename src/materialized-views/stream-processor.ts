@@ -218,28 +218,11 @@ export interface PersistenceConfig {
   onRecovery?: (result: RecoveryResult) => void
 }
 
-/**
- * A failed batch that couldn't be written after all retries
- */
-export interface FailedBatch<T> {
-  /** Records that failed to write */
-  records: T[]
+// Re-export FailedBatch from types.ts for backward compatibility
+export type { FailedBatch } from './types'
 
-  /** Batch number */
-  batchNumber: number
-
-  /** File path that was attempted */
-  filePath: string
-
-  /** The error that caused the failure */
-  error: Error
-
-  /** Timestamp when failure occurred */
-  failedAt: number
-
-  /** Number of retry attempts made */
-  attempts: number
-}
+// Import FailedBatch for use in this module
+import type { FailedBatch } from './types'
 
 /**
  * Behavior when a write fails after all retries

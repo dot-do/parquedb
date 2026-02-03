@@ -45,7 +45,7 @@
  */
 
 import type { StorageBackend } from '../types/storage'
-import type { FailedBatch } from './stream-processor'
+import type { FailedBatch } from './types'
 
 // =============================================================================
 // Types
