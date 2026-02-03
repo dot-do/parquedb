@@ -34,6 +34,10 @@
     "./mcp": {
       "import": "./dist/integrations/mcp/index.js",
       "types": "./dist/integrations/mcp/index.d.ts"
+    },
+    "./search": {
+      "import": "./dist/search/index.js",
+      "types": "./dist/search/index.d.ts"
     }
   },
   "peerDependencies": {
@@ -88,7 +92,12 @@
     "load:wikidata": "tsx scripts/load-data.ts --dataset wikidata --output ./data/wikidata",
     "load:commoncrawl": "tsx scripts/load-data.ts --dataset commoncrawl --output ./data/commoncrawl",
     "load:all": "tsx scripts/load-all.ts",
-    "generate:wikidata": "tsx scripts/generate-wikidata-sample.ts --output ./data/wikidata"
+    "generate:wikidata": "tsx scripts/generate-wikidata-sample.ts --output ./data/wikidata",
+    "load-test": "tsx scripts/load-test-compaction.ts",
+    "load-test:a": "tsx scripts/load-test-compaction.ts --scenario=A",
+    "load-test:b": "tsx scripts/load-test-compaction.ts --scenario=B",
+    "load-test:c": "tsx scripts/load-test-compaction.ts --scenario=C",
+    "load-test:d": "tsx scripts/load-test-compaction.ts --scenario=D"
   },
   "dependencies": {
     "@dotdo/iceberg": "^0.2.0",
