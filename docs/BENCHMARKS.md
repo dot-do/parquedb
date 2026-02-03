@@ -35,6 +35,8 @@ ParqueDB is designed for low-latency operations with the following SLA targets:
 | Relationship traverse | 50ms | 200ms | ✅ Achieved |
 | FTS search | 20ms | 100ms | ✅ Achieved |
 
+*Note: These targets align with the performance requirements documented in CLAUDE.md and are continuously validated through automated benchmarks.*
+
 These targets are measured at the p50 (median) and p99 (99th percentile) latencies across various dataset sizes and workloads.
 
 ## Benchmark Methodology
@@ -45,18 +47,19 @@ ParqueDB benchmarks run in two primary environments:
 
 #### 1. Node.js (Local)
 
-- **Runtime**: Node.js v20.x or later
-- **Hardware**: Varies by machine (benchmarks normalize for comparison)
-- **Storage**: In-memory for unit tests, filesystem for integration tests
-- **Tool**: Vitest with benchmark mode
-- **Purpose**: Development, regression testing, quick iteration
+- **Runtime**: Node.js v20.x or later (required per package.json engines)
+- **Hardware**: Varies by machine (results are machine-specific; use relative comparisons)
+- **Storage**: In-memory (MemoryBackend) for unit tests, filesystem (FSBackend) for integration tests
+- **Tool**: Vitest with benchmark mode (`vitest bench`)
+- **Purpose**: Development, regression testing, quick iteration, algorithm optimization
 
 #### 2. Cloudflare Workers (Production)
 
-- **Runtime**: workerd (Cloudflare Workers runtime)
-- **Storage**: R2 (object storage) + SQLite (Durable Objects)
-- **Tool**: vitest-pool-workers for Worker-environment tests
-- **Purpose**: Production performance validation, real-world I/O characteristics
+- **Runtime**: workerd (Cloudflare Workers runtime, V8-based)
+- **Storage**: R2 (object storage) for Parquet files + SQLite (Durable Objects) for indexes/metadata
+- **Tool**: `@cloudflare/vitest-pool-workers` for Worker-environment tests
+- **Memory**: 128MB limit per Worker instance
+- **Purpose**: Production performance validation, real-world I/O characteristics, network latency testing
 
 ### Dataset Sizes
 
@@ -77,13 +80,14 @@ All benchmarks measure latency percentiles:
 - **p95**: Performance under moderate load
 - **p99**: Worst-case performance (for SLA guarantees)
 
-**Iterations**: Each benchmark runs multiple iterations (10-100) with warmup cycles to eliminate cold-start effects.
+**Iterations**: Each benchmark runs multiple iterations (10-100) with warmup cycles to eliminate cold-start effects and ensure JIT compilation has stabilized.
 
 **Metrics Collected**:
-- Latency (mean, median, p95, p99)
-- Throughput (operations/second)
-- Memory usage (heap growth)
-- I/O bytes read/written (for storage benchmarks)
+- **Latency**: mean, median, p95, p99 (milliseconds)
+- **Throughput**: operations per second (ops/sec)
+- **Memory usage**: heap growth and allocation patterns
+- **I/O performance**: bytes read/written for storage benchmarks
+- **Hit rates**: cache and index effectiveness (where applicable)
 
 ### Datasets Used
 
@@ -100,7 +104,7 @@ Generated entities with varied field types to test specific patterns:
 - **O*NET**: 1,000 occupations, skills, and relationships
 - **UNSPSC**: Product classification hierarchy (10K+ items)
 
-See `scripts/load-data.ts` for dataset loading utilities.
+See `scripts/load-data.ts` and `scripts/load-all.ts` for dataset loading utilities.
 
 ## Running Benchmarks
 
@@ -314,7 +318,7 @@ With secondary indexes, query performance improves significantly:
 | Offset (limit 20) | 2ms | 4ms | 20ms | 100ms |
 | Cursor-based | 2ms | 2ms | 2ms | 2ms |
 
-**Recommendation**: Use cursor-based pagination for deep pagination. Offset pagination degrades linearly with page depth.
+**Recommendation**: Use cursor-based pagination for deep pagination (beyond page 10). Offset pagination degrades linearly with page depth, while cursor-based pagination maintains constant time performance.
 
 ### Projection (Column Selection)
 
@@ -327,7 +331,7 @@ Selecting only needed columns significantly reduces data transfer:
 | 4 fields | 3ms | 30ms | 2.7x faster |
 | 8 fields | 5ms | 50ms | 1.6x faster |
 
-**Tip**: Always use `project` to limit returned fields when you don't need the full entity.
+**Tip**: Always use the `project` option to limit returned fields when you don't need the full entity. This reduces I/O, memory usage, and serialization overhead, especially important for Cloudflare Workers with memory constraints.
 
 ## Aggregation Performance
 
@@ -533,25 +537,31 @@ ParqueDB supports three types of secondary indexes:
 
 ### Variant Shredding Benefits
 
-The V3 "dual variant" architecture shreds hot fields for efficient column projection:
+The V3 "dual variant" architecture shreds frequently-accessed ("hot") fields into dedicated Parquet columns for efficient column projection, while keeping remaining fields in a single `$data` Variant column:
 
 | Query Type | Without Shredding | With Shredding | Speedup |
 |------------|-------------------|----------------|---------|
-| Full entity | 100ms | 100ms | 1x |
-| Index columns only | 100ms | 5ms | 20x |
-| 2 columns | 100ms | 15ms | 6.7x |
-| 4 columns | 100ms | 30ms | 3.3x |
+| Full entity | 100ms | 100ms | 1x (no change) |
+| Index columns only | 100ms | 5ms | 20x faster |
+| 2 shredded columns | 100ms | 15ms | 6.7x faster |
+| 4 shredded columns | 100ms | 30ms | 3.3x faster |
+
+**Key Insight**: Shredding provides dramatic performance improvements when querying subset of fields, with negligible overhead when reading full entities.
 
 ### Compression Comparison
 
-| Codec | Write (ms) | Read (ms) | Size | Ratio |
-|-------|------------|-----------|------|-------|
-| None | 50 | 30 | 2.0 MB | 1.0x |
-| Snappy | 55 | 35 | 0.8 MB | 2.5x |
-| GZIP | 120 | 80 | 0.5 MB | 4.0x |
-| LZ4 | 52 | 32 | 0.7 MB | 2.9x |
+Parquet supports multiple compression codecs with different tradeoffs:
 
-**Recommendation**: Use Snappy for best balance of speed and compression.
+| Codec | Write (ms) | Read (ms) | Size | Ratio | Best For |
+|-------|------------|-----------|------|-------|----------|
+| None | 50 | 30 | 2.0 MB | 1.0x | Local testing, fastest I/O |
+| Snappy | 55 | 35 | 0.8 MB | 2.5x | **Production (recommended)** |
+| GZIP | 120 | 80 | 0.5 MB | 4.0x | Archival, minimize storage cost |
+| LZ4 | 52 | 32 | 0.7 MB | 2.9x | Balance (if available) |
+
+**Recommendation**: Use **Snappy** compression for the best balance of speed and compression in production. It provides 2.5x compression with minimal CPU overhead (~10% slower than uncompressed).
+
+**For Cloudflare Workers**: Snappy is well-supported in `hyparquet-compressors` and provides good compression without exceeding CPU time limits.
 
 ## Optimization Tips
 
@@ -582,7 +592,7 @@ await posts.find({ status: 'published' })
 
 ### 2. Leverage Bloom Filters for Existence Checks
 
-Bloom filters provide probabilistic existence checks with minimal I/O:
+Bloom filters provide probabilistic existence checks with minimal I/O by allowing rapid elimination of row groups that definitely don't contain a value:
 
 ```typescript
 // Enable bloom filter on a column
@@ -595,35 +605,39 @@ const hasTech = await posts.find({ category: 'tech' }, { limit: 1 })
 ```
 
 **Benefits**:
-- 10-100x faster than full scan for rare values
-- Minimal storage overhead (~1% of data size)
-- Works with Parquet row group statistics
+- **10-100x faster** than full scan for rare values
+- **Minimal storage overhead**: ~1% of data size per column
+- **Works with Parquet row group statistics** for compound filtering
+- **No false negatives**: if bloom filter says "not present", it's guaranteed absent
 
 **Use Cases**:
-- Tag/category filtering
-- Checking if value exists
-- Pre-filtering before full query
+- Tag/category filtering (high-cardinality string fields)
+- Checking if a value exists in large datasets
+- Pre-filtering before expensive full query execution
+- IN queries with many values
 
 ### 3. Use Predicate Pushdown
 
-ParqueDB automatically pushes predicates down to row groups using column statistics:
+ParqueDB automatically pushes predicates down to row groups using Parquet's built-in column statistics (min/max values per row group):
 
 ```typescript
 // ParqueDB automatically uses min/max statistics
 await products.find({
   price: { $gte: 100, $lte: 200 }
-  // Skips row groups where max(price) < 100 or min(price) > 200
+  // Automatically skips row groups where max(price) < 100 or min(price) > 200
 })
 ```
 
 **How to Optimize**:
-- Sort data by commonly filtered columns before writing
-- Use appropriate row group sizes (10K entities is optimal)
-- Filter on columns with good statistics (numeric, dates)
+- **Sort data** by commonly filtered columns before writing (maximizes statistics effectiveness)
+- **Use appropriate row group sizes**: 10K entities is optimal for balancing granularity vs overhead
+- **Filter on columns with good statistics**: numeric types, dates, and low-cardinality strings
+- **Compound predicates**: AND conditions allow elimination of row groups failing any predicate
 
 **Effectiveness**:
-- Can skip 80-95% of row groups on range queries
-- Best with sorted or clustered data
+- Can skip **80-95% of row groups** on selective range queries
+- Best results with sorted or clustered data (e.g., time-series sorted by timestamp)
+- Works automatically - no configuration needed
 
 ### 4. Batch Operations
 
@@ -785,7 +799,7 @@ const count = await posts.count({ status: 'published' })
 
 ### 11. Cloudflare Workers Specific
 
-**Parallel R2 Reads**: Use `Promise.all` for independent queries:
+**Parallel R2 Reads**: Use `Promise.all` for independent queries to maximize throughput:
 
 ```typescript
 // Bad: Sequential (10ms each = 30ms total)
@@ -793,7 +807,7 @@ const users = await db.users.find({ active: true })
 const posts = await db.posts.find({ status: 'published' })
 const comments = await db.comments.find({ approved: true })
 
-// Good: Parallel (10ms total)
+// Good: Parallel (10ms total - limited by slowest query)
 const [users, posts, comments] = await Promise.all([
   db.users.find({ active: true }),
   db.posts.find({ status: 'published' }),
@@ -801,38 +815,36 @@ const [users, posts, comments] = await Promise.all([
 ])
 ```
 
-**Cache Index Metadata**: Reuse Durable Objects to keep indexes in memory:
+**Cache Index Metadata**: Reuse Durable Objects to keep indexes in memory and avoid cold starts:
 
 ```typescript
-// Index metadata is cached in DO SQLite
-// Warm DO: 0.7ms vs Cold DO: 3ms
+// Index metadata is cached in Durable Object SQLite
+// Warm DO: ~0.7ms per operation
+// Cold DO: ~3ms per operation (includes DO initialization)
+// Recommendation: Keep DOs warm with periodic health checks for latency-critical workloads
 ```
 
 **Use R2 Conditional Requests**: Leverage ETags to avoid re-reading unchanged data:
 
 ```typescript
 // R2 automatically handles ETags and conditional requests
-// Browser cache: 304 Not Modified responses are near-instant
+// Cache-Control headers enable browser/CDN caching
+// 304 Not Modified responses are near-instant (<1ms)
+// Particularly effective for static/historical Parquet files
 ```
 
-## Benchmark Architecture
+**Memory Management**: Workers have 128MB memory limit:
 
-| Operation | Target (p50) | Target (p99) | Status |
-|-----------|--------------|--------------|--------|
-| Get by ID | 5ms | 20ms | Achieved |
-| Find (indexed) | 20ms | 100ms | Achieved |
-| Find (scan) | 100ms | 500ms | Achieved |
-| Create | 10ms | 50ms | Achieved |
-| Update | 15ms | 75ms | Achieved |
-| Delete | 10ms | 50ms | Achieved |
-| Relationship traverse | 50ms | 200ms | Achieved |
-| FTS search | 20ms | 100ms | Achieved |
+- Use projections to reduce entity size in memory
+- Stream large result sets rather than loading all at once
+- Clear references promptly to allow garbage collection
+- Monitor heap usage in production with `performance.memory` (if available)
 
 ## Benchmark Architecture
 
 ### Test Files
 
-ParqueDB benchmarks are organized by functionality:
+ParqueDB benchmarks are organized by functionality in `tests/benchmarks/`:
 
 ```
 tests/benchmarks/
@@ -865,12 +877,17 @@ scripts/
   ├── benchmark-variant.ts       # Variant encoding benchmarks
   ├── benchmark-v3.ts            # V3 architecture benchmarks
   ├── e2e-benchmark.ts           # End-to-end deployed Worker tests
-  ├── events-benchmark.ts        # Event log performance
+  ├── events-benchmark.mjs       # Event log performance (development script, untracked)
   ├── upload-benchmark-data.ts   # Upload test data to R2
   ├── upload-benchmark-datasets.ts  # Upload benchmark datasets
   ├── build-indexes.ts           # Build secondary indexes
   ├── upload-indexes.ts          # Upload indexes to R2
-  └── check-datasets.ts          # Validate benchmark datasets
+  ├── check-datasets.ts          # Validate benchmark datasets
+  ├── load-data.ts               # Load individual datasets
+  ├── load-all.ts                # Load all available datasets
+  └── *.mjs (untracked)          # Ad-hoc development benchmark scripts
+
+**Note**: Some utility scripts in `scripts/` are `.mjs` files that remain untracked in git. These are typically one-off exploration or debugging scripts. Core benchmark functionality is in `.ts` files and tracked in version control.
 
 src/worker/
   ├── benchmark.ts               # R2 benchmark endpoint (Worker runtime)
@@ -943,6 +960,8 @@ describe('My Custom Benchmark', () => {
 npm run benchmark -- --suite=my-suite --iterations=50 --scale=1000,10000
 ```
 
+**Note**: The benchmark script is TypeScript (`benchmark.ts`) and runs via `tsx`. The package.json references it for compatibility.
+
 #### Using Manual Timing
 
 ```typescript
@@ -995,8 +1014,20 @@ npm run load:onet
 # Load UNSPSC product taxonomy
 npm run load:unspsc
 
+# Load Wiktionary dataset
+npm run load:wiktionary
+
+# Load Wikidata dataset
+npm run load:wikidata
+
+# Load CommonCrawl dataset
+npm run load:commoncrawl
+
 # Load all datasets
 npm run load:all
+
+# Validate loaded datasets
+npm run check:datasets
 ```
 
 Datasets are loaded into `data/` directory and used by:
@@ -1065,16 +1096,22 @@ open https://your-username.github.io/parquedb/dev/bench
 
 ### Performance Regression Detection
 
-Benchmarks fail CI if performance regresses:
+Benchmarks can fail CI if significant performance regressions are detected:
 
 ```typescript
-// In benchmark setup
+// In benchmark setup (optional - not enabled by default)
 const PERFORMANCE_THRESHOLD = 1.2 // 20% regression tolerance
 
 if (currentTime > baselineTime * PERFORMANCE_THRESHOLD) {
   throw new Error(`Performance regression detected: ${currentTime}ms vs ${baselineTime}ms baseline`)
 }
 ```
+
+**Note**: Automated regression detection should account for:
+- Statistical variance (run multiple iterations)
+- Different CI environments (may be slower than development machines)
+- Reasonable thresholds (20-50% depending on operation criticality)
+- Baseline updates when intentional architecture changes occur
 
 ## Contributing Benchmarks
 
