@@ -22,6 +22,7 @@
  */
 
 import { DurableObject } from 'cloudflare:workers'
+import Sqids from 'sqids'
 import type {
   Entity,
   EntityId,
@@ -33,9 +34,12 @@ import type {
   CreateInput,
   Variant,
 } from '../types'
-import { entityTarget, relTarget, parseEntityTarget, isRelationshipTarget } from '../types'
+import { entityTarget, relTarget } from '../types'
 import type { Env, FlushConfig } from '../types/worker'
 import { getRandom48Bit, parseStoredData } from '../utils'
+
+// Initialize Sqids for short ID generation
+const sqids = new Sqids()
 
 // =============================================================================
 // ULID Generation (simplified, for event IDs)
@@ -145,21 +149,7 @@ interface StoredRelationship {
   data: string | null
 }
 
-/** Event as stored in SQLite */
-interface StoredEvent {
-  [key: string]: SqlStorageValue
-  id: string
-  ts: string
-  target: string
-  op: string
-  ns: string | null
-  entity_id: string | null
-  before: string | null
-  after: string | null
-  actor: string
-  metadata: string | null
-  flushed: number
-}
+// Note: StoredEvent interface removed - legacy table kept for backward compatibility only
 
 // =============================================================================
 // ParqueDBDO Class
@@ -201,6 +191,15 @@ export class ParqueDBDO extends DurableObject<Env> {
 
   /** Approximate size of buffered events in bytes */
   private eventBufferSize = 0
+
+  /** Namespace sequence counters for short ID generation with Sqids */
+  private counters: Map<string, number> = new Map()
+
+  /** Event buffers per namespace for WAL batching with sequence tracking */
+  private nsEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }> = new Map()
+
+  /** Whether counters have been initialized from SQLite */
+  private countersInitialized = false
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -254,8 +253,21 @@ export class ParqueDBDO extends DurableObject<Env> {
       )
     `)
 
-    // NEW: Event batches table for WAL batching (reduces SQLite row costs)
-    // Each row contains a batch of events serialized as a blob
+    // NEW: events_wal table for WAL batching with namespace-based counters
+    // Each row contains a batch of events with Sqids sequence range for short IDs
+    // first_seq/last_seq track the counter range for ID generation
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS events_wal (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ns TEXT NOT NULL,
+        first_seq INTEGER NOT NULL,
+        last_seq INTEGER NOT NULL,
+        events BLOB NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `)
+
+    // Legacy event_batches table - kept for backward compatibility
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS event_batches (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -301,12 +313,51 @@ export class ParqueDBDO extends DurableObject<Env> {
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_entities_updated ON entities(ns, updated_at)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_rels_from ON relationships(from_ns, from_id, predicate)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_rels_to ON relationships(to_ns, to_id, reverse)')
+    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_wal_ns ON events_wal(ns, last_seq)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_event_batches_flushed ON event_batches(flushed, min_ts)')
     // Legacy index kept for backward compatibility
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_unflushed ON events(flushed, ts)')
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_events_ns ON events(ns, entity_id)')
 
     this.initialized = true
+
+    // Initialize sequence counters from events_wal
+    await this.initializeCounters()
+  }
+
+  /**
+   * Initialize namespace counters from events_wal table
+   * On DO startup, load the max sequence for each namespace
+   */
+  private async initializeCounters(): Promise<void> {
+    if (this.countersInitialized) return
+
+    interface CounterRow {
+      [key: string]: SqlStorageValue
+      ns: string
+      max_seq: number
+    }
+
+    // Get max sequence for each namespace
+    const rows = [...this.sql.exec<CounterRow>(
+      `SELECT ns, MAX(last_seq) as max_seq FROM events_wal GROUP BY ns`
+    )]
+
+    for (const row of rows) {
+      // Next ID starts after max_seq
+      this.counters.set(row.ns, row.max_seq + 1)
+    }
+
+    this.countersInitialized = true
+  }
+
+  /**
+   * Get next sequence number for namespace and generate short ID with Sqids
+   */
+  private getNextId(ns: string): string {
+    const seq = this.counters.get(ns) || 1
+    this.counters.set(ns, seq + 1)
+    return sqids.encode([seq])
   }
 
   // ===========================================================================
@@ -330,7 +381,8 @@ export class ParqueDBDO extends DurableObject<Env> {
 
     const now = new Date().toISOString()
     const actor = options.actor || 'system/anonymous'
-    const id = generateULID().toLowerCase()
+    // Use Sqids for short, human-friendly IDs based on namespace counter
+    const id = this.getNextId(ns)
     const entityIdValue = `${ns}/${id}`
 
     // Extract $type and name, rest goes to data
@@ -841,6 +893,89 @@ export class ParqueDBDO extends DurableObject<Env> {
   }
 
   /**
+   * Append an event with namespace-based sequence tracking (new events_wal format)
+   * Uses Sqids-based counter for short IDs instead of ULIDs
+   *
+   * @param ns - Namespace for the event
+   * @param event - Event without ID (ID will be generated)
+   * @returns Event ID generated with Sqids
+   */
+  async appendEventWithSeq(ns: string, event: Omit<Event, 'id'>): Promise<string> {
+    await this.ensureInitialized()
+
+    // Get or create buffer for this namespace
+    let buffer = this.nsEventBuffers.get(ns)
+    if (!buffer) {
+      // Initialize with current counter
+      const seq = this.counters.get(ns) || 1
+      buffer = { events: [], firstSeq: seq, lastSeq: seq, sizeBytes: 0 }
+      this.nsEventBuffers.set(ns, buffer)
+    }
+
+    // Generate event ID using Sqids with current sequence
+    const eventId = sqids.encode([buffer.lastSeq])
+    const fullEvent: Event = { ...event, id: eventId }
+
+    buffer.events.push(fullEvent)
+    buffer.lastSeq++
+    this.counters.set(ns, buffer.lastSeq)
+
+    // Estimate size
+    const eventJson = JSON.stringify(fullEvent)
+    buffer.sizeBytes += eventJson.length
+
+    // Check if we should flush
+    if (buffer.events.length >= EVENT_BATCH_COUNT_THRESHOLD ||
+        buffer.sizeBytes >= EVENT_BATCH_SIZE_THRESHOLD) {
+      await this.flushNsEventBatch(ns)
+    }
+
+    return eventId
+  }
+
+  /**
+   * Flush buffered events for a specific namespace to events_wal
+   */
+  async flushNsEventBatch(ns: string): Promise<void> {
+    const buffer = this.nsEventBuffers.get(ns)
+    if (!buffer || buffer.events.length === 0) return
+
+    await this.ensureInitialized()
+
+    // Serialize events to blob
+    const json = JSON.stringify(buffer.events)
+    const data = new TextEncoder().encode(json)
+    const now = new Date().toISOString()
+
+    this.sql.exec(
+      `INSERT INTO events_wal (ns, first_seq, last_seq, events, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      ns,
+      buffer.firstSeq,
+      buffer.lastSeq - 1, // last_seq is inclusive
+      data,
+      now
+    )
+
+    // Reset buffer for next batch
+    this.nsEventBuffers.set(ns, {
+      events: [],
+      firstSeq: buffer.lastSeq,
+      lastSeq: buffer.lastSeq,
+      sizeBytes: 0,
+    })
+  }
+
+  /**
+   * Flush all namespace event buffers
+   */
+  async flushAllNsEventBatches(): Promise<void> {
+    for (const ns of this.nsEventBuffers.keys()) {
+      await this.flushNsEventBatch(ns)
+    }
+  }
+
+  /**
    * Flush buffered events as a single batch row
    *
    * This is called automatically when thresholds are reached,
@@ -891,6 +1026,61 @@ export class ParqueDBDO extends DurableObject<Env> {
   }
 
   /**
+   * Get unflushed WAL event count for a specific namespace
+   */
+  async getUnflushedWalEventCount(ns: string): Promise<number> {
+    await this.ensureInitialized()
+
+    // Count events in WAL batches
+    const rows = [...this.sql.exec<{ total: number }>(
+      `SELECT SUM(last_seq - first_seq + 1) as total FROM events_wal WHERE ns = ?`,
+      ns
+    )]
+
+    const walCount = rows[0]?.total || 0
+
+    // Add buffered events not yet written
+    const buffer = this.nsEventBuffers.get(ns)
+    const bufferCount = buffer?.events.length || 0
+
+    return walCount + bufferCount
+  }
+
+  /**
+   * Get total unflushed WAL event count across all namespaces
+   */
+  async getTotalUnflushedWalEventCount(): Promise<number> {
+    await this.ensureInitialized()
+
+    // Count events in WAL batches
+    const rows = [...this.sql.exec<{ total: number }>(
+      `SELECT SUM(last_seq - first_seq + 1) as total FROM events_wal`
+    )]
+
+    let total = rows[0]?.total || 0
+
+    // Add all buffered events
+    for (const buffer of this.nsEventBuffers.values()) {
+      total += buffer.events.length
+    }
+
+    return total
+  }
+
+  /**
+   * Get unflushed WAL batch count
+   */
+  async getUnflushedWalBatchCount(): Promise<number> {
+    await this.ensureInitialized()
+
+    const rows = [...this.sql.exec<{ count: number }>(
+      'SELECT COUNT(*) as count FROM events_wal'
+    )]
+
+    return rows[0]?.count || 0
+  }
+
+  /**
    * Get unflushed batch count
    */
   async getUnflushedBatchCount(): Promise<number> {
@@ -904,6 +1094,43 @@ export class ParqueDBDO extends DurableObject<Env> {
   }
 
   /**
+   * Read all unflushed WAL events for a namespace
+   */
+  async readUnflushedWalEvents(ns: string): Promise<Event[]> {
+    await this.ensureInitialized()
+
+    const allEvents: Event[] = []
+
+    interface WalRow extends Record<string, SqlStorageValue> {
+      id: number
+      events: ArrayBuffer
+      first_seq: number
+      last_seq: number
+    }
+
+    const rows = [...this.sql.exec<WalRow>(
+      `SELECT id, events, first_seq, last_seq
+       FROM events_wal
+       WHERE ns = ?
+       ORDER BY first_seq ASC`,
+      ns
+    )]
+
+    for (const row of rows) {
+      const batchEvents = this.deserializeEventBatch(row.events)
+      allEvents.push(...batchEvents)
+    }
+
+    // Add buffer events
+    const buffer = this.nsEventBuffers.get(ns)
+    if (buffer) {
+      allEvents.push(...buffer.events)
+    }
+
+    return allEvents
+  }
+
+  /**
    * Read all unflushed events (from batches + buffer)
    */
   async readUnflushedEvents(): Promise<Event[]> {
@@ -912,9 +1139,9 @@ export class ParqueDBDO extends DurableObject<Env> {
     const allEvents: Event[] = []
 
     // Read from batches
-    interface EventBatchRow {
+    interface EventBatchRow extends Record<string, SqlStorageValue> {
       id: number
-      batch: Uint8Array | ArrayBuffer
+      batch: ArrayBuffer
       min_ts: number
       max_ts: number
       event_count: number
@@ -954,6 +1181,40 @@ export class ParqueDBDO extends DurableObject<Env> {
   }
 
   /**
+   * Delete WAL batches for a namespace (after archiving to R2)
+   */
+  async deleteWalBatches(ns: string, upToSeq: number): Promise<void> {
+    await this.ensureInitialized()
+
+    this.sql.exec(
+      `DELETE FROM events_wal WHERE ns = ? AND last_seq <= ?`,
+      ns,
+      upToSeq
+    )
+  }
+
+  /**
+   * Get current sequence counter for a namespace
+   */
+  getSequenceCounter(ns: string): number {
+    return this.counters.get(ns) || 1
+  }
+
+  /**
+   * Get buffer state for a namespace (for testing)
+   */
+  getNsBufferState(ns: string): { eventCount: number; firstSeq: number; lastSeq: number; sizeBytes: number } | null {
+    const buffer = this.nsEventBuffers.get(ns)
+    if (!buffer) return null
+    return {
+      eventCount: buffer.events.length,
+      firstSeq: buffer.firstSeq,
+      lastSeq: buffer.lastSeq,
+      sizeBytes: buffer.sizeBytes,
+    }
+  }
+
+  /**
    * Deserialize a batch blob back to events
    */
   private deserializeEventBatch(batch: Uint8Array | ArrayBuffer): Event[] {
@@ -985,15 +1246,15 @@ export class ParqueDBDO extends DurableObject<Env> {
     await this.flushEventBatch()
 
     // Get unflushed batches
-    interface EventBatchRow {
+    interface FlushEventBatchRow extends Record<string, SqlStorageValue> {
       id: number
-      batch: Uint8Array | ArrayBuffer
+      batch: ArrayBuffer
       min_ts: number
       max_ts: number
       event_count: number
     }
 
-    const batches = [...this.sql.exec<EventBatchRow>(
+    const batches = [...this.sql.exec<FlushEventBatchRow>(
       `SELECT id, batch, min_ts, max_ts, event_count
        FROM event_batches
        WHERE flushed = 0
