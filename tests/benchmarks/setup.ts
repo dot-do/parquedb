@@ -154,8 +154,26 @@ export interface BenchmarkStats {
  * Calculate statistics from an array of durations
  */
 export function calculateStats(name: string, durations: number[]): BenchmarkStats {
-  const sorted = [...durations].sort((a, b) => a - b)
   const n = durations.length
+
+  // Handle empty array case
+  if (n === 0) {
+    return {
+      name,
+      iterations: 0,
+      totalTime: 0,
+      mean: 0,
+      median: 0,
+      min: 0,
+      max: 0,
+      stdDev: 0,
+      p95: 0,
+      p99: 0,
+      opsPerSecond: 0,
+    }
+  }
+
+  const sorted = [...durations].sort((a, b) => a - b)
   const totalTime = durations.reduce((a, b) => a + b, 0)
   const mean = totalTime / n
 

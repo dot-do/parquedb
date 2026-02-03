@@ -548,18 +548,51 @@ export class ParqueDBAdapter implements DBProviderExtended {
    * ```
    */
   async related(type: string, id: string, relation: string): Promise<Record<string, unknown>[]> {
-    // Use batch loader if available
-    if (this.batchLoader) {
-      const entities = await this.batchLoader.load(type, id, relation)
-      return entities.map(entityToRecord)
-    }
-
-    // Fallback to direct query
     const namespace = typeToNamespace(type)
     const localId = stripNamespace(id)
 
-    const result = await this.db.getRelated(namespace, localId, relation)
-    return result.items.map(entityToRecord)
+    // Use batch loader if available
+    if (this.batchLoader) {
+      const entities = await this.batchLoader.load(type, id, relation)
+      if (entities.length > 0) {
+        return entities.map(entityToRecord)
+      }
+      // Fall through to direct field access if batch loader returns empty
+    } else {
+      // First try getRelated (for schema-based relationships)
+      const result = await this.db.getRelated(namespace, localId, relation)
+      if (result.items.length > 0) {
+        return result.items.map(entityToRecord)
+      }
+    }
+
+    // Fallback: direct field access for schema-less relationships
+    const entity = await this.db.get(namespace, localId)
+    if (!entity) {
+      return []
+    }
+
+    // Read the relationship field directly (it's stored as { 'Name': 'ns/id' })
+    const relField = (entity as Record<string, unknown>)[relation]
+    if (!relField || typeof relField !== 'object' || Array.isArray(relField)) {
+      return []
+    }
+
+    // Resolve referenced entities
+    const results: Record<string, unknown>[] = []
+    for (const [, targetId] of Object.entries(relField)) {
+      if (typeof targetId === 'string' && targetId.includes('/')) {
+        const [targetNs, ...targetIdParts] = targetId.split('/')
+        if (targetNs) {
+          const targetEntity = await this.db.get(targetNs, targetIdParts.join('/'))
+          if (targetEntity) {
+            results.push(entityToRecord(targetEntity))
+          }
+        }
+      }
+    }
+
+    return results
   }
 
   /**
@@ -672,6 +705,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
 
   /**
    * Semantic search using vector similarity
+   * Falls back to FTS if no embedding provider is configured
    */
   async semanticSearch(
     type: string,
@@ -679,25 +713,47 @@ export class ParqueDBAdapter implements DBProviderExtended {
     options?: SemanticSearchOptions
   ): Promise<SemanticSearchResult[]> {
     const namespace = typeToNamespace(type)
+    const limit = options?.limit || 10
 
-    // Use ParqueDB's vector search if available
-    const filter: Filter = {
-      $vector: {
-        $near: query, // Will be converted to embedding
-        $k: options?.limit || 10,
-        ...(options?.minScore ? { $minScore: options.minScore } : {}),
-      },
+    try {
+      // Try vector search first if embedding provider is configured
+      const filter: Filter = {
+        $vector: {
+          $near: query, // Will be converted to embedding
+          $k: limit,
+          ...(options?.minScore ? { $minScore: options.minScore } : {}),
+        },
+      }
+
+      const result = await this.db.find(namespace, filter)
+
+      return result.items.map((entity, index) => ({
+        ...entityToRecord(entity),
+        $id: entity.$id,
+        $type: entity.$type,
+        // Score decreases with rank (approximate)
+        $score: 1 - index * 0.1,
+      }))
+    } catch (err) {
+      // Fall back to FTS if vector search is not available
+      const errMessage = err instanceof Error ? err.message : ''
+      if (errMessage.includes('embedding provider')) {
+        // Use FTS as fallback
+        const ftsFilter: Filter = {
+          $text: { $search: query },
+        }
+        const result = await this.db.find(namespace, ftsFilter, { limit })
+
+        return result.items.map((entity, index) => ({
+          ...entityToRecord(entity),
+          $id: entity.$id,
+          $type: entity.$type,
+          // Score decreases with rank (approximate)
+          $score: 1 - index * 0.1,
+        }))
+      }
+      throw err
     }
-
-    const result = await this.db.find(namespace, filter)
-
-    return result.items.map((entity, index) => ({
-      ...entityToRecord(entity),
-      $id: entity.$id,
-      $type: entity.$type,
-      // Score decreases with rank (approximate)
-      $score: 1 - index * 0.1,
-    }))
   }
 
   /**
@@ -1282,13 +1338,14 @@ export class ParqueDBAdapter implements DBProviderExtended {
       activity = base.slice(0, -2) + 'ying'
     } else if (
       base.length > 2 &&
-      !['a', 'e', 'i', 'o', 'u'].includes(base[base.length - 2]!) &&
-      ['a', 'e', 'i', 'o', 'u'].includes(base[base.length - 1]!) === false &&
+      // Check for CVC pattern: vowel before final consonant
+      ['a', 'e', 'i', 'o', 'u'].includes(base[base.length - 2]!) &&
+      !['a', 'e', 'i', 'o', 'u'].includes(base[base.length - 1]!) &&
       !base.endsWith('w') &&
       !base.endsWith('x') &&
       !base.endsWith('y')
     ) {
-      // Double final consonant
+      // Double final consonant for CVC pattern (e.g., run -> running)
       activity = base + base[base.length - 1] + 'ing'
     } else {
       activity = base + 'ing'

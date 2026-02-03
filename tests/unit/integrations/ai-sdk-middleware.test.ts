@@ -247,7 +247,7 @@ describe('AI SDK Middleware Integration', () => {
 
       // Verify cache entry was created
       const cacheEntries = await db.collection('ai_cache').find({})
-      expect(cacheEntries.length).toBe(1)
+      expect(cacheEntries.items.length).toBe(1)
     })
 
     it('should return cached response on cache hit', async () => {
@@ -312,9 +312,9 @@ describe('AI SDK Middleware Integration', () => {
       })
 
       const logEntries = await db.collection('ai_logs').find({})
-      expect(logEntries.length).toBe(1)
+      expect(logEntries.items.length).toBe(1)
 
-      const log = logEntries[0] as unknown as LogEntry
+      const log = logEntries.items[0] as unknown as LogEntry
       expect(log.modelId).toBe('gpt-4')
       expect(log.providerId).toBe('openai')
       expect(log.requestType).toBe('generate')
@@ -342,9 +342,9 @@ describe('AI SDK Middleware Integration', () => {
       ).rejects.toThrow('API Error')
 
       const logEntries = await db.collection('ai_logs').find({})
-      expect(logEntries.length).toBe(1)
+      expect(logEntries.items.length).toBe(1)
 
-      const log = logEntries[0] as unknown as LogEntry
+      const log = logEntries.items[0] as unknown as LogEntry
       expect(log.error).toBeDefined()
       expect(log.error?.message).toBe('API Error')
     })
@@ -405,9 +405,9 @@ describe('AI SDK Middleware Integration', () => {
       })
 
       const logEntries = await db.collection('ai_logs').find({})
-      expect(logEntries.length).toBe(1)
+      expect(logEntries.items.length).toBe(1)
 
-      const log = logEntries[0] as unknown as LogEntry
+      const log = logEntries.items[0] as unknown as LogEntry
       expect(log.requestType).toBe('stream')
     })
   })
@@ -598,7 +598,7 @@ describe('AI SDK Middleware Integration', () => {
       expect(deleted).toBe(2)
 
       const remaining = await db.collection('ai_cache').find({})
-      expect(remaining.length).toBe(1)
+      expect(remaining.items.length).toBe(1)
     })
   })
 
@@ -667,7 +667,7 @@ describe('AI SDK Middleware Integration', () => {
       })
 
       const logs = await db.collection('ai_logs').find({})
-      const log = logs[0] as unknown as LogEntry
+      const log = logs.items[0] as unknown as LogEntry
 
       expect(log.usage).toBeDefined()
       expect(log.responseText).toBe('Test')
@@ -690,7 +690,7 @@ describe('AI SDK Middleware Integration', () => {
       })
 
       const logs = await db.collection('ai_logs').find({})
-      const log = logs[0] as unknown as LogEntry
+      const log = logs.items[0] as unknown as LogEntry
 
       expect(log.prompt).toBeDefined()
       expect(log.response).toBeDefined()
@@ -713,7 +713,7 @@ describe('AI SDK Middleware Integration', () => {
       })
 
       const logs = await db.collection('ai_logs').find({})
-      const log = logs[0] as unknown as LogEntry
+      const log = logs.items[0] as unknown as LogEntry
 
       expect(log.metadata).toEqual({ app: 'test-app', version: '1.0.0' })
     })

@@ -562,7 +562,7 @@ export async function queryCacheEntries(
     sort: { [sortField]: sortOrder },
   })
 
-  return results as unknown as CacheEntry[]
+  return results.items as unknown as CacheEntry[]
 }
 
 /**
@@ -634,7 +634,7 @@ export async function queryLogEntries(
     sort: { timestamp: -1 },
   })
 
-  return results as unknown as LogEntry[]
+  return results.items as unknown as LogEntry[]
 }
 
 /**
@@ -689,7 +689,8 @@ export async function getCacheStats(
   const collection = options?.collection ?? DEFAULT_CACHE_COLLECTION
   const now = new Date()
 
-  const allEntries = await db.collection(collection).find({}, { limit: 10000 }) as unknown as CacheEntry[]
+  const result = await db.collection(collection).find({}, { limit: 10000 })
+  const allEntries = result.items as unknown as CacheEntry[]
 
   let totalHits = 0
   let activeCount = 0

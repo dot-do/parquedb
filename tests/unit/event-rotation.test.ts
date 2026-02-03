@@ -468,4 +468,179 @@ describe('Event Log Rotation', () => {
       expect(count).toBe(20)
     })
   })
+
+  // ===========================================================================
+  // maxArchivedEvents Tests (Resource Leak Fix)
+  // ===========================================================================
+
+  describe('maxArchivedEvents limit', () => {
+    it('uses default maxArchivedEvents of 50000', async () => {
+      db = new ParqueDB({ storage })
+      const eventLog = db.getEventLog()
+      const config = eventLog.getConfig()
+
+      expect(config.maxArchivedEvents).toBe(50000)
+    })
+
+    it('respects custom maxArchivedEvents', async () => {
+      db = new ParqueDB({
+        storage,
+        eventLogConfig: { maxArchivedEvents: 100 },
+      })
+      const eventLog = db.getEventLog()
+      const config = eventLog.getConfig()
+
+      expect(config.maxArchivedEvents).toBe(100)
+    })
+
+    it('prunes archived events when exceeding maxArchivedEvents during rotation', async () => {
+      db = new ParqueDB({
+        storage,
+        eventLogConfig: {
+          maxEvents: 3,
+          archiveOnRotation: true,
+          maxArchivedEvents: 5,
+        },
+      })
+
+      // Create 10 entities (10 CREATE events)
+      // With maxEvents=3, 7 events will be rotated to archive
+      // With maxArchivedEvents=5, only 5 should remain in archive
+      for (let i = 0; i < 10; i++) {
+        await db.create('posts', {
+          $type: 'Post',
+          name: `Post ${i}`,
+          title: `Title ${i}`,
+        })
+        advanceTime(5) // Ensure different timestamps
+      }
+
+      const eventLog = db.getEventLog()
+      const archivedEvents = await eventLog.getArchivedEvents()
+      const eventCount = await eventLog.getEventCount()
+
+      // Should have 3 active events (maxEvents limit)
+      expect(eventCount).toBe(3)
+      // Should have at most 5 archived events (maxArchivedEvents limit)
+      expect(archivedEvents.length).toBeLessThanOrEqual(5)
+    })
+
+    it('keeps newest archived events when pruning', async () => {
+      db = new ParqueDB({
+        storage,
+        eventLogConfig: {
+          maxEvents: 2,
+          archiveOnRotation: true,
+          maxArchivedEvents: 3,
+        },
+      })
+
+      // Create 7 entities
+      for (let i = 0; i < 7; i++) {
+        await db.create('posts', {
+          $type: 'Post',
+          name: `Post ${i}`,
+          title: `Title ${i}`,
+        })
+        advanceTime(10)
+      }
+
+      const eventLog = db.getEventLog()
+      const archivedEvents = await eventLog.getArchivedEvents()
+
+      // Should have at most 3 archived events
+      expect(archivedEvents.length).toBeLessThanOrEqual(3)
+
+      // Archived events should be sorted by timestamp (oldest to newest after pruning)
+      for (let i = 1; i < archivedEvents.length; i++) {
+        expect(archivedEvents[i].ts).toBeGreaterThanOrEqual(archivedEvents[i - 1].ts)
+      }
+    })
+
+    it('prunes archived events when manually archiving', async () => {
+      db = new ParqueDB({
+        storage,
+        eventLogConfig: {
+          maxEvents: 100,
+          archiveOnRotation: true,
+          maxArchivedEvents: 5,
+        },
+      })
+
+      // Create 10 entities
+      for (let i = 0; i < 10; i++) {
+        await db.create('posts', {
+          $type: 'Post',
+          name: `Post ${i}`,
+          title: `Title ${i}`,
+        })
+        advanceTime(5)
+      }
+
+      const eventLog = db.getEventLog()
+
+      // Manually archive to keep only 2 events (will archive 8)
+      const result = await eventLog.archiveEvents({ maxEvents: 2 })
+
+      expect(result.archivedCount).toBe(8)
+      // prunedCount should reflect events pruned due to maxArchivedEvents
+      expect(result.prunedCount).toBe(3) // 8 archived - 5 max = 3 pruned
+
+      const archivedEvents = await eventLog.getArchivedEvents()
+      expect(archivedEvents.length).toBe(5)
+    })
+
+    it('does not prune when under maxArchivedEvents limit', async () => {
+      db = new ParqueDB({
+        storage,
+        eventLogConfig: {
+          maxEvents: 5,
+          archiveOnRotation: true,
+          maxArchivedEvents: 100,
+        },
+      })
+
+      // Create 8 entities (will archive 3)
+      for (let i = 0; i < 8; i++) {
+        await db.create('posts', {
+          $type: 'Post',
+          name: `Post ${i}`,
+          title: `Title ${i}`,
+        })
+        advanceTime(5)
+      }
+
+      const eventLog = db.getEventLog()
+      const archivedEvents = await eventLog.getArchivedEvents()
+
+      // All 3 archived events should remain (under the 100 limit)
+      expect(archivedEvents.length).toBe(3)
+    })
+
+    it('handles maxArchivedEvents of 0', async () => {
+      db = new ParqueDB({
+        storage,
+        eventLogConfig: {
+          maxEvents: 3,
+          archiveOnRotation: true,
+          maxArchivedEvents: 0,
+        },
+      })
+
+      // Create 5 entities
+      for (let i = 0; i < 5; i++) {
+        await db.create('posts', {
+          $type: 'Post',
+          name: `Post ${i}`,
+          title: `Title ${i}`,
+        })
+      }
+
+      const eventLog = db.getEventLog()
+      const archivedEvents = await eventLog.getArchivedEvents()
+
+      // All archived events should be pruned immediately
+      expect(archivedEvents.length).toBe(0)
+    })
+  })
 })

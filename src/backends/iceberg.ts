@@ -36,7 +36,7 @@ import type { Filter } from '../types/filter'
 import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions } from '../types/options'
 import type { Update } from '../types/update'
 import type { StorageBackend } from '../types/storage'
-import { isETagMismatchError } from '../storage/errors'
+import { isETagMismatchError, isNotFoundError } from '../storage/errors'
 import { entityAsRecord } from '../types/cast'
 
 // Import shared Parquet utilities
@@ -758,8 +758,12 @@ export class IcebergBackend implements EntityBackend {
         return metadata
       }
       return null
-    } catch {
-      // Table doesn't exist or error reading
+    } catch (error) {
+      // Table doesn't exist yet - return null to indicate no metadata
+      // Propagate other errors (permission, network, corruption)
+      if (!isNotFoundError(error)) {
+        throw error
+      }
       return null
     }
   }
@@ -1004,8 +1008,12 @@ export class IcebergBackend implements EntityBackend {
           manifest.content === 1 // is delete manifest
         )
       }
-    } catch {
-      // Parent manifest list not found or invalid
+    } catch (error) {
+      // Parent manifest list not found is expected (first snapshot)
+      // Propagate other errors (permission, network, corruption)
+      if (!isNotFoundError(error)) {
+        throw error
+      }
     }
   }
 
@@ -1364,8 +1372,13 @@ export class IcebergBackend implements EntityBackend {
     try {
       const manifestListData = await this.storage.read(manifestListPath)
       manifestFiles = decodeManifestListFromAvroOrJson(manifestListData)
-    } catch {
-      return [] // Manifest list doesn't exist or is invalid
+    } catch (error) {
+      // Manifest list not found is expected for empty snapshots
+      // Propagate other errors (permission, network, corruption)
+      if (!isNotFoundError(error)) {
+        throw error
+      }
+      return []
     }
 
     // Step 2: Collect data file paths and deleted entity IDs
@@ -1397,14 +1410,22 @@ export class IcebergBackend implements EntityBackend {
                       deletedIds.add(deletedId)
                     }
                   }
-                } catch {
-                  // Skip unreadable delete files
+                } catch (error) {
+                  // Skip missing delete files (can happen during time travel)
+                  // Propagate other errors (permission, network, corruption)
+                  if (!isNotFoundError(error)) {
+                    throw error
+                  }
                 }
               }
             }
           }
-        } catch {
-          // Skip invalid manifest files
+        } catch (error) {
+          // Skip missing manifest files (can happen during time travel)
+          // Propagate other errors (permission, network, corruption)
+          if (!isNotFoundError(error)) {
+            throw error
+          }
         }
       } else {
         // Process data manifests
@@ -1418,8 +1439,12 @@ export class IcebergBackend implements EntityBackend {
               dataFilePaths.push(entry['data-file']['file-path'])
             }
           }
-        } catch {
-          // Skip invalid manifest files
+        } catch (error) {
+          // Skip missing manifest files (can happen during time travel)
+          // Propagate other errors (permission, network, corruption)
+          if (!isNotFoundError(error)) {
+            throw error
+          }
         }
       }
     }
@@ -1446,8 +1471,12 @@ export class IcebergBackend implements EntityBackend {
             entityMap.set(entity.$id, entity)
           }
         }
-      } catch {
-        // Skip unreadable files
+      } catch (error) {
+        // Skip missing data files (can happen during time travel or concurrent operations)
+        // Propagate other errors (permission, network, corruption)
+        if (!isNotFoundError(error)) {
+          throw error
+        }
       }
     }
 
@@ -1565,8 +1594,12 @@ export class IcebergBackend implements EntityBackend {
       async get(key: string): Promise<Uint8Array | null> {
         try {
           return await storage.read(key)
-        } catch {
-          // Intentionally returns null: Iceberg storage interface expects null for missing files
+        } catch (error) {
+          // Iceberg storage interface expects null for missing files
+          // Propagate other errors (permission, network, corruption)
+          if (!isNotFoundError(error)) {
+            throw error
+          }
           return null
         }
       },

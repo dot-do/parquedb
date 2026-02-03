@@ -181,6 +181,8 @@ export interface EventLogConfig {
   maxAge?: number
   /** Whether to archive rotated events instead of dropping them (default: false) */
   archiveOnRotation?: boolean
+  /** Maximum number of archived events to keep in memory (default: 50000). Only applies when archiveOnRotation is true. Older archived events are pruned when this limit is exceeded. */
+  maxArchivedEvents?: number
 }
 
 /**
@@ -191,6 +193,8 @@ export interface ArchiveEventsResult {
   archivedCount: number
   /** Number of events dropped (if archiveOnRotation is false) */
   droppedCount: number
+  /** Number of old archived events pruned due to maxArchivedEvents limit */
+  prunedCount?: number
   /** Timestamp of the oldest remaining event */
   oldestEventTs?: number
   /** Timestamp of the newest archived event */
@@ -204,6 +208,7 @@ export const DEFAULT_EVENT_LOG_CONFIG: Required<EventLogConfig> = {
   maxEvents: 10000,
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
   archiveOnRotation: false,
+  maxArchivedEvents: 50000, // Default limit for archived events to prevent unbounded growth
 }
 
 /**

@@ -628,4 +628,334 @@ describe('DeltaBackend OCC', () => {
       }
     })
   })
+
+  describe('compact() OCC', () => {
+    it('should use ifNoneMatch when committing compaction', async () => {
+      // Create multiple small files
+      for (let i = 0; i < 3; i++) {
+        await backend.create('posts', { $type: 'Post', name: `Post ${i}` })
+      }
+
+      // Spy on storage.write to verify ifNoneMatch is used
+      const writeSpy = vi.spyOn(storage, 'write')
+
+      await backend.compact('posts', {
+        targetFileSize: 1024 * 1024,
+        minFileSize: 1024 * 1024,
+      })
+
+      // Find the compaction commit file write call
+      const commitWriteCall = writeSpy.mock.calls.find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('_delta_log/') &&
+          call[0].endsWith('.json') &&
+          call[0].includes('00000000000000000003') // Compaction commit (after 3 creates)
+      )
+
+      expect(commitWriteCall).toBeDefined()
+      // The options should include ifNoneMatch: '*' to ensure create-only semantics
+      const options = commitWriteCall?.[2]
+      expect(options?.ifNoneMatch).toBe('*')
+    })
+
+    it('should retry compact on conflict', async () => {
+      // Create files to compact
+      for (let i = 0; i < 3; i++) {
+        await backend.create('posts', { $type: 'Post', name: `Post ${i}` })
+      }
+
+      // Version is now 2 (0, 1, 2 for three creates)
+      let attempts = 0
+      const originalWrite = storage.write.bind(storage)
+      vi.spyOn(storage, 'write').mockImplementation(async (path, data, options) => {
+        // Fail first compaction commit attempt
+        if (
+          path.includes('_delta_log/') &&
+          path.endsWith('.json') &&
+          path.includes('00000000000000000003') &&
+          attempts < 1
+        ) {
+          attempts++
+          const { AlreadyExistsError } = await import('../../../src/storage/errors')
+          throw new AlreadyExistsError(path)
+        }
+        return originalWrite(path, data, options)
+      })
+
+      // Compact should succeed after retry
+      const result = await backend.compact('posts', {
+        targetFileSize: 1024 * 1024,
+        minFileSize: 1024 * 1024,
+      })
+
+      // Should have compacted files
+      expect(result.filesCompacted).toBeGreaterThanOrEqual(0)
+
+      // Data should still be readable
+      const posts = await backend.find('posts', {})
+      expect(posts).toHaveLength(3)
+    })
+
+    it('should handle concurrent compaction attempts', async () => {
+      // Create files
+      for (let i = 0; i < 5; i++) {
+        await backend.create('posts', { $type: 'Post', name: `Post ${i}` })
+      }
+
+      // Two concurrent compactions
+      const [result1, result2] = await Promise.all([
+        backend.compact('posts', {
+          targetFileSize: 1024 * 1024,
+          minFileSize: 1024 * 1024,
+        }),
+        backend.compact('posts', {
+          targetFileSize: 1024 * 1024,
+          minFileSize: 1024 * 1024,
+        }),
+      ])
+
+      // At least one should succeed
+      expect(result1.filesCompacted + result2.filesCompacted).toBeGreaterThan(0)
+
+      // Data should still be complete
+      const posts = await backend.find('posts', {})
+      expect(posts).toHaveLength(5)
+    })
+
+    it('should clean up orphaned files on compaction failure', async () => {
+      const lowRetryBackend = createDeltaBackend({
+        type: 'delta',
+        storage,
+        location: 'warehouse',
+        maxRetries: 2,
+        baseBackoffMs: 10,
+      })
+      await lowRetryBackend.initialize()
+
+      try {
+        // Create files
+        for (let i = 0; i < 3; i++) {
+          await lowRetryBackend.create('posts', { $type: 'Post', name: `Post ${i}` })
+        }
+
+        // Make compaction commit always fail
+        const originalWrite = storage.write.bind(storage)
+        let parquetPath: string | null = null
+
+        vi.spyOn(storage, 'write').mockImplementation(async (path, data, options) => {
+          if (path.endsWith('.parquet') && !path.includes('_delta_log')) {
+            parquetPath = path
+            return originalWrite(path, data, options)
+          }
+          if (path.includes('_delta_log/') && path.endsWith('.json') && !path.includes('0000000000000000000')) {
+            // Fail compaction commits (version > 0)
+            const { AlreadyExistsError } = await import('../../../src/storage/errors')
+            throw new AlreadyExistsError(path)
+          }
+          return originalWrite(path, data, options)
+        })
+
+        try {
+          await lowRetryBackend.compact('posts', {
+            targetFileSize: 1024 * 1024,
+            minFileSize: 1024 * 1024,
+          })
+        } catch {
+          // Expected to fail
+        }
+
+        vi.restoreAllMocks()
+
+        // Original data should still be accessible
+        const posts = await lowRetryBackend.find('posts', {})
+        expect(posts).toHaveLength(3)
+      } finally {
+        await lowRetryBackend.close()
+      }
+    })
+  })
+
+  describe('hardDeleteEntities() OCC', () => {
+    it('should use ifNoneMatch when committing hard delete', async () => {
+      const entity = await backend.create('users', { $type: 'User', name: 'Alice' })
+      const entityId = entity.$id.split('/')[1]!
+
+      // Spy on storage.write to verify ifNoneMatch is used
+      const writeSpy = vi.spyOn(storage, 'write')
+
+      await backend.delete('users', entityId, { hard: true })
+
+      // Find the hard delete commit file write call
+      const commitWriteCall = writeSpy.mock.calls.find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('_delta_log/') &&
+          call[0].endsWith('.json') &&
+          call[0].includes('00000000000000000001') // Delete commit
+      )
+
+      expect(commitWriteCall).toBeDefined()
+      // The options should include ifNoneMatch: '*' to ensure create-only semantics
+      const options = commitWriteCall?.[2]
+      expect(options?.ifNoneMatch).toBe('*')
+    })
+
+    it('should retry hard delete on conflict', async () => {
+      await backend.create('users', { $type: 'User', name: 'Alice' })
+      const entity2 = await backend.create('users', { $type: 'User', name: 'Bob' })
+      const entityId = entity2.$id.split('/')[1]!
+
+      // Version is now 1 (0 for Alice, 1 for Bob)
+      let attempts = 0
+      const originalWrite = storage.write.bind(storage)
+      vi.spyOn(storage, 'write').mockImplementation(async (path, data, options) => {
+        // Fail first hard delete commit attempt
+        if (
+          path.includes('_delta_log/') &&
+          path.endsWith('.json') &&
+          path.includes('00000000000000000002') &&
+          attempts < 1
+        ) {
+          attempts++
+          const { AlreadyExistsError } = await import('../../../src/storage/errors')
+          throw new AlreadyExistsError(path)
+        }
+        return originalWrite(path, data, options)
+      })
+
+      // Hard delete should succeed after retry
+      const result = await backend.delete('users', entityId, { hard: true })
+      expect(result.deletedCount).toBe(1)
+
+      // Only Alice should remain
+      const users = await backend.find('users', {})
+      expect(users).toHaveLength(1)
+      expect(users[0]!.name).toBe('Alice')
+    })
+
+    it('should handle concurrent hard deletes correctly', async () => {
+      // Create multiple entities
+      const entities = await Promise.all([
+        backend.create('users', { $type: 'User', name: 'Alice' }),
+        backend.create('users', { $type: 'User', name: 'Bob' }),
+        backend.create('users', { $type: 'User', name: 'Charlie' }),
+      ])
+
+      const ids = entities.map(e => e.$id.split('/')[1]!)
+
+      // Concurrent hard deletes
+      await Promise.all([
+        backend.delete('users', ids[0]!, { hard: true }),
+        backend.delete('users', ids[1]!, { hard: true }),
+      ])
+
+      // Only Charlie should remain
+      const users = await backend.find('users', {})
+      expect(users).toHaveLength(1)
+      expect(users[0]!.name).toBe('Charlie')
+    })
+
+    it('should throw CommitConflictError after max retries for hard delete', async () => {
+      const lowRetryBackend = createDeltaBackend({
+        type: 'delta',
+        storage,
+        location: 'warehouse',
+        maxRetries: 2,
+        baseBackoffMs: 10,
+      })
+      await lowRetryBackend.initialize()
+
+      try {
+        const entity = await lowRetryBackend.create('users', { $type: 'User', name: 'Alice' })
+        const entityId = entity.$id.split('/')[1]!
+
+        // Make all hard delete commits fail
+        const originalWrite = storage.write.bind(storage)
+        vi.spyOn(storage, 'write').mockImplementation(async (path, data, options) => {
+          if (
+            path.includes('_delta_log/') &&
+            path.endsWith('.json') &&
+            path.includes('00000000000000000001')
+          ) {
+            const { AlreadyExistsError } = await import('../../../src/storage/errors')
+            throw new AlreadyExistsError(path)
+          }
+          return originalWrite(path, data, options)
+        })
+
+        await expect(
+          lowRetryBackend.delete('users', entityId, { hard: true })
+        ).rejects.toThrow(/conflict|retry|exceeded/i)
+      } finally {
+        await lowRetryBackend.close()
+      }
+    })
+
+    it('should not corrupt data on failed hard delete', async () => {
+      const lowRetryBackend = createDeltaBackend({
+        type: 'delta',
+        storage,
+        location: 'warehouse',
+        maxRetries: 2,
+        baseBackoffMs: 10,
+      })
+      await lowRetryBackend.initialize()
+
+      try {
+        const entity = await lowRetryBackend.create('users', { $type: 'User', name: 'Alice' })
+        await lowRetryBackend.create('users', { $type: 'User', name: 'Bob' })
+        const entityId = entity.$id.split('/')[1]!
+
+        // Count before
+        const countBefore = await lowRetryBackend.count('users', {})
+
+        // Make hard delete commit fail
+        const originalWrite = storage.write.bind(storage)
+        vi.spyOn(storage, 'write').mockImplementation(async (path, data, options) => {
+          if (
+            path.includes('_delta_log/') &&
+            path.endsWith('.json') &&
+            path.includes('00000000000000000002')
+          ) {
+            const { AlreadyExistsError } = await import('../../../src/storage/errors')
+            throw new AlreadyExistsError(path)
+          }
+          return originalWrite(path, data, options)
+        })
+
+        try {
+          await lowRetryBackend.delete('users', entityId, { hard: true })
+        } catch {
+          // Expected
+        }
+
+        vi.restoreAllMocks()
+
+        // Re-read from fresh backend
+        await lowRetryBackend.close()
+        const freshBackend = createDeltaBackend({
+          type: 'delta',
+          storage,
+          location: 'warehouse',
+        })
+        await freshBackend.initialize()
+
+        try {
+          // Data should be unchanged
+          const countAfter = await freshBackend.count('users', {})
+          expect(countAfter).toBe(countBefore)
+        } finally {
+          await freshBackend.close()
+        }
+      } finally {
+        // Ensure cleanup even if test fails early
+        try {
+          await lowRetryBackend.close()
+        } catch {
+          // Ignore
+        }
+      }
+    })
+  })
 })

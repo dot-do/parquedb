@@ -281,8 +281,25 @@ export async function createEntity<T = Record<string, unknown>>(
   ctx: CRUDContext
 ): Promise<Entity<T>> {
   const now = new Date()
-  const id = generateId()
-  const fullId = entityId(namespace, id)
+
+  // Use provided $id if present, otherwise generate a new one
+  let fullId: string
+  let id: string
+  if (data.$id) {
+    // If $id is provided, use it (could be full "ns/id" or just "id")
+    const providedId = String(data.$id)
+    if (providedId.includes('/')) {
+      fullId = providedId
+      id = providedId.split('/').slice(1).join('/')
+    } else {
+      id = providedId
+      fullId = entityId(namespace, id)
+    }
+  } else {
+    id = generateId()
+    fullId = entityId(namespace, id)
+  }
+
   const actor = options?.actor || asEntityId('system/anonymous')
 
   // Auto-derive $type from namespace if not provided

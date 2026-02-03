@@ -482,15 +482,79 @@ export function isValidViewName(name: string): boolean {
 }
 
 /**
- * Check if a cron expression is valid (basic validation)
+ * Check if a cron expression is valid
  *
- * Basic format: minute hour day-of-month month day-of-week
+ * Standard format: minute hour day-of-month month day-of-week
+ *
+ * Validates both structure and field ranges:
+ * - minute: 0-59
+ * - hour: 0-23
+ * - day of month: 1-31
+ * - month: 1-12
+ * - day of week: 0-6 (0 = Sunday)
  */
 export function isValidCronExpression(cron: string): boolean {
   if (!cron || typeof cron !== 'string') return false
   const parts = cron.trim().split(/\s+/)
-  // Cron should have 5 parts (standard) or 6 parts (with seconds)
-  return parts.length >= 5 && parts.length <= 6
+  // Cron should have exactly 5 parts (standard format)
+  if (parts.length !== 5) return false
+
+  const ranges: [number, number][] = [
+    [0, 59],   // minute
+    [0, 23],   // hour
+    [1, 31],   // day of month
+    [1, 12],   // month
+    [0, 6],    // day of week
+  ]
+
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]!
+    const [min, max] = ranges[i]!
+    if (!isValidCronField(part, min, max)) return false
+  }
+
+  return true
+}
+
+/**
+ * Check if a single cron field is valid
+ */
+function isValidCronField(field: string, min: number, max: number): boolean {
+  if (field === '*') return true
+
+  // Handle step values (e.g., */15, 0-30/5)
+  if (field.includes('/')) {
+    const [range, stepStr] = field.split('/')
+    if (!stepStr || stepStr === '') return false
+    const step = Number(stepStr)
+    if (isNaN(step) || step <= 0 || !Number.isInteger(step)) return false
+    if (range !== '*' && !isValidCronField(range!, min, max)) return false
+    return true
+  }
+
+  // Handle lists (e.g., 1,3,5)
+  if (field.includes(',')) {
+    return field.split(',').every((part) => isValidCronField(part, min, max))
+  }
+
+  // Handle ranges (e.g., 1-5)
+  if (field.includes('-')) {
+    const [startStr, endStr] = field.split('-')
+    if (!startStr || !endStr) return false
+    const start = Number(startStr)
+    const end = Number(endStr)
+    if (isNaN(start) || isNaN(end)) return false
+    if (!Number.isInteger(start) || !Number.isInteger(end)) return false
+    if (start < min || start > max) return false
+    if (end < min || end > max) return false
+    if (start > end) return false
+    return true
+  }
+
+  // Single value
+  const num = Number(field)
+  if (isNaN(num) || !Number.isInteger(num)) return false
+  return num >= min && num <= max
 }
 
 /**

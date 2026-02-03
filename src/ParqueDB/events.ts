@@ -156,7 +156,7 @@ export function maybeRotateEventLog(
   archivedEvents: Event[],
   eventLogConfig: Required<EventLogConfig>
 ): void {
-  const { maxEvents, maxAge, archiveOnRotation } = eventLogConfig
+  const { maxEvents, maxAge, archiveOnRotation, maxArchivedEvents } = eventLogConfig
   const now = Date.now()
 
   // Calculate cutoff time for age-based rotation
@@ -190,11 +190,35 @@ export function maybeRotateEventLog(
     if (archiveOnRotation) {
       // Move to archived events
       archivedEvents.push(...eventsToRotate)
+      // Prune archived events if exceeding limit (keep newest)
+      pruneArchivedEvents(archivedEvents, maxArchivedEvents)
     }
     // Update the events array in place to maintain reference
     events.length = 0
     events.push(...eventsToKeep)
   }
+}
+
+/**
+ * Prune archived events to respect the maximum limit.
+ * Removes oldest events first (based on timestamp).
+ */
+export function pruneArchivedEvents(
+  archivedEvents: Event[],
+  maxArchivedEvents: number
+): number {
+  if (archivedEvents.length <= maxArchivedEvents) {
+    return 0
+  }
+
+  // Sort by timestamp (oldest first) to determine which to remove
+  archivedEvents.sort((a, b) => a.ts - b.ts)
+
+  const excessCount = archivedEvents.length - maxArchivedEvents
+  // Remove oldest events from the beginning
+  archivedEvents.splice(0, excessCount)
+
+  return excessCount
 }
 
 /**
@@ -215,10 +239,11 @@ export function archiveEvents(
   const now = Date.now()
   const olderThanTs = options?.olderThan?.getTime() ?? (now - eventLogConfig.maxAge)
   const maxEventsToKeep = options?.maxEvents ?? eventLogConfig.maxEvents
-  const { archiveOnRotation } = eventLogConfig
+  const { archiveOnRotation, maxArchivedEvents } = eventLogConfig
 
   let archivedCount = 0
   let droppedCount = 0
+  let prunedCount = 0
   let newestArchivedTs: number | undefined
   let eventsToArchive: Event[] = []
   let eventsToKeep: Event[] = []
@@ -253,6 +278,8 @@ export function archiveEvents(
   if (archiveOnRotation) {
     archivedEvents.push(...eventsToArchive)
     archivedCount = eventsToArchive.length
+    // Prune archived events if exceeding limit (keep newest)
+    prunedCount = pruneArchivedEvents(archivedEvents, maxArchivedEvents)
   } else {
     droppedCount = eventsToArchive.length
   }
@@ -268,6 +295,7 @@ export function archiveEvents(
   return {
     archivedCount,
     droppedCount,
+    prunedCount,
     oldestEventTs,
     newestArchivedTs,
   }
