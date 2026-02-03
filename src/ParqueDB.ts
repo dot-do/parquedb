@@ -330,6 +330,8 @@ export class ParqueDB {
       getStorageRouter: impl.getStorageRouter.bind(impl),
       // Resource Management
       dispose: impl.dispose.bind(impl),
+      flush: impl.flush.bind(impl),
+      disposeAsync: impl.disposeAsync.bind(impl),
     }
 
     // Return a Proxy for dynamic collection access

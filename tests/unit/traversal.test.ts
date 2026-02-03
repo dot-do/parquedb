@@ -250,8 +250,8 @@ describe('Relationship Traversal', () => {
   })
 
   afterEach(async () => {
-    // Small delay to allow any pending file operations to complete
-    await new Promise(resolve => setTimeout(resolve, 50))
+    // Wait for any pending flush operations to complete before cleanup
+    await db.flush()
     try {
       await rm(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
     } catch {
