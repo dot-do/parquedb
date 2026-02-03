@@ -12,7 +12,7 @@
  * @example
  * ```typescript
  * import { Hono } from 'hono'
- * import { auth, requireAuth, getActor } from 'parquedb/hono'
+ * import { auth, requireAuth, getUser } from 'parquedb/hono'
  * import { db } from 'parquedb'
  *
  * const app = new Hono()
@@ -29,13 +29,11 @@
  *   return c.json(post)
  * })
  *
- * // Update also tracks updatedBy
- * app.patch('/api/posts/:id', requireAuth(), async (c) => {
- *   await db.Posts.update(
- *     { $id: c.req.param('id') },
- *     { $set: { title: 'Updated' } },
- *     { actor: c.var.actor }  // → updatedBy: "users/abc123"
- *   )
+ * // Get current user info
+ * app.get('/api/me', async (c) => {
+ *   const user = getUser(c)
+ *   if (!user) return c.json({ error: 'Not authenticated' }, 401)
+ *   return c.json(user)
  * })
  * ```
  */
@@ -211,24 +209,16 @@ export function requireAuth(options: {
 }
 
 /**
- * Get actor from Hono context
- *
- * Helper to extract actor for ParqueDB operations.
+ * Get authenticated user from Hono context
  *
  * @example
  * ```typescript
- * app.post('/api/posts', async (c) => {
- *   const actor = getActor(c)
- *   await db.Posts.create(data, { actor })
+ * app.get('/api/me', async (c) => {
+ *   const user = getUser(c)
+ *   if (!user) return c.json({ error: 'Not authenticated' }, 401)
+ *   return c.json({ id: user.id, email: user.email })
  * })
  * ```
- */
-export function getActor(c: Context): EntityId | null {
-  return (c.var as any).actor ?? null
-}
-
-/**
- * Get user from Hono context
  */
 export function getUser(c: Context): AuthUser | null {
   return (c.var as any).user ?? null

@@ -7,7 +7,6 @@
 export {
   auth,
   requireAuth,
-  getActor,
   getUser,
   assertAuth,
   assertRole,
