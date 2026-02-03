@@ -84,14 +84,44 @@ src/
 
 ## Development Workflow
 
-### Issue Tracking with bd (beads)
+## Beads Issue Tracking
+
+This project uses **Beads** for issue tracking. Issues are stored in `.beads/` and synced via git.
+
+### Hierarchical IDs
+
+Beads supports hierarchical IDs for organizing epics and their children:
+
+```
+parquedb-a3f8        (Epic: CLI Improvements)
+parquedb-a3f8.1      (Task: Schema file loading)
+parquedb-a3f8.1.1    (Sub-task: TypeScript loader)
+parquedb-a3f8.1.2    (Sub-task: JSON loader)
+parquedb-a3f8.2      (Task: Add tests)
+```
+
+### Creating Issues
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --status in_progress  # Claim work
-bd close <id>         # Complete work
-bd sync               # Sync with git
+# Create epic
+bd create --title="Epic: Feature Name" --type=feature --priority=0
+
+# Create child task (hierarchical)
+bd create --title="Implement X" --type=task --priority=1 --parent=icetype-a3f8
+
+# Create sub-task
+bd create --title="Sub-task Y" --type=task --parent=icetype-a3f8.1
+```
+
+### Managing Work
+
+```bash
+bd ready           # Show available work
+bd list            # All issues
+bd show <id>       # Issue details
+bd update <id> --status=in_progress
+bd close <id>      # Complete issue
+bd sync            # Sync with git
 ```
 
 ### TDD Workflow
@@ -103,9 +133,9 @@ All features follow Red-Green-Refactor:
 3. **Refactor**: Clean up while keeping tests green
 
 ```bash
-npm test              # Run all tests
-npm test -- --watch   # Watch mode
-npm test -- <pattern> # Run specific tests
+pnpm test              # Run all tests
+pnpm test -- --watch   # Watch mode
+pnpm test -- <pattern> # Run specific tests
 ```
 
 ### Code Style
@@ -193,7 +223,7 @@ events/current.parquet:
 **MANDATORY before ending session:**
 
 1. [ ] Create issues for remaining work (`bd create`)
-2. [ ] Run tests if code changed (`npm test`)
+2. [ ] Run tests if code changed (`pnpm test`)
 3. [ ] Update issue status (`bd close <id>`)
 4. [ ] Sync and push:
    ```bash

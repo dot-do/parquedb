@@ -52,8 +52,8 @@
   "dependencies": {
     "@dotdo/iceberg": "file:../iceberg/core",
     "@graphdl/core": "^0.3.0",
-    "@icetype/core": "^0.2.0",
-    "@icetype/iceberg": "^0.2.0",
+    "@icetype/core": "^0.3.0",
+    "@icetype/iceberg": "^0.3.0",
     "@types/pluralize": "^0.0.33",
     "hyparquet": "github:dot-do/hyparquet#variant-shredding",
     "hyparquet-compressors": "^1.1.1",
