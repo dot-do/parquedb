@@ -27,7 +27,10 @@ import { DEFAULT_E2E_CONFIG } from './types'
 // Configuration
 // =============================================================================
 
-const SKIP_BENCHMARKS = process.env.SKIP_E2E_BENCHMARKS === '1'
+// Skip benchmarks if explicitly disabled OR if no worker URL is provided
+// This prevents failures in CI/local dev when no deployed worker exists
+const HAS_WORKER_URL = Boolean(process.env.WORKER_URL || process.env.PARQUEDB_URL)
+const SKIP_BENCHMARKS = process.env.SKIP_E2E_BENCHMARKS === '1' || !HAS_WORKER_URL
 const WORKER_URL = process.env.WORKER_URL || process.env.PARQUEDB_URL || DEFAULT_E2E_CONFIG.url
 
 /**
@@ -159,7 +162,7 @@ describe.skipIf(SKIP_BENCHMARKS)('E2E Deployed Worker Benchmark Tests', () => {
   const createdIds: string[] = []
 
   beforeAll(async () => {
-    // Health check
+    // Health check - fail the test suite if worker is unavailable
     const health = await withRetry(() => workerRequest('/health'), 3, 2000)
     if (!health.success) {
       throw new Error(`Worker not available at ${WORKER_URL}: ${health.error}`)

@@ -204,7 +204,7 @@ describe('ParqueDB Workers E2E', () => {
 
       // Soft delete
       const deleted = await stub.delete('posts', id, {})
-      expect(deleted).toBe(true)
+      expect(deleted.deletedCount).toBe(1)
 
       // Should not find (soft deleted)
       const retrieved = await stub.get('posts', id)

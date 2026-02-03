@@ -102,7 +102,7 @@ describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
 
       // Delete it
       const deleted = await stub.delete('posts', entityId, {})
-      expect(deleted).toBe(true)
+      expect(deleted.deletedCount).toBe(1)
 
       // Get should return null (unless includeDeleted)
       const result = await stub.get('posts', entityId)
@@ -216,7 +216,7 @@ describe('DO WAL Phase 3 - Event-Sourced Entities', () => {
 
       // Delete should work by finding entity from events
       const deleted = await stub.delete('posts', entityId, {})
-      expect(deleted).toBe(true)
+      expect(deleted.deletedCount).toBe(1)
 
       // Verify it's deleted
       const result = await stub.get('posts', entityId)

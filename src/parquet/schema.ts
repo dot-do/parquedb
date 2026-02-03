@@ -303,7 +303,11 @@ export function createRelationshipSchema(): ParquetSchema {
     deletedBy: { type: 'STRING', optional: true },
     version: { type: 'INT32', optional: false },
 
-    // Edge properties (Variant)
+    // Shredded metadata columns (commonly queried)
+    matchMode: { type: 'STRING', optional: true },
+    similarity: { type: 'DOUBLE', optional: true },
+
+    // Edge properties (Variant) - remaining metadata
     data: { type: 'BYTE_ARRAY', optional: true },
   }
 }
