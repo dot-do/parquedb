@@ -7,18 +7,71 @@ This guide covers deploying ParqueDB data to Cloudflare R2 object storage for pr
 
 ## Table of Contents
 
+- [What is Cloudflare R2](#what-is-cloudflare-r2)
 - [R2 Bucket Setup](#r2-bucket-setup)
+- [Configuring R2Backend](#configuring-r2backend)
+- [Wrangler Configuration](#wrangler-configuration)
 - [Loading Data to R2](#loading-data-to-r2)
 - [Data Layout in R2](#data-layout-in-r2)
 - [Querying from Workers](#querying-from-workers)
+- [Advanced Topics](#advanced-topics)
 - [Cost Estimation](#cost-estimation)
 - [Pre-loaded Public Datasets](#pre-loaded-public-datasets)
 
 ---
 
+## What is Cloudflare R2
+
+### Overview
+
+Cloudflare R2 is an S3-compatible object storage service that runs on Cloudflare's global network. Unlike traditional cloud object storage, R2 eliminates egress fees, making it ideal for data-intensive applications.
+
+**Key Features:**
+
+- **S3 Compatible API**: Works with existing S3 tools and libraries
+- **Zero Egress Fees**: No bandwidth charges for data reads
+- **Global Distribution**: Data accessible from 300+ cities worldwide
+- **Automatic Caching**: Integrates with Cloudflare's CDN
+- **Simple Pricing**: Pay only for storage and operations
+- **Workers Integration**: Direct binding to Cloudflare Workers
+
+### Benefits for ParqueDB
+
+ParqueDB is designed to take full advantage of R2's unique capabilities:
+
+1. **Cost-Effective Analytics**: Zero egress fees mean you can query large datasets without bandwidth costs
+2. **Edge Performance**: Parquet files cached at Cloudflare's edge for sub-100ms query times
+3. **Columnar Efficiency**: Read only the columns you need, reducing data transfer
+4. **Scalable Storage**: Store terabytes of Parquet data affordably
+5. **Built-in CDN**: Public datasets automatically distributed globally
+6. **Worker Integration**: Direct R2 bindings avoid HTTP overhead
+
+**Cost Comparison Example:**
+
+For a 100GB dataset with 1M queries/month:
+- **AWS S3 + Lambda**: $1.35 (storage) + $90 (egress @ $0.09/GB) = ~$91/month
+- **Cloudflare R2 + Workers**: $1.35 (storage) + $10.80 (operations) = ~$12/month
+- **Savings**: 87% cost reduction
+
+### When to Use R2 for ParqueDB
+
+R2 is ideal for:
+- Public datasets and APIs
+- Analytics dashboards
+- High-traffic read-heavy workloads
+- Cost-sensitive applications
+- Edge-first architectures
+
+Consider alternatives if:
+- You need ACID transactions (use Durable Objects with SQLite)
+- You require sub-millisecond latency (use KV for hot data)
+- You're already heavily invested in AWS ecosystem
+
+---
+
 ## R2 Bucket Setup
 
-### Creating a Bucket via Wrangler
+### Creating a Bucket via Wrangler CLI
 
 The recommended way to create R2 buckets is using Wrangler CLI:
 
@@ -28,7 +81,20 @@ npx wrangler r2 bucket create parquedb
 
 # Create a preview bucket for development
 npx wrangler r2 bucket create parquedb-preview
+
+# Create buckets for different environments
+npx wrangler r2 bucket create parquedb-staging
+npx wrangler r2 bucket create parquedb-test
+
+# Verify bucket creation
+npx wrangler r2 bucket list
 ```
+
+**Advantages of Wrangler CLI:**
+- Scriptable and automatable
+- Supports CI/CD pipelines
+- Version controlled configuration
+- Faster than dashboard for multiple buckets
 
 ### Creating a Bucket via Dashboard
 
@@ -39,25 +105,489 @@ npx wrangler r2 bucket create parquedb-preview
 5. Select your preferred location hint (optional)
 6. Click **Create bucket**
 
-### Configuring wrangler.toml Bindings
+**Advantages of Dashboard:**
+- Visual interface
+- Easy to configure public access
+- View bucket metrics and usage
+- Configure lifecycle policies
+
+### Bucket Naming Conventions
+
+Follow these best practices for bucket naming:
+
+```bash
+# Good: Environment suffix
+parquedb-prod
+parquedb-staging
+parquedb-dev
+
+# Good: Project and environment
+myapp-parquedb-prod
+analytics-parquedb-prod
+
+# Good: Team and purpose
+data-team-datasets
+public-datasets-prod
+
+# Avoid: Special characters or spaces
+parquedb_prod        # Underscores work but hyphens preferred
+parquedb.prod        # Dots can conflict with domain names
+parquedb prod        # Spaces not allowed
+```
+
+**Naming Rules:**
+- 3-63 characters
+- Lowercase letters, numbers, hyphens
+- Must start and end with letter or number
+- No dots (can conflict with custom domains)
+- Globally unique within your account
+
+---
+
+## Configuring R2Backend
+
+### Basic Setup with R2 Binding
+
+The `R2Backend` class provides a storage backend implementation for ParqueDB using Cloudflare R2:
+
+```typescript
+import { R2Backend } from 'parquedb/storage'
+import type { R2Bucket } from '@cloudflare/workers-types'
+
+// In your Worker fetch handler
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    // Create R2 backend from Worker binding
+    const storage = new R2Backend(env.BUCKET)
+
+    // Use with ParqueDB
+    const db = new ParqueDB({ storage })
+
+    // Now you can query data
+    const results = await db.find('posts', { status: 'published' })
+    return Response.json(results)
+  }
+}
+```
+
+### Configuration Options
+
+The `R2Backend` constructor accepts an optional configuration object:
+
+```typescript
+interface R2BackendOptions {
+  /** Prefix for all keys (optional) */
+  prefix?: string
+
+  /** TTL for multipart uploads in milliseconds (default: 30 minutes) */
+  multipartUploadTTL?: number
+}
+```
+
+#### Using a Prefix
+
+Prefixes help organize data within a single bucket:
+
+```typescript
+// Separate environments in one bucket
+const prodStorage = new R2Backend(env.BUCKET, { prefix: 'prod/' })
+const stagingStorage = new R2Backend(env.BUCKET, { prefix: 'staging/' })
+
+// Separate teams or projects
+const analyticsStorage = new R2Backend(env.BUCKET, { prefix: 'analytics/' })
+const publicStorage = new R2Backend(env.BUCKET, { prefix: 'public/' })
+
+// All paths will be automatically prefixed
+await prodStorage.write('data/posts/data.parquet', data)
+// Actually writes to: prod/data/posts/data.parquet
+```
+
+**When to use prefixes:**
+- Multiple environments in one bucket (dev/staging/prod)
+- Multi-tenant applications
+- Separating public vs private data
+- Testing without separate buckets
+
+**When to use separate buckets:**
+- Production isolation (recommended)
+- Different access control requirements
+- Lifecycle policy differences
+- Cost tracking per environment
+
+#### Multipart Upload TTL
+
+Configure how long incomplete multipart uploads are tracked:
+
+```typescript
+const storage = new R2Backend(env.BUCKET, {
+  multipartUploadTTL: 60 * 60 * 1000 // 1 hour (default: 30 minutes)
+})
+
+// The backend automatically cleans up stale uploads
+storage.cleanupStaleUploads() // Returns count of cleaned uploads
+
+// Check active uploads
+console.log(`Active uploads: ${storage.activeUploadCount}`)
+```
+
+### Error Handling
+
+The R2Backend throws specific error types for different failure scenarios:
+
+```typescript
+import {
+  R2OperationError,
+  R2NotFoundError,
+  R2ETagMismatchError
+} from 'parquedb/storage'
+
+try {
+  const data = await storage.read('data/posts/data.parquet')
+} catch (error) {
+  if (error instanceof R2NotFoundError) {
+    // File doesn't exist
+    console.error('File not found:', error.key)
+    return Response.json({ error: 'Data not found' }, { status: 404 })
+  }
+
+  if (error instanceof R2ETagMismatchError) {
+    // Conditional write failed (version mismatch)
+    console.error('Version conflict:', error.expectedEtag, 'vs', error.actualEtag)
+    return Response.json({ error: 'Data was modified' }, { status: 409 })
+  }
+
+  if (error instanceof R2OperationError) {
+    // General R2 operation failure
+    console.error('R2 operation failed:', error.operation, error.message)
+    return Response.json({ error: 'Storage error' }, { status: 500 })
+  }
+
+  // Unknown error
+  throw error
+}
+```
+
+#### Common Error Scenarios
+
+**File Not Found:**
+```typescript
+try {
+  const data = await storage.read('missing.parquet')
+} catch (error) {
+  if (error instanceof R2NotFoundError) {
+    // Handle gracefully - maybe return empty results
+    return []
+  }
+}
+```
+
+**Conditional Write Failures:**
+```typescript
+try {
+  // Write only if ETag matches (optimistic locking)
+  await storage.writeConditional('data.parquet', newData, expectedETag)
+} catch (error) {
+  if (error instanceof R2ETagMismatchError) {
+    // Data was modified by another writer
+    // Option 1: Retry with fresh read
+    // Option 2: Return conflict error to client
+  }
+}
+```
+
+**Operation Timeouts:**
+```typescript
+try {
+  await storage.write('large-file.parquet', hugeData)
+} catch (error) {
+  if (error instanceof R2OperationError) {
+    // May be timeout or network issue
+    // Consider retry with exponential backoff
+  }
+}
+```
+
+### R2Backend API Reference
+
+#### Read Operations
+
+```typescript
+// Read entire file
+const data: Uint8Array = await storage.read('path/to/file.parquet')
+
+// Read byte range (efficient for column scanning)
+const chunk: Uint8Array = await storage.readRange('file.parquet', 0, 1024)
+
+// Check if file exists
+const exists: boolean = await storage.exists('file.parquet')
+
+// Get file metadata
+const stat = await storage.stat('file.parquet')
+// Returns: { path, size, mtime, etag, contentType, metadata }
+```
+
+#### Write Operations
+
+```typescript
+// Write file
+const result = await storage.write('file.parquet', data, {
+  contentType: 'application/octet-stream',
+  cacheControl: 'public, max-age=3600',
+  metadata: { 'x-parquedb-version': '1' }
+})
+// Returns: { etag, size, versionId }
+
+// Atomic write
+await storage.writeAtomic('file.parquet', data)
+
+// Conditional write (optimistic locking)
+await storage.writeConditional('file.parquet', data, expectedETag)
+
+// Append to file (uses read-modify-write with retry)
+await storage.append('log.txt', newLogData)
+```
+
+#### Multipart Uploads
+
+For files larger than 5MB, use multipart uploads:
+
+```typescript
+// Automatic chunking
+await storage.writeStreaming('large.parquet', largeData, {
+  partSize: 10 * 1024 * 1024, // 10MB parts
+  contentType: 'application/octet-stream'
+})
+
+// Manual multipart control
+const uploadId = await storage.startMultipartUpload('file.parquet')
+try {
+  const parts = []
+  for (let i = 0; i < chunks.length; i++) {
+    const { etag } = await storage.uploadPart('file.parquet', uploadId, i + 1, chunks[i])
+    parts.push({ partNumber: i + 1, etag })
+  }
+  await storage.completeMultipartUpload('file.parquet', uploadId, parts)
+} catch (error) {
+  await storage.abortMultipartUpload('file.parquet', uploadId)
+  throw error
+}
+```
+
+#### List and Delete Operations
+
+```typescript
+// List files with prefix
+const result = await storage.list('data/posts/', {
+  limit: 100,
+  includeMetadata: true,
+  delimiter: '/'
+})
+// Returns: { files: string[], prefixes?: string[], cursor?, hasMore, stats? }
+
+// Delete single file
+const deleted: boolean = await storage.delete('file.parquet')
+
+// Delete all files with prefix
+const count: number = await storage.deletePrefix('old-data/')
+```
+
+#### File Operations
+
+```typescript
+// Copy file
+await storage.copy('source.parquet', 'destination.parquet')
+
+// Move file (copy + delete)
+await storage.move('old-path.parquet', 'new-path.parquet')
+```
+
+---
+
+## Wrangler Configuration
+
+### R2 Bindings in wrangler.toml
+
+### Basic R2 Bindings
 
 Add R2 bucket bindings to your `wrangler.toml`:
 
 ```toml
 # =============================================================================
+# R2 Storage Configuration
+# =============================================================================
+
+[[r2_buckets]]
+binding = "BUCKET"                         # Binding name in env.BUCKET
+bucket_name = "parquedb-prod"              # Production bucket
+preview_bucket_name = "parquedb-preview"   # Local dev bucket (wrangler dev)
+```
+
+**Binding Name Best Practices:**
+- Use `BUCKET` for primary storage (matches ParqueDB defaults)
+- Use descriptive names for multiple bindings: `DATA_BUCKET`, `ASSETS_BUCKET`
+- Use UPPER_SNAKE_CASE for consistency with environment variables
+
+### Environment-Specific Buckets
+
+Configure different buckets per environment:
+
+```toml
+# Default environment (development)
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "parquedb-dev"
+preview_bucket_name = "parquedb-preview"
+
+# Production environment
+[env.production]
+[[env.production.r2_buckets]]
+binding = "BUCKET"
+bucket_name = "parquedb-prod"
+
+# Staging environment
+[env.staging]
+[[env.staging.r2_buckets]]
+binding = "BUCKET"
+bucket_name = "parquedb-staging"
+
+# Test environment (ephemeral)
+[env.test]
+[[env.test.r2_buckets]]
+binding = "BUCKET"
+bucket_name = "parquedb-test"
+```
+
+**Deploy to specific environment:**
+```bash
+# Deploy to production
+npx wrangler deploy --env production
+
+# Deploy to staging
+npx wrangler deploy --env staging
+
+# Local development uses preview_bucket_name
+npx wrangler dev
+```
+
+### Multiple Bucket Bindings
+
+Use multiple buckets for different purposes:
+
+```toml
+# Primary data storage (private)
+[[r2_buckets]]
+binding = "DATA_BUCKET"
+bucket_name = "parquedb-data"
+preview_bucket_name = "parquedb-data-preview"
+
+# Public datasets (read-only)
+[[r2_buckets]]
+binding = "PUBLIC_BUCKET"
+bucket_name = "parquedb-public"
+
+# User uploads
+[[r2_buckets]]
+binding = "UPLOADS_BUCKET"
+bucket_name = "parquedb-uploads"
+
+# Backups and archives
+[[r2_buckets]]
+binding = "ARCHIVE_BUCKET"
+bucket_name = "parquedb-archive"
+```
+
+**Usage in Worker:**
+```typescript
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    // Different storage backends for different purposes
+    const dataStorage = new R2Backend(env.DATA_BUCKET)
+    const publicStorage = new R2Backend(env.PUBLIC_BUCKET)
+    const uploadsStorage = new R2Backend(env.UPLOADS_BUCKET)
+
+    // Route based on data type
+    const url = new URL(request.url)
+    if (url.pathname.startsWith('/public/')) {
+      // Serve public datasets
+      const data = await publicStorage.read(url.pathname.slice(8))
+      return new Response(data)
+    }
+
+    // Use main data storage for API queries
+    const db = new ParqueDB({ storage: dataStorage })
+    return handleQuery(db, request)
+  }
+}
+```
+
+### Jurisdiction and Location
+
+R2 supports jurisdiction and location hints for data residency:
+
+```toml
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "parquedb-eu"
+jurisdiction = "eu"  # EU data residency
+
+[[r2_buckets]]
+binding = "BUCKET_US"
+bucket_name = "parquedb-us"
+# jurisdiction defaults to "default" (automatic)
+```
+
+**Jurisdiction Options:**
+- `eu` - European Union data residency
+- `fedramp` - FedRAMP compliance (requires Enterprise plan)
+- `default` - Automatic (Cloudflare chooses optimal location)
+
+**Note:** Jurisdiction is set at bucket creation time and cannot be changed. You must create a new bucket to change jurisdiction.
+
+### Complete wrangler.toml Example
+
+```toml
+name = "parquedb-api"
+main = "src/index.ts"
+compatibility_date = "2026-01-30"
+compatibility_flags = ["nodejs_compat"]
+
+# =============================================================================
 # R2 Storage
 # =============================================================================
 
-# R2 bucket for Parquet file storage
 [[r2_buckets]]
 binding = "BUCKET"
-bucket_name = "parquedb"
-preview_bucket_name = "parquedb-preview"  # Used during `wrangler dev`
+bucket_name = "parquedb-dev"
+preview_bucket_name = "parquedb-preview"
 
-# Optional: Multiple buckets for different datasets
-[[r2_buckets]]
-binding = "DATASETS_BUCKET"
-bucket_name = "parquedb-datasets"
+# =============================================================================
+# Production Environment
+# =============================================================================
+
+[env.production]
+
+vars = {
+  ENVIRONMENT = "production"
+  CACHE_DATA_TTL = "300"
+  CACHE_METADATA_TTL = "900"
+}
+
+[[env.production.r2_buckets]]
+binding = "BUCKET"
+bucket_name = "parquedb-prod"
+jurisdiction = "eu"  # If EU data residency required
+
+# =============================================================================
+# Staging Environment
+# =============================================================================
+
+[env.staging]
+
+vars = { ENVIRONMENT = "staging" }
+
+[[env.staging.r2_buckets]]
+binding = "BUCKET"
+bucket_name = "parquedb-staging"
 ```
 
 ### Public Access vs Private
@@ -602,6 +1132,535 @@ const topMovies = await db.find('imdb/titles', {
 const movieCount = await db.count('imdb/titles', { type: 'movie' })
 const seriesCount = await db.count('imdb/titles', { type: 'tvSeries' })
 ```
+
+---
+
+## Advanced Topics
+
+### Multi-Region Considerations
+
+R2 automatically replicates data globally, but understanding its architecture helps optimize performance:
+
+#### How R2 Replication Works
+
+1. **Single Source of Truth**: Data written to one location
+2. **Global Replication**: Automatically replicated to Cloudflare's network
+3. **Edge Caching**: Frequently accessed data cached at edge
+4. **Smart Routing**: Requests routed to nearest location with data
+
+#### Optimizing for Multi-Region Access
+
+**1. Choose the Right Jurisdiction**
+
+```toml
+# EU jurisdiction - optimized for European access
+[[r2_buckets]]
+binding = "BUCKET_EU"
+bucket_name = "parquedb-eu"
+jurisdiction = "eu"
+
+# Default jurisdiction - global optimization
+[[r2_buckets]]
+binding = "BUCKET_GLOBAL"
+bucket_name = "parquedb-global"
+jurisdiction = "default"
+```
+
+**2. Use Regional Buckets for Hot Data**
+
+```typescript
+// Route requests to region-specific buckets
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const region = request.cf?.region || 'US'
+
+    // Choose bucket based on client region
+    const bucket = region.startsWith('EU') ? env.BUCKET_EU : env.BUCKET_US
+    const storage = new R2Backend(bucket)
+
+    const db = new ParqueDB({ storage })
+    return handleQuery(db, request)
+  }
+}
+```
+
+**3. Leverage Edge Caching**
+
+```typescript
+import { CacheStrategy, READ_HEAVY_CACHE_CONFIG } from 'parquedb'
+
+// Cache frequently accessed data at the edge
+const storage = new R2Backend(env.BUCKET)
+const cache = new CacheStrategy(READ_HEAVY_CACHE_CONFIG)
+
+// Cache responses at edge for global distribution
+const response = await db.find('popular-posts', {})
+const cachedResponse = new Response(JSON.stringify(response), {
+  headers: {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'public, max-age=300, s-maxage=3600'
+  }
+})
+
+return cachedResponse
+```
+
+**4. Partition Data by Region**
+
+```typescript
+// Store regional data in separate prefixes
+const usStorage = new R2Backend(env.BUCKET, { prefix: 'us/' })
+const euStorage = new R2Backend(env.BUCKET, { prefix: 'eu/' })
+const apacStorage = new R2Backend(env.BUCKET, { prefix: 'apac/' })
+
+// Write to regional prefix
+await usStorage.write('data/users/data.parquet', usUserData)
+await euStorage.write('data/users/data.parquet', euUserData)
+```
+
+#### Latency Expectations
+
+| Scenario | Typical Latency | Optimization |
+|----------|----------------|--------------|
+| First request (cache miss) | 200-500ms | Use warmup, preload |
+| Cached at edge | 50-100ms | Default behavior |
+| Same region bucket | 100-200ms | Choose jurisdiction |
+| Cross-region bucket | 300-800ms | Use regional buckets |
+
+### Lifecycle Policies
+
+R2 does not currently support automatic lifecycle policies like S3. Use Durable Objects for custom lifecycle management:
+
+#### Custom Lifecycle Manager
+
+```typescript
+// Durable Object for managing data lifecycle
+export class LifecycleManager extends DurableObject {
+  async scheduleCleanup(namespace: string, retentionDays: number) {
+    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
+
+    const storage = new R2Backend(this.env.BUCKET)
+
+    // List old files
+    const files = await storage.list(`data/${namespace}/`, {
+      includeMetadata: true
+    })
+
+    // Delete files older than retention period
+    for (const stat of files.stats || []) {
+      if (stat.mtime.getTime() < cutoff) {
+        await storage.delete(stat.path)
+      }
+    }
+  }
+}
+```
+
+#### Scheduled Cleanup Worker
+
+```typescript
+// Worker triggered by Cron Trigger
+export default {
+  async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
+    const storage = new R2Backend(env.BUCKET)
+
+    // Archive old events
+    const archiveDate = new Date()
+    archiveDate.setDate(archiveDate.getDate() - 90)
+
+    // Move old events to archive prefix
+    const events = await storage.list('events/', { includeMetadata: true })
+    for (const stat of events.stats || []) {
+      if (stat.mtime < archiveDate) {
+        const archivePath = `archive/${stat.path}`
+        await storage.move(stat.path, archivePath)
+      }
+    }
+
+    // Delete very old archives
+    const deleteDate = new Date()
+    deleteDate.setFullYear(deleteDate.getFullYear() - 1)
+
+    const archives = await storage.list('archive/', { includeMetadata: true })
+    for (const stat of archives.stats || []) {
+      if (stat.mtime < deleteDate) {
+        await storage.delete(stat.path)
+      }
+    }
+  }
+}
+```
+
+#### Backup and Archive Strategy
+
+```typescript
+// Daily backup to archive bucket
+export async function backupToArchive(
+  sourceStorage: R2Backend,
+  archiveStorage: R2Backend,
+  namespace: string
+): Promise<void> {
+  const timestamp = new Date().toISOString().split('T')[0] // YYYY-MM-DD
+
+  // List all files in namespace
+  const files = await sourceStorage.list(`data/${namespace}/`)
+
+  // Copy to archive with timestamp
+  for (const file of files.files) {
+    const archivePath = `backups/${timestamp}/${file}`
+    const data = await sourceStorage.read(file)
+    await archiveStorage.write(archivePath, data)
+  }
+}
+```
+
+### Access Control
+
+R2 access is controlled at the Worker level. Implement custom access control in your Worker:
+
+#### API Key Authentication
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    // Verify API key
+    const apiKey = request.headers.get('X-API-Key')
+    if (!apiKey || apiKey !== env.API_KEY) {
+      return new Response('Unauthorized', { status: 401 })
+    }
+
+    const storage = new R2Backend(env.BUCKET)
+    const db = new ParqueDB({ storage })
+
+    // Process authenticated request
+    return handleQuery(db, request)
+  }
+}
+```
+
+#### Role-Based Access Control
+
+```typescript
+interface User {
+  id: string
+  role: 'admin' | 'user' | 'readonly'
+}
+
+async function checkAccess(
+  user: User,
+  operation: 'read' | 'write',
+  namespace: string
+): Promise<boolean> {
+  // Admins can do anything
+  if (user.role === 'admin') return true
+
+  // Read-only users can only read
+  if (user.role === 'readonly') return operation === 'read'
+
+  // Users can read/write their own namespace
+  return namespace.startsWith(`users/${user.id}/`)
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const user = await authenticateUser(request)
+    if (!user) {
+      return new Response('Unauthorized', { status: 401 })
+    }
+
+    const url = new URL(request.url)
+    const namespace = url.pathname.split('/')[1]
+    const operation = request.method === 'GET' ? 'read' : 'write'
+
+    if (!await checkAccess(user, operation, namespace)) {
+      return new Response('Forbidden', { status: 403 })
+    }
+
+    const storage = new R2Backend(env.BUCKET)
+    const db = new ParqueDB({ storage })
+    return handleQuery(db, request)
+  }
+}
+```
+
+#### Namespace Isolation
+
+Use prefixes to isolate tenant data:
+
+```typescript
+// Multi-tenant isolation
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const tenantId = request.headers.get('X-Tenant-ID')
+    if (!tenantId) {
+      return new Response('Tenant ID required', { status: 400 })
+    }
+
+    // Each tenant gets isolated storage
+    const storage = new R2Backend(env.BUCKET, {
+      prefix: `tenants/${tenantId}/`
+    })
+
+    const db = new ParqueDB({ storage })
+    return handleQuery(db, request)
+  }
+}
+```
+
+#### Public vs Private Data
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url)
+
+    // Public data - no authentication required
+    if (url.pathname.startsWith('/public/')) {
+      const storage = new R2Backend(env.PUBLIC_BUCKET)
+      const path = url.pathname.slice(8) // Remove /public/
+
+      const data = await storage.read(path)
+      return new Response(data, {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Cache-Control': 'public, max-age=3600'
+        }
+      })
+    }
+
+    // Private data - authentication required
+    const user = await authenticateUser(request)
+    if (!user) {
+      return new Response('Unauthorized', { status: 401 })
+    }
+
+    const storage = new R2Backend(env.PRIVATE_BUCKET)
+    const db = new ParqueDB({ storage })
+    return handleQuery(db, request)
+  }
+}
+```
+
+### Cost Optimization
+
+Strategies to minimize R2 costs while maintaining performance:
+
+#### 1. Optimize File Sizes
+
+```typescript
+// Good: Files between 50MB-200MB
+// - Efficient for columnar scanning
+// - Good compression ratio
+// - Reasonable request counts
+
+// Too small: Many small files (< 10MB)
+// - Increases request costs (Class A operations)
+// - Poor compression
+// - More metadata overhead
+
+// Too large: Very large files (> 1GB)
+// - Slow first query
+// - More data transfer per request
+// - Harder to partition
+
+// Optimal partitioning
+async function optimizeFileSize(
+  storage: R2Backend,
+  namespace: string,
+  targetSize: number = 100 * 1024 * 1024 // 100MB
+): Promise<void> {
+  // Compact small files
+  const files = await storage.list(`data/${namespace}/`, {
+    includeMetadata: true
+  })
+
+  const smallFiles = (files.stats || []).filter(f => f.size < targetSize / 2)
+  if (smallFiles.length > 1) {
+    // Merge small files into one
+    const merged = await mergeParquetFiles(smallFiles)
+    await storage.write(`data/${namespace}/merged.parquet`, merged)
+
+    // Delete old files
+    for (const file of smallFiles) {
+      await storage.delete(file.path)
+    }
+  }
+}
+```
+
+#### 2. Leverage Caching
+
+```typescript
+// Cache frequently accessed data
+import { CacheStrategy, READ_HEAVY_CACHE_CONFIG } from 'parquedb'
+
+// Long cache for static data
+const staticCache = new CacheStrategy({
+  dataTtl: 3600,        // 1 hour
+  metadataTtl: 7200,    // 2 hours
+  bloomTtl: 14400,      // 4 hours
+  staleWhileRevalidate: true
+})
+
+// Short cache for dynamic data
+const dynamicCache = new CacheStrategy({
+  dataTtl: 60,          // 1 minute
+  metadataTtl: 300,     // 5 minutes
+  bloomTtl: 600,        // 10 minutes
+  staleWhileRevalidate: true
+})
+```
+
+#### 3. Minimize Column Reads
+
+```typescript
+// Bad: Reading all columns (transfers more data)
+const posts = await db.find('posts', {}, {
+  limit: 100
+})
+
+// Good: Project only needed columns (reduces data transfer)
+const posts = await db.find('posts', {}, {
+  limit: 100,
+  project: {
+    title: 1,
+    status: 1,
+    createdAt: 1
+  }
+})
+
+// Savings: If posts have 50 fields, projection reduces data by ~95%
+```
+
+#### 4. Use Bloom Filters
+
+```typescript
+// Enable bloom filters for fast ID lookups
+// Reduces unnecessary reads for non-existent IDs
+
+const storage = new R2Backend(env.BUCKET)
+const db = new ParqueDB({
+  storage,
+  indexes: {
+    bloom: {
+      enabled: true,
+      falsePositiveRate: 0.01 // 1% false positive rate
+    }
+  }
+})
+
+// Bloom filter check avoids R2 read if ID doesn't exist
+const post = await db.get('posts', 'non-existent-id')
+// Returns null immediately without R2 request
+```
+
+#### 5. Batch Operations
+
+```typescript
+// Bad: Many small requests
+for (const id of userIds) {
+  await db.get('users', id) // 100 requests
+}
+
+// Good: Single query with filter
+const users = await db.find('users', {
+  $id: { $in: userIds }
+}) // 1 request
+```
+
+#### 6. Partition Data
+
+```typescript
+// Partition large datasets for efficient querying
+// Example: Time-based partitioning
+
+// Write to date-partitioned files
+const date = new Date().toISOString().split('T')[0]
+await storage.write(
+  `data/events/date=${date}/data.parquet`,
+  eventData
+)
+
+// Query only relevant partitions (partition pruning)
+const todayEvents = await db.find('events', {
+  date: '2026-02-03'  // Only reads data/events/date=2026-02-03/
+})
+```
+
+#### 7. Compress Data
+
+```typescript
+// Parquet files are already compressed, but you can optimize:
+
+// Choose compression codec
+import { parquetWrite } from 'hyparquet-writer'
+
+const data = await parquetWrite({
+  schema: schema,
+  data: rows,
+  compression: 'ZSTD'  // Or GZIP, SNAPPY, LZ4
+})
+
+// Compression comparison:
+// - ZSTD: Best compression, slower (recommended for cold data)
+// - GZIP: Good compression, moderate speed (default)
+// - SNAPPY: Fast, less compression (recommended for hot data)
+// - LZ4: Fastest, least compression (for frequently updated data)
+```
+
+#### 8. Monitor and Alert
+
+```typescript
+// Track R2 usage and costs
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const startTime = Date.now()
+    let bytesRead = 0
+    let requestCount = 0
+
+    const storage = new R2Backend(env.BUCKET)
+    const trackedStorage = new Proxy(storage, {
+      get(target, prop) {
+        if (prop === 'read' || prop === 'readRange') {
+          return async (...args: any[]) => {
+            requestCount++
+            const result = await (target as any)[prop](...args)
+            bytesRead += result.length
+            return result
+          }
+        }
+        return (target as any)[prop]
+      }
+    })
+
+    const db = new ParqueDB({ storage: trackedStorage })
+    const response = await handleQuery(db, request)
+
+    // Log metrics
+    console.log(JSON.stringify({
+      duration: Date.now() - startTime,
+      bytesRead,
+      requestCount,
+      estimatedCost: (requestCount * 0.00036 / 1000) + (bytesRead * 0.015 / (1024 ** 3))
+    }))
+
+    return response
+  }
+}
+```
+
+#### Cost Optimization Checklist
+
+- [ ] Files between 50-200MB for optimal balance
+- [ ] Caching enabled with appropriate TTLs
+- [ ] Projection used to read only needed columns
+- [ ] Bloom filters enabled for ID lookups
+- [ ] Batch operations instead of loops
+- [ ] Data partitioned by common filters
+- [ ] Compression codec optimized for use case
+- [ ] Monitoring and alerting in place
+- [ ] Old data archived or deleted
+- [ ] Public data using CDN caching
 
 ---
 
