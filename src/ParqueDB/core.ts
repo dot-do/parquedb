@@ -2251,6 +2251,18 @@ export class ParqueDBImpl {
 
   /**
    * Begin a transaction
+   *
+   * Returns a transaction object that provides atomic operations with rollback support.
+   * Transactions suppress auto-flush and batch all operations until commit or rollback.
+   *
+   * Rollback Implementation:
+   * - CREATE: Removes entity from store and removes CREATE event from event log
+   * - UPDATE: Restores entity to pre-transaction state and removes UPDATE event
+   * - DELETE: Restores deleted entity and removes DELETE event
+   * - All operations are undone in reverse order to maintain consistency
+   * - beforeState is deep-copied to prevent mutations during transaction
+   *
+   * @returns Transaction object with create, update, delete, commit, and rollback methods
    */
   beginTransaction(): ParqueDBTransaction {
     // Set flag to suppress auto-flush during transaction
