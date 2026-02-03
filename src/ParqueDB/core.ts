@@ -87,6 +87,8 @@ import {
   getQueryStatsStore,
   clearGlobalState,
 } from './store'
+import type { IStorageRouter, StorageMode } from '../storage/router'
+import type { CollectionOptions } from '../db'
 
 // =============================================================================
 // ParqueDB Implementation
@@ -111,6 +113,8 @@ export class ParqueDBImpl {
   private flushPromise: Promise<void> | null = null // Promise for pending flush
   private inTransaction = false // Flag to suppress auto-flush during transactions
   private indexManager: IndexManager // Index management
+  private storageRouter: IStorageRouter | null = null // Routes storage by collection mode
+  private collectionOptions: Map<string, CollectionOptions> = new Map() // Per-collection options
 
   constructor(config: ParqueDBConfig) {
     if (!config.storage) {
@@ -127,6 +131,13 @@ export class ParqueDBImpl {
     this.queryStats = getQueryStatsStore(config.storage)
     // Initialize index manager
     this.indexManager = new IndexManager(config.storage)
+    // Initialize storage router and collection options if provided
+    if (config.storageRouter) {
+      this.storageRouter = config.storageRouter
+    }
+    if (config.collectionOptions) {
+      this.collectionOptions = config.collectionOptions
+    }
     if (config.schema) {
       this.registerSchema(config.schema)
     }
@@ -188,6 +199,58 @@ export class ParqueDBImpl {
       this.collections.set(normalizedNs, new CollectionImpl(this, normalizedNs))
     }
     return this.collections.get(normalizedNs)! as Collection<T>
+  }
+
+  // ===========================================================================
+  // Storage Router Methods
+  // ===========================================================================
+
+  /**
+   * Get the storage mode for a collection
+   * Returns 'typed' for typed collections with schema, 'flexible' for variant storage
+   */
+  getStorageMode(namespace: string): StorageMode {
+    if (this.storageRouter) {
+      return this.storageRouter.getStorageMode(namespace)
+    }
+    return 'flexible' // Default to flexible when no router
+  }
+
+  /**
+   * Get the data path for a collection
+   */
+  getDataPath(namespace: string): string {
+    if (this.storageRouter) {
+      return this.storageRouter.getDataPath(namespace)
+    }
+    // Default flexible path format
+    const normalizedNs = normalizeNamespace(namespace)
+    return `data/${normalizedNs}/data.parquet`
+  }
+
+  /**
+   * Check if a collection has a typed schema
+   */
+  hasTypedSchema(namespace: string): boolean {
+    if (this.storageRouter) {
+      return this.storageRouter.hasTypedSchema(namespace)
+    }
+    return false
+  }
+
+  /**
+   * Get the collection options for a namespace
+   */
+  getCollectionOptions(namespace: string): CollectionOptions | undefined {
+    const normalizedNs = normalizeNamespace(namespace)
+    return this.collectionOptions.get(normalizedNs)
+  }
+
+  /**
+   * Get the storage router (for advanced use cases)
+   */
+  getStorageRouter(): IStorageRouter | null {
+    return this.storageRouter
   }
 
   /**

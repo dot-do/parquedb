@@ -37,6 +37,7 @@ export type {
   // Writer types
   ParquetWriterOptions,
   ParquetWriteResult,
+  TypedWriteOptions,
 
   // Entity types
   EntityParquetSchema,
@@ -67,6 +68,7 @@ export {
   writeParquet,
   appendParquet,
   compactParquet,
+  writeTypedParquet,
 } from './writer'
 
 // =============================================================================

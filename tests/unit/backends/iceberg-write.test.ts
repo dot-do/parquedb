@@ -81,8 +81,8 @@ describe('IcebergBackend', () => {
       const metadataFiles = await storage.list('warehouse/testdb/posts/metadata/')
       expect(metadataFiles.files.length).toBeGreaterThan(0)
 
-      // Should have version-hint.txt
-      const versionHintExists = await storage.exists('warehouse/testdb/posts/metadata/version-hint.txt')
+      // Should have version-hint.text (Iceberg spec uses .text, not .txt)
+      const versionHintExists = await storage.exists('warehouse/testdb/posts/metadata/version-hint.text')
       expect(versionHintExists).toBe(true)
     })
 

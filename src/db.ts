@@ -38,7 +38,8 @@ import { ParqueDB } from './ParqueDB'
 import type { ParqueDBConfig } from './ParqueDB/types'
 import type { StorageBackend } from './types'
 import { fromIceType } from './types/integrations'
-import { MemoryBackend } from './storage'
+import { MemoryBackend, StorageRouter } from './storage'
+import type { RouterSchema } from './storage/router'
 import { createSQL } from './integrations/sql'
 import type { SQLExecutor } from './integrations/sql'
 
@@ -306,12 +307,14 @@ export function getFieldsWithoutOptions(schema: CollectionSchema): Record<string
 
 /**
  * Extract all collection options from a database schema
- * Returns a map of collection name -> options
+ * Returns a map of normalized collection name (lowercase) -> options
  */
 export function extractAllCollectionOptions(schema: DBSchema): Map<string, CollectionOptions> {
   const optionsMap = new Map<string, CollectionOptions>()
   for (const [name, collectionSchema] of Object.entries(schema)) {
-    optionsMap.set(name, extractCollectionOptions(collectionSchema))
+    // Normalize to lowercase for case-insensitive lookup
+    const normalizedName = name.toLowerCase()
+    optionsMap.set(normalizedName, extractCollectionOptions(collectionSchema))
   }
   return optionsMap
 }
@@ -359,19 +362,49 @@ export function extractAllCollectionOptions(schema: DBSchema): Map<string, Colle
 export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {}): DBInstance {
   const storage = config.storage ?? new MemoryBackend()
 
-  const parqueDBConfig: ParqueDBConfig = {
-    storage,
-    defaultNamespace: config.defaultNamespace,
-  }
-
-  const db = new ParqueDB(parqueDBConfig)
-
-  // If flexible mode, attach SQL and return
+  // If flexible mode, create simple config without router
   if (isFlexibleMode(input)) {
+    const parqueDBConfig: ParqueDBConfig = {
+      storage,
+      defaultNamespace: config.defaultNamespace,
+    }
+
+    const db = new ParqueDB(parqueDBConfig)
     const dbWithSql = db as DBInstance
     dbWithSql.sql = createSQL(db)
     return dbWithSql
   }
+
+  // Create StorageRouter from schema
+  // Convert DBSchema to RouterSchema format
+  const routerSchema: RouterSchema = {}
+  for (const [name, collectionSchema] of Object.entries(input)) {
+    if (isCollectionFlexible(collectionSchema)) {
+      routerSchema[name] = 'flexible'
+    } else {
+      // Extract field definitions (excluding $-prefixed keys)
+      const fields: Record<string, string> = {}
+      for (const [key, value] of Object.entries(collectionSchema)) {
+        if (!key.startsWith('$') && typeof value === 'string') {
+          fields[key] = value
+        }
+      }
+      routerSchema[name] = fields
+    }
+  }
+  const storageRouter = new StorageRouter(routerSchema)
+
+  // Extract collection options
+  const collectionOptions = extractAllCollectionOptions(input)
+
+  const parqueDBConfig: ParqueDBConfig = {
+    storage,
+    defaultNamespace: config.defaultNamespace,
+    storageRouter,
+    collectionOptions,
+  }
+
+  const db = new ParqueDB(parqueDBConfig)
 
   // Parse typed schemas using GraphDL
   const graphInput = convertToGraphDLInput(input)
@@ -388,13 +421,6 @@ export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {
 
     // Register the converted schema
     db.registerSchema(parqueDBSchema)
-  }
-
-  // Track flexible collections (for future use - different storage mode)
-  const flexibleCollections = getFlexibleCollections(input)
-  if (flexibleCollections.length > 0) {
-    // TODO: Mark these collections for flexible/variant storage mode
-    // For now they work the same as typed collections
   }
 
   // Attach SQL executor

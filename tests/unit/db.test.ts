@@ -288,9 +288,10 @@ describe('DB factory', () => {
         const optionsMap = extractAllCollectionOptions(schema)
 
         expect(optionsMap.size).toBe(3)
-        expect(optionsMap.get('User')?.includeDataVariant).toBe(true)
-        expect(optionsMap.get('Logs')?.includeDataVariant).toBe(false)
-        expect(optionsMap.get('Posts')?.includeDataVariant).toBe(true)  // default for flexible
+        // Keys are normalized to lowercase
+        expect(optionsMap.get('user')?.includeDataVariant).toBe(true)
+        expect(optionsMap.get('logs')?.includeDataVariant).toBe(false)
+        expect(optionsMap.get('posts')?.includeDataVariant).toBe(true)  // default for flexible
       })
 
       it('uses defaults for collections without $options', () => {
@@ -306,8 +307,9 @@ describe('DB factory', () => {
         }
         const optionsMap = extractAllCollectionOptions(schema)
 
-        expect(optionsMap.get('User')?.includeDataVariant).toBe(true)
-        expect(optionsMap.get('Post')?.includeDataVariant).toBe(true)
+        // Keys are normalized to lowercase
+        expect(optionsMap.get('user')?.includeDataVariant).toBe(true)
+        expect(optionsMap.get('post')?.includeDataVariant).toBe(true)
       })
     })
 

@@ -86,6 +86,16 @@ export {
   InvalidRangeError,
 } from './validation'
 
+// Shared utility functions
+export {
+  globToRegex,
+  matchGlob,
+  generateEtag,
+  generateDeterministicEtag,
+  normalizePath,
+  normalizeFilePath,
+} from './utils'
+
 // FsBackend - Node.js filesystem
 export { FsBackend } from './FsBackend'
 

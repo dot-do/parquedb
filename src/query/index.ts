@@ -82,3 +82,19 @@ export {
   type ExistenceOp,
   type QueryOp,
 } from './builder'
+
+// Typed mode predicate pushdown
+export {
+  filterToPredicates,
+  predicatesToQueryFilter,
+  analyzeFilterForPushdown,
+  extractNonPushableFilter,
+  canFullyPushdown,
+  getPredicateColumns,
+  mergePredicates,
+  hasPushableConditions,
+  type ParquetPredicate,
+  type PredicateOp,
+  type HyparquetFilter,
+  type PredicatePushdownResult,
+} from './predicate-pushdown'

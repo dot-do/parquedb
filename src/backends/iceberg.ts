@@ -46,14 +46,9 @@ import {
   // Manifest operations
   ManifestGenerator,
   ManifestListGenerator,
-  // Atomic commit operations
-  AtomicCommitter,
+  // Snapshot building
   SnapshotBuilder,
   generateUUID,
-  // Avro encoding for manifests
-  AvroFileWriter,
-  createManifestEntrySchema,
-  createManifestListSchema,
   // Types
   type TableMetadata,
   type IcebergSchema,
@@ -61,7 +56,6 @@ import {
   type StorageBackend as IcebergStorageBackend,
   type ManifestEntry,
   type ManifestFile,
-  type PendingCommit,
 } from '@dotdo/iceberg'
 
 // Import Parquet utilities
@@ -668,7 +662,6 @@ export class IcebergBackend implements EntityBackend {
     }
 
     const location = this.getTableLocation(ns)
-    const icebergStorage = this.toIcebergStorage()
 
     // Step 1: Write entities to Parquet file
     const dataFileId = generateUUID()
@@ -732,50 +725,61 @@ export class IcebergBackend implements EntityBackend {
     )
     await this.storage.write(manifestListPath, manifestListContent)
 
-    // Step 6: Commit the snapshot using AtomicCommitter
-    const committer = new AtomicCommitter(icebergStorage, location)
+    // Step 6: Build new snapshot
+    const currentSnapshotId = metadata['current-snapshot-id']
+    const existingSnapshot = currentSnapshotId ? getSnapshotById(metadata, currentSnapshotId) : undefined
+    const existingSummary = existingSnapshot?.summary as Record<string, string> | undefined
+    const prevTotalRecords = existingSummary?.['total-records'] ? parseInt(existingSummary['total-records']) : 0
+    const prevTotalSize = existingSummary?.['total-files-size'] ? parseInt(existingSummary['total-files-size']) : 0
+    const prevTotalFiles = existingSummary?.['total-data-files'] ? parseInt(existingSummary['total-data-files']) : 0
 
-    await committer.commit(async (currentMetadata) => {
-      const baseMetadata = currentMetadata ?? metadata!
-      const currentSeqNum = baseMetadata['last-sequence-number'] ?? 0
-      const newSequenceNumber = currentSeqNum + 1
-      const currentSnapshotId = baseMetadata['current-snapshot-id']
-
-      const snapshotBuilder = new SnapshotBuilder({
-        sequenceNumber: newSequenceNumber,
-        snapshotId,
-        parentSnapshotId: currentSnapshotId ?? undefined,
-        manifestListPath,
-        operation: 'append',
-        schemaId: baseMetadata['current-schema-id'],
-      })
-
-      // Calculate totals
-      const existingSnapshot = currentSnapshotId ? getSnapshotById(baseMetadata, currentSnapshotId) : undefined
-      const existingSummary = existingSnapshot?.summary as Record<string, string> | undefined
-      const prevTotalRecords = existingSummary?.['total-records'] ? parseInt(existingSummary['total-records']) : 0
-      const prevTotalSize = existingSummary?.['total-files-size'] ? parseInt(existingSummary['total-files-size']) : 0
-      const prevTotalFiles = existingSummary?.['total-data-files'] ? parseInt(existingSummary['total-data-files']) : 0
-
-      snapshotBuilder.setSummary(
-        1, // added files
-        0, // deleted files
-        entities.length, // added records
-        0, // deleted records
-        writeResult.size, // added size
-        0, // removed size
-        prevTotalRecords + entities.length, // total records
-        prevTotalSize + writeResult.size, // total size
-        prevTotalFiles + 1 // total files
-      )
-
-      const pendingCommit: PendingCommit = {
-        baseMetadata,
-        snapshot: snapshotBuilder.build(),
-      }
-
-      return pendingCommit
+    const snapshotBuilder = new SnapshotBuilder({
+      sequenceNumber,
+      snapshotId,
+      parentSnapshotId: currentSnapshotId ?? undefined,
+      manifestListPath,
+      operation: 'append',
+      schemaId: metadata['current-schema-id'],
     })
+
+    snapshotBuilder.setSummary(
+      1, // added files
+      0, // deleted files
+      entities.length, // added records
+      0, // deleted records
+      writeResult.size, // added size
+      0, // removed size
+      prevTotalRecords + entities.length, // total records
+      prevTotalSize + writeResult.size, // total size
+      prevTotalFiles + 1 // total files
+    )
+
+    const newSnapshot = snapshotBuilder.build()
+
+    // Step 7: Update metadata with new snapshot
+    const newMetadata: TableMetadata = {
+      ...metadata,
+      'last-sequence-number': sequenceNumber,
+      'last-updated-ms': Date.now(),
+      'current-snapshot-id': snapshotId,
+      snapshots: [...metadata.snapshots, newSnapshot],
+      'snapshot-log': [
+        ...(metadata['snapshot-log'] ?? []),
+        { 'timestamp-ms': Date.now(), 'snapshot-id': snapshotId },
+      ],
+    }
+
+    // Step 8: Write new metadata file
+    const metadataVersion = sequenceNumber
+    const metadataUuid = generateUUID()
+    const metadataPath = `${location}/metadata/${metadataVersion}-${metadataUuid}.metadata.json`
+
+    const metadataJson = JSON.stringify(newMetadata, null, 2)
+    await this.storage.write(metadataPath, new TextEncoder().encode(metadataJson))
+
+    // Step 9: Update version-hint.text (note: Iceberg spec uses .text, not .txt)
+    const versionHintPath = `${location}/metadata/version-hint.text`
+    await this.storage.write(versionHintPath, new TextEncoder().encode(metadataPath))
 
     // Invalidate cache
     this.tableCache.delete(ns)
@@ -800,8 +804,17 @@ export class IcebergBackend implements EntityBackend {
       ...dataFields
     } = entity as Entity<T> & { deletedAt?: Date; deletedBy?: string }
 
-    // Encode remaining fields as Variant $data
-    const $data = encodeVariant(dataFields)
+    // Filter out undefined values (null should be preserved)
+    const filteredDataFields: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(dataFields)) {
+      if (value !== undefined) {
+        filteredDataFields[key] = value
+      }
+    }
+
+    // Encode remaining fields as Variant $data, then base64 encode to avoid binary issues
+    const variantBytes = encodeVariant(filteredDataFields)
+    const $data = this.bytesToBase64(variantBytes)
 
     return {
       $id,
@@ -819,6 +832,39 @@ export class IcebergBackend implements EntityBackend {
   }
 
   /**
+   * Convert bytes to base64 string
+   */
+  private bytesToBase64(bytes: Uint8Array): string {
+    // Use btoa if available (browser/modern Node.js)
+    if (typeof btoa === 'function') {
+      let binary = ''
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]!)
+      }
+      return btoa(binary)
+    }
+    // Fallback for older Node.js
+    return Buffer.from(bytes).toString('base64')
+  }
+
+  /**
+   * Convert base64 string to bytes
+   */
+  private base64ToBytes(base64: string): Uint8Array {
+    // Use atob if available (browser/modern Node.js)
+    if (typeof atob === 'function') {
+      const binary = atob(base64)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i)
+      }
+      return bytes
+    }
+    // Fallback for older Node.js
+    return new Uint8Array(Buffer.from(base64, 'base64'))
+  }
+
+  /**
    * Build ParquetSchema for entity storage
    */
   private buildParquetSchema(): ParquetSchema {
@@ -833,7 +879,7 @@ export class IcebergBackend implements EntityBackend {
       deletedAt: { type: 'UTF8', optional: true },
       deletedBy: { type: 'UTF8', optional: true },
       version: { type: 'INT32', optional: false },
-      $data: { type: 'BYTE_ARRAY', optional: true }, // Variant encoded
+      $data: { type: 'UTF8', optional: true }, // Base64-encoded Variant
     }
   }
 
@@ -979,9 +1025,14 @@ export class IcebergBackend implements EntityBackend {
       $data,
     } = row
 
-    // Decode Variant $data
+    // Decode Variant $data (stored as base64-encoded string)
     let dataFields: Record<string, unknown> = {}
-    if ($data instanceof Uint8Array && $data.length > 0) {
+    if (typeof $data === 'string' && $data.length > 0) {
+      // $data is base64 encoded - decode to bytes then decode variant
+      const bytes = this.base64ToBytes($data)
+      dataFields = decodeVariant(bytes) as Record<string, unknown>
+    } else if ($data instanceof Uint8Array && $data.length > 0) {
+      // Direct Uint8Array (unlikely with hyparquet)
       dataFields = decodeVariant($data) as Record<string, unknown>
     } else if ($data && typeof $data === 'object') {
       // If $data came back as an object (some parquet readers might do this)

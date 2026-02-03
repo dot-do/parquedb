@@ -29,6 +29,7 @@ import {
   PathTraversalError,
 } from './errors'
 import { validateRange } from './validation'
+import { globToRegex } from './utils'
 import { getRandomBase36 } from '../utils'
 
 // Re-export PathTraversalError for backward compatibility
@@ -275,7 +276,7 @@ export class FsBackend implements StorageBackend {
       } else {
         // Check pattern matching
         if (pattern) {
-          const regex = this.globToRegex(pattern)
+          const regex = globToRegex(pattern)
           if (!regex.test(entry.name)) {
             continue
           }
@@ -294,14 +295,6 @@ export class FsBackend implements StorageBackend {
         }
       }
     }
-  }
-
-  private globToRegex(pattern: string): RegExp {
-    const escaped = pattern
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*/g, '.*')
-      .replace(/\?/g, '.')
-    return new RegExp(`^${escaped}$`)
   }
 
   async write(path: string, data: Uint8Array, options?: WriteOptions): Promise<WriteResult> {

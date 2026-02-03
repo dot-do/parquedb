@@ -17,12 +17,15 @@
 
 import { logger } from '../utils/logger'
 import type { StorageBackend } from '../types/storage'
+import type { Entity } from '../types/entity'
 import type {
   ParquetSchema,
   ParquetWriterOptions,
   ParquetWriteResult,
   CompressionCodec,
+  TypedWriteOptions,
 } from './types'
+import { generateParquetSchema, type SchemaTree } from './schema-generator'
 import { encodeVariant as _encodeVariant } from './variant'
 import { writeCompressors, compressors } from './compression'
 import {
@@ -242,8 +245,231 @@ export class ParquetWriter {
   }
 
   // ===========================================================================
+  // Typed Entity Writes
+  // ===========================================================================
+
+  /**
+   * Write typed entities to a Parquet file
+   *
+   * This method uses a TypeDefinition schema to generate the Parquet column schema
+   * and writes entities with proper type handling. Optionally includes a $data
+   * column containing the full entity as JSON for flexible querying.
+   *
+   * @param path - Path to write the Parquet file
+   * @param entities - Array of entities to write
+   * @param options - Typed write options including schema
+   * @returns Write result with statistics
+   *
+   * @example
+   * ```typescript
+   * const Post: TypeDefinition = {
+   *   title: 'string!',
+   *   content: 'text',
+   *   views: 'int',
+   *   published: 'boolean',
+   * }
+   *
+   * await writer.writeTypedEntities('data/posts/data.parquet', posts, {
+   *   schema: Post,
+   *   includeDataVariant: true,
+   * })
+   * ```
+   */
+  async writeTypedEntities<T extends Entity = Entity>(
+    path: string,
+    entities: T[],
+    options: TypedWriteOptions
+  ): Promise<ParquetWriteResult> {
+    const {
+      schema: typeDef,
+      includeDataVariant = true,
+      includeAuditColumns = true,
+      includeSoftDeleteColumns = true,
+      ...writerOptions
+    } = options
+
+    // Generate Parquet schema from TypeDefinition
+    const parquetSchema = generateParquetSchema(typeDef, {
+      includeDataVariant,
+      includeAuditColumns,
+      includeSoftDeleteColumns,
+    })
+
+    // Convert SchemaTree to ParquetSchema format
+    const schema = this.schemaTreeToParquetSchema(parquetSchema)
+
+    // Build column data from entities
+    const columns = this.typedEntitiesToColumns(entities, parquetSchema, includeDataVariant)
+
+    if (entities.length === 0) {
+      return this.writeEmptyFile(path, schema)
+    }
+
+    // Merge options
+    const compression = COMPRESSION_MAP[writerOptions.compression ?? 'lz4'] ?? this.compression
+    const rowGroupSize = writerOptions.rowGroupSize ?? this.rowGroupSize
+    const metadata = { ...this.defaultMetadata, ...writerOptions.metadata }
+
+    // Build Parquet buffer
+    const buffer = await this.buildParquetBuffer(columns, schema, {
+      compression,
+      rowGroupSize,
+      dictionary: writerOptions.dictionary ?? this.useDictionary,
+      statistics: writerOptions.statistics ?? this.enableStatistics,
+      metadata,
+      columnIndex: writerOptions.columnIndex ?? this.enableColumnIndex,
+      offsetIndex: writerOptions.offsetIndex ?? this.enableOffsetIndex,
+    })
+
+    // Write to storage
+    const writeResult = await this.storage.writeAtomic(path, buffer, {
+      contentType: 'application/vnd.apache.parquet',
+    })
+
+    return {
+      ...writeResult,
+      rowCount: entities.length,
+      rowGroupCount: Math.ceil(entities.length / rowGroupSize),
+      columns: Object.keys(columns),
+    }
+  }
+
+  /**
+   * Write typed entities directly to a buffer without storage
+   *
+   * This is useful when you need the raw Parquet bytes without writing to storage.
+   *
+   * @param entities - Array of entities to write
+   * @param options - Typed write options including schema
+   * @returns Parquet file as Uint8Array
+   */
+  async writeTypedEntitiesBuffer<T extends Entity = Entity>(
+    entities: T[],
+    options: TypedWriteOptions
+  ): Promise<Uint8Array> {
+    const {
+      schema: typeDef,
+      includeDataVariant = true,
+      includeAuditColumns = true,
+      includeSoftDeleteColumns = true,
+      ...writerOptions
+    } = options
+
+    // Generate Parquet schema from TypeDefinition
+    const parquetSchema = generateParquetSchema(typeDef, {
+      includeDataVariant,
+      includeAuditColumns,
+      includeSoftDeleteColumns,
+    })
+
+    // Convert SchemaTree to ParquetSchema format
+    const schema = this.schemaTreeToParquetSchema(parquetSchema)
+
+    // Build column data from entities
+    const columns = this.typedEntitiesToColumns(entities, parquetSchema, includeDataVariant)
+
+    // Merge options
+    const compression = COMPRESSION_MAP[writerOptions.compression ?? 'lz4'] ?? this.compression
+    const rowGroupSize = writerOptions.rowGroupSize ?? this.rowGroupSize
+    const metadata = { ...this.defaultMetadata, ...writerOptions.metadata }
+
+    // Build and return Parquet buffer
+    return this.buildParquetBuffer(columns, schema, {
+      compression,
+      rowGroupSize,
+      dictionary: writerOptions.dictionary ?? this.useDictionary,
+      statistics: writerOptions.statistics ?? this.enableStatistics,
+      metadata,
+      columnIndex: writerOptions.columnIndex ?? this.enableColumnIndex,
+      offsetIndex: writerOptions.offsetIndex ?? this.enableOffsetIndex,
+    })
+  }
+
+  // ===========================================================================
   // Private Methods
   // ===========================================================================
+
+  /**
+   * Convert SchemaTree to ParquetSchema format
+   */
+  private schemaTreeToParquetSchema(schemaTree: SchemaTree): ParquetSchema {
+    const schema: ParquetSchema = {}
+    for (const [name, field] of Object.entries(schemaTree)) {
+      schema[name] = {
+        type: field.type as ParquetSchema[string]['type'],
+        optional: field.optional,
+      }
+    }
+    return schema
+  }
+
+  /**
+   * Convert typed entities to columnar format
+   *
+   * @param entities - Array of entities to convert
+   * @param schema - SchemaTree defining the columns
+   * @param includeDataVariant - Whether to include $data column
+   */
+  private typedEntitiesToColumns<T extends Entity>(
+    entities: T[],
+    schema: SchemaTree,
+    includeDataVariant: boolean
+  ): Record<string, unknown[]> {
+    const columns: Record<string, unknown[]> = {}
+
+    // Initialize columns
+    for (const colName of Object.keys(schema)) {
+      columns[colName] = []
+    }
+
+    // Fill columns from entities
+    for (const entity of entities) {
+      for (const colName of Object.keys(schema)) {
+        if (colName === '$data' && includeDataVariant) {
+          // $data column contains the full entity as JSON
+          columns[colName]!.push(JSON.stringify(entity))
+        } else {
+          // Extract value from entity, handling nested access
+          const value = this.getEntityValue(entity, colName)
+          columns[colName]!.push(value ?? null)
+        }
+      }
+    }
+
+    return columns
+  }
+
+  /**
+   * Get a value from an entity, handling special column names
+   *
+   * @param entity - The entity to extract the value from
+   * @param colName - The column name
+   */
+  private getEntityValue<T extends Entity>(entity: T, colName: string): unknown {
+    // Handle special fields
+    if (colName === '$id') {
+      return entity.$id
+    }
+    if (colName === '$type') {
+      return entity.$type
+    }
+    if (colName === '$data') {
+      // Should be handled separately
+      return JSON.stringify(entity)
+    }
+
+    // Handle audit fields - convert Date to timestamp if needed
+    if (colName === 'createdAt' || colName === 'updatedAt' || colName === 'deletedAt') {
+      const value = entity[colName as keyof T]
+      if (value instanceof Date) {
+        return value.getTime()
+      }
+      return value
+    }
+
+    // Regular field access
+    return entity[colName as keyof T]
+  }
 
   /**
    * Convert row objects to columnar format
@@ -604,4 +830,40 @@ export async function compactParquet(
 ): Promise<ParquetWriteResult> {
   const writer = new ParquetWriter(storage)
   return writer.compact(path, targetRowGroupSize)
+}
+
+/**
+ * Write typed entities to a Parquet file
+ *
+ * Convenience function for one-off typed entity writes.
+ * Uses a TypeDefinition schema to generate the Parquet column schema.
+ *
+ * @param storage - Storage backend
+ * @param path - Path to write
+ * @param entities - Entities to write
+ * @param options - Typed write options including schema
+ * @returns Write result
+ *
+ * @example
+ * ```typescript
+ * const Post: TypeDefinition = {
+ *   title: 'string!',
+ *   content: 'text',
+ *   views: 'int',
+ * }
+ *
+ * await writeTypedParquet(storage, 'data/posts.parquet', posts, {
+ *   schema: Post,
+ *   includeDataVariant: true,
+ * })
+ * ```
+ */
+export async function writeTypedParquet<T extends Entity = Entity>(
+  storage: StorageBackend,
+  path: string,
+  entities: T[],
+  options: TypedWriteOptions
+): Promise<ParquetWriteResult> {
+  const writer = new ParquetWriter(storage, options)
+  return writer.writeTypedEntities(path, entities, options)
 }

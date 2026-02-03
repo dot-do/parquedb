@@ -339,3 +339,40 @@ export interface CreateEntitySchemaOptions {
   /** Additional columns to include */
   additionalColumns?: ParquetSchema
 }
+
+// =============================================================================
+// Typed Writer Types
+// =============================================================================
+
+/**
+ * Options for writing typed entities
+ *
+ * These options configure how entities are written to Parquet files
+ * with typed schema support.
+ */
+export interface TypedWriteOptions extends ParquetWriterOptions {
+  /**
+   * The TypeDefinition schema for the entities being written.
+   * Used to generate the Parquet column schema.
+   */
+  schema: TypeDefinition
+
+  /**
+   * Include the $data variant column containing the full entity as JSON.
+   * This enables flexible querying of non-shredded fields.
+   * @default true
+   */
+  includeDataVariant?: boolean
+
+  /**
+   * Include audit columns (createdAt, createdBy, updatedAt, updatedBy, version).
+   * @default true
+   */
+  includeAuditColumns?: boolean
+
+  /**
+   * Include soft delete columns (deletedAt, deletedBy).
+   * @default true
+   */
+  includeSoftDeleteColumns?: boolean
+}

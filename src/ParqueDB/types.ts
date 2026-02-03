@@ -26,6 +26,9 @@ import type {
   HistoryOptions,
 } from '../types'
 
+import type { IStorageRouter } from '../storage/router'
+import type { CollectionOptions } from '../db'
+
 // =============================================================================
 // Configuration Types
 // =============================================================================
@@ -152,6 +155,12 @@ export interface ParqueDBConfig {
 
   /** Event log configuration for rotation and archival */
   eventLogConfig?: EventLogConfig
+
+  /** Storage router for determining storage mode and paths */
+  storageRouter?: IStorageRouter
+
+  /** Per-collection options from DB() schema */
+  collectionOptions?: Map<string, CollectionOptions>
 }
 
 // =============================================================================

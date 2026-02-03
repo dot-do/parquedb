@@ -86,6 +86,8 @@ import type {
 
 import type { IndexDefinition, IndexMetadata, IndexStats } from './indexes/types'
 import type { IndexManager } from './indexes/manager'
+import type { IStorageRouter, StorageMode } from './storage/router'
+import type { CollectionOptions } from './db'
 
 import type {
   ParqueDBConfig,
@@ -224,6 +226,17 @@ export interface IParqueDB {
 
   getIndexManager(): IndexManager
 
+  // Storage Router
+  getStorageMode(namespace: string): StorageMode
+
+  getDataPath(namespace: string): string
+
+  hasTypedSchema(namespace: string): boolean
+
+  getCollectionOptions(namespace: string): CollectionOptions | undefined
+
+  getStorageRouter(): IStorageRouter | null
+
   // Resource Management
   dispose(): void
 }
@@ -298,6 +311,12 @@ export class ParqueDB {
           rebuildIndex: impl.rebuildIndex.bind(impl),
           getIndexStats: impl.getIndexStats.bind(impl),
           getIndexManager: impl.getIndexManager.bind(impl),
+          // Storage Router
+          getStorageMode: impl.getStorageMode.bind(impl),
+          getDataPath: impl.getDataPath.bind(impl),
+          hasTypedSchema: impl.hasTypedSchema.bind(impl),
+          getCollectionOptions: impl.getCollectionOptions.bind(impl),
+          getStorageRouter: impl.getStorageRouter.bind(impl),
           // Resource Management
           dispose: impl.dispose.bind(impl),
         }

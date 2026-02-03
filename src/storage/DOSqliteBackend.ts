@@ -33,6 +33,7 @@ import type {
   RmdirOptions,
 } from '../types/storage'
 import { validateRange } from './validation'
+import { generateEtag, globToRegex, normalizeFilePath } from './utils'
 
 /**
  * Error thrown when a file is not found
@@ -113,36 +114,6 @@ export interface DOSqliteBackendOptions {
 }
 
 /**
- * Generate an ETag from data using a simple hash
- */
-function generateEtag(data: Uint8Array): string {
-  // Simple FNV-1a hash
-  let hash = 2166136261
-  for (let i = 0; i < data.length; i++) {
-    hash ^= data[i]!
-    hash = (hash * 16777619) >>> 0
-  }
-  // Include timestamp to ensure different etags even for same content
-  const timestamp = Date.now().toString(36)
-  return `${hash.toString(16)}-${timestamp}`
-}
-
-/**
- * Normalize path by removing leading/trailing slashes
- */
-function normalizePath(path: string): string {
-  // Remove leading slash
-  if (path.startsWith('/')) {
-    path = path.slice(1)
-  }
-  // Remove trailing slash for files
-  if (path.endsWith('/')) {
-    path = path.slice(0, -1)
-  }
-  return path
-}
-
-/**
  * Storage backend using Cloudflare Durable Object SQLite
  *
  * Optimized for storing parquet blocks as blobs:
@@ -191,7 +162,7 @@ export class DOSqliteBackend implements StorageBackend {
    * Apply prefix to a path
    */
   private withPrefix(path: string): string {
-    return this.prefix + normalizePath(path)
+    return this.prefix + normalizeFilePath(path)
   }
 
   /**
@@ -594,15 +565,4 @@ export class DOSqliteBackend implements StorageBackend {
       .bind(sourceKey)
       .run()
   }
-}
-
-/**
- * Convert glob pattern to regex
- */
-function globToRegex(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*/g, '.*')
-    .replace(/\?/g, '.')
-  return new RegExp(`^${escaped}$`)
 }

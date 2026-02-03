@@ -14,6 +14,7 @@ import type {
   RmdirOptions,
 } from '../types/storage'
 import { validateRange } from './validation'
+import { generateEtag, matchGlob, normalizePath as normalizePathUtil } from './utils'
 import {
   NotFoundError,
   AlreadyExistsError,
@@ -39,34 +40,6 @@ interface FileEntry {
 }
 
 /**
- * Simple hash function for generating ETags
- */
-function generateEtag(data: Uint8Array): string {
-  // Simple FNV-1a hash
-  let hash = 2166136261
-  for (let i = 0; i < data.length; i++) {
-    hash ^= data[i]!
-    hash = (hash * 16777619) >>> 0
-  }
-  // Include timestamp to ensure different etags even for same content
-  const timestamp = Date.now().toString(36)
-  return `${hash.toString(16)}-${timestamp}`
-}
-
-/**
- * Simple glob pattern matching
- */
-function matchPattern(filename: string, pattern: string): boolean {
-  // Convert glob pattern to regex
-  const regexPattern = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&') // Escape special chars except * and ?
-    .replace(/\*/g, '.*')
-    .replace(/\?/g, '.')
-  const regex = new RegExp(`^${regexPattern}$`)
-  return regex.test(filename)
-}
-
-/**
  * In-memory storage backend for testing and browser use
  */
 export class MemoryBackend implements StorageBackend {
@@ -82,11 +55,7 @@ export class MemoryBackend implements StorageBackend {
    * Normalize path (remove leading slash if present, handle trailing slashes)
    */
   private normalizePath(path: string): string {
-    // Remove leading slash
-    if (path.startsWith('/')) {
-      path = path.slice(1)
-    }
-    return path
+    return normalizePathUtil(path)
   }
 
   /**
@@ -220,7 +189,7 @@ export class MemoryBackend implements StorageBackend {
       // Apply pattern filter if specified
       if (pattern) {
         const filename = filePath.split('/').pop() || filePath
-        if (!matchPattern(filename, pattern)) {
+        if (!matchGlob(filename, pattern)) {
           continue
         }
       }
