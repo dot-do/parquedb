@@ -88,6 +88,7 @@ import type {
   DeleteOptions,
   Schema,
   HistoryOptions,
+  Event,
 } from './types'
 
 import type { IndexDefinition, IndexMetadata, IndexStats } from './indexes/types'
@@ -251,6 +252,12 @@ export interface IParqueDB {
 
   getStorageRouter(): IStorageRouter | null
 
+  // Materialized View Integration
+  /** Set a callback that receives all mutation events (for MV streaming integration) */
+  setEventCallback(callback: ((event: Event) => void | Promise<void>) | null): void
+  /** Get the current event callback */
+  getEventCallback(): ((event: Event) => void | Promise<void>) | null
+
   // Resource Management
   /** Wait for any pending flush operations to complete */
   flush(): Promise<void>
@@ -333,6 +340,9 @@ export class ParqueDB {
       hasTypedSchema: impl.hasTypedSchema.bind(impl),
       getCollectionOptions: impl.getCollectionOptions.bind(impl),
       getStorageRouter: impl.getStorageRouter.bind(impl),
+      // Materialized View Integration
+      setEventCallback: impl.setEventCallback.bind(impl),
+      getEventCallback: impl.getEventCallback.bind(impl),
       // Resource Management
       dispose: impl.dispose.bind(impl),
       flush: impl.flush.bind(impl),
