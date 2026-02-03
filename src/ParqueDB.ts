@@ -252,7 +252,12 @@ export interface IParqueDB {
   getStorageRouter(): IStorageRouter | null
 
   // Resource Management
+  /** Wait for any pending flush operations to complete */
+  flush(): Promise<void>
+  /** Synchronously dispose without waiting for pending flushes */
   dispose(): void
+  /** Asynchronously dispose, waiting for pending flushes first */
+  disposeAsync(): Promise<void>
 }
 
 // =============================================================================
