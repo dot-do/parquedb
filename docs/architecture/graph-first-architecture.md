@@ -1,4 +1,7 @@
-# ParqueDB: Graph-First Architecture with Separate Edge Storage
+---
+title: Graph-First Architecture
+description: Graph-optimized architecture for ParqueDB, treating relationships (edges) as first-class citizens with separate edge storage, bidirectional traversal indexes, and unified CDC event log for time-travel.
+---
 
 **Architecture Perspective**: Graph-first with edges as first-class citizens
 

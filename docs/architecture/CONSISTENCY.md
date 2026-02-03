@@ -1,4 +1,7 @@
-# ParqueDB Consistency Model
+---
+title: Consistency Model
+description: ParqueDB's read/write consistency guarantees including CQRS architecture, strong consistency for writes via Durable Objects, eventual consistency for reads with caching, and best practices for applications.
+---
 
 **Design Document: Read/Write Consistency Guarantees**
 
@@ -26,37 +29,37 @@ This document explains ParqueDB's consistency model, including when reads are st
 ParqueDB uses a **CQRS (Command Query Responsibility Segregation)** architecture with physically separated read and write paths:
 
 ```
-                    ┌─────────────────────────────────────────────────────────┐
-                    │                    ParqueDB Worker                       │
-                    │                                                          │
-   Application      │   ┌──────────────────────────────────────────────────┐  │
-        │           │   │              ParqueDBWorker (RPC)                 │  │
-        │           │   │                                                   │  │
-        ▼           │   │   ┌─────────────┐       ┌──────────────────┐     │  │
-  ┌──────────┐      │   │   │   READS     │       │     WRITES       │     │  │
-  │  Request │──────┼───┼──▶│  (Direct)   │       │  (via DO Stub)   │     │  │
-  └──────────┘      │   │   │             │       │                  │     │  │
-                    │   │   └──────┬──────┘       └────────┬─────────┘     │  │
-                    │   │          │                        │               │  │
-                    │   └──────────┼────────────────────────┼───────────────┘  │
-                    │              │                        │                  │
-                    │              ▼                        ▼                  │
-                    │   ┌─────────────────┐      ┌──────────────────────┐     │
-                    │   │   ReadPath      │      │    ParqueDBDO        │     │
-                    │   │                 │      │  (Durable Object)    │     │
-                    │   │  ┌───────────┐  │      │                      │     │
-                    │   │  │   Cache   │  │      │  ┌────────────────┐  │     │
-                    │   │  │   API     │  │      │  │    SQLite      │  │     │
-                    │   │  └─────┬─────┘  │      │  │  (Transient)   │  │     │
-                    │   │        │        │      │  └───────┬────────┘  │     │
-                    │   │        ▼        │      │          │           │     │
-                    │   │  ┌───────────┐  │      │          ▼           │     │
-                    │   │  │    R2     │◀─┼──────│    Event Log +      │     │
-                    │   │  │  Bucket   │  │      │    Flush to R2       │     │
-                    │   │  └───────────┘  │      │                      │     │
-                    │   └─────────────────┘      └──────────────────────┘     │
-                    │                                                          │
-                    └─────────────────────────────────────────────────────────┘
+                    +-------------------------------------------------------------+
+                    |                    ParqueDB Worker                           |
+                    |                                                              |
+   Application      |   +------------------------------------------------------+   |
+        |           |   |              ParqueDBWorker (RPC)                     |   |
+        |           |   |                                                       |   |
+        v           |   |   +-------------+       +----------------------+      |   |
+  +----------+      |   |   |   READS     |       |     WRITES           |      |   |
+  |  Request |------+---+-->|  (Direct)   |       |  (via DO Stub)       |      |   |
+  +----------+      |   |   |             |       |                      |      |   |
+                    |   |   +------+------+       +--------+-------------+      |   |
+                    |   |          |                        |                   |   |
+                    |   +----------+------------------------+-------------------+   |
+                    |              |                        |                       |
+                    |              v                        v                       |
+                    |   +-----------------+      +----------------------+           |
+                    |   |   ReadPath      |      |    ParqueDBDO        |           |
+                    |   |                 |      |  (Durable Object)    |           |
+                    |   |  +-----------+  |      |                      |           |
+                    |   |  |   Cache   |  |      |  +----------------+  |           |
+                    |   |  |   API     |  |      |  |    SQLite      |  |           |
+                    |   |  +-----+-----+  |      |  |  (Transient)   |  |           |
+                    |   |       |         |      |  +-------+--------+  |           |
+                    |   |       v         |      |          |           |           |
+                    |   |  +---------+    |      |          v           |           |
+                    |   |  |    R2   |<---+------+    Event Log +       |           |
+                    |   |  |  Bucket |    |      |    Flush to R2       |           |
+                    |   |  +---------+    |      |                      |           |
+                    |   +-----------------+      +----------------------+           |
+                    |                                                              |
+                    +-------------------------------------------------------------+
 ```
 
 ### Key Components

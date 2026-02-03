@@ -1,4 +1,7 @@
-# ParqueDB: Graph Query Patterns and Optimization
+---
+title: Graph Query Patterns
+description: Practical guide to graph operations on Parquet including core query operations, graphdl operator implementation, traversal algorithms, materialized views, time-travel, caching, and batch processing.
+---
 
 **Practical Guide to Graph Operations on Parquet**
 
@@ -364,45 +367,6 @@ async function resolveRelationship(
 }
 ```
 
-### Bidirectional Relationship Resolution
-
-When `bidirectional: true`, queries implicitly include reverse edges:
-
-```typescript
-async function resolveBidirectional(
-  bucket: R2Bucket,
-  ns: string,
-  nodeId: string,
-  relType: string
-): Promise<{ peers: Node[]; direction: 'outgoing' | 'incoming' }[]> {
-  // 1. Get explicit outgoing edges
-  const outgoing = await forwardLookup(bucket, { ns, fromId: nodeId, relType });
-
-  // 2. Get incoming edges where bidirectional=true
-  const incoming = await scanWithPredicates(
-    bucket,
-    await getManifest(bucket, ns, 'reverse'),
-    [
-      { column: 'ns', op: 'eq', value: ns },
-      { column: 'to_id', op: 'eq', value: nodeId },
-      { column: 'rel_type', op: 'eq', value: relType },
-      { column: 'bidirectional', op: 'eq', value: true },
-      { column: 'deleted', op: 'eq', value: false }
-    ],
-    { projection: ['from_id', 'ts', 'data'] }
-  );
-
-  // 3. Resolve all peer nodes
-  const outgoingNodes = await batchGetNodes(bucket, ns, outgoing.map(e => e.to_id));
-  const incomingNodes = await batchGetNodes(bucket, ns, incoming.map(e => e.from_id));
-
-  return [
-    { peers: outgoingNodes, direction: 'outgoing' },
-    { peers: incomingNodes, direction: 'incoming' }
-  ];
-}
-```
-
 ---
 
 ## Traversal Algorithms
@@ -763,62 +727,6 @@ async function getReportingChain(
 }
 ```
 
-### Social Graph (2-Hop Connections)
-
-Pre-compute "friends of friends":
-
-```typescript
-async function materializeFOF(
-  bucket: R2Bucket,
-  ns: string
-): Promise<void> {
-  const users = await scanNodes(bucket, ns, { type: 'User' });
-
-  const paths: MaterializedPath[] = [];
-
-  for (const user of users) {
-    // Get direct friends
-    const friends = await forwardLookup(bucket, {
-      ns,
-      fromId: user.id,
-      relType: 'follows'
-    });
-
-    const friendIds = friends.map(e => e.to_id);
-
-    // Get friends of friends
-    for (const friendId of friendIds) {
-      const fof = await forwardLookup(bucket, {
-        ns,
-        fromId: friendId,
-        relType: 'follows'
-      });
-
-      for (const edge of fof) {
-        // Exclude direct friends and self
-        if (edge.to_id === user.id || friendIds.includes(edge.to_id)) {
-          continue;
-        }
-
-        paths.push({
-          ns,
-          path_type: 'social_fof',
-          start_id: user.id,
-          end_id: edge.to_id,
-          hops: 2,
-          path: [user.id, friendId, edge.to_id],
-          total_weight: 2,
-          computed_at: BigInt(Date.now()) * 1000n,
-          valid_until: BigInt(Date.now() + 86400000) * 1000n  // 24 hours
-        });
-      }
-    }
-  }
-
-  await writePaths(bucket, ns, 'social_fof', paths);
-}
-```
-
 ---
 
 ## Time-Travel Implementation
@@ -898,54 +806,6 @@ function applyEdgeEvent(state: Map<string, Edge>, event: CDCEvent): void {
 }
 ```
 
-### Incremental Time-Travel Query
-
-For queries that don't need full graph state:
-
-```typescript
-async function traverseAsOf(
-  bucket: R2Bucket,
-  ns: string,
-  fromId: string,
-  relType: string,
-  asOf: bigint
-): Promise<Edge[]> {
-  // 1. Query current edges with ts filter
-  const currentEdges = await forwardLookup(bucket, {
-    ns,
-    fromId,
-    relType,
-    asOf  // Only edges created before asOf
-  });
-
-  // 2. Check for DELETE events after edge creation but before asOf
-  const edgesToCheck = currentEdges.map(e => ({
-    edge: e,
-    entityId: `${e.from_id}|${e.rel_type}|${e.to_id}`
-  }));
-
-  const deletedEdges = new Set<string>();
-
-  for (const { edge, entityId } of edgesToCheck) {
-    const deleteEvents = await getEventRange(bucket, ns, edge.ts, asOf, {
-      entity_id: entityId,
-      op: 'DELETE',
-      target: 'edge'
-    });
-
-    if (deleteEvents.length > 0) {
-      deletedEdges.add(entityId);
-    }
-  }
-
-  // 3. Filter out deleted edges
-  return currentEdges.filter(e => {
-    const entityId = `${e.from_id}|${e.rel_type}|${e.to_id}`;
-    return !deletedEdges.has(entityId);
-  });
-}
-```
-
 ---
 
 ## Caching Strategies
@@ -1012,42 +872,6 @@ async function cachedForwardLookup(
   }
 
   return result;
-}
-```
-
-### Manifest Cache (File Metadata)
-
-```typescript
-// Cache Parquet file metadata to avoid repeated fetches
-interface ManifestCache {
-  manifests: Map<string, { manifest: EdgeIndexManifest; fetchedAt: number }>;
-  ttlMs: number;
-}
-
-const manifestCache: ManifestCache = {
-  manifests: new Map(),
-  ttlMs: 300000  // 5 minutes
-};
-
-async function getCachedManifest(
-  bucket: R2Bucket,
-  ns: string,
-  index: 'forward' | 'reverse' | 'type'
-): Promise<EdgeIndexManifest> {
-  const cacheKey = `${ns}:${index}`;
-
-  const cached = manifestCache.manifests.get(cacheKey);
-  if (cached && Date.now() - cached.fetchedAt < manifestCache.ttlMs) {
-    return cached.manifest;
-  }
-
-  const manifest = await fetchManifest(bucket, ns, index);
-  manifestCache.manifests.set(cacheKey, {
-    manifest,
-    fetchedAt: Date.now()
-  });
-
-  return manifest;
 }
 ```
 

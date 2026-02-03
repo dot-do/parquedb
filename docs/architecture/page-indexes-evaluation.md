@@ -1,4 +1,7 @@
-# Evaluation: DataFusion-style Embedded Page Indexes (ColumnIndex/OffsetIndex)
+---
+title: Page Indexes Evaluation
+description: Evaluation of DataFusion-style embedded page indexes (ColumnIndex/OffsetIndex) for ParqueDB, comparing with current row group stats and external bloom files approach.
+---
 
 **Issue**: parquedb-450n
 **Date**: 2026-02-03
@@ -142,8 +145,8 @@ entities.parquet
 │   ├── Schema
 │   ├── Row Group Metadata
 │   │   └── Column Chunks
-│   │       ├── column_index_offset → ColumnIndex
-│   │       └── offset_index_offset → OffsetIndex
+│   │       ├── column_index_offset -> ColumnIndex
+│   │       └── offset_index_offset -> OffsetIndex
 │   └── Page Indexes (after footer)
 │       ├── ColumnIndex (per-page min/max/null_count)
 │       └── OffsetIndex (page byte offsets)

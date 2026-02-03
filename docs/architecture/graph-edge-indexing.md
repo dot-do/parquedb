@@ -1,4 +1,7 @@
-# ParqueDB: Advanced Edge Indexing and Traversal Strategies
+---
+title: Advanced Edge Indexing
+description: Deep technical analysis of edge storage and indexing strategies optimized for Parquet's columnar format, including the three-index strategy, Bloom filter design, super-node handling, and query execution plans.
+---
 
 **Supplement to Graph-First Architecture**
 
@@ -53,8 +56,8 @@ edges/
 ### Storage Overhead Analysis
 
 ```
-Base edge data: N edges × avg_row_size
-Three indexes:  3N × avg_row_size = 3x storage
+Base edge data: N edges x avg_row_size
+Three indexes:  3N x avg_row_size = 3x storage
 
 With Parquet compression (ZSTD level 3):
 - Dictionary encoding on ns, rel_type, operator: ~90% reduction

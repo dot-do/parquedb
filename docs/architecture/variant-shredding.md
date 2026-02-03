@@ -1,4 +1,7 @@
-# Variant Shredding Implementation Plan
+---
+title: Variant Shredding
+description: Implementation plan for Parquet Variant Shredding in hyparquet/hyparquet-writer to enable predicate pushdown on semi-structured data fields with statistics-based row group skipping.
+---
 
 ## Goal
 
@@ -18,11 +21,11 @@ optional group $index (VARIANT) {
   optional group typed_value {
     optional group titleType {     // shredded field
       optional binary value;       // null for typed
-      optional UTF8 typed_value;   // ← STATISTICS HERE
+      optional UTF8 typed_value;   // <- STATISTICS HERE
     }
     optional group $type {
       optional binary value;
-      optional UTF8 typed_value;   // ← STATISTICS HERE
+      optional UTF8 typed_value;   // <- STATISTICS HERE
     }
   }
 }
@@ -119,8 +122,8 @@ From Parquet spec:
 > "Statistics for typed_value columns can be used for file, row group, or page skipping when value is always null (missing)."
 
 This means:
-- Shredded fields (value=null) → Statistics work ✅
-- Non-shredded fields (value≠null) → Must scan ❌
+- Shredded fields (value=null) -> Statistics work
+- Non-shredded fields (value!=null) -> Must scan
 
 ## Testing Plan
 

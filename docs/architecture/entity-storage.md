@@ -1,4 +1,7 @@
-# Entity Storage Architecture
+---
+title: Entity Storage Architecture
+description: Dual storage architecture for ParqueDB with Node.js/testing using in-memory globalEntityStore and Cloudflare Workers using SQLite for writes and R2 Parquet files for reads.
+---
 
 ## Overview
 
@@ -14,22 +17,22 @@ This document explains why both exist, when to use each, and future consolidatio
 ### Node.js / Testing Environment
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  ParqueDB.ts                        │
-│                                                     │
-│  ┌──────────────────────────────────────────────┐  │
-│  │         globalEntityStore (WeakMap)           │  │
-│  │  ┌─────────────────────────────────────────┐ │  │
-│  │  │   Map<StorageBackend, Map<$id, Entity>> │ │  │
-│  │  └─────────────────────────────────────────┘ │  │
-│  └──────────────────────────────────────────────┘  │
-│                        │                            │
-│                        ▼                            │
-│  ┌──────────────────────────────────────────────┐  │
-│  │            StorageBackend                     │  │
-│  │  (FsBackend, MemoryBackend, R2Backend, etc.)  │  │
-│  └──────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
++-----------------------------------------------------+
+|                  ParqueDB.ts                        |
+|                                                     |
+|  +----------------------------------------------+   |
+|  |         globalEntityStore (WeakMap)          |   |
+|  |  +---------------------------------------+   |   |
+|  |  |   Map<StorageBackend, Map<$id, Entity>> | |   |
+|  |  +---------------------------------------+   |   |
+|  +----------------------------------------------+   |
+|                        |                            |
+|                        v                            |
+|  +----------------------------------------------+   |
+|  |            StorageBackend                    |   |
+|  |  (FsBackend, MemoryBackend, R2Backend, etc.) |   |
+|  +----------------------------------------------+   |
++-----------------------------------------------------+
 ```
 
 **How it works:**
@@ -47,21 +50,21 @@ This document explains why both exist, when to use each, and future consolidatio
 ### Cloudflare Workers Environment
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     ParqueDBWorker.ts                           │
-│                                                                 │
-│  ┌─────────────────────┐       ┌────────────────────────────┐  │
-│  │   READS (fast)      │       │   WRITES (consistent)      │  │
-│  │                     │       │                            │  │
-│  │  QueryExecutor      │       │  ParqueDBDO (Durable Obj)  │  │
-│  │       │             │       │       │                    │  │
-│  │       ▼             │       │       ▼                    │  │
-│  │   ReadPath          │       │   SQLite (SqlStorage)      │  │
-│  │       │             │       │       │                    │  │
-│  │       ▼             │       │       ▼                    │  │
-│  │  Cache API + R2     │       │  Flush to R2 (Parquet)     │  │
-│  └─────────────────────┘       └────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
++-----------------------------------------------------------------+
+|                     ParqueDBWorker.ts                           |
+|                                                                 |
+|  +---------------------+       +----------------------------+   |
+|  |   READS (fast)      |       |   WRITES (consistent)      |   |
+|  |                     |       |                            |   |
+|  |  QueryExecutor      |       |  ParqueDBDO (Durable Obj)  |   |
+|  |       |             |       |       |                    |   |
+|  |       v             |       |       v                    |   |
+|  |   ReadPath          |       |   SQLite (SqlStorage)      |   |
+|  |       |             |       |       |                    |   |
+|  |       v             |       |       v                    |   |
+|  |  Cache API + R2     |       |  Flush to R2 (Parquet)     |   |
+|  +---------------------+       +----------------------------+   |
++-----------------------------------------------------------------+
 ```
 
 **How it works:**
@@ -156,6 +159,6 @@ Options under consideration:
 
 ## Related Documentation
 
-- [CONSISTENCY.md](./CONSISTENCY.md) - Consistency guarantees
-- [GRAPH_FIRST_ARCHITECTURE.md](./GRAPH_FIRST_ARCHITECTURE.md) - Relationship storage
-- [SECONDARY_INDEXES.md](./SECONDARY_INDEXES.md) - Index architecture
+- [Consistency Model](./consistency) - Consistency guarantees
+- [Graph-First Architecture](./graph-first-architecture) - Relationship storage
+- [Secondary Indexes](./secondary-indexes) - Index architecture

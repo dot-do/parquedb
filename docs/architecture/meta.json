@@ -1,0 +1,15 @@
+{
+  "title": "Architecture",
+  "pages": [
+    "graph-first-architecture",
+    "graph-edge-indexing",
+    "graph-query-patterns",
+    "namespace-sharded-architecture",
+    "entity-storage",
+    "consistency",
+    "secondary-indexes",
+    "bloom-filter-indexes",
+    "variant-shredding",
+    "page-indexes-evaluation"
+  ]
+}
