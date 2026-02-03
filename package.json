@@ -82,7 +82,7 @@
     "load:all": "tsx scripts/load-all.ts"
   },
   "dependencies": {
-    "@dotdo/iceberg": "file:../iceberg/core",
+    "@dotdo/iceberg": "^0.2.0",
     "@graphdl/core": "^0.3.0",
     "@icetype/core": "^0.3.0",
     "@icetype/iceberg": "^0.3.0",
@@ -117,7 +117,8 @@
     "tsx": "^4.7.0",
     "typescript": "^5.7.2",
     "vitest": "^3.0.4",
-    "wrangler": "^3.99.0"
+    "wrangler": "^3.99.0",
+    "yaml": "^2.8.2"
   },
   "keywords": [
     "parquet",

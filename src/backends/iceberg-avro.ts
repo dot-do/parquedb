@@ -5,15 +5,30 @@
  * and manifest lists. This is required for interoperability with DuckDB, Spark,
  * Snowflake, and other tools that expect Avro-encoded manifests.
  *
+ * Uses @dotdo/iceberg's Avro utilities for encoding/decoding manifest files.
+ *
  * @see https://iceberg.apache.org/spec/
  * @see https://avro.apache.org/docs/current/specification/
  */
 
 import {
+  // Avro classes
   AvroEncoder,
+  AvroDecoder,
   AvroFileWriter,
+  // Schema builders
   createManifestEntrySchema,
   createManifestListSchema,
+  // Encoding functions from @dotdo/iceberg
+  encodeManifestEntry,
+  encodeManifestListEntry,
+  // Decoding functions from @dotdo/iceberg
+  decodeManifestEntry as decodeManifestEntryAvro,
+  decodeManifestListEntry as decodeManifestListEntryAvro,
+  // Types
+  type EncodableManifestEntry,
+  type EncodableManifestListEntry,
+  type PartitionFieldDef,
   type ManifestEntry,
   type ManifestFile,
 } from '@dotdo/iceberg'
@@ -32,311 +47,6 @@ export function isAvroFormat(data: Uint8Array): boolean {
     data[2] === AVRO_MAGIC[2] &&
     data[3] === AVRO_MAGIC[3]
   )
-}
-
-// ===========================================================================
-// Helper functions for encoding optional values
-// ===========================================================================
-
-function writeOptionalLong(encoder: AvroEncoder, value: number | null | undefined): void {
-  if (value === null || value === undefined) {
-    encoder.writeUnionIndex(0) // null
-  } else {
-    encoder.writeUnionIndex(1) // non-null
-    encoder.writeLong(value)
-  }
-}
-
-function writeOptionalInt(encoder: AvroEncoder, value: number | null | undefined): void {
-  if (value === null || value === undefined) {
-    encoder.writeUnionIndex(0) // null
-  } else {
-    encoder.writeUnionIndex(1) // non-null
-    encoder.writeInt(value)
-  }
-}
-
-function writeOptionalKeyValueArray<T>(
-  encoder: AvroEncoder,
-  value: T[] | null | undefined,
-  writeElement: (item: T) => void
-): void {
-  if (value === null || value === undefined) {
-    encoder.writeUnionIndex(0) // null
-  } else {
-    encoder.writeUnionIndex(1) // non-null
-    encoder.writeArray(value, writeElement)
-  }
-}
-
-function writeOptionalBytes(encoder: AvroEncoder, value: Uint8Array | null | undefined): void {
-  if (value === null || value === undefined) {
-    encoder.writeUnionIndex(0) // null
-  } else {
-    encoder.writeUnionIndex(1) // non-null
-    encoder.writeBytes(value)
-  }
-}
-
-function writeOptionalLongArray(encoder: AvroEncoder, value: number[] | null | undefined): void {
-  if (value === null || value === undefined) {
-    encoder.writeUnionIndex(0) // null
-  } else {
-    encoder.writeUnionIndex(1) // non-null
-    encoder.writeArray(value, (v) => encoder.writeLong(v))
-  }
-}
-
-function writeOptionalIntArray(encoder: AvroEncoder, value: number[] | null | undefined): void {
-  if (value === null || value === undefined) {
-    encoder.writeUnionIndex(0) // null
-  } else {
-    encoder.writeUnionIndex(1) // non-null
-    encoder.writeArray(value, (v) => encoder.writeInt(v))
-  }
-}
-
-function writeOptionalString(encoder: AvroEncoder, value: string | null | undefined): void {
-  if (value === null || value === undefined) {
-    encoder.writeUnionIndex(0) // null
-  } else {
-    encoder.writeUnionIndex(1) // non-null
-    encoder.writeString(value)
-  }
-}
-
-function writeOptionalBoolean(encoder: AvroEncoder, value: boolean | null | undefined): void {
-  if (value === null || value === undefined) {
-    encoder.writeUnionIndex(0) // null
-  } else {
-    encoder.writeUnionIndex(1) // non-null
-    encoder.writeBoolean(value)
-  }
-}
-
-// ===========================================================================
-// Encoding functions (inline implementations since not exported from @dotdo/iceberg)
-// ===========================================================================
-
-interface EncodableDataFile {
-  content: number
-  file_path: string
-  file_format: string
-  partition: Record<string, unknown>
-  record_count: number
-  file_size_in_bytes: number
-  column_sizes?: Array<{ key: number; value: number }> | null
-  value_counts?: Array<{ key: number; value: number }> | null
-  null_value_counts?: Array<{ key: number; value: number }> | null
-  nan_value_counts?: Array<{ key: number; value: number }> | null
-  lower_bounds?: Array<{ key: number; value: Uint8Array }> | null
-  upper_bounds?: Array<{ key: number; value: Uint8Array }> | null
-  key_metadata?: Uint8Array | null
-  split_offsets?: number[] | null
-  equality_ids?: number[] | null
-  sort_order_id?: number | null
-  first_row_id?: number | null
-  referenced_data_file?: string | null
-  content_offset?: number | null
-  content_size_in_bytes?: number | null
-}
-
-interface EncodableManifestEntry {
-  status: number
-  snapshot_id: number | null
-  sequence_number: number | null
-  file_sequence_number: number | null
-  data_file: EncodableDataFile
-}
-
-interface EncodableManifestListEntry {
-  manifest_path: string
-  manifest_length: number
-  partition_spec_id: number
-  content: number
-  sequence_number: number
-  min_sequence_number: number
-  added_snapshot_id: number
-  added_files_count: number
-  existing_files_count: number
-  deleted_files_count: number
-  added_rows_count: number
-  existing_rows_count: number
-  deleted_rows_count: number
-  partitions?: Array<{
-    contains_null: boolean
-    contains_nan?: boolean | null
-    lower_bound?: Uint8Array | null
-    upper_bound?: Uint8Array | null
-  }> | null
-  first_row_id?: number | null
-}
-
-interface PartitionFieldDef {
-  name: string
-  type: string
-}
-
-function writePartitionValue(encoder: AvroEncoder, value: unknown, type: string): void {
-  switch (type) {
-    case 'int':
-      encoder.writeInt(value as number)
-      break
-    case 'long':
-      encoder.writeLong(value as number)
-      break
-    case 'string':
-      encoder.writeString(value as string)
-      break
-    case 'boolean':
-      encoder.writeBoolean(value as boolean)
-      break
-    case 'float':
-      encoder.writeFloat(value as number)
-      break
-    case 'double':
-      encoder.writeDouble(value as number)
-      break
-    case 'bytes':
-      encoder.writeBytes(value as Uint8Array)
-      break
-    default:
-      encoder.writeString(String(value))
-  }
-}
-
-function encodeDataFile(
-  encoder: AvroEncoder,
-  dataFile: EncodableDataFile,
-  partitionFields: PartitionFieldDef[]
-): void {
-  // content (int)
-  encoder.writeInt(dataFile.content)
-  // file_path (string)
-  encoder.writeString(dataFile.file_path)
-  // file_format (string)
-  encoder.writeString(dataFile.file_format)
-  // partition (record)
-  for (const field of partitionFields) {
-    const value = dataFile.partition[field.name]
-    if (value === null || value === undefined) {
-      encoder.writeUnionIndex(0) // null
-    } else {
-      encoder.writeUnionIndex(1) // non-null
-      writePartitionValue(encoder, value, field.type)
-    }
-  }
-  // record_count (long)
-  encoder.writeLong(dataFile.record_count)
-  // file_size_in_bytes (long)
-  encoder.writeLong(dataFile.file_size_in_bytes)
-  // column_sizes (optional map as array)
-  writeOptionalKeyValueArray(encoder, dataFile.column_sizes, (kv) => {
-    encoder.writeInt(kv.key)
-    encoder.writeLong(kv.value)
-  })
-  // value_counts
-  writeOptionalKeyValueArray(encoder, dataFile.value_counts, (kv) => {
-    encoder.writeInt(kv.key)
-    encoder.writeLong(kv.value)
-  })
-  // null_value_counts
-  writeOptionalKeyValueArray(encoder, dataFile.null_value_counts, (kv) => {
-    encoder.writeInt(kv.key)
-    encoder.writeLong(kv.value)
-  })
-  // nan_value_counts
-  writeOptionalKeyValueArray(encoder, dataFile.nan_value_counts, (kv) => {
-    encoder.writeInt(kv.key)
-    encoder.writeLong(kv.value)
-  })
-  // lower_bounds
-  writeOptionalKeyValueArray(encoder, dataFile.lower_bounds, (kv) => {
-    encoder.writeInt(kv.key)
-    encoder.writeBytes(kv.value)
-  })
-  // upper_bounds
-  writeOptionalKeyValueArray(encoder, dataFile.upper_bounds, (kv) => {
-    encoder.writeInt(kv.key)
-    encoder.writeBytes(kv.value)
-  })
-  // key_metadata
-  writeOptionalBytes(encoder, dataFile.key_metadata)
-  // split_offsets
-  writeOptionalLongArray(encoder, dataFile.split_offsets)
-  // equality_ids
-  writeOptionalIntArray(encoder, dataFile.equality_ids)
-  // sort_order_id
-  writeOptionalInt(encoder, dataFile.sort_order_id)
-  // v3 fields
-  // first_row_id
-  writeOptionalLong(encoder, dataFile.first_row_id)
-  // referenced_data_file
-  writeOptionalString(encoder, dataFile.referenced_data_file)
-  // content_offset
-  writeOptionalLong(encoder, dataFile.content_offset)
-  // content_size_in_bytes
-  writeOptionalLong(encoder, dataFile.content_size_in_bytes)
-}
-
-function encodeManifestEntry(
-  encoder: AvroEncoder,
-  entry: EncodableManifestEntry,
-  partitionFields: PartitionFieldDef[]
-): void {
-  // status (int)
-  encoder.writeInt(entry.status)
-  // snapshot_id (optional long)
-  writeOptionalLong(encoder, entry.snapshot_id)
-  // sequence_number (optional long)
-  writeOptionalLong(encoder, entry.sequence_number)
-  // file_sequence_number (optional long)
-  writeOptionalLong(encoder, entry.file_sequence_number)
-  // data_file (record)
-  encodeDataFile(encoder, entry.data_file, partitionFields)
-}
-
-function encodeManifestListEntry(encoder: AvroEncoder, entry: EncodableManifestListEntry): void {
-  // manifest_path (string)
-  encoder.writeString(entry.manifest_path)
-  // manifest_length (long)
-  encoder.writeLong(entry.manifest_length)
-  // partition_spec_id (int)
-  encoder.writeInt(entry.partition_spec_id)
-  // content (int)
-  encoder.writeInt(entry.content)
-  // sequence_number (long)
-  encoder.writeLong(entry.sequence_number)
-  // min_sequence_number (long)
-  encoder.writeLong(entry.min_sequence_number)
-  // added_snapshot_id (long)
-  encoder.writeLong(entry.added_snapshot_id)
-  // added_files_count (int)
-  encoder.writeInt(entry.added_files_count)
-  // existing_files_count (int)
-  encoder.writeInt(entry.existing_files_count)
-  // deleted_files_count (int)
-  encoder.writeInt(entry.deleted_files_count)
-  // added_rows_count (long)
-  encoder.writeLong(entry.added_rows_count)
-  // existing_rows_count (long)
-  encoder.writeLong(entry.existing_rows_count)
-  // deleted_rows_count (long)
-  encoder.writeLong(entry.deleted_rows_count)
-  // partitions (optional array)
-  if (entry.partitions === null || entry.partitions === undefined) {
-    encoder.writeUnionIndex(0) // null
-  } else {
-    encoder.writeUnionIndex(1) // non-null
-    encoder.writeArray(entry.partitions, (p) => {
-      encoder.writeBoolean(p.contains_null)
-      writeOptionalBoolean(encoder, p.contains_nan)
-      writeOptionalBytes(encoder, p.lower_bound)
-      writeOptionalBytes(encoder, p.upper_bound)
-    })
-  }
-  // first_row_id (v3)
-  writeOptionalLong(encoder, entry.first_row_id)
 }
 
 /**
@@ -426,61 +136,136 @@ export function encodeManifestListToAvro(manifests: ManifestFile[]): Uint8Array 
 }
 
 // ===========================================================================
-// Avro Decoding Helpers
+// Avro Container File Parsing Helpers
 // ===========================================================================
 
-function readVarLong(data: Uint8Array, offset: number): { value: number; newOffset: number } {
-  let value = 0
-  let shift = 0
-  while (offset < data.length) {
-    const b = data[offset++]!
-    value |= (b & 0x7f) << shift
-    if ((b & 0x80) === 0) break
-    shift += 7
-  }
-  value = (value >>> 1) ^ -(value & 1)
-  return { value, newOffset: offset }
-}
+/**
+ * Parse Avro container file header to extract block data.
+ * Returns the offset after the header and sync marker, plus the sync marker itself.
+ */
+function parseAvroContainerHeader(data: Uint8Array): { dataOffset: number; syncMarker: Uint8Array } | null {
+  if (!isAvroFormat(data)) return null
 
-function readAvroString(data: Uint8Array, offset: number): { value: string; newOffset: number } {
-  const lenResult = readVarLong(data, offset)
-  const strData = data.slice(lenResult.newOffset, lenResult.newOffset + lenResult.value)
-  return { value: new TextDecoder().decode(strData), newOffset: lenResult.newOffset + lenResult.value }
-}
+  let offset = 4 // Skip magic bytes
 
-function skipAvroMap(data: Uint8Array, offset: number): number {
-  // Avro maps are written as: count, entries..., 0
-  // The count can be negative (means block has size prefix)
+  // Read header metadata map
+  // Maps are encoded as: count, [key, value], ..., 0
   while (true) {
-    let mapEntries = readVarLong(data, offset)
-    offset = mapEntries.newOffset
+    const decoder = new AvroDecoder(data.slice(offset))
+    const count = decoder.readLong()
+    offset += decoder.position
 
-    // Zero terminates the map
-    if (mapEntries.value === 0) break
+    if (count === 0) break
 
-    // Negative count means block has size prefix
-    if (mapEntries.value < 0) {
-      mapEntries.value = -mapEntries.value
-      offset = readVarLong(data, offset).newOffset // Skip block size
+    let absCount = count
+    if (count < 0) {
+      absCount = -count
+      const sizeDecoder = new AvroDecoder(data.slice(offset))
+      sizeDecoder.readLong() // Skip block size
+      offset += sizeDecoder.position
     }
 
     // Read each key-value pair
-    for (let i = 0; i < mapEntries.value; i++) {
-      const keyLen = readVarLong(data, offset)
-      offset = keyLen.newOffset + keyLen.value
-      const valLen = readVarLong(data, offset)
-      offset = valLen.newOffset + valLen.value
+    for (let i = 0; i < absCount; i++) {
+      const kvDecoder = new AvroDecoder(data.slice(offset))
+      const key = kvDecoder.readString()
+      const value = kvDecoder.readBytes()
+      void key
+      void value
+      offset += kvDecoder.position
     }
   }
+
+  // Read 16-byte sync marker
+  const syncMarker = data.slice(offset, offset + 16)
+  offset += 16
+
+  return { dataOffset: offset, syncMarker }
+}
+
+/**
+ * Read a block from an Avro container file.
+ * Returns the count, block data, and next offset.
+ */
+function readAvroBlock(data: Uint8Array, offset: number): { count: number; data: Uint8Array; newOffset: number } {
+  const decoder = new AvroDecoder(data.slice(offset))
+  const count = decoder.readLong()
+  if (count === 0) {
+    return { count: 0, data: new Uint8Array(0), newOffset: offset + decoder.position }
+  }
+  const size = decoder.readLong()
+  const blockData = data.slice(offset + decoder.position, offset + decoder.position + size)
+  return { count, data: blockData, newOffset: offset + decoder.position + size }
+}
+
+// ===========================================================================
+// Low-level Avro Decoding Helpers
+// ===========================================================================
+
+/**
+ * Read a zig-zag encoded variable-length integer from a buffer.
+ * Avro uses zig-zag encoding for signed integers.
+ */
+function readVarLong(data: Uint8Array, offset: number): { value: number; newOffset: number } {
+  let value = 0n
+  let shift = 0n
+  let newOffset = offset
+
+  while (newOffset < data.length) {
+    const b = data[newOffset++]!
+    value |= BigInt(b & 0x7f) << shift
+    if ((b & 0x80) === 0) break
+    shift += 7n
+  }
+
+  // Zig-zag decode
+  const decoded = (value >> 1n) ^ -(value & 1n)
+  return { value: Number(decoded), newOffset }
+}
+
+/**
+ * Skip over an Avro map in the buffer.
+ * Maps are encoded as: count, [key, value], ..., 0 (terminating zero block)
+ */
+function skipAvroMap(data: Uint8Array, offset: number): number {
+  while (true) {
+    const countResult = readVarLong(data, offset)
+    offset = countResult.newOffset
+
+    if (countResult.value === 0) break
+
+    let count = countResult.value
+    if (count < 0) {
+      // Negative count means block has size prefix
+      count = -count
+      const sizeResult = readVarLong(data, offset)
+      offset = sizeResult.newOffset
+    }
+
+    // Skip each key-value pair
+    for (let i = 0; i < count; i++) {
+      // Skip key (string: length + bytes)
+      const keyLenResult = readVarLong(data, offset)
+      offset = keyLenResult.newOffset + keyLenResult.value
+
+      // Skip value (bytes: length + bytes)
+      const valueLenResult = readVarLong(data, offset)
+      offset = valueLenResult.newOffset + valueLenResult.value
+    }
+  }
+
   return offset
 }
 
-function readAvroBlock(data: Uint8Array, offset: number): { count: number; data: Uint8Array; newOffset: number } {
-  const countResult = readVarLong(data, offset)
-  if (countResult.value === 0) return { count: 0, data: new Uint8Array(0), newOffset: countResult.newOffset }
-  const sizeResult = readVarLong(data, countResult.newOffset)
-  const blockData = data.slice(sizeResult.newOffset, sizeResult.newOffset + sizeResult.value)
-  return { count: countResult.value, data: blockData, newOffset: sizeResult.newOffset + sizeResult.value }
+/**
+ * Read an Avro string from a buffer.
+ * Strings are encoded as: length (varint), UTF-8 bytes
+ */
+function readAvroString(data: Uint8Array, offset: number): { value: string; newOffset: number } {
+  const lenResult = readVarLong(data, offset)
+  const strBytes = data.slice(lenResult.newOffset, lenResult.newOffset + lenResult.value)
+  const value = new TextDecoder().decode(strBytes)
+  return { value, newOffset: lenResult.newOffset + lenResult.value }
 }
 
 /**

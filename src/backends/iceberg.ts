@@ -10,18 +10,23 @@
  * - REST Catalog (any Iceberg REST catalog)
  */
 
-import type {
-  EntityBackend,
-  IcebergBackendConfig,
-  IcebergCatalogConfig,
-  EntitySchema,
-  SnapshotInfo,
-  CompactOptions,
-  CompactResult,
-  VacuumOptions,
-  VacuumResult,
-  BackendStats,
-  SchemaFieldType,
+import {
+  ReadOnlyError,
+  BackendEntityNotFoundError,
+  TableNotFoundError,
+  SnapshotNotFoundError,
+  InvalidNamespaceError,
+  type EntityBackend,
+  type IcebergBackendConfig,
+  type IcebergCatalogConfig,
+  type EntitySchema,
+  type SnapshotInfo,
+  type CompactOptions,
+  type CompactResult,
+  type VacuumOptions,
+  type VacuumResult,
+  type BackendStats,
+  type SchemaFieldType,
 } from './types'
 import type { Entity, EntityId, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
 import type { Filter } from '../types/filter'
@@ -65,7 +70,7 @@ import {
   type IcebergSchema,
   type Snapshot,
   type StorageBackend as IcebergStorageBackend,
-  type ManifestEntry,
+  type ManifestEntry as _ManifestEntry,
   type ManifestFile,
 } from '@dotdo/iceberg'
 
@@ -218,7 +223,7 @@ export class IcebergBackend implements EntityBackend {
     options?: CreateOptions
   ): Promise<Entity<T>> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('create', 'IcebergBackend')
     }
 
     // Generate entity
@@ -251,13 +256,13 @@ export class IcebergBackend implements EntityBackend {
     options?: UpdateOptions
   ): Promise<Entity<T>> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('update', 'IcebergBackend')
     }
 
     // Get existing entity
     const existing = await this.get<T>(ns, id)
     if (!existing && !options?.upsert) {
-      throw new Error(`Entity not found: ${ns}/${id}`)
+      throw new BackendEntityNotFoundError(ns, id)
     }
 
     const now = new Date()
@@ -282,7 +287,7 @@ export class IcebergBackend implements EntityBackend {
 
   async delete(ns: string, id: string, options?: DeleteOptions): Promise<DeleteResult> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('delete', 'IcebergBackend')
     }
 
     const entity = await this.get(ns, id)
@@ -321,7 +326,7 @@ export class IcebergBackend implements EntityBackend {
     options?: CreateOptions
   ): Promise<Entity<T>[]> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('bulkCreate', 'IcebergBackend')
     }
 
     const now = new Date()
@@ -353,7 +358,7 @@ export class IcebergBackend implements EntityBackend {
     options?: UpdateOptions
   ): Promise<UpdateResult> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('bulkUpdate', 'IcebergBackend')
     }
 
     const entities = await this.find(ns, filter)
@@ -384,7 +389,7 @@ export class IcebergBackend implements EntityBackend {
 
   async bulkDelete(ns: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('bulkDelete', 'IcebergBackend')
     }
 
     const entities = await this.find(ns, filter)
@@ -421,7 +426,7 @@ export class IcebergBackend implements EntityBackend {
   async snapshot(ns: string, version: number | Date): Promise<EntityBackend> {
     const metadata = await this.getTableMetadata(ns)
     if (!metadata) {
-      throw new Error(`Table not found: ${ns}`)
+      throw new TableNotFoundError(ns, 'IcebergBackend')
     }
 
     let snapshot: Snapshot | undefined
@@ -432,7 +437,7 @@ export class IcebergBackend implements EntityBackend {
     }
 
     if (!snapshot) {
-      throw new Error(`Snapshot not found for version: ${version}`)
+      throw new SnapshotNotFoundError(ns, version)
     }
 
     // Return a read-only backend pointing to the specific snapshot
@@ -468,7 +473,7 @@ export class IcebergBackend implements EntityBackend {
 
   async setSchema(ns: string, schema: EntitySchema): Promise<void> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('setSchema', 'IcebergBackend')
     }
 
     const metadata = await this.getTableMetadata(ns)
@@ -533,7 +538,7 @@ export class IcebergBackend implements EntityBackend {
 
   async compact(_ns: string, _options?: CompactOptions): Promise<CompactResult> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('compact', 'IcebergBackend')
     }
 
     // For R2 Data Catalog, compaction is managed by Cloudflare
@@ -561,7 +566,7 @@ export class IcebergBackend implements EntityBackend {
 
   async vacuum(ns: string, options?: VacuumOptions): Promise<VacuumResult> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('vacuum', 'IcebergBackend')
     }
 
     const metadata = await this.getTableMetadata(ns)
@@ -1385,24 +1390,24 @@ class IcebergSnapshotBackend implements EntityBackend {
     return entity !== null
   }
 
-  // Write operations throw errors (read-only)
+  // Write operations throw errors (read-only snapshot view)
   async create(): Promise<never> {
-    throw new Error('Snapshot backend is read-only')
+    throw new ReadOnlyError('create', 'IcebergSnapshotBackend')
   }
   async update(): Promise<never> {
-    throw new Error('Snapshot backend is read-only')
+    throw new ReadOnlyError('update', 'IcebergSnapshotBackend')
   }
   async delete(): Promise<never> {
-    throw new Error('Snapshot backend is read-only')
+    throw new ReadOnlyError('delete', 'IcebergSnapshotBackend')
   }
   async bulkCreate(): Promise<never> {
-    throw new Error('Snapshot backend is read-only')
+    throw new ReadOnlyError('bulkCreate', 'IcebergSnapshotBackend')
   }
   async bulkUpdate(): Promise<never> {
-    throw new Error('Snapshot backend is read-only')
+    throw new ReadOnlyError('bulkUpdate', 'IcebergSnapshotBackend')
   }
   async bulkDelete(): Promise<never> {
-    throw new Error('Snapshot backend is read-only')
+    throw new ReadOnlyError('bulkDelete', 'IcebergSnapshotBackend')
   }
 
   async getSchema(ns: string): Promise<EntitySchema | null> {

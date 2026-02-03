@@ -527,7 +527,13 @@ export class DeltaBackend implements EntityBackend {
       const metaData = actions.find((a): a is MetaDataAction => 'metaData' in a)
       if (!metaData) return null
 
-      const schemaObj = JSON.parse(metaData.metaData.schemaString)
+      let schemaObj
+      try {
+        schemaObj = JSON.parse(metaData.metaData.schemaString)
+      } catch {
+        // Invalid schema JSON in metadata
+        return null
+      }
       return this.deltaSchemaToEntitySchema(ns, schemaObj)
     } catch {
       return null
@@ -712,8 +718,8 @@ export class DeltaBackend implements EntityBackend {
         timestamp: Date.now(),
         operation: 'OPTIMIZE',
         operationParameters: {
-          targetFileSize,
-          minFileSize,
+          targetFileSize: targetSize,
+          minFileSize: minFileSize,
         },
         readVersion: currentVersion,
         isBlindAppend: false,
@@ -913,7 +919,13 @@ export class DeltaBackend implements EntityBackend {
     // Check for _last_checkpoint first
     try {
       const checkpointData = await this.storage.read(`${logPath}_last_checkpoint`)
-      const checkpoint: LastCheckpoint = JSON.parse(new TextDecoder().decode(checkpointData))
+      let checkpoint: LastCheckpoint
+      try {
+        checkpoint = JSON.parse(new TextDecoder().decode(checkpointData))
+      } catch {
+        // Invalid checkpoint JSON - fall through to scan from beginning
+        throw new Error('Invalid checkpoint JSON')
+      }
 
       // Look for commits after checkpoint
       let version = checkpoint.version
@@ -975,7 +987,16 @@ export class DeltaBackend implements EntityBackend {
    */
   private parseCommitFile(content: string): DeltaAction[] {
     const lines = content.trim().split('\n')
-    return lines.map(line => JSON.parse(line) as DeltaAction)
+    const actions: DeltaAction[] = []
+    for (const line of lines) {
+      try {
+        actions.push(JSON.parse(line) as DeltaAction)
+      } catch {
+        // Skip invalid JSON lines in commit file
+        continue
+      }
+    }
+    return actions
   }
 
   /**
@@ -1049,7 +1070,7 @@ export class DeltaBackend implements EntityBackend {
 
     // OCC: Retry loop with exponential backoff
     let retries = 0
-    let lastError: Error | null = null
+    let _lastError: Error | null = null
     let dataFilePath: string | null = null
 
     while (retries <= this.maxRetries) {
@@ -1161,7 +1182,7 @@ export class DeltaBackend implements EntityBackend {
       } catch (error) {
         // Check if this is a conflict error (file already exists)
         if (error instanceof AlreadyExistsError || this.isConflictError(error)) {
-          lastError = error as Error
+          _lastError = error as Error
           retries++
 
           if (retries <= this.maxRetries) {
@@ -1298,12 +1319,12 @@ export class DeltaBackend implements EntityBackend {
 
     // Delta Lake checkpoint schema (all optional strings containing JSON)
     const checkpointSchema = {
-      txn: { type: 'STRING', optional: true },
-      add: { type: 'STRING', optional: true },
-      remove: { type: 'STRING', optional: true },
-      metaData: { type: 'STRING', optional: true },
-      protocol: { type: 'STRING', optional: true },
-      commitInfo: { type: 'STRING', optional: true },
+      txn: { type: 'STRING' as const, optional: true },
+      add: { type: 'STRING' as const, optional: true },
+      remove: { type: 'STRING' as const, optional: true },
+      metaData: { type: 'STRING' as const, optional: true },
+      protocol: { type: 'STRING' as const, optional: true },
+      commitInfo: { type: 'STRING' as const, optional: true },
     }
 
     // Write checkpoint as proper Parquet file

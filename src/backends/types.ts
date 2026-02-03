@@ -467,3 +467,78 @@ export class CommitConflictError extends Error {
     Object.setPrototypeOf(this, CommitConflictError.prototype)
   }
 }
+
+/**
+ * Error thrown when a write operation is attempted on a read-only backend
+ */
+export class ReadOnlyError extends Error {
+  override readonly name = 'ReadOnlyError'
+
+  constructor(operation: string, backend?: string) {
+    const backendMsg = backend ? ` (${backend})` : ''
+    super(`Cannot perform ${operation} operation: backend is read-only${backendMsg}`)
+    Object.setPrototypeOf(this, ReadOnlyError.prototype)
+  }
+}
+
+/**
+ * Error thrown when an entity is not found
+ */
+export class BackendEntityNotFoundError extends Error {
+  override readonly name = 'EntityNotFoundError'
+
+  constructor(
+    public readonly ns: string,
+    public readonly entityId: string
+  ) {
+    super(`Entity not found: ${ns}/${entityId}`)
+    Object.setPrototypeOf(this, BackendEntityNotFoundError.prototype)
+  }
+}
+
+/**
+ * Error thrown when a table/namespace is not found in the backend
+ */
+export class TableNotFoundError extends Error {
+  override readonly name = 'TableNotFoundError'
+
+  constructor(
+    public readonly ns: string,
+    public readonly backend?: string
+  ) {
+    const backendMsg = backend ? ` in ${backend}` : ''
+    super(`Table not found: ${ns}${backendMsg}`)
+    Object.setPrototypeOf(this, TableNotFoundError.prototype)
+  }
+}
+
+/**
+ * Error thrown when a snapshot version is not found
+ */
+export class SnapshotNotFoundError extends Error {
+  override readonly name = 'SnapshotNotFoundError'
+
+  constructor(
+    public readonly ns: string,
+    public readonly version: number | Date
+  ) {
+    const versionStr = version instanceof Date ? version.toISOString() : String(version)
+    super(`Snapshot not found for ${ns}: version ${versionStr}`)
+    Object.setPrototypeOf(this, SnapshotNotFoundError.prototype)
+  }
+}
+
+/**
+ * Error thrown when an operation targets an invalid namespace
+ */
+export class InvalidNamespaceError extends Error {
+  override readonly name = 'InvalidNamespaceError'
+
+  constructor(
+    public readonly provided: string,
+    public readonly expected: string
+  ) {
+    super(`Invalid namespace: expected "${expected}", got "${provided}"`)
+    Object.setPrototypeOf(this, InvalidNamespaceError.prototype)
+  }
+}

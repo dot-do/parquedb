@@ -24,6 +24,7 @@ import type {
   R2UploadedPart,
 } from './types/r2'
 import { validateRange, InvalidRangeError } from './validation'
+import { toError, normalizePrefix, applyPrefix, stripPrefix } from './utils'
 import { MIN_PART_SIZE, DEFAULT_PART_SIZE, MAX_PARTS, DEFAULT_MULTIPART_UPLOAD_TTL } from '../constants'
 
 /**
@@ -96,9 +97,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
   constructor(bucket: R2Bucket, options?: R2BackendOptions) {
     this.bucket = bucket
-    // Normalize prefix: ensure it ends with / if provided
-    const rawPrefix = options?.prefix ?? ''
-    this.prefix = rawPrefix && !rawPrefix.endsWith('/') ? rawPrefix + '/' : rawPrefix
+    this.prefix = normalizePrefix(options?.prefix)
     this.multipartUploadTTL = options?.multipartUploadTTL ?? DEFAULT_MULTIPART_UPLOAD_TTL
   }
 
@@ -106,17 +105,14 @@ export class R2Backend implements StorageBackend, MultipartBackend {
    * Apply prefix to a path
    */
   private withPrefix(path: string): string {
-    return this.prefix + path
+    return applyPrefix(path, this.prefix)
   }
 
   /**
    * Remove prefix from a path
    */
   private withoutPrefix(path: string): string {
-    if (this.prefix && path.startsWith(this.prefix)) {
-      return path.slice(this.prefix.length)
-    }
-    return path
+    return stripPrefix(path, this.prefix)
   }
 
   async read(path: string): Promise<Uint8Array> {
@@ -131,7 +127,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       if (error instanceof R2NotFoundError) {
         throw error
       }
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to read ${path}: ${err.message}`,
         'read',
@@ -167,7 +163,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       if (error instanceof R2NotFoundError) {
         throw error
       }
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to read range ${start}-${end} from ${path}: ${err.message}`,
         'readRange',
@@ -183,7 +179,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       const obj = await this.bucket.head(key)
       return obj !== null
     } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to check existence of ${path}: ${err.message}`,
         'exists',
@@ -211,7 +207,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
         metadata: obj.customMetadata,
       }
     } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to stat ${path}: ${err.message}`,
         'stat',
@@ -277,7 +273,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
       return listResult
     } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to list ${prefix}: ${err.message}`,
         'list',
@@ -349,7 +345,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       if (error instanceof R2ETagMismatchError) {
         throw error
       }
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to write ${path}: ${err.message}`,
         'write',
@@ -432,7 +428,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
           continue
         }
 
-        const err = error instanceof Error ? error : new Error(String(error))
+        const err = toError(error)
         throw new R2OperationError(
           `Failed to append to ${path}: ${err.message}`,
           'append',
@@ -455,7 +451,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
       return exists !== null
     } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to delete ${path}: ${err.message}`,
         'delete',
@@ -491,7 +487,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
       return totalDeleted
     } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to delete prefix ${prefix}: ${err.message}`,
         'deletePrefix',
@@ -564,7 +560,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       if (error instanceof R2ETagMismatchError) {
         throw error
       }
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed conditional write to ${path}: ${err.message}`,
         'writeConditional',
@@ -603,7 +599,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       if (error instanceof R2NotFoundError) {
         throw error
       }
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to copy ${source} to ${dest}: ${err.message}`,
         'copy',
@@ -626,7 +622,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       if (error instanceof R2NotFoundError) {
         throw error
       }
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to move ${source} to ${dest}: ${err.message}`,
         'move',
@@ -656,7 +652,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
       return new R2MultipartUploadWrapper(r2Upload)
     } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to create multipart upload for ${path}: ${err.message}`,
         'createMultipartUpload',
@@ -697,7 +693,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       })
       return r2Upload.uploadId
     } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to create multipart upload for ${path}: ${err.message}`,
         'startMultipartUpload',
@@ -736,7 +732,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       const part = await entry.upload.uploadPart(partNumber, data)
       return { etag: part.etag }
     } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to upload part ${partNumber} for ${path}: ${err.message}`,
         'uploadPart',
@@ -771,7 +767,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       await entry.upload.complete(parts)
       this.activeUploads.delete(uploadId)
     } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to complete multipart upload for ${path}: ${err.message}`,
         'completeMultipartUpload',
@@ -801,7 +797,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       await entry.upload.abort()
       this.activeUploads.delete(uploadId)
     } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to abort multipart upload for ${path}: ${err.message}`,
         'abortMultipartUpload',
@@ -954,7 +950,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
       if (error instanceof R2OperationError) {
         throw error
       }
-      const err = error instanceof Error ? error : new Error(String(error))
+      const err = toError(error)
       throw new R2OperationError(
         `Failed to write streaming ${path}: ${err.message}`,
         'writeStreaming',
