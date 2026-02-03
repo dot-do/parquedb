@@ -812,3 +812,47 @@ export function createThresholdsFromConfig(config: {
     ...(config.criticalStalenessRatio !== undefined && { criticalStalenessRatio: config.criticalStalenessRatio }),
   }
 }
+
+// =============================================================================
+// Lineage Utilities
+// =============================================================================
+
+/**
+ * Create an empty MVLineage with default values
+ */
+export function createEmptyLineage(): MVLineage {
+  return {
+    refreshVersionId: '',
+    definitionVersionId: '',
+    lastRefreshedAt: 0,
+    sourceVersions: new Map(),
+    refreshCount: 0,
+  }
+}
+
+/**
+ * Serialize an MVLineage to a JSON string for storage
+ */
+export function serializeLineage(lineage: MVLineage): string {
+  return JSON.stringify({
+    refreshVersionId: lineage.refreshVersionId,
+    definitionVersionId: lineage.definitionVersionId,
+    lastRefreshedAt: lineage.lastRefreshedAt,
+    sourceVersions: Array.from(lineage.sourceVersions.entries()),
+    refreshCount: lineage.refreshCount,
+  })
+}
+
+/**
+ * Deserialize an MVLineage from a JSON string
+ */
+export function deserializeLineage(data: string): MVLineage {
+  const parsed = JSON.parse(data)
+  return {
+    refreshVersionId: parsed.refreshVersionId ?? '',
+    definitionVersionId: parsed.definitionVersionId ?? '',
+    lastRefreshedAt: parsed.lastRefreshedAt ?? 0,
+    sourceVersions: new Map(parsed.sourceVersions ?? []),
+    refreshCount: parsed.refreshCount ?? 0,
+  }
+}

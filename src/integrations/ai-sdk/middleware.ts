@@ -48,6 +48,8 @@ import type {
   CacheEntry,
   LogEntry,
 } from './types'
+import { logger } from '../../utils/logger'
+import { asTypedResult, asTypedResults } from '../../types/cast'
 
 // =============================================================================
 // Constants
@@ -220,7 +222,7 @@ export function createParqueDBMiddleware(
 
           const cacheResult = await db.collection(cacheCollection).findOne({ key: cacheKey })
 
-          if (cacheResult && !isExpired(cacheResult as unknown as CacheEntry)) {
+          if (cacheResult && !isExpired(asTypedResult<CacheEntry>(cacheResult))) {
             // Update hit count and last accessed time
             const localId = (cacheResult.$id as string).split('/').pop()
             if (localId) {
@@ -233,7 +235,7 @@ export function createParqueDBMiddleware(
             }
 
             cached = true
-            const result = (cacheResult as unknown as CacheEntry).response as LanguageModelGenerateResult
+            const result = asTypedResult<CacheEntry>(cacheResult).response as LanguageModelGenerateResult
 
             // Log the cache hit if logging is enabled
             if (loggingEnabled) {
@@ -262,7 +264,7 @@ export function createParqueDBMiddleware(
           }
         } catch (error) {
           // Cache lookup failed - proceed without cache
-          console.warn('[ParqueDB AI Middleware] Cache lookup failed:', error)
+          logger.warn('[ParqueDB AI Middleware] Cache lookup failed:', error)
         }
       }
 
@@ -323,7 +325,7 @@ export function createParqueDBMiddleware(
             })
           } catch (cacheError) {
             // Cache write failed - log but don't fail the request
-            console.warn('[ParqueDB AI Middleware] Cache write failed:', cacheError)
+            logger.warn('[ParqueDB AI Middleware] Cache write failed:', cacheError)
           }
         }
       }
@@ -501,11 +503,11 @@ async function logRequest(options: LogRequestOptions): Promise<void> {
 
     // Call custom log handler if provided
     if (onLog) {
-      await onLog(createdEntry as unknown as LogEntry)
+      await onLog(asTypedResult<LogEntry>(createdEntry))
     }
   } catch (error) {
     // Don't let logging errors break the request
-    console.warn('[ParqueDB AI Middleware] Failed to log request:', error)
+    logger.warn('[ParqueDB AI Middleware] Failed to log request:', error)
   }
 }
 
@@ -562,7 +564,7 @@ export async function queryCacheEntries(
     sort: { [sortField]: sortOrder },
   })
 
-  return results.items as unknown as CacheEntry[]
+  return asTypedResults<CacheEntry>(results.items)
 }
 
 /**
@@ -634,7 +636,7 @@ export async function queryLogEntries(
     sort: { timestamp: -1 },
   })
 
-  return results.items as unknown as LogEntry[]
+  return asTypedResults<LogEntry>(results.items)
 }
 
 /**
@@ -690,7 +692,7 @@ export async function getCacheStats(
   const now = new Date()
 
   const result = await db.collection(collection).find({}, { limit: 10000 })
-  const allEntries = result.items as unknown as CacheEntry[]
+  const allEntries = asTypedResults<CacheEntry>(result.items)
 
   let totalHits = 0
   let activeCount = 0

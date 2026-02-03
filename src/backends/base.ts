@@ -32,6 +32,9 @@ import {
   extractDataFields,
 } from './parquet-utils'
 
+// Import update operators
+import { applyOperators } from '../mutation/operators'
+
 // =============================================================================
 // Abstract Base Entity Backend
 // =============================================================================
@@ -494,37 +497,16 @@ export abstract class BaseEntityBackend implements EntityBackend {
   /**
    * Apply update operators to an entity
    *
-   * Supports: $set, $unset, $inc
-   * TODO: Add support for $push, $pull, $addToSet
+   * Supports all MongoDB-style operators via the mutation/operators module:
+   * - Field: $set, $unset, $rename, $setOnInsert
+   * - Numeric: $inc, $mul, $min, $max
+   * - Array: $push, $pull, $pullAll, $addToSet, $pop
+   * - Date: $currentDate
+   * - Bitwise: $bit
    */
   protected applyUpdate<T>(entity: Entity<T>, update: Update): Entity<T> {
-    const result = { ...entity }
-
-    // Handle $set
-    if (update.$set) {
-      Object.assign(result, update.$set)
-    }
-
-    // Handle $unset
-    if (update.$unset) {
-      for (const key of Object.keys(update.$unset)) {
-        delete (result as Record<string, unknown>)[key]
-      }
-    }
-
-    // Handle $inc
-    if (update.$inc) {
-      for (const [key, value] of Object.entries(update.$inc)) {
-        const current = (result as Record<string, unknown>)[key]
-        if (typeof current === 'number' && typeof value === 'number') {
-          (result as Record<string, unknown>)[key] = current + value
-        }
-      }
-    }
-
-    // TODO: Handle other operators ($push, $pull, $addToSet, etc.)
-
-    return result
+    const result = applyOperators(entity as Record<string, unknown>, update)
+    return result.document as Entity<T>
   }
 
   /**

@@ -15,6 +15,7 @@
  */
 
 import type { ValidatedTraceItem } from './tail-validation'
+import { WORKERS_PAID_SUBREQUEST_LIMIT as IMPORTED_WORKERS_PAID_SUBREQUEST_LIMIT } from '../constants'
 
 // =============================================================================
 // Types
@@ -85,7 +86,7 @@ export const WORKERS_FREE_SUBREQUEST_LIMIT = 50
 /**
  * Workers Paid plan subrequest limit
  */
-export const WORKERS_PAID_SUBREQUEST_LIMIT = 1000
+export const WORKERS_PAID_SUBREQUEST_LIMIT = IMPORTED_WORKERS_PAID_SUBREQUEST_LIMIT
 
 // =============================================================================
 // Helper Functions

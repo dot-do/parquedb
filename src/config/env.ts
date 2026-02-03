@@ -118,10 +118,11 @@ export async function detectStoragePaths(): Promise<StoragePaths | null> {
 
     if (runtime === 'deno') {
       cwd = globalThis.Deno!.cwd()
-      // Deno uses different fs API
+      // Deno fs detection uses Deno.stat and Deno.readDir which are not yet implemented here
+      // For now, return minimal info - Deno users should explicitly configure paths
       return {
         projectRoot: cwd,
-        dataDir: null, // TODO: Deno fs detection
+        dataDir: null,
         configFile: null,
       }
     }

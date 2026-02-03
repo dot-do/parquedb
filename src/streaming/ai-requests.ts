@@ -44,6 +44,8 @@
 import type { ParqueDB } from '../ParqueDB'
 import type { ViewDefinition, ViewOptions } from '../materialized-views/types'
 import { viewName } from '../materialized-views/types'
+import { asCreatedRecord, asTypedResults } from '../types/cast'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Constants
@@ -649,7 +651,7 @@ export async function recordAIRequest(
     ...request,
   })
 
-  return created as unknown as AIRequest
+  return asCreatedRecord<AIRequest>(created)
 }
 
 /**
@@ -717,7 +719,7 @@ export async function recordAIRequests(
     }))
   )
 
-  return created as unknown as AIRequest[]
+  return asTypedResults<AIRequest>(created)
 }
 
 // =============================================================================
@@ -978,10 +980,10 @@ export async function getAIMetrics(
   }
 
   // Fetch requests
-  const requests = await db.collection(collection).find(filter, {
+  const requests = asTypedResults<AIRequest>(await db.collection(collection).find(filter, {
     limit: options?.limit ?? 10000,
     sort: { timestamp: 1 },
-  }) as unknown as AIRequest[]
+  }))
 
   // Group by time bucket
   const bucketMap = new Map<string, AIRequest[]>()
@@ -1103,10 +1105,10 @@ export async function getAICostSummary(
     }
   }
 
-  const requests = await db.collection(collection).find(filter, {
+  const requests = asTypedResults<AIRequest>(await db.collection(collection).find(filter, {
     limit: options?.limit ?? 10000,
     sort: { timestamp: -1 },
-  }) as unknown as AIRequest[]
+  }))
 
   // Calculate totals
   const nonCachedRequests = requests.filter(r => !r.cached)
@@ -1202,9 +1204,9 @@ export async function getAIErrorSummary(
     }
   }
 
-  const allRequests = await db.collection(collection).find(allFilter, {
+  const allRequests = asTypedResults<AIRequest>(await db.collection(collection).find(allFilter, {
     limit: options?.limit ?? 10000,
-  }) as unknown as AIRequest[]
+  }))
 
   // Get error requests
   const errorFilter = {
@@ -1212,10 +1214,10 @@ export async function getAIErrorSummary(
     success: false,
   }
 
-  const errorRequests = await db.collection(collection).find(errorFilter, {
+  const errorRequests = asTypedResults<AIRequest>(await db.collection(collection).find(errorFilter, {
     limit: options?.limit ?? 1000,
     sort: { timestamp: -1 },
-  }) as unknown as AIRequest[]
+  }))
 
   // Aggregate by model
   const byModel: Record<string, number> = {}
@@ -1416,7 +1418,7 @@ export class AIRequestBuffer {
     this.flushTimer = setInterval(() => {
       if (this.buffer.length > 0 && !this.flushPromise) {
         this.flush().catch(err => {
-          console.error('[AIRequestBuffer] Flush failed:', err)
+          logger.error('[AIRequestBuffer] Flush failed:', err)
         })
       }
     }, this.options.flushIntervalMs ?? DEFAULT_AI_FLUSH_INTERVAL_MS)
@@ -1480,7 +1482,7 @@ export class AIRequestBuffer {
         if (this.options.onDrop) {
           this.options.onDrop(toDrop, err instanceof Error ? err : new Error(String(err)))
         } else {
-          console.error(`[AIRequestBuffer] Dropped ${toDrop.length} requests after ${maxRetries} retries:`, err)
+          logger.error(`[AIRequestBuffer] Dropped ${toDrop.length} requests after ${maxRetries} retries:`, err)
         }
       }
 

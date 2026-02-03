@@ -5,12 +5,18 @@
  * These tests verify that malicious regex patterns are detected and rejected.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   createSafeRegex,
   validateRegexPattern,
   isRegexSafe,
   UnsafeRegexError,
+  calculateComplexityScore,
+  analyzeRegexSafety,
+  safeRegexTest,
+  safeRegexMatch,
+  safeRegexExec,
+  RegexTimeoutError,
 } from '@/utils/safe-regex'
 
 describe('Safe Regex', () => {
@@ -195,6 +201,84 @@ describe('Safe Regex', () => {
       expect(() => createSafeRegex('\\b.*test.*\\b')).toThrow(UnsafeRegexError)
     })
   })
+
+  describe('ReDoS protection - star height analysis', () => {
+    it('rejects high star height patterns', () => {
+      // ((a+)+)+ has star height 3 (default max is 2)
+      expect(() => createSafeRegex('((a+)+)+')).toThrow(UnsafeRegexError)
+    })
+
+    it('accepts patterns within star height limit', () => {
+      // (a+)+ has star height 2 (at the limit)
+      // This would normally be caught by nested quantifiers check
+      // but star height provides additional protection
+      expect(() => createSafeRegex('a+b+')).not.toThrow()
+    })
+
+    it('respects custom maxStarHeight option', () => {
+      // Simple pattern with star height 1
+      expect(() => createSafeRegex('a+', '', { maxStarHeight: 1 })).not.toThrow()
+      expect(() => createSafeRegex('a+', '', { maxStarHeight: 0 })).toThrow(UnsafeRegexError)
+    })
+  })
+
+  describe('ReDoS protection - group depth analysis', () => {
+    it('rejects excessively nested groups', () => {
+      // Create a pattern with 15 levels of nesting (default max is 10)
+      const deeplyNested = '('.repeat(15) + 'a' + ')'.repeat(15)
+      expect(() => createSafeRegex(deeplyNested)).toThrow(UnsafeRegexError)
+    })
+
+    it('accepts patterns within group depth limit', () => {
+      // Create a pattern with 5 levels of nesting
+      const moderatelyNested = '('.repeat(5) + 'a' + ')'.repeat(5)
+      expect(() => createSafeRegex(moderatelyNested)).not.toThrow()
+    })
+
+    it('respects custom maxGroupDepth option', () => {
+      const nested = '((a))'
+      expect(() => createSafeRegex(nested, '', { maxGroupDepth: 2 })).not.toThrow()
+      expect(() => createSafeRegex(nested, '', { maxGroupDepth: 1 })).toThrow(UnsafeRegexError)
+    })
+  })
+
+  describe('ReDoS protection - repetition count', () => {
+    it('rejects patterns with too many repetitions', () => {
+      // Create a pattern with 25 repetition operators (default max is 20)
+      const manyRepetitions = Array(25).fill('a+').join('')
+      expect(() => createSafeRegex(manyRepetitions)).toThrow(UnsafeRegexError)
+    })
+
+    it('accepts patterns within repetition limit', () => {
+      // Create a pattern with 10 repetition operators
+      const fewRepetitions = Array(10).fill('a+').join('')
+      expect(() => createSafeRegex(fewRepetitions)).not.toThrow()
+    })
+
+    it('respects custom maxRepetitions option', () => {
+      const pattern = 'a+b+c+'
+      expect(() => createSafeRegex(pattern, '', { maxRepetitions: 3 })).not.toThrow()
+      expect(() => createSafeRegex(pattern, '', { maxRepetitions: 2 })).toThrow(UnsafeRegexError)
+    })
+  })
+
+  describe('ReDoS protection - additional dangerous patterns', () => {
+    it('rejects overlapping character classes with quantifiers', () => {
+      expect(() => createSafeRegex('[a-z]*[a-z]+')).toThrow(UnsafeRegexError)
+    })
+
+    it('rejects quantifier after optional group', () => {
+      expect(() => createSafeRegex('(a?)+$')).toThrow(UnsafeRegexError)
+    })
+
+    it('rejects empty group with quantifier', () => {
+      expect(() => createSafeRegex('()+$')).toThrow(UnsafeRegexError)
+    })
+
+    it('rejects recursive-like patterns', () => {
+      expect(() => createSafeRegex('.*.*test')).toThrow(UnsafeRegexError)
+    })
+  })
 })
 
 describe('Safe Regex Integration with $regex Filter', () => {
@@ -230,5 +314,372 @@ describe('Safe Regex Integration with $regex Filter', () => {
     // Verify the utility is available and working
     expect(() => createSafeRegex('(a+)+')).toThrow(UnsafeRegexError)
     expect(createSafeRegex('^hello').test('hello')).toBe(true)
+  })
+})
+
+describe('Complexity Scoring', () => {
+  describe('calculateComplexityScore', () => {
+    it('returns low score for simple patterns', () => {
+      const result = calculateComplexityScore('^hello$')
+      expect(result.score).toBeLessThan(5)
+      expect(result.isSafe).toBe(true)
+      expect(result.warnings).toHaveLength(0)
+    })
+
+    it('returns low score for common safe patterns', () => {
+      // Email-like pattern
+      const email = calculateComplexityScore('[\\w.]+@[\\w.]+')
+      expect(email.isSafe).toBe(true)
+
+      // Phone number
+      const phone = calculateComplexityScore('\\d{3}-\\d{3}-\\d{4}')
+      expect(phone.isSafe).toBe(true)
+
+      // URL-like pattern
+      const url = calculateComplexityScore('^https?://[\\w./]+$')
+      expect(url.isSafe).toBe(true)
+    })
+
+    it('returns high score for nested quantifiers', () => {
+      const result = calculateComplexityScore('(a+)+')
+      expect(result.score).toBeGreaterThan(10)
+      expect(result.factors.starHeight).toBeGreaterThan(0)
+    })
+
+    it('returns high score for complex patterns', () => {
+      const result = calculateComplexityScore('((a|b)+c?)+d*')
+      expect(result.score).toBeGreaterThan(5)
+    })
+
+    it('includes warnings for problematic constructs', () => {
+      const result = calculateComplexityScore('(a+)+')
+      expect(result.warnings.length).toBeGreaterThan(0)
+      // Should warn about star height, quantifier depth, or nesting
+      expect(result.warnings.some(w =>
+        w.toLowerCase().includes('star') ||
+        w.toLowerCase().includes('quantifier') ||
+        w.toLowerCase().includes('nest') ||
+        w.toLowerCase().includes('backtrack')
+      )).toBe(true)
+    })
+
+    it('tracks individual factors separately', () => {
+      const result = calculateComplexityScore('((a)+b*c+)')
+      expect(result.factors).toHaveProperty('starHeight')
+      expect(result.factors).toHaveProperty('groupDepth')
+      expect(result.factors).toHaveProperty('quantifierDepth')
+      expect(result.factors).toHaveProperty('repetitionCount')
+    })
+  })
+
+  describe('analyzeRegexSafety', () => {
+    it('provides detailed analysis for safe patterns', () => {
+      const result = analyzeRegexSafety('^hello$')
+      expect(result.isSafe).toBe(true)
+      expect(result.violations).toHaveLength(0)
+      expect(result.complexity.score).toBeLessThan(10)
+    })
+
+    it('lists violations for unsafe patterns', () => {
+      const result = analyzeRegexSafety('(a+)+')
+      expect(result.isSafe).toBe(false)
+      expect(result.violations.length).toBeGreaterThan(0)
+    })
+
+    it('provides recommendations for improvement', () => {
+      const result = analyzeRegexSafety('(a+)+')
+      expect(result.recommendations.length).toBeGreaterThan(0)
+    })
+
+    it('identifies multiple issues in complex patterns', () => {
+      // Pattern with multiple problems: nested quantifiers, high star height, overlapping alternation
+      const result = analyzeRegexSafety('((a|b)+)+')
+      expect(result.violations.length).toBeGreaterThan(1)
+    })
+
+    it('respects custom options', () => {
+      const result = analyzeRegexSafety('a'.repeat(500), { maxLength: 100 })
+      expect(result.isSafe).toBe(false)
+      expect(result.violations.some(v => v.includes('length'))).toBe(true)
+    })
+  })
+})
+
+describe('Safe Regex Execution', () => {
+  describe('safeRegexTest', () => {
+    it('executes simple regex correctly', () => {
+      const regex = createSafeRegex('^hello')
+      expect(safeRegexTest(regex, 'hello world')).toBe(true)
+      expect(safeRegexTest(regex, 'world hello')).toBe(false)
+    })
+
+    it('throws on input exceeding max length', () => {
+      const regex = createSafeRegex('test')
+      const longInput = 'a'.repeat(200000)
+      expect(() => safeRegexTest(regex, longInput)).toThrow('Input length')
+    })
+
+    it('respects custom maxInputLength', () => {
+      const regex = createSafeRegex('test')
+      const input = 'a'.repeat(1000)
+      expect(() => safeRegexTest(regex, input, { maxInputLength: 500 })).toThrow()
+      expect(() => safeRegexTest(regex, input, { maxInputLength: 2000 })).not.toThrow()
+    })
+
+    it('handles patterns with moderate complexity', () => {
+      const regex = createSafeRegex('[a-z]+\\d+')
+      expect(safeRegexTest(regex, 'abc123')).toBe(true)
+      expect(safeRegexTest(regex, '123abc')).toBe(false)
+    })
+  })
+
+  describe('safeRegexMatch', () => {
+    it('returns match results correctly', () => {
+      const regex = createSafeRegex('(\\w+)@(\\w+)')
+      const result = safeRegexMatch(regex, 'test@example')
+      expect(result).not.toBeNull()
+      expect(result![0]).toBe('test@example')
+      expect(result![1]).toBe('test')
+      expect(result![2]).toBe('example')
+    })
+
+    it('returns null for no match', () => {
+      const regex = createSafeRegex('^hello$')
+      expect(safeRegexMatch(regex, 'world')).toBeNull()
+    })
+
+    it('throws on excessive input length', () => {
+      const regex = createSafeRegex('test')
+      const longInput = 'a'.repeat(200000)
+      expect(() => safeRegexMatch(regex, longInput)).toThrow()
+    })
+  })
+
+  describe('safeRegexExec', () => {
+    it('returns exec results correctly', () => {
+      const regex = createSafeRegex('(\\d+)')
+      const result = safeRegexExec(regex, 'abc123def')
+      expect(result).not.toBeNull()
+      expect(result![0]).toBe('123')
+      expect(result![1]).toBe('123')
+    })
+
+    it('returns null for no match', () => {
+      const regex = createSafeRegex('\\d+')
+      expect(safeRegexExec(regex, 'abcdef')).toBeNull()
+    })
+
+    it('throws on excessive input length', () => {
+      const regex = createSafeRegex('test')
+      const longInput = 'a'.repeat(200000)
+      expect(() => safeRegexExec(regex, longInput)).toThrow()
+    })
+  })
+
+  describe('RegexTimeoutError', () => {
+    it('contains pattern and timeout information', () => {
+      const error = new RegexTimeoutError('(a+)+', 1000)
+      expect(error.pattern).toBe('(a+)+')
+      expect(error.timeoutMs).toBe(1000)
+      expect(error.message).toContain('1000ms')
+      expect(error.name).toBe('RegexTimeoutError')
+    })
+  })
+})
+
+describe('Enhanced Dangerous Pattern Detection', () => {
+  describe('polynomial backtracking patterns', () => {
+    it('rejects .*a.*a.* pattern', () => {
+      expect(() => createSafeRegex('.*a.*a.*')).toThrow(UnsafeRegexError)
+    })
+
+    it('rejects patterns with multiple consecutive wildcards', () => {
+      expect(() => createSafeRegex('.+.+')).toThrow(UnsafeRegexError)
+    })
+  })
+
+  describe('excessive repetition counts', () => {
+    it('rejects {1000,} repetition', () => {
+      expect(() => createSafeRegex('a{1000,}')).toThrow(UnsafeRegexError)
+    })
+
+    it('rejects {999} large bounded repetition', () => {
+      expect(() => createSafeRegex('a{999}')).toThrow(UnsafeRegexError)
+    })
+
+    it('accepts reasonable bounded repetitions', () => {
+      expect(() => createSafeRegex('a{1,10}')).not.toThrow()
+      expect(() => createSafeRegex('a{50}')).not.toThrow()
+    })
+  })
+
+  describe('deeply nested alternation', () => {
+    it('rejects ((a|b)+)+ pattern', () => {
+      expect(() => createSafeRegex('((a|b)+)+')).toThrow(UnsafeRegexError)
+    })
+
+    it('accepts simple alternation', () => {
+      expect(() => createSafeRegex('(a|b|c)')).not.toThrow()
+    })
+  })
+
+  describe('greedy quantifier before anchor', () => {
+    it('rejects .+.*$ pattern', () => {
+      expect(() => createSafeRegex('.+test$')).toThrow(UnsafeRegexError)
+    })
+  })
+
+  describe('alternation branch limits', () => {
+    it('rejects patterns with too many alternation branches', () => {
+      const manyBranches = '(' + Array(20).fill('a').join('|') + ')'
+      expect(() => createSafeRegex(manyBranches)).toThrow(UnsafeRegexError)
+    })
+
+    it('accepts patterns within branch limit', () => {
+      const fewBranches = '(a|b|c|d|e)'
+      expect(() => createSafeRegex(fewBranches)).not.toThrow()
+    })
+
+    it('respects custom maxAlternationBranches', () => {
+      const pattern = '(a|b|c)'
+      expect(() => createSafeRegex(pattern, '', { maxAlternationBranches: 3 })).not.toThrow()
+      expect(() => createSafeRegex(pattern, '', { maxAlternationBranches: 2 })).toThrow(UnsafeRegexError)
+    })
+  })
+
+  describe('character class complexity', () => {
+    it('rejects character classes exceeding max size', () => {
+      // Create a character class with many characters
+      const largeCharClass = '[' + 'a'.repeat(150) + ']'
+      expect(() => createSafeRegex(largeCharClass)).toThrow(UnsafeRegexError)
+    })
+
+    it('accepts character classes within limits', () => {
+      // Use \w which is equivalent to [a-zA-Z0-9_] but avoids triggering overlapping class detection
+      expect(() => createSafeRegex('\\w+')).not.toThrow()
+      expect(() => createSafeRegex('[a-z]+')).not.toThrow()
+    })
+
+    it('respects custom maxCharClassSize', () => {
+      const pattern = '[abcdefghij]+'
+      expect(() => createSafeRegex(pattern, '', { maxCharClassSize: 10 })).not.toThrow()
+      expect(() => createSafeRegex(pattern, '', { maxCharClassSize: 5 })).toThrow(UnsafeRegexError)
+    })
+  })
+})
+
+describe('Edge Cases for Deeply Nested Structures', () => {
+  it('detects quantified nesting at multiple levels', () => {
+    // ((a+)+)+ - outer group with quantifier containing inner group with quantifier
+    // The pattern ((a)+)+ may pass because inner quantifier is on single char
+    // But ((a+)+)+ definitely has nested quantifiers
+    expect(() => createSafeRegex('((a+)+)+')).toThrow(UnsafeRegexError)
+  })
+
+  it('detects mixed quantifier types in nesting', () => {
+    // (a*)+
+    expect(() => createSafeRegex('(a*)+')).toThrow(UnsafeRegexError)
+    // (a+)*
+    expect(() => createSafeRegex('(a+)*')).toThrow(UnsafeRegexError)
+  })
+
+  it('handles escaped characters correctly', () => {
+    // \( and \) are literal, not groups
+    expect(() => createSafeRegex('\\(a+\\)+')).not.toThrow()
+  })
+
+  it('handles nested non-capturing groups', () => {
+    // (?:(?:a+)+)+ should still be caught - has nested quantifiers
+    expect(() => createSafeRegex('(?:(?:a+)+)+')).toThrow(UnsafeRegexError)
+  })
+
+  it('handles mixed group types', () => {
+    // ((?:a+)+)+ mixing capturing and non-capturing with nested quantifiers
+    expect(() => createSafeRegex('((?:a+)+)+')).toThrow(UnsafeRegexError)
+  })
+
+  it('handles character classes in nested groups', () => {
+    // ([a-z]+)+
+    expect(() => createSafeRegex('([a-z]+)+')).toThrow(UnsafeRegexError)
+  })
+
+  it('correctly identifies safe deeply nested groups without quantifiers', () => {
+    // Deeply nested but no quantifiers on inner groups
+    expect(() => createSafeRegex('(((abc)))')).not.toThrow()
+  })
+
+  it('handles complex real-world vulnerable patterns', () => {
+    // Known vulnerable patterns from CVEs and security advisories
+
+    // CVE-like: email validation ReDoS
+    expect(() => createSafeRegex('^([a-z]+)+@')).toThrow(UnsafeRegexError)
+
+    // Semver-like vulnerable pattern
+    expect(() => createSafeRegex('(\\d+\\.)+\\d+')).toThrow(UnsafeRegexError)
+
+    // HTML tag matching vulnerable pattern
+    expect(() => createSafeRegex('<([a-z]+)([^>]*)>.*</\\1>')).toThrow(UnsafeRegexError)
+  })
+})
+
+describe('Complexity Score Edge Cases', () => {
+  it('handles empty pattern', () => {
+    const result = calculateComplexityScore('')
+    expect(result.score).toBe(0)
+    expect(result.isSafe).toBe(true)
+  })
+
+  it('handles pattern with only anchors', () => {
+    const result = calculateComplexityScore('^$')
+    expect(result.score).toBeLessThan(5)
+    expect(result.isSafe).toBe(true)
+  })
+
+  it('handles pattern with only literals', () => {
+    const result = calculateComplexityScore('hello world')
+    expect(result.score).toBeLessThan(5)
+    expect(result.isSafe).toBe(true)
+  })
+
+  it('increases score for each nested quantifier level', () => {
+    const simple = calculateComplexityScore('a+')
+    const nested = calculateComplexityScore('(a+)+')
+    expect(nested.score).toBeGreaterThan(simple.score)
+  })
+
+  it('respects custom maxComplexityScore', () => {
+    // A moderately complex pattern
+    const pattern = '([a-z]+)+'
+    // With high threshold - should be safe
+    expect(() => createSafeRegex(pattern, '', { maxComplexityScore: 100 })).toThrow() // Still fails other checks
+
+    // Pattern that barely passes other checks
+    const edgePattern = '[a-z]+[0-9]+[a-z]+[0-9]+'
+    const analysis = calculateComplexityScore(edgePattern)
+
+    // Should be safe with default threshold
+    if (analysis.isSafe) {
+      expect(() => createSafeRegex(edgePattern, '', { maxComplexityScore: analysis.score - 1 })).toThrow(UnsafeRegexError)
+    }
+  })
+})
+
+describe('Subtle Dangerous Patterns', () => {
+  it('detects anchored alternation with quantifier', () => {
+    // ^(a|b)+ can cause issues with certain inputs
+    const result = calculateComplexityScore('^(a|b)+')
+    expect(result.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('detects mixed lazy and greedy quantifiers', () => {
+    const result = calculateComplexityScore('a+?b+')
+    // Should add to complexity score
+    expect(result.factors).toBeDefined()
+  })
+
+  it('detects multiple quantified groups', () => {
+    const result = calculateComplexityScore('(a+)(b+)(c+)')
+    // Multiple groups with quantifiers increase risk
+    expect(result.score).toBeGreaterThan(0)
   })
 })

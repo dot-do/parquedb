@@ -17,7 +17,7 @@
  * - DELETE vs UPDATE: Cannot combine
  */
 
-import { deepEqual } from '../utils'
+import { deepEqual, compareValues } from '../utils'
 
 // =============================================================================
 // Types
@@ -319,29 +319,6 @@ function combineMax(
   return result
 }
 
-/**
- * Compare two values for ordering
- */
-function compareValues(a: unknown, b: unknown): number {
-  if (a === b) return 0
-  if (a === null || a === undefined) return -1
-  if (b === null || b === undefined) return 1
-
-  if (typeof a === 'number' && typeof b === 'number') {
-    return a - b
-  }
-
-  if (typeof a === 'string' && typeof b === 'string') {
-    return a.localeCompare(b)
-  }
-
-  if (a instanceof Date && b instanceof Date) {
-    return a.getTime() - b.getTime()
-  }
-
-  // Fallback to string comparison
-  return String(a).localeCompare(String(b))
-}
 
 // =============================================================================
 // Field Extraction

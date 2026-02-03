@@ -157,8 +157,10 @@ export {
   TransactionalBackend,
   TransactionError,
   TransactionCommitError,
+  TransactionTooLargeError,
   withTransactions,
   runInTransaction,
+  type TransactionalBackendOptions,
 } from './TransactionalBackend'
 
 // StorageRouter - Routes storage operations based on collection mode

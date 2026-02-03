@@ -11,6 +11,7 @@ import type { Event } from '../types/entity'
 import { entityId as makeEntityId } from '../types/entity'
 import { matchesFilter } from '../query/filter'
 import { parseEntityTarget } from '../types/entity'
+import { logger } from '../utils/logger'
 import type {
   ChangeEvent,
   Connection,
@@ -115,7 +116,7 @@ export class SubscriptionManager {
     })
 
     if (this.config.debug) {
-      console.log(`[SubscriptionManager] Connection added: ${connection.id}`)
+      logger.debug(`[SubscriptionManager] Connection added: ${connection.id}`)
     }
 
     return connection
@@ -146,7 +147,7 @@ export class SubscriptionManager {
     this.stats.activeConnections--
 
     if (this.config.debug) {
-      console.log(`[SubscriptionManager] Connection removed: ${connectionId}`)
+      logger.debug(`[SubscriptionManager] Connection removed: ${connectionId}`)
     }
   }
 
@@ -172,7 +173,7 @@ export class SubscriptionManager {
     const connection = this.connections.get(connectionId)
     if (!connection) {
       if (this.config.debug) {
-        console.log(`[SubscriptionManager] Subscribe failed: connection ${connectionId} not found`)
+        logger.debug(`[SubscriptionManager] Subscribe failed: connection ${connectionId} not found`)
       }
       return null
     }
@@ -214,7 +215,7 @@ export class SubscriptionManager {
     })
 
     if (this.config.debug) {
-      console.log(`[SubscriptionManager] Subscription created: ${subscription.id} for ns=${options.ns}`)
+      logger.debug(`[SubscriptionManager] Subscription created: ${subscription.id} for ns=${options.ns}`)
     }
 
     return subscription.id
@@ -246,7 +247,7 @@ export class SubscriptionManager {
     })
 
     if (this.config.debug) {
-      console.log(`[SubscriptionManager] Subscription removed: ${subscriptionId}`)
+      logger.debug(`[SubscriptionManager] Subscription removed: ${subscriptionId}`)
     }
 
     return true
@@ -287,7 +288,7 @@ export class SubscriptionManager {
     await source.start()
 
     if (this.config.debug) {
-      console.log('[SubscriptionManager] Event source set and started')
+      logger.debug('[SubscriptionManager] Event source set and started')
     }
   }
 
@@ -312,7 +313,7 @@ export class SubscriptionManager {
     } catch {
       // Skip invalid event targets (e.g., relationship events)
       if (this.config.debug) {
-        console.log(`[SubscriptionManager] Skipping event with invalid target: ${event.target}`)
+        logger.debug(`[SubscriptionManager] Skipping event with invalid target: ${event.target}`)
       }
       return
     }
@@ -407,7 +408,7 @@ export class SubscriptionManager {
       await connection.writer.send(message)
     } catch (error) {
       if (this.config.debug) {
-        console.error(`[SubscriptionManager] Failed to send to ${connection.id}:`, error)
+        logger.error(`[SubscriptionManager] Failed to send to ${connection.id}:`, error)
       }
       // Remove connection on send failure
       await this.removeConnection(connection.id)
@@ -431,11 +432,11 @@ export class SubscriptionManager {
         // Check for timeout
         if (now - connection.lastActivity > this.config.connectionTimeoutMs) {
           if (this.config.debug) {
-            console.log(`[SubscriptionManager] Connection timeout: ${connection.id}`)
+            logger.debug(`[SubscriptionManager] Connection timeout: ${connection.id}`)
           }
           // Fire-and-forget with error handling - removeConnection is async but heartbeat is sync
           this.removeConnection(connection.id).catch((err) => {
-            console.error(`[SubscriptionManager] Failed to remove timed-out connection ${connection.id}:`, err)
+            logger.error(`[SubscriptionManager] Failed to remove timed-out connection ${connection.id}:`, err)
           })
           continue
         }
@@ -449,7 +450,7 @@ export class SubscriptionManager {
     }, this.config.heartbeatIntervalMs)
 
     if (this.config.debug) {
-      console.log('[SubscriptionManager] Heartbeat started')
+      logger.debug('[SubscriptionManager] Heartbeat started')
     }
   }
 
@@ -462,7 +463,7 @@ export class SubscriptionManager {
       this.heartbeatTimer = undefined
 
       if (this.config.debug) {
-        console.log('[SubscriptionManager] Heartbeat stopped')
+        logger.debug('[SubscriptionManager] Heartbeat stopped')
       }
     }
   }
@@ -527,7 +528,9 @@ export class SubscriptionManager {
       }
     }
 
-    // TODO: Fetch missed events from event source if supported
+    // Note: Missed events are replayed via the resumeAfter parameter on subscribe.
+    // If the event source supports historical replay (e.g., from event log),
+    // events since lastEventId will be delivered through normal subscription flow.
 
     return result
   }
@@ -567,7 +570,7 @@ export class SubscriptionManager {
     this.startHeartbeat()
 
     if (this.config.debug) {
-      console.log('[SubscriptionManager] Started')
+      logger.debug('[SubscriptionManager] Started')
     }
   }
 
@@ -591,7 +594,7 @@ export class SubscriptionManager {
     }
 
     if (this.config.debug) {
-      console.log('[SubscriptionManager] Stopped')
+      logger.debug('[SubscriptionManager] Stopped')
     }
   }
 }

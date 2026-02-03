@@ -58,6 +58,21 @@ export const COST_CONSTANTS = {
   SORT_PER_ROW: 0.2,
   /** Cost for projection (per field per row) */
   PROJECT_PER_FIELD: 0.01,
+  // ==========================================================================
+  // Vector Search Cost Model Constants
+  // ==========================================================================
+  /** Base cost for HNSW graph traversal per layer */
+  HNSW_LAYER_TRAVERSAL: 5,
+  /** Cost per distance computation (vector comparison) */
+  VECTOR_DISTANCE_COMPUTE: 0.01,
+  /** Cost multiplier for efSearch parameter (higher ef = more comparisons) */
+  VECTOR_EF_FACTOR: 0.5,
+  /** Cost for brute force scan per vector (used in pre-filter) */
+  VECTOR_BRUTE_FORCE: 0.02,
+  /** Overhead for hybrid search coordination */
+  HYBRID_SEARCH_OVERHEAD: 20,
+  /** Threshold for pre-filter efficiency (selectivity below this favors pre-filter) */
+  HYBRID_PREFILTER_THRESHOLD: 0.3,
 } as const
 
 // =============================================================================
@@ -150,6 +165,8 @@ export interface OptimizedQueryPlan {
   columnPruning: ColumnPruningResult
   /** Index recommendation (if applicable) */
   indexRecommendation?: IndexRecommendation
+  /** Vector search plan (if $vector query) */
+  vectorSearchPlan?: VectorSearchPlan
   /** Estimated cost */
   estimatedCost: QueryCost
   /** Optimization suggestions */
@@ -183,6 +200,54 @@ export type ExecutionStrategy =
   | 'fts_search'
   | 'vector_search'
   | 'hybrid_search'
+
+/**
+ * Vector search plan details for explain output
+ */
+export interface VectorSearchPlan {
+  /** Vector index name */
+  indexName: string
+  /** Field being searched */
+  field: string
+  /** Number of results requested */
+  topK: number
+  /** Minimum similarity score threshold */
+  minScore?: number
+  /** efSearch parameter for HNSW */
+  efSearch: number
+  /** Estimated index size (number of vectors) */
+  estimatedIndexSize?: number
+  /** Vector dimensions */
+  dimensions?: number
+  /** Distance metric used */
+  metric?: 'cosine' | 'euclidean' | 'dot'
+  /** Hybrid search details (if applicable) */
+  hybridSearch?: {
+    /** Strategy used */
+    strategy: 'pre-filter' | 'post-filter' | 'auto'
+    /** Actual strategy selected (if auto) */
+    selectedStrategy?: 'pre-filter' | 'post-filter'
+    /** Reason for strategy selection */
+    strategyReason: string
+    /** Estimated filter selectivity (0-1) */
+    filterSelectivity?: number
+    /** Estimated candidate count after pre-filter */
+    preFilterCandidates?: number
+    /** Over-fetch multiplier for post-filter */
+    overFetchMultiplier?: number
+  }
+  /** Cost breakdown */
+  costBreakdown: {
+    /** Cost for HNSW traversal */
+    hnswTraversalCost: number
+    /** Cost for distance computations */
+    distanceComputeCost: number
+    /** Cost for hybrid coordination (if applicable) */
+    hybridOverheadCost: number
+    /** Total vector search cost */
+    totalCost: number
+  }
+}
 
 /**
  * Statistics for cost estimation
@@ -250,17 +315,25 @@ export class QueryOptimizer {
     // 4. Determine execution strategy
     const strategy = this.determineStrategy(filter, indexRecommendation)
 
-    // 5. Estimate cost
+    // 5. Analyze vector search if applicable
+    const vectorSearchPlan = this.analyzeVectorSearch(
+      filter,
+      indexRecommendation,
+      statistics
+    )
+
+    // 6. Estimate cost
     const estimatedCost = this.estimateCost(
       filter,
       options,
       predicatePushdown,
       columnPruning,
       indexRecommendation,
-      statistics
+      statistics,
+      vectorSearchPlan
     )
 
-    // 6. Generate optimization suggestions
+    // 7. Generate optimization suggestions
     const suggestions = this.generateSuggestions(
       filter,
       options,
@@ -270,10 +343,10 @@ export class QueryOptimizer {
       statistics
     )
 
-    // 7. Optimize filter (rewrite for better performance)
+    // 8. Optimize filter (rewrite for better performance)
     const optimizedFilter = this.optimizeFilter(filter)
 
-    // 8. Determine if query is optimal
+    // 9. Determine if query is optimal
     const isOptimal = suggestions.filter(s => s.priority >= 7).length === 0
 
     return {
@@ -282,6 +355,7 @@ export class QueryOptimizer {
       predicatePushdown,
       columnPruning,
       indexRecommendation,
+      vectorSearchPlan,
       estimatedCost,
       suggestions,
       isOptimal,
@@ -430,6 +504,231 @@ export class QueryOptimizer {
   }
 
   /**
+   * Analyze vector search parameters and build a vector search plan
+   */
+  private analyzeVectorSearch(
+    filter: Filter,
+    indexRecommendation?: IndexRecommendation,
+    statistics?: TableStatistics
+  ): VectorSearchPlan | undefined {
+    if (!filter.$vector) {
+      return undefined
+    }
+
+    const vq = filter.$vector as {
+      // New format
+      query?: number[] | string
+      field?: string
+      topK?: number
+      minScore?: number
+      efSearch?: number
+      strategy?: 'pre-filter' | 'post-filter' | 'auto'
+      // Legacy format
+      $near?: number[]
+      $k?: number
+      $field?: string
+      $minScore?: number
+    }
+
+    // Extract parameters from both new and legacy formats
+    const queryVector = vq.query ?? vq.$near
+    const field = vq.field ?? vq.$field ?? 'embedding'
+    const topK = vq.topK ?? vq.$k ?? 10
+    const minScore = vq.minScore ?? vq.$minScore
+    const efSearch = vq.efSearch ?? Math.max(topK * 2, 50) // Default heuristic
+    const strategy = vq.strategy ?? 'auto'
+
+    // Get index info if available
+    const indexName = indexRecommendation?.index?.name ?? `idx_${field}`
+    const dimensions = typeof queryVector === 'object' && Array.isArray(queryVector)
+      ? queryVector.length
+      : undefined
+    const metric = indexRecommendation?.index?.vectorOptions?.metric ?? 'cosine'
+
+    // Estimate index size from statistics
+    const estimatedIndexSize = statistics?.totalRows ?? 10000
+
+    // Check if this is a hybrid search (has non-vector filters)
+    const metadataFilterKeys = Object.keys(filter).filter(
+      k => k !== '$vector' && k !== '$and' && k !== '$or' && k !== '$not'
+    )
+    const hasMetadataFilter = metadataFilterKeys.length > 0
+
+    // Build hybrid search details if applicable
+    let hybridSearch: VectorSearchPlan['hybridSearch'] | undefined
+
+    if (hasMetadataFilter) {
+      // Estimate filter selectivity based on available statistics
+      const filterSelectivity = this.estimateFilterSelectivity(filter, statistics)
+
+      // Determine strategy based on selectivity and index size
+      let selectedStrategy: 'pre-filter' | 'post-filter'
+      let strategyReason: string
+
+      if (strategy === 'auto') {
+        // Cost-based strategy selection
+        const preFilterCost = this.estimatePreFilterCost(filterSelectivity, estimatedIndexSize, topK)
+        const postFilterCost = this.estimatePostFilterCost(filterSelectivity, estimatedIndexSize, topK, efSearch)
+
+        if (preFilterCost < postFilterCost) {
+          selectedStrategy = 'pre-filter'
+          strategyReason = `Pre-filter selected: filter selectivity ${(filterSelectivity * 100).toFixed(1)}% ` +
+            `reduces candidate set significantly (estimated cost: ${preFilterCost.toFixed(0)} vs ${postFilterCost.toFixed(0)} for post-filter)`
+        } else {
+          selectedStrategy = 'post-filter'
+          strategyReason = `Post-filter selected: filter selectivity ${(filterSelectivity * 100).toFixed(1)}% ` +
+            `is too high for efficient pre-filtering (estimated cost: ${postFilterCost.toFixed(0)} vs ${preFilterCost.toFixed(0)} for pre-filter)`
+        }
+      } else {
+        selectedStrategy = strategy
+        strategyReason = `Strategy explicitly set to ${strategy}`
+      }
+
+      const preFilterCandidates = selectedStrategy === 'pre-filter'
+        ? Math.floor(estimatedIndexSize * filterSelectivity)
+        : undefined
+
+      hybridSearch = {
+        strategy,
+        selectedStrategy,
+        strategyReason,
+        filterSelectivity,
+        preFilterCandidates,
+        overFetchMultiplier: selectedStrategy === 'post-filter' ? 3 : undefined,
+      }
+    }
+
+    // Calculate cost breakdown
+    const hnswTraversalCost = this.calculateHnswTraversalCost(estimatedIndexSize, efSearch)
+    const distanceComputeCost = this.calculateDistanceComputeCost(
+      hybridSearch?.selectedStrategy === 'pre-filter'
+        ? (hybridSearch.preFilterCandidates ?? estimatedIndexSize)
+        : estimatedIndexSize,
+      efSearch,
+      dimensions ?? 128
+    )
+    const hybridOverheadCost = hasMetadataFilter ? COST_CONSTANTS.HYBRID_SEARCH_OVERHEAD : 0
+
+    return {
+      indexName,
+      field,
+      topK,
+      minScore,
+      efSearch,
+      estimatedIndexSize,
+      dimensions,
+      metric,
+      hybridSearch,
+      costBreakdown: {
+        hnswTraversalCost,
+        distanceComputeCost,
+        hybridOverheadCost,
+        totalCost: hnswTraversalCost + distanceComputeCost + hybridOverheadCost,
+      },
+    }
+  }
+
+  /**
+   * Estimate filter selectivity (0-1, what fraction of rows pass the filter)
+   */
+  private estimateFilterSelectivity(filter: Filter, statistics?: TableStatistics): number {
+    // Without statistics, use conservative estimate
+    if (!statistics) {
+      return 0.3 // Default 30% selectivity
+    }
+
+    let selectivity = 1.0
+
+    for (const [key, value] of Object.entries(filter)) {
+      if (key.startsWith('$')) continue
+
+      // Get cardinality for this field if available
+      const cardinality = statistics.columnCardinality.get(key)
+
+      if (cardinality) {
+        if (value === null || typeof value !== 'object') {
+          // Equality: 1/cardinality
+          selectivity *= 1 / cardinality
+        } else if (typeof value === 'object' && value !== null) {
+          const op = value as Record<string, unknown>
+          if ('$eq' in op) {
+            selectivity *= 1 / cardinality
+          } else if ('$in' in op && Array.isArray(op.$in)) {
+            selectivity *= op.$in.length / cardinality
+          } else if ('$gt' in op || '$gte' in op || '$lt' in op || '$lte' in op) {
+            // Range query: estimate ~33% of values
+            selectivity *= 0.33
+          } else if ('$ne' in op) {
+            // Not equal: most values
+            selectivity *= (cardinality - 1) / cardinality
+          }
+        }
+      } else {
+        // No cardinality info, use heuristic
+        selectivity *= 0.3
+      }
+    }
+
+    return Math.max(0.001, Math.min(1, selectivity))
+  }
+
+  /**
+   * Estimate cost of pre-filter strategy
+   */
+  private estimatePreFilterCost(selectivity: number, indexSize: number, topK: number): number {
+    // Pre-filter: scan parquet for filter, then brute-force vector search on candidates
+    const candidateCount = Math.floor(indexSize * selectivity)
+    const parquetScanCost = indexSize * COST_CONSTANTS.ROW_READ * 0.1 // Fast filter scan
+    const bruteForceVectorCost = candidateCount * COST_CONSTANTS.VECTOR_BRUTE_FORCE
+
+    return parquetScanCost + bruteForceVectorCost + COST_CONSTANTS.HYBRID_SEARCH_OVERHEAD
+  }
+
+  /**
+   * Estimate cost of post-filter strategy
+   */
+  private estimatePostFilterCost(
+    selectivity: number,
+    indexSize: number,
+    topK: number,
+    efSearch: number
+  ): number {
+    // Post-filter: HNSW search with over-fetching, then filter results
+    const overFetchMultiplier = 3
+    const hnswCost = this.calculateHnswTraversalCost(indexSize, efSearch)
+    const fetchedCount = topK * overFetchMultiplier
+    const filterCost = fetchedCount * COST_CONSTANTS.ROW_FILTER
+    // Risk: we might not get enough results after filtering
+    const resultRisk = selectivity < 0.3 ? 50 : 0 // Penalty for low selectivity
+
+    return hnswCost + filterCost + resultRisk + COST_CONSTANTS.HYBRID_SEARCH_OVERHEAD
+  }
+
+  /**
+   * Calculate HNSW graph traversal cost
+   */
+  private calculateHnswTraversalCost(indexSize: number, efSearch: number): number {
+    // HNSW has O(log n) layers, each with efSearch comparisons
+    const estimatedLayers = Math.max(1, Math.floor(Math.log2(indexSize) / 2))
+    return estimatedLayers * COST_CONSTANTS.HNSW_LAYER_TRAVERSAL +
+           efSearch * COST_CONSTANTS.VECTOR_EF_FACTOR
+  }
+
+  /**
+   * Calculate distance computation cost
+   */
+  private calculateDistanceComputeCost(
+    candidateCount: number,
+    efSearch: number,
+    dimensions: number
+  ): number {
+    // Each distance computation scales with vector dimensions
+    const comparisons = Math.min(candidateCount, efSearch * 2) // HNSW limits comparisons
+    const dimensionFactor = dimensions / 128 // Normalize to typical embedding size
+    return comparisons * COST_CONSTANTS.VECTOR_DISTANCE_COMPUTE * dimensionFactor
+  }
+
+  /**
    * Determine the best execution strategy
    */
   private determineStrategy(
@@ -466,7 +765,8 @@ export class QueryOptimizer {
     predicatePushdown: PredicatePushdownAnalysis,
     columnPruning: ColumnPruningResult,
     indexRecommendation?: IndexRecommendation,
-    statistics?: TableStatistics
+    statistics?: TableStatistics,
+    vectorSearchPlan?: VectorSearchPlan
   ): QueryCost {
     const totalRows = statistics?.totalRows ?? 10000
     const rowGroupCount = statistics?.rowGroupCount ?? 10
@@ -487,8 +787,16 @@ export class QueryOptimizer {
       if (indexRecommendation.type === 'fts') {
         ioCost = COST_CONSTANTS.FTS_INDEX_LOOKUP + (ioCost * indexRecommendation.selectivity)
       } else if (indexRecommendation.type === 'vector') {
-        ioCost = COST_CONSTANTS.VECTOR_INDEX_LOOKUP + (ioCost * indexRecommendation.selectivity)
+        // Use detailed vector cost model if available
+        if (vectorSearchPlan) {
+          ioCost = vectorSearchPlan.costBreakdown.totalCost
+        } else {
+          ioCost = COST_CONSTANTS.VECTOR_INDEX_LOOKUP + (ioCost * indexRecommendation.selectivity)
+        }
       }
+    } else if (vectorSearchPlan) {
+      // Vector search without index recommendation (standalone $vector query)
+      ioCost = vectorSearchPlan.costBreakdown.totalCost
     }
 
     // Calculate CPU cost
@@ -844,6 +1152,59 @@ export class QueryOptimizer {
       lines.push(`Reason: ${plan.indexRecommendation.reason}`)
       lines.push(`Selectivity: ${(plan.indexRecommendation.selectivity * 100).toFixed(1)}%`)
       lines.push(`Cost Reduction: ${(plan.indexRecommendation.costReduction * 100).toFixed(0)}%`)
+    }
+
+    // Vector search plan details
+    if (plan.vectorSearchPlan) {
+      const vsp = plan.vectorSearchPlan
+      lines.push('')
+      lines.push('--- Vector Search Plan ---')
+      lines.push(`Index: ${vsp.indexName}`)
+      lines.push(`Field: ${vsp.field}`)
+      lines.push(`Top K: ${vsp.topK}`)
+      lines.push(`efSearch: ${vsp.efSearch}`)
+      if (vsp.minScore !== undefined) {
+        lines.push(`Min Score: ${vsp.minScore}`)
+      }
+      if (vsp.dimensions) {
+        lines.push(`Dimensions: ${vsp.dimensions}`)
+      }
+      if (vsp.metric) {
+        lines.push(`Distance Metric: ${vsp.metric}`)
+      }
+      if (vsp.estimatedIndexSize) {
+        lines.push(`Estimated Index Size: ${vsp.estimatedIndexSize.toLocaleString()} vectors`)
+      }
+
+      // Hybrid search details
+      if (vsp.hybridSearch) {
+        lines.push('')
+        lines.push('  Hybrid Search:')
+        lines.push(`    Strategy: ${vsp.hybridSearch.strategy}`)
+        if (vsp.hybridSearch.selectedStrategy && vsp.hybridSearch.strategy === 'auto') {
+          lines.push(`    Selected: ${vsp.hybridSearch.selectedStrategy}`)
+        }
+        lines.push(`    Reason: ${vsp.hybridSearch.strategyReason}`)
+        if (vsp.hybridSearch.filterSelectivity !== undefined) {
+          lines.push(`    Filter Selectivity: ${(vsp.hybridSearch.filterSelectivity * 100).toFixed(1)}%`)
+        }
+        if (vsp.hybridSearch.preFilterCandidates !== undefined) {
+          lines.push(`    Pre-filter Candidates: ${vsp.hybridSearch.preFilterCandidates.toLocaleString()}`)
+        }
+        if (vsp.hybridSearch.overFetchMultiplier !== undefined) {
+          lines.push(`    Over-fetch Multiplier: ${vsp.hybridSearch.overFetchMultiplier}x`)
+        }
+      }
+
+      // Cost breakdown
+      lines.push('')
+      lines.push('  Cost Breakdown:')
+      lines.push(`    HNSW Traversal: ${vsp.costBreakdown.hnswTraversalCost.toFixed(2)}`)
+      lines.push(`    Distance Compute: ${vsp.costBreakdown.distanceComputeCost.toFixed(2)}`)
+      if (vsp.costBreakdown.hybridOverheadCost > 0) {
+        lines.push(`    Hybrid Overhead: ${vsp.costBreakdown.hybridOverheadCost.toFixed(2)}`)
+      }
+      lines.push(`    Total Vector Cost: ${vsp.costBreakdown.totalCost.toFixed(2)}`)
     }
 
     if (plan.suggestions.length > 0) {

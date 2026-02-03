@@ -10,6 +10,7 @@ import {
   TransactionalBackend,
   TransactionError,
   TransactionCommitError,
+  TransactionTooLargeError,
   withTransactions,
   runInTransaction,
   NotFoundError,
@@ -575,6 +576,252 @@ describe('TransactionalBackend', () => {
 
       const data2 = await tx.read('file.txt')
       expect(decodeData(data2)).toBe('Original')
+    })
+  })
+
+  // ===========================================================================
+  // Transaction Size Limits
+  // ===========================================================================
+
+  describe('Transaction size limits', () => {
+    describe('operation count limits', () => {
+      it('should enforce maxTransactionOperations limit on writes', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionOperations: 3,
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+        await tx.write('file1.txt', createTestData('1'))
+        await tx.write('file2.txt', createTestData('2'))
+        await tx.write('file3.txt', createTestData('3'))
+
+        // Fourth write should fail
+        await expect(tx.write('file4.txt', createTestData('4'))).rejects.toThrow(
+          TransactionTooLargeError
+        )
+      })
+
+      it('should enforce maxTransactionOperations limit on deletes', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionOperations: 2,
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+        await tx.delete('file1.txt')
+        await tx.delete('file2.txt')
+
+        // Third delete should fail
+        await expect(tx.delete('file3.txt')).rejects.toThrow(TransactionTooLargeError)
+      })
+
+      it('should enforce limit across mixed operations', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionOperations: 3,
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+        await tx.write('file1.txt', createTestData('1'))
+        await tx.delete('file2.txt')
+        await tx.write('file3.txt', createTestData('3'))
+
+        // Fourth operation (either write or delete) should fail
+        await expect(tx.delete('file4.txt')).rejects.toThrow(TransactionTooLargeError)
+      })
+
+      it('should not count overwrites as new operations', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionOperations: 2,
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+        await tx.write('file1.txt', createTestData('v1'))
+        await tx.write('file2.txt', createTestData('v1'))
+
+        // Overwriting same path should not count as new operation
+        await tx.write('file1.txt', createTestData('v2'))
+        await tx.write('file2.txt', createTestData('v2'))
+
+        // This should still fail since it's a new path
+        await expect(tx.write('file3.txt', createTestData('v1'))).rejects.toThrow(
+          TransactionTooLargeError
+        )
+      })
+
+      it('should not count delete of pending write as new operation', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionOperations: 2,
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+        await tx.write('file1.txt', createTestData('1'))
+        await tx.write('file2.txt', createTestData('2'))
+
+        // Delete of existing pending write should not count as new operation
+        await tx.delete('file1.txt')
+
+        // Still at max, new path should fail
+        await expect(tx.write('file3.txt', createTestData('3'))).rejects.toThrow(
+          TransactionTooLargeError
+        )
+      })
+    })
+
+    describe('bytes limits', () => {
+      it('should enforce maxTransactionBytes limit', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionBytes: 100, // 100 bytes limit
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+        await tx.write('file1.txt', createTestData('x'.repeat(50))) // 50 bytes
+        await tx.write('file2.txt', createTestData('y'.repeat(40))) // 40 bytes, total 90
+
+        // This should exceed the limit (90 + 20 = 110 > 100)
+        await expect(tx.write('file3.txt', createTestData('z'.repeat(20)))).rejects.toThrow(
+          TransactionTooLargeError
+        )
+      })
+
+      it('should allow operations up to exact limit', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionBytes: 100,
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+        await tx.write('file1.txt', createTestData('x'.repeat(50)))
+        await tx.write('file2.txt', createTestData('y'.repeat(50)))
+
+        // Exactly at limit, commit should work
+        await tx.commit()
+
+        expect(decodeData(await memoryBackend.read('file1.txt'))).toBe('x'.repeat(50))
+        expect(decodeData(await memoryBackend.read('file2.txt'))).toBe('y'.repeat(50))
+      })
+
+      it('should track bytes correctly when overwriting', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionBytes: 100,
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+        await tx.write('file.txt', createTestData('x'.repeat(80))) // 80 bytes
+
+        // Overwriting with smaller data should free up space
+        await tx.write('file.txt', createTestData('y'.repeat(30))) // Now only 30 bytes used
+
+        // Should be able to write more since we freed space
+        await tx.write('file2.txt', createTestData('z'.repeat(70))) // 30 + 70 = 100 (at limit)
+
+        await tx.commit()
+        expect(decodeData(await memoryBackend.read('file.txt'))).toBe('y'.repeat(30))
+        expect(decodeData(await memoryBackend.read('file2.txt'))).toBe('z'.repeat(70))
+      })
+
+      it('should reclaim bytes when write is deleted', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionBytes: 100,
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+        await tx.write('file1.txt', createTestData('x'.repeat(80))) // 80 bytes
+
+        // Delete the write, should reclaim bytes
+        await tx.delete('file1.txt')
+
+        // Now we should have space for a large write again
+        await tx.write('file2.txt', createTestData('y'.repeat(100)))
+
+        await tx.commit()
+        expect(await memoryBackend.exists('file1.txt')).toBe(false)
+        expect(decodeData(await memoryBackend.read('file2.txt'))).toBe('y'.repeat(100))
+      })
+
+      it('should reject single write exceeding limit', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionBytes: 50,
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+
+        await expect(tx.write('big.txt', createTestData('x'.repeat(100)))).rejects.toThrow(
+          TransactionTooLargeError
+        )
+      })
+    })
+
+    describe('error messages', () => {
+      it('should provide clear error message for operation limit', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionOperations: 1,
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+        await tx.write('file1.txt', createTestData('1'))
+
+        try {
+          await tx.write('file2.txt', createTestData('2'))
+          expect.fail('Should have thrown')
+        } catch (error) {
+          expect(error).toBeInstanceOf(TransactionTooLargeError)
+          const txError = error as TransactionTooLargeError
+          expect(txError.limitType).toBe('operations')
+          expect(txError.limit).toBe(1)
+          expect(txError.actual).toBe(2)
+          expect(txError.message).toContain('operation count limit')
+        }
+      })
+
+      it('should provide clear error message for bytes limit', async () => {
+        const limitedBackend = new TransactionalBackend(memoryBackend, {
+          maxTransactionBytes: 10,
+        })
+
+        const tx = await limitedBackend.beginTransaction()
+
+        try {
+          await tx.write('big.txt', createTestData('x'.repeat(100)))
+          expect.fail('Should have thrown')
+        } catch (error) {
+          expect(error).toBeInstanceOf(TransactionTooLargeError)
+          const txError = error as TransactionTooLargeError
+          expect(txError.limitType).toBe('bytes')
+          expect(txError.limit).toBe(10)
+          expect(txError.actual).toBe(100)
+          expect(txError.message).toContain('size limit')
+        }
+      })
+    })
+
+    describe('default limits', () => {
+      it('should use default maxTransactionOperations of 10000', async () => {
+        // This tests that default limits are reasonable (not actually testing 10000 operations)
+        const defaultBackend = new TransactionalBackend(memoryBackend)
+        const tx = await defaultBackend.beginTransaction()
+
+        // Should be able to do at least a few thousand operations
+        for (let i = 0; i < 1000; i++) {
+          await tx.write(`file${i}.txt`, createTestData(`${i}`))
+        }
+
+        // Clean up without committing (would be slow with 1000 files)
+        await tx.rollback()
+      })
+    })
+
+    describe('withTransactions helper with options', () => {
+      it('should pass options to TransactionalBackend', async () => {
+        const txBackend = withTransactions(memoryBackend, {
+          maxTransactionOperations: 2,
+        })
+
+        const tx = await txBackend.beginTransaction()
+        await tx.write('file1.txt', createTestData('1'))
+        await tx.write('file2.txt', createTestData('2'))
+
+        await expect(tx.write('file3.txt', createTestData('3'))).rejects.toThrow(
+          TransactionTooLargeError
+        )
+      })
     })
   })
 

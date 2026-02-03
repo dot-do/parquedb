@@ -367,21 +367,28 @@ describe('AsyncIteratorAdapter', () => {
 
   describe('blocking behavior', () => {
     it('should wait for events when buffer is empty', async () => {
-      const iterator = adapter.getIterator()
-      const asyncIterator = iterator[Symbol.asyncIterator]()
+      vi.useFakeTimers()
+      try {
+        const iterator = adapter.getIterator()
+        const asyncIterator = iterator[Symbol.asyncIterator]()
 
-      // Start waiting for next event
-      const nextPromise = asyncIterator.next()
+        // Start waiting for next event
+        const nextPromise = asyncIterator.next()
 
-      // Emit event after a delay
-      setTimeout(async () => {
-        const context = createQueryContext('find', 'posts')
-        await registry.dispatchQueryStart(context)
-      }, 10)
+        // Emit event after a delay using fake timers
+        setTimeout(async () => {
+          const context = createQueryContext('find', 'posts')
+          await registry.dispatchQueryStart(context)
+        }, 10)
 
-      const result = await nextPromise
-      expect(result.done).toBe(false)
-      expect(result.value.category).toBe('query')
+        await vi.advanceTimersByTimeAsync(10)
+
+        const result = await nextPromise
+        expect(result.done).toBe(false)
+        expect(result.value.category).toBe('query')
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 

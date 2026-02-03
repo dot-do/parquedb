@@ -21,41 +21,33 @@ import {
   type OpenRemoteDBOptions,
 } from '../../../src/client/remote'
 import { RemoteBackend } from '../../../src/storage/RemoteBackend'
+import {
+  createMockFetch,
+  createJsonResponse,
+  installMockFetch,
+  restoreGlobalFetch,
+  type MockFetch,
+} from '../../mocks'
 
 // =============================================================================
 // Mock Setup
 // =============================================================================
 
-// Store original fetch
-const originalFetch = globalThis.fetch
-
-// Create mock fetch function
-let mockFetch: Mock
+let mockFetch: MockFetch
 
 beforeEach(() => {
-  mockFetch = vi.fn()
-  globalThis.fetch = mockFetch
+  mockFetch = createMockFetch()
+  installMockFetch(mockFetch)
 })
 
 afterEach(() => {
-  globalThis.fetch = originalFetch
+  restoreGlobalFetch()
   vi.restoreAllMocks()
 })
 
 // =============================================================================
 // Test Helpers
 // =============================================================================
-
-/**
- * Create a mock response with JSON body
- */
-function createJsonResponse(data: unknown, status = 200, statusText = 'OK'): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    statusText,
-    headers: { 'Content-Type': 'application/json' },
-  })
-}
 
 /**
  * Create a mock database info response

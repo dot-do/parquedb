@@ -37,6 +37,7 @@
 
 import type { StorageBackend } from '../types/storage'
 import type { ParquetSchema } from '../parquet/types'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Content Type Definitions
@@ -651,7 +652,7 @@ export class GeneratedContentMV {
     this.flushTimer = setInterval(() => {
       if (this.buffer.length > 0 && !this.flushPromise) {
         this.flush().catch((err) => {
-          console.error('[GeneratedContentMV] Periodic flush failed:', err)
+          logger.error('[GeneratedContentMV] Periodic flush failed:', err)
         })
       }
     }, this.flushIntervalMs)

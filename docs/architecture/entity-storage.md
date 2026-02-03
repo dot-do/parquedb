@@ -159,6 +159,7 @@ Options under consideration:
 
 ## Related Documentation
 
-- [Consistency Model](./consistency) - Consistency guarantees
-- [Graph-First Architecture](./graph-first-architecture) - Relationship storage
-- [Secondary Indexes](./secondary-indexes) - Index architecture
+- [Consistency Model](./consistency.md) - Consistency guarantees
+- [DO Write Bottleneck](./do-write-bottleneck.md) - Single-writer scaling strategies
+- [Graph-First Architecture](./graph-first-architecture.md) - Relationship storage
+- [Secondary Indexes](./secondary-indexes.md) - Index architecture

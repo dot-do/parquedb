@@ -240,6 +240,85 @@ async function readNativeEntities(
 }
 
 // =============================================================================
+// Source Deletion
+// =============================================================================
+
+/**
+ * Delete source data after successful migration
+ */
+async function deleteSourceData(
+  storage: StorageBackend,
+  format: BackendType,
+  namespace: string
+): Promise<void> {
+  if (format === 'native') {
+    // Delete native Parquet files
+    const nativePaths = [
+      `data/${namespace}/data.parquet`,
+      `${namespace}.parquet`,
+      `${namespace}/data.parquet`,
+    ]
+    for (const path of nativePaths) {
+      if (await storage.exists(path)) {
+        await storage.delete(path)
+        logger.info(`Deleted native source file: ${path}`)
+      }
+    }
+    // Try to delete the namespace directory if empty
+    try {
+      const dirFiles = await storage.list(`data/${namespace}/`)
+      if (dirFiles.length === 0) {
+        // Directory is empty, safe to leave (storage backends typically don't have explicit directory deletion)
+      }
+    } catch {
+      // Ignore - directory may not exist
+    }
+  } else if (format === 'iceberg') {
+    // Delete Iceberg files (metadata + data)
+    const icebergPrefixes = [
+      `${namespace}/metadata/`,
+      `${namespace}/data/`,
+      `iceberg/${namespace}/metadata/`,
+      `iceberg/${namespace}/data/`,
+    ]
+    for (const prefix of icebergPrefixes) {
+      try {
+        const files = await storage.list(prefix)
+        for (const file of files) {
+          await storage.delete(file)
+        }
+        if (files.length > 0) {
+          logger.info(`Deleted ${files.length} Iceberg files from ${prefix}`)
+        }
+      } catch {
+        // Ignore - prefix may not exist
+      }
+    }
+  } else if (format === 'delta') {
+    // Delete Delta Lake files (_delta_log + parquet files)
+    const deltaPrefixes = [
+      `${namespace}/_delta_log/`,
+      `${namespace}/`,
+      `delta/${namespace}/_delta_log/`,
+      `delta/${namespace}/`,
+    ]
+    for (const prefix of deltaPrefixes) {
+      try {
+        const files = await storage.list(prefix)
+        for (const file of files) {
+          await storage.delete(file)
+        }
+        if (files.length > 0) {
+          logger.info(`Deleted ${files.length} Delta files from ${prefix}`)
+        }
+      } catch {
+        // Ignore - prefix may not exist
+      }
+    }
+  }
+}
+
+// =============================================================================
 // Migration Functions
 // =============================================================================
 
@@ -272,7 +351,7 @@ async function migrateNamespace(
     if (from === 'native') {
       entities = await readNativeEntities(storage, namespace)
     } else if (from === 'iceberg') {
-      // TODO: Read from Iceberg using IcebergBackend
+      // Read from Iceberg using IcebergBackend
       const icebergBackend = new IcebergBackend({
         type: 'iceberg',
         storage,
@@ -282,7 +361,7 @@ async function migrateNamespace(
       entities = await icebergBackend.find(namespace)
       await icebergBackend.close()
     } else if (from === 'delta') {
-      // TODO: Read from Delta using DeltaBackend
+      // Read from Delta using DeltaBackend
       const deltaBackend = new DeltaBackend({
         type: 'delta',
         storage,
@@ -377,7 +456,7 @@ async function migrateNamespace(
         bytesWritten,
         phase: 'cleanup',
       })
-      // TODO: Implement source deletion
+      await deleteSourceData(storage, from, namespace)
     }
 
     config.onProgress?.({
@@ -518,8 +597,9 @@ export async function createBackendWithMigration(
 
     case 'native':
       // For native, we just use the existing Parquet files directly
-      // TODO: Implement NativeBackend wrapper
-      throw new Error('Native backend not yet implemented as EntityBackend')
+      // NativeBackend is intentionally not implemented - use Iceberg or Delta instead
+      // See parquedb-08w1 for historical context on this decision
+      throw new Error('Native backend not supported as EntityBackend - use createBackendWithMigration to auto-migrate to iceberg or delta')
 
     default:
       throw new Error(`Unknown backend type: ${(config as BackendConfig).type}`)

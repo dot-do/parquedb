@@ -9,37 +9,27 @@
  * - merge-driver: Custom merge drivers for Parquet files
  */
 
-// TODO: Implement and export from './hooks' when available
+// Planned modules - not yet implemented:
+// - './hooks': Git hooks installation and management
+// - './worktree': Git worktree detection and management
+// - './merge-driver': Custom merge drivers for Parquet files
+//
+// When implementing these modules, uncomment the corresponding exports below:
+//
 // export {
-//   findGitDir,
-//   installHooks,
-//   uninstallHooks,
-//   areHooksInstalled,
-//   configureMergeDriver,
-//   removeMergeDriver,
-//   ensureGitAttributes,
-//   removeGitAttributes,
+//   findGitDir, installHooks, uninstallHooks, areHooksInstalled,
+//   configureMergeDriver, removeMergeDriver, ensureGitAttributes, removeGitAttributes,
 //   type HookConfig,
 // } from './hooks'
-
-// TODO: Implement and export from './worktree' when available
+//
 // export {
-//   detectWorktree,
-//   getCurrentGitBranch,
-//   getGitMergeHead,
-//   getBranchForCommit,
-//   isGitMerging,
-//   getGitStatus,
-//   listWorktrees,
-//   findWorktreeForBranch,
+//   detectWorktree, getCurrentGitBranch, getGitMergeHead, getBranchForCommit,
+//   isGitMerging, getGitStatus, listWorktrees, findWorktreeForBranch,
 //   type WorktreeInfo,
 // } from './worktree'
-
-// TODO: Implement and export from './merge-driver' when available
+//
 // export {
-//   mergeDriver,
-//   type MergeDriverType,
-//   type MergeResult,
+//   mergeDriver, type MergeDriverType, type MergeResult,
 // } from './merge-driver'
 
 // Placeholder types for planned features

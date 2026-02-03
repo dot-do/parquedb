@@ -12,6 +12,7 @@ export {
   getValueType,
   isNullish,
   isDefined,
+  isNotNullish,
 } from './comparison'
 
 export {
@@ -124,3 +125,9 @@ export {
   // Array helpers
   asArray,
 } from './type-utils'
+
+export {
+  type TTLCacheOptions,
+  type TTLCacheStats,
+  TTLCache,
+} from './ttl-cache'

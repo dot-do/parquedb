@@ -9,6 +9,7 @@
 import type { Event } from '../types/entity'
 import type { EventBatch, EventWriterConfig } from './types'
 import { DEFAULT_WRITER_CONFIG } from './types'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types
@@ -189,9 +190,11 @@ export class EventWriter {
         // Wrap in promise chain to properly handle async errors
         // Errors are logged but don't stop the timer - next interval will retry
         this.flush().catch((err) => {
-          console.error('[EventWriter] Periodic flush failed:', err)
-          // TODO(parquedb-y9aw): Consider implementing retry with backoff
-          // or emitting an error event for monitoring
+          logger.error('[EventWriter] Periodic flush failed:', err)
+          // Periodic flush errors are logged but don't stop the timer.
+          // The next interval will attempt another flush, providing
+          // automatic retry behavior. For more sophisticated error handling,
+          // consider adding an error callback to the config.
         })
       }
     }, this.config.flushIntervalMs)

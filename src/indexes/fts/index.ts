@@ -36,3 +36,29 @@ export {
 
 // Search
 export { FTSIndex, buildFTSIndex } from './search'
+
+// Highlight/Snippet Generation
+export {
+  highlightText,
+  generateSnippet,
+  generateHighlights,
+  type HighlightOptions,
+  type SnippetOptions,
+  type GenerateHighlightsOptions,
+} from './highlight'
+
+// Fuzzy Matching
+export {
+  levenshteinDistance,
+  levenshteinDistanceBounded,
+  damerauLevenshteinDistance,
+  damerauLevenshteinDistanceBounded,
+  findFuzzyMatches,
+  expandQueryTerms,
+  normalizeFuzzyOptions,
+  fuzzyScorePenalty,
+  shouldApplyFuzzy,
+  prefixMatches,
+  type FuzzyMatch,
+  type NormalizedFuzzyOptions,
+} from './fuzzy'

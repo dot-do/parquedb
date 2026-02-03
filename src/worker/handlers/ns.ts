@@ -12,6 +12,7 @@ import type { EntityRecord } from '../../types/entity'
 import type { Update } from '../../types/update'
 import type { HandlerContext } from './types'
 import { statsAsRecord } from '../../types/cast'
+import { logger } from '../../utils/logger'
 
 /**
  * Handle /ns/:namespace or /ns/:namespace/:id routes
@@ -87,10 +88,10 @@ export async function handleNsRoute(
       }
       const data = body as Partial<EntityRecord>
       if (!data.type) {
-        console.warn(`POST /ns/${ns}: missing type field`)
+        logger.warn(`POST /ns/${ns}: missing type field`)
       }
       if (!data.name) {
-        console.warn(`POST /ns/${ns}: missing name field`)
+        logger.warn(`POST /ns/${ns}: missing name field`)
       }
       const entity = await worker.create(ns, data)
       return Response.json(entity, { status: 201 })

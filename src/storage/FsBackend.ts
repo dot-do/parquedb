@@ -28,6 +28,7 @@ import {
   DirectoryNotEmptyError,
   PathTraversalError,
 } from './errors'
+import { STALE_LOCK_AGE_MS } from '../constants'
 import { validateRange } from './validation'
 import { globToRegex, normalizePath as normalizePathUtil } from './utils'
 import { getRandomBase36 } from '../utils'
@@ -540,7 +541,7 @@ export class FsBackend implements StorageBackend {
           try {
             const lockStat = await fs.stat(lockPath)
             const lockAge = Date.now() - lockStat.mtimeMs
-            if (lockAge > 30000) {
+            if (lockAge > STALE_LOCK_AGE_MS) {
               // Stale lock - try to remove it
               try {
                 await fs.unlink(lockPath)

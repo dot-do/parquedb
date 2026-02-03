@@ -184,20 +184,27 @@ ParqueDB supports MongoDB-style filter operators:
 
 ### Unknown Operator Validation
 
-ParqueDB can validate query operators to catch typos and incorrect usage. Configure the behavior for unknown operators:
+ParqueDB can validate query operators to catch typos and incorrect usage. Pass configuration directly to filter functions:
 
 ```typescript
-import { setFilterConfig } from 'parquedb'
+import { matchesFilter, createPredicate, DEFAULT_FILTER_CONFIG } from 'parquedb'
 
-// Configure globally
-setFilterConfig({ unknownOperatorBehavior: 'warn' })  // Log warnings (recommended)
-setFilterConfig({ unknownOperatorBehavior: 'error' }) // Throw errors (strict)
-setFilterConfig({ unknownOperatorBehavior: 'ignore' }) // Silent (default, backward compatible)
+// Pass config directly to filter functions (recommended)
+const doc = { score: 100 }
 
-// Or pass config per query
-const results = await db.Posts.find(
-  { score: { $customOp: 100 } },  // Will trigger validation
-  { config: { unknownOperatorBehavior: 'error' } }
+// Warn mode - logs warnings for unknown operators
+matchesFilter(doc, { score: { $customOp: 'test' } }, { unknownOperatorBehavior: 'warn' })
+
+// Error mode - throws on unknown operators
+matchesFilter(doc, { score: { $customOp: 'test' } }, { unknownOperatorBehavior: 'error' })
+
+// Ignore mode - silently ignores unknown operators (default)
+matchesFilter(doc, { score: { $customOp: 'test' } }, { unknownOperatorBehavior: 'ignore' })
+
+// Create a predicate with config for reuse
+const predicate = createPredicate(
+  { status: 'published' },
+  { unknownOperatorBehavior: 'warn' }
 )
 ```
 

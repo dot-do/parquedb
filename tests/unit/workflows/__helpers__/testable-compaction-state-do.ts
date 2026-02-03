@@ -66,6 +66,17 @@ export interface StoredState {
   priority?: NamespacePriority
 }
 
+/**
+ * Per-window storage format for 128KB limit fix
+ * Each window is stored in its own key: `window:{windowStart}`
+ */
+export interface StoredMetadata {
+  namespace: string
+  knownWriters: string[]
+  writerLastSeen: Record<string, number>
+  priority?: NamespacePriority
+}
+
 export interface UpdateRequest {
   namespace: string
   updates: Array<{
@@ -113,8 +124,27 @@ export class MockDurableObjectStorage {
     return this.data.delete(key)
   }
 
-  async list(): Promise<Map<string, unknown>> {
-    return new Map(this.data)
+  async list(options?: { prefix?: string }): Promise<Map<string, unknown>> {
+    if (!options?.prefix) {
+      return new Map(this.data)
+    }
+    const result = new Map<string, unknown>()
+    for (const [key, value] of this.data) {
+      if (key.startsWith(options.prefix)) {
+        result.set(key, value)
+      }
+    }
+    return result
+  }
+
+  /**
+   * Simple transaction implementation for testing
+   * Collects all operations and applies them atomically
+   */
+  async transaction<T>(closure: (txn: MockDurableObjectStorage) => T | Promise<T>): Promise<T> {
+    // For testing, we just execute immediately since we don't have concurrent access
+    // In production, this would use actual DO transactions
+    return closure(this)
   }
 
   // Test helpers
@@ -182,12 +212,20 @@ export class TestableCompactionStateDO {
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return
 
-    const stored = await this.state.storage.get<StoredState>('compactionState')
-    if (stored) {
-      this.namespace = stored.namespace ?? ''
-      this.priority = stored.priority ?? 2
-      for (const [key, sw] of Object.entries(stored.windows)) {
-        this.windows.set(key, {
+    // Try new per-window storage format first
+    const metadata = await this.state.storage.get<StoredMetadata>('metadata')
+    if (metadata) {
+      this.namespace = metadata.namespace ?? ''
+      this.priority = metadata.priority ?? 2
+      this.knownWriters = new Set(metadata.knownWriters)
+      this.writerLastSeen = new Map(Object.entries(metadata.writerLastSeen))
+
+      // Load windows from per-window keys
+      const windowEntries = await this.state.storage.list({ prefix: 'window:' })
+      for (const [key, value] of windowEntries) {
+        const sw = value as StoredWindowState
+        const windowKey = key.replace('window:', '')
+        this.windows.set(windowKey, {
           windowStart: sw.windowStart,
           windowEnd: sw.windowEnd,
           filesByWriter: new Map(Object.entries(sw.filesByWriter)),
@@ -197,14 +235,61 @@ export class TestableCompactionStateDO {
           processingStatus: sw.processingStatus ?? { state: 'pending' },
         })
       }
-      this.knownWriters = new Set(stored.knownWriters)
-      this.writerLastSeen = new Map(Object.entries(stored.writerLastSeen))
+    } else {
+      // Fall back to legacy single-key format for backwards compatibility
+      const stored = await this.state.storage.get<StoredState>('compactionState')
+      if (stored) {
+        this.namespace = stored.namespace ?? ''
+        this.priority = stored.priority ?? 2
+        for (const [key, sw] of Object.entries(stored.windows)) {
+          this.windows.set(key, {
+            windowStart: sw.windowStart,
+            windowEnd: sw.windowEnd,
+            filesByWriter: new Map(Object.entries(sw.filesByWriter)),
+            writers: new Set(sw.writers),
+            lastActivityAt: sw.lastActivityAt,
+            totalSize: sw.totalSize,
+            processingStatus: sw.processingStatus ?? { state: 'pending' },
+          })
+        }
+        this.knownWriters = new Set(stored.knownWriters)
+        this.writerLastSeen = new Map(Object.entries(stored.writerLastSeen))
+      }
     }
 
     this.initialized = true
   }
 
+  /**
+   * Save state using per-window storage keys to avoid 128KB limit
+   * Each window is stored in its own key: `window:{windowStart}`
+   * Metadata (namespace, writers, priority) is stored in 'metadata' key
+   */
   private async saveState(): Promise<void> {
+    // Save metadata separately
+    const metadata: StoredMetadata = {
+      namespace: this.namespace,
+      knownWriters: Array.from(this.knownWriters),
+      writerLastSeen: Object.fromEntries(this.writerLastSeen),
+      priority: this.priority,
+    }
+    await this.state.storage.put('metadata', metadata)
+
+    // Save each window in its own key
+    for (const [key, window] of this.windows) {
+      const storedWindow: StoredWindowState = {
+        windowStart: window.windowStart,
+        windowEnd: window.windowEnd,
+        filesByWriter: Object.fromEntries(window.filesByWriter),
+        writers: Array.from(window.writers),
+        lastActivityAt: window.lastActivityAt,
+        totalSize: window.totalSize,
+        processingStatus: window.processingStatus,
+      }
+      await this.state.storage.put(`window:${key}`, storedWindow)
+    }
+
+    // Also maintain legacy format for backwards compatibility during migration
     const stored: StoredState = {
       namespace: this.namespace,
       windows: {},
@@ -348,15 +433,19 @@ export class TestableCompactionStateDO {
     return 'none'
   }
 
-  private cleanupStuckProcessingWindows(now: number): void {
-    for (const [windowKey, window] of this.windows) {
-      if (
-        window.processingStatus.state === 'processing' &&
-        now - window.processingStatus.startedAt > TestableCompactionStateDO.PROCESSING_TIMEOUT_MS
-      ) {
-        window.processingStatus = { state: 'pending' }
-      }
-    }
+  /**
+   * Clean up windows stuck in "processing" state due to crashes or timeouts
+   *
+   * NOTE: This method is now a no-op to prevent race conditions.
+   * For proper crash recovery with duplicate prevention, use /get-stuck-windows
+   * endpoint which includes the provisional workflow ID for status checking
+   * before deciding to confirm or rollback.
+   *
+   * @deprecated Use /get-stuck-windows + workflow status check instead
+   */
+  private cleanupStuckProcessingWindows(_now: number): void {
+    // IMPORTANT: This is now a no-op to prevent race conditions.
+    // Stuck window recovery is handled externally via /get-stuck-windows endpoint.
   }
 
   private async handleUpdate(request: Request): Promise<Response> {
@@ -568,6 +657,8 @@ export class TestableCompactionStateDO {
 
     if (success) {
       this.windows.delete(windowKey)
+      // Delete the per-window storage key
+      await this.state.storage.delete(`window:${windowKey}`)
     } else {
       window.processingStatus = { state: 'pending' }
     }

@@ -21,6 +21,17 @@
  * ```
  */
 
+import {
+  DEFAULT_FAILURE_THRESHOLD,
+  DEFAULT_SUCCESS_THRESHOLD,
+  DEFAULT_CIRCUIT_RESET_TIMEOUT_MS,
+  DEFAULT_FAILURE_WINDOW_MS,
+  FAST_CIRCUIT_RESET_TIMEOUT_MS,
+  FAST_FAILURE_WINDOW_MS,
+  SLOW_CIRCUIT_RESET_TIMEOUT_MS,
+  SLOW_FAILURE_WINDOW_MS,
+} from '../constants'
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -165,12 +176,12 @@ export class CircuitBreaker {
   private readonly failureWindowMs: number
 
   constructor(options: CircuitBreakerOptions = {}) {
-    this.failureThreshold = options.failureThreshold ?? 5
-    this.successThreshold = options.successThreshold ?? 2
-    this.resetTimeoutMs = options.resetTimeoutMs ?? 30000
+    this.failureThreshold = options.failureThreshold ?? DEFAULT_FAILURE_THRESHOLD
+    this.successThreshold = options.successThreshold ?? DEFAULT_SUCCESS_THRESHOLD
+    this.resetTimeoutMs = options.resetTimeoutMs ?? DEFAULT_CIRCUIT_RESET_TIMEOUT_MS
     this.name = options.name
     this.onStateChange = options.onStateChange
-    this.failureWindowMs = options.failureWindowMs ?? 60000
+    this.failureWindowMs = options.failureWindowMs ?? DEFAULT_FAILURE_WINDOW_MS
 
     // Default isFailure: all errors except "not found" type errors
     this.isFailure = options.isFailure ?? ((error: Error) => {
@@ -413,10 +424,10 @@ export function createStorageCircuitBreaker(
 ): CircuitBreaker {
   return new CircuitBreaker({
     name,
-    failureThreshold: 5,
-    successThreshold: 2,
-    resetTimeoutMs: 30000,
-    failureWindowMs: 60000,
+    failureThreshold: DEFAULT_FAILURE_THRESHOLD,
+    successThreshold: DEFAULT_SUCCESS_THRESHOLD,
+    resetTimeoutMs: DEFAULT_CIRCUIT_RESET_TIMEOUT_MS,
+    failureWindowMs: DEFAULT_FAILURE_WINDOW_MS,
     onStateChange,
     // Don't count "not found" errors as failures
     isFailure: (error) => {
@@ -437,8 +448,8 @@ export function createFastFailCircuitBreaker(
     name,
     failureThreshold: 3,
     successThreshold: 1,
-    resetTimeoutMs: 10000,
-    failureWindowMs: 30000,
+    resetTimeoutMs: FAST_CIRCUIT_RESET_TIMEOUT_MS,
+    failureWindowMs: FAST_FAILURE_WINDOW_MS,
     onStateChange,
   })
 }
@@ -454,8 +465,8 @@ export function createConservativeCircuitBreaker(
     name,
     failureThreshold: 10,
     successThreshold: 5,
-    resetTimeoutMs: 60000,
-    failureWindowMs: 120000,
+    resetTimeoutMs: SLOW_CIRCUIT_RESET_TIMEOUT_MS,
+    failureWindowMs: SLOW_FAILURE_WINDOW_MS,
     onStateChange,
   })
 }

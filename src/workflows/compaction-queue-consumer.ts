@@ -98,6 +98,24 @@ export interface CompactionConsumerConfig {
   namespacePrefix?: string
 
   /**
+   * Time after which a writer is considered inactive (default: 30 minutes)
+   * Writers that haven't written within this threshold won't delay compaction
+   */
+  writerInactiveThresholdMs?: number
+
+  /**
+   * Time after which a processing window is considered stuck (default: 5 minutes)
+   * Stuck windows will be recovered via /get-stuck-windows endpoint
+   */
+  processingTimeoutMs?: number
+
+  /**
+   * Age after which bucket DOs can be cleaned up (default: 48 hours)
+   * Only applies when time bucket sharding is enabled
+   */
+  bucketCleanupAgeMs?: number
+
+  /**
    * Time bucket sharding configuration
    * When enabled, DOs are sharded by namespace + time bucket for extreme concurrency (>1000 writes/sec)
    */
@@ -317,11 +335,11 @@ const DEFAULT_MIN_FILES = 10
 /** Default max wait time for late writers: 5 minutes */
 const DEFAULT_MAX_WAIT_MS = 5 * 60 * 1000
 
-/** Time after which a writer is considered inactive: 30 minutes */
-const WRITER_INACTIVE_THRESHOLD_MS = 30 * 60 * 1000
+/** Default time after which a writer is considered inactive: 30 minutes */
+const DEFAULT_WRITER_INACTIVE_THRESHOLD_MS = 30 * 60 * 1000
 
-/** Time after which a processing window is considered stuck: 5 minutes */
-const PROCESSING_TIMEOUT_MS = 5 * 60 * 1000
+/** Default time after which a processing window is considered stuck: 5 minutes */
+const DEFAULT_PROCESSING_TIMEOUT_MS = 5 * 60 * 1000
 
 /** Time bucket size for DO sharding: 1 hour */
 const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000
@@ -329,8 +347,8 @@ const TIME_BUCKET_SIZE_MS = 60 * 60 * 1000
 /** Maximum age of time buckets to query for status aggregation: 24 hours */
 const MAX_BUCKET_AGE_HOURS = 24
 
-/** Age after which bucket DOs can be cleaned up: 48 hours */
-const BUCKET_CLEANUP_AGE_MS = 48 * 60 * 60 * 1000
+/** Default age after which bucket DOs can be cleaned up: 48 hours */
+const DEFAULT_BUCKET_CLEANUP_AGE_MS = 48 * 60 * 60 * 1000
 
 // =============================================================================
 // Time Bucket Sharding Helpers
@@ -419,7 +437,7 @@ export function isTimeBucketExpired(
   timeBucket: number,
   now: number = Date.now(),
   bucketSizeMs: number = TIME_BUCKET_SIZE_MS,
-  cleanupAgeMs: number = BUCKET_CLEANUP_AGE_MS
+  cleanupAgeMs: number = DEFAULT_BUCKET_CLEANUP_AGE_MS
 ): boolean {
   const bucketEndTimestamp = (timeBucket + 1) * bucketSizeMs
   return (now - bucketEndTimestamp) > cleanupAgeMs
@@ -843,6 +861,9 @@ export async function handleCompactionQueue(
     maxWaitTimeMs = DEFAULT_MAX_WAIT_MS,
     targetFormat = 'native',
     namespacePrefix = 'data/',
+    writerInactiveThresholdMs = DEFAULT_WRITER_INACTIVE_THRESHOLD_MS,
+    processingTimeoutMs = DEFAULT_PROCESSING_TIMEOUT_MS,
+    bucketCleanupAgeMs = DEFAULT_BUCKET_CLEANUP_AGE_MS,
     timeBucketSharding,
     backpressure: backpressureConfig,
   } = config
@@ -969,6 +990,9 @@ export async function handleCompactionQueue(
             minFilesToCompact,
             maxWaitTimeMs,
             targetFormat,
+            writerInactiveThresholdMs,
+            processingTimeoutMs,
+            bucketCleanupAgeMs,
           },
         }),
       })
@@ -1263,6 +1287,18 @@ interface StoredState {
 }
 
 /**
+ * Per-window storage format for 128KB limit fix
+ * Metadata is stored in 'metadata' key, each window in 'window:{windowStart}' key
+ * This prevents exceeding the 128KB per-key limit in Durable Object storage
+ */
+interface StoredMetadata {
+  namespace: string
+  knownWriters: string[]
+  writerLastSeen: Record<string, number>
+  priority?: NamespacePriority
+}
+
+/**
  * Durable Object for tracking compaction state across queue messages
  *
  * ARCHITECTURE: Namespace Sharding
@@ -1289,24 +1325,36 @@ export class CompactionStateDO {
   private priority: NamespacePriority = 2
   /** External backpressure level (set by queue consumer) */
   private backpressureLevel: BackpressureLevel = 'none'
+  /** Configurable timeout: time after which a writer is considered inactive */
+  private writerInactiveThresholdMs: number = DEFAULT_WRITER_INACTIVE_THRESHOLD_MS
+  /** Configurable timeout: time after which a processing window is considered stuck */
+  private processingTimeoutMs: number = DEFAULT_PROCESSING_TIMEOUT_MS
 
   constructor(state: DurableObjectState) {
     this.state = state
   }
 
-  /** Load state from storage */
+  /**
+   * Load state from storage
+   * Supports both new per-window storage format and legacy single-key format
+   */
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return
 
-    const stored = await this.state.storage.get<StoredState>('compactionState')
-    if (stored) {
-      // Restore namespace
-      this.namespace = stored.namespace ?? ''
-      // Restore priority
-      this.priority = stored.priority ?? 2
-      // Restore windows (keyed by windowStart timestamp)
-      for (const [key, sw] of Object.entries(stored.windows)) {
-        this.windows.set(key, {
+    // Try new per-window storage format first (128KB limit fix)
+    const metadata = await this.state.storage.get<StoredMetadata>('metadata')
+    if (metadata) {
+      this.namespace = metadata.namespace ?? ''
+      this.priority = metadata.priority ?? 2
+      this.knownWriters = new Set(metadata.knownWriters)
+      this.writerLastSeen = new Map(Object.entries(metadata.writerLastSeen))
+
+      // Load windows from per-window keys
+      const windowEntries = await this.state.storage.list({ prefix: 'window:' })
+      for (const [key, value] of windowEntries) {
+        const sw = value as StoredWindowState
+        const windowKey = key.replace('window:', '')
+        this.windows.set(windowKey, {
           windowStart: sw.windowStart,
           windowEnd: sw.windowEnd,
           filesByWriter: new Map(Object.entries(sw.filesByWriter)),
@@ -1316,16 +1364,66 @@ export class CompactionStateDO {
           processingStatus: sw.processingStatus ?? { state: 'pending' },
         })
       }
-      // Restore writers
-      this.knownWriters = new Set(stored.knownWriters)
-      this.writerLastSeen = new Map(Object.entries(stored.writerLastSeen))
+    } else {
+      // Fall back to legacy single-key format for backwards compatibility
+      const stored = await this.state.storage.get<StoredState>('compactionState')
+      if (stored) {
+        // Restore namespace
+        this.namespace = stored.namespace ?? ''
+        // Restore priority
+        this.priority = stored.priority ?? 2
+        // Restore windows (keyed by windowStart timestamp)
+        for (const [key, sw] of Object.entries(stored.windows)) {
+          this.windows.set(key, {
+            windowStart: sw.windowStart,
+            windowEnd: sw.windowEnd,
+            filesByWriter: new Map(Object.entries(sw.filesByWriter)),
+            writers: new Set(sw.writers),
+            lastActivityAt: sw.lastActivityAt,
+            totalSize: sw.totalSize,
+            processingStatus: sw.processingStatus ?? { state: 'pending' },
+          })
+        }
+        // Restore writers
+        this.knownWriters = new Set(stored.knownWriters)
+        this.writerLastSeen = new Map(Object.entries(stored.writerLastSeen))
+      }
     }
 
     this.initialized = true
   }
 
-  /** Save state to storage */
+  /**
+   * Save state to storage using per-window keys to avoid 128KB limit
+   * Each window is stored in its own key: `window:{windowStart}`
+   * Metadata (namespace, writers, priority) is stored in 'metadata' key
+   */
   private async saveState(): Promise<void> {
+    // Save metadata separately (small, fixed size)
+    const metadata: StoredMetadata = {
+      namespace: this.namespace,
+      knownWriters: Array.from(this.knownWriters),
+      writerLastSeen: Object.fromEntries(this.writerLastSeen),
+      priority: this.priority,
+    }
+    await this.state.storage.put('metadata', metadata)
+
+    // Save each window in its own key (prevents 128KB limit issues)
+    for (const [key, window] of this.windows) {
+      const storedWindow: StoredWindowState = {
+        windowStart: window.windowStart,
+        windowEnd: window.windowEnd,
+        filesByWriter: Object.fromEntries(window.filesByWriter),
+        writers: Array.from(window.writers),
+        lastActivityAt: window.lastActivityAt,
+        totalSize: window.totalSize,
+        processingStatus: window.processingStatus,
+      }
+      await this.state.storage.put(`window:${key}`, storedWindow)
+    }
+
+    // Also maintain legacy format for backwards compatibility during migration
+    // This can be removed after all DOs have been migrated to new format
     const stored: StoredState = {
       namespace: this.namespace,
       windows: {},
@@ -1502,12 +1600,23 @@ export class CompactionStateDO {
         minFilesToCompact: number
         maxWaitTimeMs: number
         targetFormat: string
+        writerInactiveThresholdMs?: number
+        processingTimeoutMs?: number
+        bucketCleanupAgeMs?: number
       }
     }
 
     const { namespace, updates, config } = body
     const now = Date.now()
     const windowsReady: WindowReadyEntry[] = []
+
+    // Update configurable timeout values from config (use instance defaults if not provided)
+    if (config.writerInactiveThresholdMs !== undefined) {
+      this.writerInactiveThresholdMs = config.writerInactiveThresholdMs
+    }
+    if (config.processingTimeoutMs !== undefined) {
+      this.processingTimeoutMs = config.processingTimeoutMs
+    }
 
     // Set namespace on first update (each DO instance handles one namespace)
     if (!this.namespace) {
@@ -1662,8 +1771,8 @@ export class CompactionStateDO {
           break
         case 'processing':
           processingWindows++
-          // Check if stuck (> 5 minutes in processing)
-          if (now - window.processingStatus.startedAt > PROCESSING_TIMEOUT_MS) {
+          // Check if stuck (using configurable processing timeout)
+          if (now - window.processingStatus.startedAt > this.processingTimeoutMs) {
             stuckWindows++
           }
           break
@@ -1856,6 +1965,8 @@ export class CompactionStateDO {
     if (success) {
       // Workflow completed successfully - delete the window (terminal state)
       this.windows.delete(windowKey)
+      // Delete the per-window storage key
+      await this.state.storage.delete(`window:${windowKey}`)
       logger.info('Window completed and deleted', {
         namespace: this.namespace,
         windowKey,
@@ -1903,7 +2014,7 @@ export class CompactionStateDO {
     for (const [windowKey, window] of this.windows) {
       if (
         window.processingStatus.state === 'processing' &&
-        now - window.processingStatus.startedAt > PROCESSING_TIMEOUT_MS
+        now - window.processingStatus.startedAt > this.processingTimeoutMs
       ) {
         stuckWindows.push({
           windowKey,
@@ -1979,8 +2090,8 @@ export class CompactionStateDO {
           break
         case 'processing':
           processingWindows++
-          // Count stuck processing windows (> 5 minutes in processing state)
-          if (now - window.processingStatus.startedAt > PROCESSING_TIMEOUT_MS) {
+          // Count stuck processing windows (using configurable processing timeout)
+          if (now - window.processingStatus.startedAt > this.processingTimeoutMs) {
             windowsStuckInProcessing++
           }
           break
@@ -2050,7 +2161,7 @@ export class CompactionStateDO {
   private getActiveWriters(now: number): string[] {
     const active: string[] = []
     for (const [writerId, lastSeen] of this.writerLastSeen) {
-      if (now - lastSeen < WRITER_INACTIVE_THRESHOLD_MS) {
+      if (now - lastSeen < this.writerInactiveThresholdMs) {
         active.push(writerId)
       }
     }

@@ -191,19 +191,102 @@ export function asConfig<T>(value: Record<string, unknown>): T {
  * Cast index catalog from parsed JSON.
  * Use when loading index catalog from storage.
  *
- * @remarks Safe after version validation and structure checks.
+ * @remarks Validates structure before returning typed IndexCatalog.
  */
-export interface IndexCatalog {
-  version: number
-  indexes: Array<{
-    name: string
-    type: string
-    field: string
-    path: string
-  }>
+export interface IndexCatalogDefinition {
+  name: string
+  type: string
+  fields: Array<{ path: string }>
 }
 
+export interface IndexCatalogEntry {
+  definition: IndexCatalogDefinition
+  metadata: Record<string, unknown>
+}
+
+export interface IndexCatalog {
+  version: number
+  indexes: Record<string, IndexCatalogEntry[]>
+}
+
+/**
+ * Validate and cast index catalog from parsed JSON.
+ * Throws descriptive errors for invalid input.
+ *
+ * @param value - Parsed JSON object
+ * @returns Validated IndexCatalog
+ * @throws Error if validation fails
+ */
 export function asIndexCatalog(value: Record<string, unknown>): IndexCatalog {
+  // Validate version
+  if (value.version === undefined || value.version === null) {
+    throw new Error("'version' must be a number")
+  }
+  if (typeof value.version !== 'number') {
+    throw new Error(`'version' must be a number, got ${typeof value.version}`)
+  }
+
+  // Validate indexes exists
+  if (value.indexes === undefined || value.indexes === null) {
+    throw new Error("'indexes' is required")
+  }
+
+  // Validate indexes is an object (not array)
+  if (Array.isArray(value.indexes)) {
+    throw new Error("'indexes' must be a record object, got array")
+  }
+  if (typeof value.indexes !== 'object') {
+    throw new Error(`'indexes' must be a record object, got ${typeof value.indexes}`)
+  }
+
+  const indexes = value.indexes as Record<string, unknown>
+
+  // Validate each namespace entry
+  for (const [ns, entries] of Object.entries(indexes)) {
+    if (!Array.isArray(entries)) {
+      throw new Error(`indexes['${ns}'] must be an array`)
+    }
+
+    // Validate each entry in the namespace
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]
+
+      // Entry must be an object
+      if (entry === null || typeof entry !== 'object') {
+        throw new Error(`indexes['${ns}'][${i}] must be an object`)
+      }
+
+      const entryRecord = entry as Record<string, unknown>
+
+      // Validate definition
+      if (entryRecord.definition === null || typeof entryRecord.definition !== 'object') {
+        throw new Error(`indexes['${ns}'][${i}].definition must be an object`)
+      }
+
+      const definition = entryRecord.definition as Record<string, unknown>
+
+      // Validate definition.name
+      if (typeof definition.name !== 'string') {
+        throw new Error(`indexes['${ns}'][${i}].definition.name must be a string`)
+      }
+
+      // Validate definition.type
+      if (typeof definition.type !== 'string') {
+        throw new Error(`indexes['${ns}'][${i}].definition.type must be a string`)
+      }
+
+      // Validate definition.fields
+      if (!Array.isArray(definition.fields)) {
+        throw new Error(`indexes['${ns}'][${i}].definition.fields must be an array`)
+      }
+
+      // Validate metadata
+      if (entryRecord.metadata === null || typeof entryRecord.metadata !== 'object') {
+        throw new Error(`indexes['${ns}'][${i}].metadata must be an object`)
+      }
+    }
+  }
+
   return value as unknown as IndexCatalog
 }
 
@@ -267,6 +350,29 @@ export function sqlItemsAs<T>(items: Record<string, unknown>[]): T[] {
  */
 export function arrayAs<T>(arr: unknown[]): T {
   return arr as unknown as T
+}
+
+/**
+ * Cast a value to unknown[] for array operations.
+ * Use when accessing array fields from Record<string, unknown> objects.
+ *
+ * @remarks Safe when the value is known to be an array at runtime.
+ * Returns empty array if value is undefined/null for safer handling.
+ */
+export function toUnknownArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value
+  return []
+}
+
+/**
+ * Cast a typed array to unknown[] for storage in untyped caches.
+ * Use when storing typed arrays in Map<string, unknown[]> caches.
+ *
+ * @remarks Safe because the array is retrieved with proper type casting.
+ * This bridges typed arrays to untyped cache storage intentionally.
+ */
+export function asCacheableArray<T>(arr: T[]): unknown[] {
+  return arr as unknown[]
 }
 
 // =============================================================================
@@ -446,4 +552,332 @@ export function asDatabaseIndexDO<T>(stub: DurableObjectStub): T {
  */
 export function opsAsVariant<T>(ops: T): import('./entity').Variant {
   return ops as unknown as import('./entity').Variant
+}
+
+// =============================================================================
+// Collection Query Result Casts
+// =============================================================================
+
+/**
+ * Cast collection find() result items to typed array.
+ * Use when querying collections where the return type is known.
+ *
+ * @remarks Safe when the collection schema matches the expected type.
+ * Commonly used with observability MVs (AIRequestRecord, LogEntry, etc.)
+ */
+export function asTypedResults<T>(items: unknown): T[] {
+  return items as T[]
+}
+
+/**
+ * Cast collection findOne() result to typed record.
+ * Use when querying a single record where the return type is known.
+ *
+ * @remarks Safe when the collection schema matches the expected type.
+ */
+export function asTypedResult<T>(item: unknown): T {
+  return item as T
+}
+
+/**
+ * Cast collection create() result to typed record.
+ * Use when creating records where the return type is known.
+ *
+ * @remarks Safe when the collection schema matches the expected type.
+ */
+export function asCreatedRecord<T>(record: unknown): T {
+  return record as T
+}
+
+// =============================================================================
+// Type Guards for AI Database Adapter
+// =============================================================================
+
+/**
+ * Check if a value is a plain record object (not null, not array)
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * Check if a value is a valid AIDB Event entity
+ * Event entities have optional: actor, event, object, timestamp, objectData
+ */
+export function isAIDBEventEntity(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  // Validate actor if present
+  if (value.actor !== undefined && typeof value.actor !== 'string') return false
+  // Validate event if present
+  if (value.event !== undefined && typeof value.event !== 'string') return false
+  // Validate object if present (can be string or object)
+  if (value.object !== undefined && typeof value.object !== 'string' && !isRecord(value.object)) return false
+  // Validate timestamp if present (can be Date or string)
+  if (value.timestamp !== undefined && !(value.timestamp instanceof Date) && typeof value.timestamp !== 'string') return false
+  // Validate objectData if present (must be object)
+  if (value.objectData !== undefined && !isRecord(value.objectData)) return false
+  return true
+}
+
+/**
+ * Check if a value is a valid AIDB Action entity
+ * Action entities have optional: status, progress, total, result
+ */
+export function isAIDBActionEntity(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  // Validate status if present
+  const validStatuses = ['pending', 'active', 'completed', 'failed', 'cancelled']
+  if (value.status !== undefined && (typeof value.status !== 'string' || !validStatuses.includes(value.status))) return false
+  // Validate progress if present
+  if (value.progress !== undefined && typeof value.progress !== 'number') return false
+  // Validate total if present
+  if (value.total !== undefined && typeof value.total !== 'number') return false
+  // Validate result if present (must be object or null)
+  if (value.result !== undefined && value.result !== null && !isRecord(value.result)) return false
+  return true
+}
+
+/**
+ * Check if a value is a valid AIDB Artifact entity
+ * Artifact entities have optional: url, sourceHash, metadata, content
+ */
+export function isAIDBArtifactEntity(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  // Validate url if present
+  if (value.url !== undefined && typeof value.url !== 'string') return false
+  // Validate sourceHash if present
+  if (value.sourceHash !== undefined && typeof value.sourceHash !== 'string') return false
+  // Validate metadata if present (must be object)
+  if (value.metadata !== undefined && !isRecord(value.metadata)) return false
+  // content can be any type
+  return true
+}
+
+/**
+ * Check if an object has a relationship field (non-null object field)
+ */
+export function hasRelationshipField(obj: unknown, field: string): boolean {
+  if (!isRecord(obj)) return false
+  const fieldValue = obj[field]
+  return isRecord(fieldValue)
+}
+
+/**
+ * Get a relationship field value
+ */
+export function getRelationshipField(obj: unknown, field: string): Record<string, unknown> | undefined {
+  if (!isRecord(obj)) return undefined
+  const fieldValue = obj[field]
+  if (!isRecord(fieldValue)) return undefined
+  return fieldValue
+}
+
+/**
+ * Get a string field from an object
+ */
+export function getStringField(obj: unknown, field: string): string | undefined {
+  if (!isRecord(obj)) return undefined
+  const value = obj[field]
+  return typeof value === 'string' ? value : undefined
+}
+
+/**
+ * Get a number field from an object
+ */
+export function getNumberField(obj: unknown, field: string): number | undefined {
+  if (!isRecord(obj)) return undefined
+  const value = obj[field]
+  return typeof value === 'number' ? value : undefined
+}
+
+/**
+ * Get a Date field from an object (parses ISO strings)
+ */
+export function getDateField(obj: unknown, field: string): Date | undefined {
+  if (!isRecord(obj)) return undefined
+  const value = obj[field]
+  if (value instanceof Date) return value
+  if (typeof value === 'string') {
+    const parsed = new Date(value)
+    return isNaN(parsed.getTime()) ? undefined : parsed
+  }
+  return undefined
+}
+
+/**
+ * Get a record field from an object
+ */
+export function getRecordField(obj: unknown, field: string): Record<string, unknown> | undefined {
+  if (!isRecord(obj)) return undefined
+  const value = obj[field]
+  if (!isRecord(value)) return undefined
+  return value
+}
+
+/**
+ * Get a boolean field from an object
+ */
+export function getBooleanField(obj: unknown, field: string): boolean | undefined {
+  if (!isRecord(obj)) return undefined
+  const value = obj[field]
+  return typeof value === 'boolean' ? value : undefined
+}
+
+/**
+ * Get an array field from an object
+ */
+export function getArrayField(obj: unknown, field: string): unknown[] | undefined {
+  if (!isRecord(obj)) return undefined
+  const value = obj[field]
+  return Array.isArray(value) ? value : undefined
+}
+
+/**
+ * Get a string array field from an object
+ */
+export function getStringArrayField(obj: unknown, field: string): string[] | undefined {
+  if (!isRecord(obj)) return undefined
+  const value = obj[field]
+  if (!Array.isArray(value)) return undefined
+  if (!value.every((v) => typeof v === 'string')) return undefined
+  return value as string[]
+}
+
+/**
+ * Assert that a value is a valid AIDB Event entity
+ * @throws Error if validation fails
+ * @returns The validated value
+ */
+export function assertAIDBEventEntity(value: unknown, context?: string): Record<string, unknown> {
+  if (!isAIDBEventEntity(value)) {
+    throw new Error(`Invalid AI Database Event entity${context ? ` (${context})` : ''}`)
+  }
+  return value as Record<string, unknown>
+}
+
+/**
+ * Assert that a value is a valid AIDB Action entity
+ * @throws Error if validation fails
+ * @returns The validated value
+ */
+export function assertAIDBActionEntity(value: unknown, context?: string): Record<string, unknown> {
+  if (!isAIDBActionEntity(value)) {
+    throw new Error(`Invalid AI Database Action entity${context ? ` (${context})` : ''}`)
+  }
+  return value as Record<string, unknown>
+}
+
+/**
+ * Assert that a value is a valid AIDB Artifact entity
+ * @throws Error if validation fails
+ * @returns The validated value
+ */
+export function assertAIDBArtifactEntity(value: unknown, context?: string): Record<string, unknown> {
+  if (!isAIDBArtifactEntity(value)) {
+    throw new Error(`Invalid AI Database Artifact entity${context ? ` (${context})` : ''}`)
+  }
+  return value as Record<string, unknown>
+}
+
+// =============================================================================
+// Entity Name Extraction
+// =============================================================================
+
+/**
+ * Check if an object has a name field
+ */
+export function hasNameField(obj: unknown): boolean {
+  return isRecord(obj) && typeof obj.name === 'string'
+}
+
+/**
+ * Check if an object has a title field
+ */
+export function hasTitleField(obj: unknown): boolean {
+  return isRecord(obj) && typeof obj.title === 'string'
+}
+
+/**
+ * Get the entity name from an object (checks name, then title)
+ * Returns undefined if name is empty string (falls through to title)
+ */
+export function getEntityName(obj: unknown): string | undefined {
+  if (!isRecord(obj)) return undefined
+  if (typeof obj.name === 'string' && obj.name !== '') return obj.name
+  if (typeof obj.title === 'string' && obj.title !== '') return obj.title
+  return undefined
+}
+
+/**
+ * Get the entity name with a default fallback
+ * Returns default for empty strings
+ */
+export function getEntityNameOrDefault(obj: unknown, defaultName: string): string {
+  return getEntityName(obj) ?? defaultName
+}
+
+// =============================================================================
+// Entity Type Field Guards
+// =============================================================================
+
+/**
+ * Check if an object has a type field
+ */
+export function hasTypeField(obj: unknown): boolean {
+  return isRecord(obj) && typeof obj.$type === 'string'
+}
+
+/**
+ * Get the type field from an object
+ */
+export function getTypeField(obj: unknown): string | undefined {
+  if (!isRecord(obj)) return undefined
+  return typeof obj.$type === 'string' ? obj.$type : undefined
+}
+
+/**
+ * Get the type field with a default fallback
+ */
+export function getTypeFieldOrDefault(obj: unknown, defaultType: string): string {
+  return getTypeField(obj) ?? defaultType
+}
+
+// =============================================================================
+// Entity ID Field Guards
+// =============================================================================
+
+/**
+ * Check if an object has a $id field (only $id, not id)
+ */
+export function hasIdField(obj: unknown): boolean {
+  if (!isRecord(obj)) return false
+  return typeof obj.$id === 'string'
+}
+
+/**
+ * Get the $id field from an object (only $id, not id)
+ */
+export function getIdField(obj: unknown): string | undefined {
+  if (!isRecord(obj)) return undefined
+  if (typeof obj.$id === 'string') return obj.$id
+  return undefined
+}
+
+// =============================================================================
+// Safe Record Casts
+// =============================================================================
+
+/**
+ * Safely cast a value to Record<string, unknown>
+ * Returns undefined if value is not a record
+ */
+export function safeAsRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined
+}
+
+/**
+ * Cast a value to Record<string, unknown> or return empty object
+ */
+export function asRecordOrEmpty(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {}
 }

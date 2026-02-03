@@ -7,6 +7,7 @@
 
 import type { ParqueDB } from '../../ParqueDB'
 import type { TransactionSession, ResolvedAdapterConfig } from './types'
+import { logger } from '../../utils/logger'
 
 /**
  * Transaction manager for the Payload adapter
@@ -37,7 +38,7 @@ export class TransactionManager {
     this.sessions.set(id, session)
 
     if (this.config.debug) {
-      console.log(`[PayloadAdapter] Transaction started: ${id}`)
+      logger.debug(`[PayloadAdapter] Transaction started: ${id}`)
     }
 
     return id
@@ -56,7 +57,7 @@ export class TransactionManager {
     }
 
     if (this.config.debug) {
-      console.log(`[PayloadAdapter] Transaction committed: ${transactionId} (${session.operations.length} operations)`)
+      logger.debug(`[PayloadAdapter] Transaction committed: ${transactionId} (${session.operations.length} operations)`)
     }
 
     // Clean up the session
@@ -80,7 +81,7 @@ export class TransactionManager {
     }
 
     if (this.config.debug) {
-      console.log(`[PayloadAdapter] Transaction rollback: ${transactionId} (${session.operations.length} operations to revert)`)
+      logger.debug(`[PayloadAdapter] Transaction rollback: ${transactionId} (${session.operations.length} operations to revert)`)
     }
 
     // In a full implementation, we would:
@@ -89,7 +90,7 @@ export class TransactionManager {
     // For now, we just clean up the session
 
     if (session.operations.length > 0) {
-      console.warn(
+      logger.warn(
         `[PayloadAdapter] Rolling back ${session.operations.length} operations. ` +
         'Note: ParqueDB operations are applied immediately. ' +
         'Use event sourcing for full rollback support.'
@@ -149,7 +150,7 @@ export class TransactionManager {
         cleaned++
 
         if (this.config.debug) {
-          console.log(`[PayloadAdapter] Cleaned up stale transaction: ${id}`)
+          logger.debug(`[PayloadAdapter] Cleaned up stale transaction: ${id}`)
         }
       }
     }

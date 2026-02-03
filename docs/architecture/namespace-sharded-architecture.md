@@ -721,6 +721,12 @@ The namespace-sharded architecture provides a robust foundation for multi-tenant
 
 This architecture balances tenant isolation with operational efficiency, making it suitable for SaaS applications, data marketplaces, and federated data systems built on ParqueDB.
 
+## Related Documentation
+
+- [DO Write Bottleneck](./do-write-bottleneck.md) - Durable Object write scaling via sharding
+- [Entity Storage Architecture](./entity-storage.md) - Dual storage model (DO + R2)
+- [Consistency Model](./consistency.md) - Read/write consistency guarantees
+
 ---
 
 *Architecture Design Document - ParqueDB Namespace-Sharded Multi-File Perspective*

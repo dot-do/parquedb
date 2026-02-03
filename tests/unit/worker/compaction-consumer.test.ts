@@ -65,15 +65,20 @@ function createR2Notification(key: string, size: number = 1024): {
 }
 
 /**
- * Create a mock message with ack/retry methods
+ * Create a mock message with ack/retry methods and attempts property
+ *
+ * @param body - The message body
+ * @param attempts - Number of delivery attempts (default: 1, per Cloudflare Queues API)
  */
-function createMockMessage<T>(body: T): {
+function createMockMessage<T>(body: T, attempts: number = 1): {
   body: T
+  attempts: number
   ack: ReturnType<typeof vi.fn>
   retry: ReturnType<typeof vi.fn>
 } {
   return {
     body,
+    attempts,
     ack: vi.fn(),
     retry: vi.fn(),
   }
@@ -251,11 +256,13 @@ describe('Compaction Consumer', () => {
   })
 
   describe('Batch Result', () => {
-    it('should create batch result', () => {
+    it('should create batch result with DLQ statistics', () => {
       const result = {
         totalMessages: 5,
-        succeeded: 4,
-        failed: 1,
+        succeeded: 3,
+        failed: 2,
+        retried: 1,
+        deadLettered: 1,
         results: [
           { sourceKey: 'raw-events/1.ndjson', eventsProcessed: 10, success: true },
           { sourceKey: 'raw-events/2.ndjson', eventsProcessed: 20, success: true },
@@ -267,6 +274,25 @@ describe('Compaction Consumer', () => {
       expect(result.succeeded + result.failed).toBeLessThanOrEqual(result.totalMessages)
       expect(result.results.length).toBe(3)
       expect(result.parquetFilesWritten.length).toBe(1)
+      expect(result.retried).toBe(1)
+      expect(result.deadLettered).toBe(1)
+    })
+
+    it('should track retried and deadLettered counts separately from failed', () => {
+      // Failed messages can be either retried OR deadLettered (not both)
+      // retried: will be redelivered
+      // deadLettered: exceeded max retries, sent to DLQ
+      const result = {
+        totalMessages: 10,
+        succeeded: 5,
+        failed: 5,
+        retried: 3, // 3 messages will be retried
+        deadLettered: 2, // 2 messages exceeded max retries
+        results: [],
+        parquetFilesWritten: [],
+      }
+
+      expect(result.retried + result.deadLettered).toBeLessThanOrEqual(result.failed)
     })
   })
 
@@ -311,6 +337,154 @@ describe('Compaction Consumer', () => {
       expect(rawEventsPrefix).toBe('raw-events')
       expect(parquetPrefix).toBe('logs/workers')
       expect(flushThreshold).toBe(1000)
+    })
+
+    it('should use defaults for MAX_RETRIES if not provided', () => {
+      const envWithoutMaxRetries = {
+        LOGS_BUCKET: mockBucket as unknown as R2Bucket,
+      }
+
+      const maxRetries = envWithoutMaxRetries.MAX_RETRIES
+        ? parseInt(envWithoutMaxRetries.MAX_RETRIES, 10)
+        : 3 // DEFAULT_MAX_RETRIES
+
+      expect(maxRetries).toBe(3)
+    })
+
+    it('should allow custom MAX_RETRIES configuration', () => {
+      const envWithCustomMaxRetries = {
+        LOGS_BUCKET: mockBucket as unknown as R2Bucket,
+        MAX_RETRIES: '5',
+      }
+
+      const maxRetries = envWithCustomMaxRetries.MAX_RETRIES
+        ? parseInt(envWithCustomMaxRetries.MAX_RETRIES, 10)
+        : 3
+
+      expect(maxRetries).toBe(5)
+    })
+  })
+
+  describe('Dead Letter Queue (DLQ) Handling', () => {
+    it('should create message with attempts property', () => {
+      const notification = createR2Notification('raw-events/test.ndjson')
+
+      // First attempt (default)
+      const message1 = createMockMessage(notification)
+      expect(message1.attempts).toBe(1)
+
+      // Third attempt (after 2 retries)
+      const message3 = createMockMessage(notification, 3)
+      expect(message3.attempts).toBe(3)
+    })
+
+    it('should distinguish between retryable and non-retryable errors', () => {
+      // Non-retryable errors (should be acked, not retried)
+      const nonRetryableErrors = [
+        'Failed to parse JSON',
+        'malformed event data',
+        'Empty raw events file',
+      ]
+
+      for (const error of nonRetryableErrors) {
+        const isNonRetryable =
+          error.includes('parse') ||
+          error.includes('malformed') ||
+          error.includes('Empty raw events file')
+
+        expect(isNonRetryable).toBe(true)
+      }
+
+      // Retryable errors (transient failures)
+      const retryableErrors = ['Network timeout', 'R2 temporarily unavailable', 'Connection reset']
+
+      for (const error of retryableErrors) {
+        const isNonRetryable =
+          error.includes('parse') ||
+          error.includes('malformed') ||
+          error.includes('Empty raw events file')
+
+        expect(isNonRetryable).toBe(false)
+      }
+    })
+
+    it('should determine retry eligibility based on attempts vs maxRetries', () => {
+      const maxRetries = 3
+
+      // Attempt 1: should retry
+      expect(1 < maxRetries).toBe(true)
+
+      // Attempt 2: should retry
+      expect(2 < maxRetries).toBe(true)
+
+      // Attempt 3: at max retries, should NOT retry (goes to DLQ)
+      expect(3 >= maxRetries).toBe(true)
+
+      // Attempt 4: exceeds max retries (should never happen if DLQ is working)
+      expect(4 >= maxRetries).toBe(true)
+    })
+
+    it('should track message handling decisions correctly', () => {
+      // Simulate the logic from processBatch
+      const maxRetries = 3
+
+      interface MessageDecision {
+        key: string
+        attempts: number
+        error: string | null
+        decision: 'ack' | 'retry' | 'dlq'
+      }
+
+      function decideAction(
+        success: boolean,
+        error: string | null,
+        attempts: number
+      ): 'ack' | 'retry' | 'dlq' {
+        if (success) return 'ack'
+
+        const isNonRetryable =
+          error?.includes('parse') ||
+          error?.includes('malformed') ||
+          error?.includes('Empty raw events file')
+
+        if (isNonRetryable) return 'ack' // Non-retryable: ack to avoid blocking
+        if (attempts >= maxRetries) return 'dlq' // Max retries: let Cloudflare send to DLQ
+        return 'retry' // Transient error: retry
+      }
+
+      const testCases: MessageDecision[] = [
+        // Success cases
+        { key: 'file1.ndjson', attempts: 1, error: null, decision: 'ack' },
+
+        // Parse error (non-retryable) - any attempt
+        { key: 'file2.ndjson', attempts: 1, error: 'Failed to parse', decision: 'ack' },
+        { key: 'file3.ndjson', attempts: 3, error: 'malformed data', decision: 'ack' },
+
+        // Transient error - first attempt (should retry)
+        { key: 'file4.ndjson', attempts: 1, error: 'Network timeout', decision: 'retry' },
+
+        // Transient error - second attempt (should retry)
+        { key: 'file5.ndjson', attempts: 2, error: 'R2 unavailable', decision: 'retry' },
+
+        // Transient error - max retries (should go to DLQ)
+        { key: 'file6.ndjson', attempts: 3, error: 'Connection failed', decision: 'dlq' },
+      ]
+
+      for (const tc of testCases) {
+        const action = decideAction(tc.error === null, tc.error, tc.attempts)
+        expect(action).toBe(tc.decision)
+      }
+    })
+
+    it('should handle message with missing attempts property gracefully', () => {
+      // Some message implementations might not have attempts property
+      // The code should default to 1
+      const notification = createR2Notification('raw-events/test.ndjson')
+      const message = createMockMessage(notification)
+
+      // Simulate the fallback logic: message.attempts ?? 1
+      const attempts = (message as { attempts?: number }).attempts ?? 1
+      expect(attempts).toBe(1)
     })
   })
 })

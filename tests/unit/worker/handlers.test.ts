@@ -25,45 +25,16 @@ import { handleRelationshipTraversal } from '@/worker/handlers/relationships'
 import { handleEntityDetail } from '@/worker/handlers/entity'
 import { DATASETS } from '@/worker/datasets'
 import type { HandlerContext } from '@/worker/handlers/types'
+import { createMockWorker, createMockCaches, createMockExecutionContext } from '../../mocks'
 
 // Mock the Cloudflare caches API for Node.js environment
-const mockCache = {
-  match: vi.fn().mockResolvedValue(null),
-  put: vi.fn().mockResolvedValue(undefined),
-}
-const mockCaches = {
-  open: vi.fn().mockResolvedValue(mockCache),
-}
+const mockCachesObj = createMockCaches()
 // @ts-expect-error - mocking global caches API
-globalThis.caches = mockCaches
+globalThis.caches = mockCachesObj
 
 // =============================================================================
 // Mock Helpers
 // =============================================================================
-
-/**
- * Create a minimal mock of ParqueDBWorker for handler tests
- */
-function createMockWorker(overrides: Record<string, unknown> = {}) {
-  return {
-    get: vi.fn().mockResolvedValue(null),
-    find: vi.fn().mockResolvedValue({ items: [], stats: {}, hasMore: false }),
-    create: vi.fn().mockResolvedValue({ $id: 'test/1', name: 'Test' }),
-    update: vi.fn().mockResolvedValue({ matched: 1, modified: 1 }),
-    delete: vi.fn().mockResolvedValue({ deleted: 1 }),
-    getRelationships: vi.fn().mockResolvedValue([]),
-    getStorageStats: vi.fn().mockReturnValue({
-      cdnHits: 0,
-      primaryHits: 0,
-      edgeHits: 0,
-      cacheHits: 0,
-      totalReads: 0,
-      usingCdn: false,
-      usingEdge: false,
-    }),
-    ...overrides,
-  }
-}
 
 /**
  * Create a HandlerContext for testing
@@ -106,10 +77,7 @@ function createContext(
     path,
     worker: (options.worker || createMockWorker()) as unknown as HandlerContext['worker'],
     startTime: performance.now(),
-    ctx: {
-      waitUntil: vi.fn(),
-      passThroughOnException: vi.fn(),
-    } as unknown as ExecutionContext,
+    ctx: createMockExecutionContext() as unknown as ExecutionContext,
   }
 }
 

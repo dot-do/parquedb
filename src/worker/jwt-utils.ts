@@ -10,6 +10,7 @@
 
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose'
 import type { Env } from '../types/worker'
+import { JWKS_CACHE_TTL as IMPORTED_JWKS_CACHE_TTL, JWKS_FETCH_TIMEOUT_MS as IMPORTED_JWKS_FETCH_TIMEOUT_MS } from '../constants'
 
 // =============================================================================
 // Types
@@ -43,8 +44,18 @@ export interface JWTVerifyResult {
 
 // JWKS cache to avoid fetching on every request
 const jwksCache = new Map<string, { jwks: ReturnType<typeof createRemoteJWKSet>; expiresAt: number }>()
-const JWKS_CACHE_TTL = 3600 * 1000 // 1 hour
-const JWKS_FETCH_TIMEOUT_MS = 10000 // 10 second timeout for JWKS fetch
+const JWKS_CACHE_TTL = IMPORTED_JWKS_CACHE_TTL
+const JWKS_FETCH_TIMEOUT_MS = IMPORTED_JWKS_FETCH_TIMEOUT_MS
+
+/**
+ * Custom error for JWKS fetch timeout
+ */
+export class JWKSFetchTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`JWKS fetch timed out after ${timeoutMs}ms`)
+    this.name = 'JWKSFetchTimeoutError'
+  }
+}
 
 /**
  * Get or create a cached JWKS instance for the given URI
@@ -60,6 +71,55 @@ function getJWKS(jwksUri: string): ReturnType<typeof createRemoteJWKSet> {
   })
   jwksCache.set(jwksUri, { jwks, expiresAt: Date.now() + JWKS_CACHE_TTL })
   return jwks
+}
+
+/**
+ * Race a promise against an AbortController timeout.
+ * This provides protection against hung connections that the jose library's
+ * timeoutDuration may not catch.
+ */
+async function withAbortTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number
+): Promise<T> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const result = await operation(controller.signal)
+    return result
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+/**
+ * Verify JWT with timeout protection for JWKS fetch.
+ * Wraps jwtVerify with an AbortController to handle hung connections.
+ */
+async function verifyJWTWithTimeout(
+  token: string,
+  jwks: ReturnType<typeof createRemoteJWKSet>,
+  options: { clockTolerance?: number },
+  timeoutMs: number = JWKS_FETCH_TIMEOUT_MS
+): Promise<Awaited<ReturnType<typeof jwtVerify>>> {
+  return withAbortTimeout(
+    async (signal) => {
+      // Create a promise that rejects on abort
+      const abortPromise = new Promise<never>((_, reject) => {
+        signal.addEventListener('abort', () => {
+          reject(new JWKSFetchTimeoutError(timeoutMs))
+        }, { once: true })
+      })
+
+      // Race the verification against the abort signal
+      return Promise.race([
+        jwtVerify(token, jwks, options),
+        abortPromise,
+      ])
+    },
+    timeoutMs
+  )
 }
 
 // =============================================================================
@@ -88,9 +148,10 @@ export async function verifyJWT(token: string, env: Env): Promise<JWTVerifyResul
   try {
     const jwks = getJWKS(env.JWKS_URI)
 
-    const { payload } = await jwtVerify(token, jwks, {
+    // Use timeout-protected verification to handle hung connections
+    const { payload } = await verifyJWTWithTimeout(token, jwks, {
       clockTolerance: 60, // Allow 60 seconds clock skew
-    })
+    }, JWKS_FETCH_TIMEOUT_MS)
 
     // Extract user information from payload
     const user: JWTUserInfo = {
@@ -113,6 +174,13 @@ export async function verifyJWT(token: string, env: Env): Promise<JWTVerifyResul
       payload,
     }
   } catch (error) {
+    // Provide specific error message for timeout errors
+    if (error instanceof JWKSFetchTimeoutError) {
+      return {
+        valid: false,
+        error: error.message,
+      }
+    }
     return {
       valid: false,
       error: error instanceof Error ? error.message : 'Token verification failed',

@@ -4,7 +4,7 @@
  * These tests verify the shared utility functions used across storage backends.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   globToRegex,
   matchGlob,
@@ -193,15 +193,20 @@ describe('Storage Utilities', () => {
     })
 
     it('should produce different ETags for same content at different times', async () => {
-      const data = new Uint8Array([1, 2, 3])
-      const etag1 = generateEtag(data)
-      // Wait a tiny bit to ensure timestamp differs
-      await new Promise(resolve => setTimeout(resolve, 2))
-      const etag2 = generateEtag(data)
-      // Same hash but potentially different timestamp
-      const hash1 = etag1.split('-')[0]
-      const hash2 = etag2.split('-')[0]
-      expect(hash1).toBe(hash2) // Same content = same hash
+      vi.useFakeTimers()
+      try {
+        const data = new Uint8Array([1, 2, 3])
+        const etag1 = generateEtag(data)
+        // Advance time to ensure timestamp differs
+        await vi.advanceTimersByTimeAsync(2)
+        const etag2 = generateEtag(data)
+        // Same hash but potentially different timestamp
+        const hash1 = etag1.split('-')[0]
+        const hash2 = etag2.split('-')[0]
+        expect(hash1).toBe(hash2) // Same content = same hash
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 

@@ -28,6 +28,7 @@ import { DurableObject } from 'cloudflare:workers'
 import type { EntityId } from '../types'
 import type { Visibility } from '../types/visibility'
 import { DEFAULT_VISIBILITY, isValidVisibility } from '../types/visibility'
+import { logger } from '../utils/logger'
 import { escapeLikePattern } from '../utils/sql-security'
 
 // =============================================================================
@@ -638,7 +639,7 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
 
       return Response.json({ error: 'Not found' }, { status: 404 })
     } catch (error) {
-      console.error('[DatabaseIndexDO] Error:', error)
+      logger.error('[DatabaseIndexDO] Error:', error)
       return Response.json(
         { error: error instanceof Error ? error.message : 'Internal error' },
         { status: 500 }

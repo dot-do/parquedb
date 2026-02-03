@@ -26,6 +26,7 @@
 
 import type { ParqueDB } from '../../ParqueDB.js'
 import type { EntityId } from '../../types/entity.js'
+import { logger } from '../../utils/logger.js'
 import type { SQLQueryResult, SQLQueryOptions } from './types.js'
 import { parseSQL } from './parser.js'
 import { translateSelect, translateInsert, translateUpdate, translateDelete } from './translator.js'
@@ -82,8 +83,8 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
     params: unknown[] = []
   ): Promise<SQLQueryResult<T>> => {
     if (debug) {
-      console.log('[sql] Query:', query)
-      console.log('[sql] Params:', params)
+      logger.debug('[sql] Query:', query)
+      logger.debug('[sql] Params:', params)
     }
 
     const stmt = parseSQL(query)

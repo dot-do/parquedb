@@ -21,6 +21,7 @@
 import type { StorageBackend } from '../types/storage'
 import type { EventSegment } from '../events/types'
 import { asDynamicModule, asBuilder } from '../types/cast'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types (defined locally to avoid import errors when @dotdo/iceberg is not installed)
@@ -395,7 +396,7 @@ export class NativeIcebergMetadataManager {
       }
     )
 
-    console.log(`Created Iceberg table at ${result.metadataPath}`)
+    logger.info(`Created Iceberg table at ${result.metadataPath}`)
   }
 
   /**
@@ -407,7 +408,7 @@ export class NativeIcebergMetadataManager {
       this.options.location
     )
 
-    console.log(`Loaded Iceberg table with ${metadata.snapshots?.length || 0} snapshots`)
+    logger.info(`Loaded Iceberg table with ${metadata.snapshots?.length || 0} snapshots`)
   }
 
   // ===========================================================================

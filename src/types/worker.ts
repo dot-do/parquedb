@@ -101,6 +101,13 @@ export interface Env {
 
   /** JWKS URI for JWT token verification (e.g., 'https://api.workos.com/sso/jwks/client_xxx') */
   JWKS_URI?: string
+
+  /**
+   * KV namespace for tracking used upload token nonces (replay protection).
+   * When configured, provides cross-isolate replay attack prevention.
+   * Falls back to in-memory tracking (per-isolate only) when not available.
+   */
+  USED_TOKENS?: KVNamespace
 }
 
 // =============================================================================

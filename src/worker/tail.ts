@@ -21,6 +21,7 @@ import {
   type TailValidationConfig,
   type TraceItemsValidationResult,
 } from './tail-validation'
+import { createSafeRegex } from '../utils/safe-regex'
 
 // Re-export validation utilities
 export {
@@ -270,7 +271,7 @@ function matchUrlPattern(url: string, pattern: string): boolean {
     .replace(/\*/g, '.*') // Convert * to .*
     .replace(/\?/g, '.') // Convert ? to .
 
-  return new RegExp(`^${regexPattern}$`).test(url)
+  return createSafeRegex(`^${regexPattern}$`).test(url)
 }
 
 /**

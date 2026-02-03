@@ -5,6 +5,13 @@
  * Alarms. When entities are created or updated, they can be queued for
  * background embedding generation instead of blocking the write operation.
  *
+ * Features:
+ * - Queue metrics (depth, processed, failed counts)
+ * - Dead letter queue for exhausted items
+ * - Webhook/callback support for failure notifications
+ * - Manual retry API for failed items
+ * - Structured logging integration
+ *
  * @example
  * ```typescript
  * // In ParqueDBDO
@@ -12,7 +19,11 @@
  *   provider: createWorkersAIProvider(env.AI),
  *   fields: ['description', 'content'],
  *   vectorField: 'embedding',
- *   batchSize: 10
+ *   batchSize: 10,
+ *   onError: async (item, error) => {
+ *     // Send to alerting service
+ *     await alertService.notify('embedding-failure', { item, error })
+ *   }
  * })
  *
  * // On entity create/update
@@ -22,6 +33,14 @@
  * async alarm() {
  *   await embeddingQueue.processQueue()
  * }
+ *
+ * // Check metrics
+ * const metrics = await embeddingQueue.getMetrics()
+ * console.log(`Queue depth: ${metrics.queueDepth}, Failed: ${metrics.totalFailed}`)
+ *
+ * // Retry failed items
+ * const deadLetterItems = await embeddingQueue.getDeadLetterItems()
+ * await embeddingQueue.retryDeadLetterItem('posts', 'abc123')
  * ```
  */
 
@@ -32,10 +51,75 @@ import {
   DEFAULT_EMBEDDING_PRIORITY,
   DEFAULT_MAX_RETRIES,
 } from '../constants'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types
 // =============================================================================
+
+/**
+ * Dead letter queue item for items that exhausted retries
+ */
+export interface DeadLetterItem {
+  /** Entity type/namespace */
+  entityType: string
+
+  /** Entity ID */
+  entityId: string
+
+  /** When the item was originally queued */
+  createdAt: number
+
+  /** When the item was moved to dead letter queue */
+  movedAt: number
+
+  /** Total number of attempts made */
+  attempts: number
+
+  /** Last error message */
+  lastError: string
+
+  /** Priority of the original item */
+  priority?: number
+}
+
+/**
+ * Queue metrics for monitoring
+ */
+export interface QueueMetrics {
+  /** Current number of items in the queue */
+  queueDepth: number
+
+  /** Total items processed successfully (since metrics were last reset) */
+  totalProcessed: number
+
+  /** Total items that failed (since metrics were last reset) */
+  totalFailed: number
+
+  /** Number of items in the dead letter queue */
+  deadLetterCount: number
+
+  /** Average processing time in ms (last batch) */
+  avgProcessingTimeMs: number
+
+  /** Error rate (failed / (processed + failed)) */
+  errorRate: number
+
+  /** Timestamp of last metrics update */
+  lastUpdated: number
+
+  /** Queue backlog age in ms (age of oldest item) */
+  backlogAgeMs: number
+}
+
+/**
+ * Error callback type for embedding failures
+ */
+export type ErrorCallback = (
+  item: EmbeddingQueueItem,
+  error: Error | string,
+  isExhausted: boolean
+) => Promise<void> | void
 
 /**
  * Configuration for background embedding generation
@@ -61,6 +145,12 @@ export interface BackgroundEmbeddingConfig {
 
   /** Separator for concatenating multiple fields (default: '\n\n') */
   fieldSeparator?: string
+
+  /** Callback for error notifications */
+  onError?: ErrorCallback
+
+  /** Whether to enable dead letter queue (default: true) */
+  enableDeadLetter?: boolean
 }
 
 /**
@@ -149,17 +239,28 @@ export type EntityUpdater = (
 // =============================================================================
 
 /**
+ * Stored metrics for persistence
+ */
+interface StoredMetrics {
+  totalProcessed: number
+  totalFailed: number
+  avgProcessingTimeMs: number
+  lastUpdated: number
+}
+
+/**
  * Queue for background embedding generation
  *
  * Uses Durable Object storage for persistence and alarms for processing.
  * Items are stored with a prefix to enable efficient listing and cleanup.
+ * Includes error monitoring, dead letter queue, and metrics collection.
  */
 export class EmbeddingQueue {
   /** Storage interface (DurableObjectStorage) */
   private storage: DurableObjectStorage
 
   /** Queue configuration */
-  private config: Required<BackgroundEmbeddingConfig>
+  private config: Required<BackgroundEmbeddingConfig> & { enableDeadLetter: boolean }
 
   /** Function to load entity data */
   private entityLoader?: EntityLoader
@@ -170,7 +271,13 @@ export class EmbeddingQueue {
   /** Queue key prefix */
   private static readonly QUEUE_PREFIX = 'embed_queue:'
 
-  /** Stats key */
+  /** Dead letter queue key prefix */
+  private static readonly DEAD_LETTER_PREFIX = 'embed_dlq:'
+
+  /** Metrics key */
+  private static readonly METRICS_KEY = 'embed_queue_metrics'
+
+  /** Stats key (deprecated, kept for backwards compat) */
   private static readonly STATS_KEY = 'embed_queue_stats'
 
   /**
@@ -187,7 +294,16 @@ export class EmbeddingQueue {
       retryAttempts: config.retryAttempts ?? DEFAULT_MAX_RETRIES,
       processDelay: config.processDelay ?? DEFAULT_EMBEDDING_PROCESS_DELAY,
       fieldSeparator: config.fieldSeparator ?? '\n\n',
+      onError: config.onError,
+      enableDeadLetter: config.enableDeadLetter ?? true,
     }
+
+    logger.debug('EmbeddingQueue initialized', {
+      batchSize: this.config.batchSize,
+      retryAttempts: this.config.retryAttempts,
+      processDelay: this.config.processDelay,
+      enableDeadLetter: this.config.enableDeadLetter,
+    })
   }
 
   /**
@@ -307,6 +423,10 @@ export class EmbeddingQueue {
    * generates embeddings, and updates entities.
    */
   async processQueue(): Promise<QueueProcessingResult> {
+    const startTime = Date.now()
+
+    logger.debug('Processing embedding queue')
+
     // Get batch of pending items
     const pending = await this.storage.list<EmbeddingQueueItem>({
       prefix: EmbeddingQueue.QUEUE_PREFIX,
@@ -314,6 +434,7 @@ export class EmbeddingQueue {
     })
 
     if (pending.size === 0) {
+      logger.debug('Embedding queue is empty')
       return { processed: 0, failed: 0, remaining: 0, errors: [] }
     }
 
@@ -330,9 +451,12 @@ export class EmbeddingQueue {
 
     if (batch.length === 0) {
       // All items have exhausted retries, clean them up
+      logger.info('Moving exhausted items to dead letter queue', { count: pending.size })
       await this.cleanupExhaustedItems(Array.from(pending.keys()))
       return { processed: 0, failed: 0, remaining: 0, errors: [] }
     }
+
+    logger.debug('Processing embedding batch', { batchSize: batch.length })
 
     const result: QueueProcessingResult = {
       processed: 0,
@@ -358,6 +482,10 @@ export class EmbeddingQueue {
 
       if (!entity) {
         // Entity not found, mark as failed and remove from queue
+        logger.warn('Entity not found during embedding generation', {
+          entityType: item.entityType,
+          entityId: item.entityId,
+        })
         await this.storage.delete(item.key)
         result.failed++
         result.errors.push({
@@ -365,6 +493,9 @@ export class EmbeddingQueue {
           entityId: item.entityId,
           error: 'Entity not found',
         })
+
+        // Notify error callback
+        await this.notifyError(item, 'Entity not found', false)
         continue
       }
 
@@ -383,6 +514,9 @@ export class EmbeddingQueue {
         limit: 1,
       })
       result.remaining = remaining.size > 0 ? pending.size - batch.length : 0
+
+      // Update metrics
+      await this.updateMetrics(result.processed, result.failed, Date.now() - startTime)
       return result
     }
 
@@ -394,14 +528,27 @@ export class EmbeddingQueue {
     try {
       vectors = await this.config.provider.embedBatch(texts)
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Embedding generation failed'
+
+      logger.error('Embedding batch generation failed', error, {
+        batchSize: batch.length,
+        entityTypes: [...new Set(batch.map(b => b.entityType))],
+      })
+
       // Embedding generation failed, increment attempts for all items
       const updates = new Map<string, EmbeddingQueueItem>()
       for (const item of batch) {
+        const newAttempts = item.attempts + 1
+        const isExhausted = newAttempts >= this.config.retryAttempts
+
         updates.set(item.key, {
           ...item,
-          attempts: item.attempts + 1,
-          lastError: error instanceof Error ? error.message : 'Embedding generation failed',
+          attempts: newAttempts,
+          lastError: errorMessage,
         })
+
+        // Notify error callback
+        await this.notifyError(item, errorMessage, isExhausted)
       }
       await this.storage.put(updates)
 
@@ -416,9 +563,12 @@ export class EmbeddingQueue {
         result.errors.push({
           entityType: item.entityType,
           entityId: item.entityId,
-          error: error instanceof Error ? error.message : 'Embedding generation failed',
+          error: errorMessage,
         })
       }
+
+      // Update metrics
+      await this.updateMetrics(result.processed, result.failed, Date.now() - startTime)
       return result
     }
 
@@ -433,20 +583,33 @@ export class EmbeddingQueue {
         successfulKeys.push(item.key)
         result.processed++
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Entity update failed'
+
+        logger.error('Entity update failed during embedding', error, {
+          entityType: item.entityType,
+          entityId: item.entityId,
+        })
+
         // Update failed, increment attempts
         const queueItem = batch.find(b => b.key === item.key)
         if (queueItem) {
+          const newAttempts = queueItem.attempts + 1
+          const isExhausted = newAttempts >= this.config.retryAttempts
+
           await this.storage.put(item.key, {
             ...queueItem,
-            attempts: queueItem.attempts + 1,
-            lastError: error instanceof Error ? error.message : 'Entity update failed',
+            attempts: newAttempts,
+            lastError: errorMessage,
           })
+
+          // Notify error callback
+          await this.notifyError(queueItem, errorMessage, isExhausted)
         }
         result.failed++
         result.errors.push({
           entityType: item.entityType,
           entityId: item.entityId,
-          error: error instanceof Error ? error.message : 'Entity update failed',
+          error: errorMessage,
         })
       }
     }
@@ -467,6 +630,18 @@ export class EmbeddingQueue {
       // Schedule next batch processing
       await this.ensureAlarmScheduled(100) // Process next batch quickly
     }
+
+    const processingTime = Date.now() - startTime
+
+    logger.info('Embedding queue batch processed', {
+      processed: result.processed,
+      failed: result.failed,
+      remaining: result.remaining,
+      processingTimeMs: processingTime,
+    })
+
+    // Update metrics
+    await this.updateMetrics(result.processed, result.failed, processingTime)
 
     return result
   }
@@ -644,20 +819,298 @@ export class EmbeddingQueue {
 
   /**
    * Clean up items that have exhausted all retry attempts
+   * Moves them to the dead letter queue if enabled
    */
   private async cleanupExhaustedItems(keys: string[]): Promise<void> {
     const exhausted: string[] = []
     const items = await this.storage.get<EmbeddingQueueItem>(keys)
+    const deadLetterPuts = new Map<string, DeadLetterItem>()
+    const now = Date.now()
 
     for (const [key, item] of Object.entries(items)) {
       if (item && item.attempts >= this.config.retryAttempts) {
         exhausted.push(key)
+
+        // Move to dead letter queue if enabled
+        if (this.config.enableDeadLetter) {
+          const dlqKey = this.getDeadLetterKey(item.entityType, item.entityId)
+          deadLetterPuts.set(dlqKey, {
+            entityType: item.entityType,
+            entityId: item.entityId,
+            createdAt: item.createdAt,
+            movedAt: now,
+            attempts: item.attempts,
+            lastError: item.lastError || 'Unknown error',
+            priority: item.priority,
+          })
+
+          logger.warn('Item moved to dead letter queue', {
+            entityType: item.entityType,
+            entityId: item.entityId,
+            attempts: item.attempts,
+            lastError: item.lastError,
+          })
+
+          // Notify error callback that item is exhausted
+          await this.notifyError(item, item.lastError || 'Max retries exhausted', true)
+        }
       }
+    }
+
+    // Write to dead letter queue first, then delete from main queue
+    if (deadLetterPuts.size > 0) {
+      await this.storage.put(deadLetterPuts)
     }
 
     if (exhausted.length > 0) {
       await this.storage.delete(exhausted)
     }
+  }
+
+  /**
+   * Generate dead letter queue key for an entity
+   */
+  private getDeadLetterKey(entityType: string, entityId: string): string {
+    return `${EmbeddingQueue.DEAD_LETTER_PREFIX}${entityType}:${entityId}`
+  }
+
+  /**
+   * Notify error callback if configured
+   */
+  private async notifyError(
+    item: EmbeddingQueueItem,
+    error: Error | string,
+    isExhausted: boolean
+  ): Promise<void> {
+    if (this.config.onError) {
+      try {
+        await this.config.onError(item, error, isExhausted)
+      } catch (callbackError) {
+        logger.error('Error callback failed', callbackError, {
+          entityType: item.entityType,
+          entityId: item.entityId,
+        })
+      }
+    }
+  }
+
+  /**
+   * Update stored metrics
+   */
+  private async updateMetrics(
+    processed: number,
+    failed: number,
+    processingTimeMs: number
+  ): Promise<void> {
+    const existing = await this.storage.get<StoredMetrics>(EmbeddingQueue.METRICS_KEY)
+
+    const metrics: StoredMetrics = {
+      totalProcessed: (existing?.totalProcessed ?? 0) + processed,
+      totalFailed: (existing?.totalFailed ?? 0) + failed,
+      avgProcessingTimeMs: processingTimeMs, // Store last batch time
+      lastUpdated: Date.now(),
+    }
+
+    await this.storage.put(EmbeddingQueue.METRICS_KEY, metrics)
+  }
+
+  // ===========================================================================
+  // Metrics and Monitoring
+  // ===========================================================================
+
+  /**
+   * Get comprehensive queue metrics for monitoring
+   */
+  async getMetrics(): Promise<QueueMetrics> {
+    // Get queue items
+    const queueItems = await this.storage.list<EmbeddingQueueItem>({
+      prefix: EmbeddingQueue.QUEUE_PREFIX,
+    })
+
+    // Get dead letter items
+    const dlqItems = await this.storage.list<DeadLetterItem>({
+      prefix: EmbeddingQueue.DEAD_LETTER_PREFIX,
+    })
+
+    // Get stored metrics
+    const storedMetrics = await this.storage.get<StoredMetrics>(EmbeddingQueue.METRICS_KEY)
+
+    // Calculate backlog age
+    let backlogAgeMs = 0
+    const now = Date.now()
+    for (const item of queueItems.values()) {
+      const age = now - item.createdAt
+      if (age > backlogAgeMs) {
+        backlogAgeMs = age
+      }
+    }
+
+    // Calculate error rate
+    const totalProcessed = storedMetrics?.totalProcessed ?? 0
+    const totalFailed = storedMetrics?.totalFailed ?? 0
+    const total = totalProcessed + totalFailed
+    const errorRate = total > 0 ? totalFailed / total : 0
+
+    return {
+      queueDepth: queueItems.size,
+      totalProcessed,
+      totalFailed,
+      deadLetterCount: dlqItems.size,
+      avgProcessingTimeMs: storedMetrics?.avgProcessingTimeMs ?? 0,
+      errorRate,
+      lastUpdated: storedMetrics?.lastUpdated ?? 0,
+      backlogAgeMs,
+    }
+  }
+
+  /**
+   * Reset metrics counters
+   */
+  async resetMetrics(): Promise<void> {
+    await this.storage.delete(EmbeddingQueue.METRICS_KEY)
+    logger.info('Embedding queue metrics reset')
+  }
+
+  // ===========================================================================
+  // Dead Letter Queue Management
+  // ===========================================================================
+
+  /**
+   * Get all items in the dead letter queue
+   *
+   * @param limit - Maximum number of items to return
+   */
+  async getDeadLetterItems(limit = 100): Promise<DeadLetterItem[]> {
+    const items = await this.storage.list<DeadLetterItem>({
+      prefix: EmbeddingQueue.DEAD_LETTER_PREFIX,
+      limit,
+    })
+
+    return Array.from(items.values())
+  }
+
+  /**
+   * Get dead letter queue count
+   */
+  async getDeadLetterCount(): Promise<number> {
+    const items = await this.storage.list({
+      prefix: EmbeddingQueue.DEAD_LETTER_PREFIX,
+    })
+    return items.size
+  }
+
+  /**
+   * Retry a specific item from the dead letter queue
+   *
+   * @param entityType - Entity type/namespace
+   * @param entityId - Entity ID
+   * @param priority - Optional new priority
+   */
+  async retryDeadLetterItem(
+    entityType: string,
+    entityId: string,
+    priority?: number
+  ): Promise<boolean> {
+    const dlqKey = this.getDeadLetterKey(entityType, entityId)
+    const item = await this.storage.get<DeadLetterItem>(dlqKey)
+
+    if (!item) {
+      logger.warn('Dead letter item not found for retry', { entityType, entityId })
+      return false
+    }
+
+    // Remove from dead letter queue
+    await this.storage.delete(dlqKey)
+
+    // Re-enqueue with fresh attempts
+    await this.enqueue(entityType, entityId, priority ?? item.priority ?? DEFAULT_EMBEDDING_PRIORITY)
+
+    logger.info('Dead letter item re-queued for retry', {
+      entityType,
+      entityId,
+      originalAttempts: item.attempts,
+    })
+
+    return true
+  }
+
+  /**
+   * Retry all items in the dead letter queue
+   *
+   * @param limit - Maximum number of items to retry
+   */
+  async retryAllDeadLetterItems(limit = 100): Promise<number> {
+    const items = await this.storage.list<DeadLetterItem>({
+      prefix: EmbeddingQueue.DEAD_LETTER_PREFIX,
+      limit,
+    })
+
+    let retried = 0
+    const dlqKeysToDelete: string[] = []
+    const queueItems = new Map<string, EmbeddingQueueItem>()
+    const now = Date.now()
+
+    for (const [dlqKey, item] of items.entries()) {
+      const queueKey = this.getQueueKey(item.entityType, item.entityId)
+      queueItems.set(queueKey, {
+        entityType: item.entityType,
+        entityId: item.entityId,
+        createdAt: now,
+        attempts: 0,
+        priority: item.priority,
+      })
+      dlqKeysToDelete.push(dlqKey)
+      retried++
+    }
+
+    if (retried > 0) {
+      // Add to main queue
+      await this.storage.put(queueItems)
+      // Remove from dead letter queue
+      await this.storage.delete(dlqKeysToDelete)
+      // Schedule processing
+      await this.ensureAlarmScheduled()
+
+      logger.info('Dead letter items re-queued for retry', { count: retried })
+    }
+
+    return retried
+  }
+
+  /**
+   * Clear all items from the dead letter queue
+   */
+  async clearDeadLetterQueue(): Promise<number> {
+    const items = await this.storage.list({
+      prefix: EmbeddingQueue.DEAD_LETTER_PREFIX,
+    })
+
+    const keys = Array.from(items.keys())
+    if (keys.length > 0) {
+      await this.storage.delete(keys)
+      logger.info('Dead letter queue cleared', { count: keys.length })
+    }
+
+    return keys.length
+  }
+
+  /**
+   * Delete a specific item from the dead letter queue
+   *
+   * @param entityType - Entity type/namespace
+   * @param entityId - Entity ID
+   */
+  async deleteDeadLetterItem(entityType: string, entityId: string): Promise<boolean> {
+    const dlqKey = this.getDeadLetterKey(entityType, entityId)
+    const item = await this.storage.get<DeadLetterItem>(dlqKey)
+
+    if (!item) {
+      return false
+    }
+
+    await this.storage.delete(dlqKey)
+    logger.debug('Dead letter item deleted', { entityType, entityId })
+    return true
   }
 }
 
@@ -738,6 +1191,22 @@ export class BackgroundEmbeddingConfigBuilder {
    */
   fieldSeparator(separator: string): this {
     this.config.fieldSeparator = separator
+    return this
+  }
+
+  /**
+   * Set the error callback
+   */
+  onError(callback: ErrorCallback): this {
+    this.config.onError = callback
+    return this
+  }
+
+  /**
+   * Enable or disable the dead letter queue
+   */
+  enableDeadLetter(enable: boolean): this {
+    this.config.enableDeadLetter = enable
     return this
   }
 

@@ -315,24 +315,34 @@ export class MemoryBackend implements StorageBackend {
    *
    * Thread-safe: Uses per-path locking to prevent race conditions when
    * multiple concurrent appends occur on the same file.
+   *
+   * The lock acquisition is atomic: we set our promise in the map BEFORE
+   * awaiting the previous operation. This ensures no other caller can slip
+   * in between our await and lock acquisition.
    */
   async append(path: string, data: Uint8Array): Promise<void> {
     path = this.normalizePath(path)
 
-    // Wait for any pending append on this path to complete before starting ours
-    const pendingAppend = this.appendLocks.get(path)
-    if (pendingAppend) {
-      await pendingAppend
-    }
-
-    // Create a new promise for our append operation
+    // Create a deferred promise for our append operation
     let resolveAppend: () => void
-    const ourAppend = new Promise<void>((resolve) => {
+    let rejectAppend: (err: unknown) => void
+    const ourAppend = new Promise<void>((resolve, reject) => {
       resolveAppend = resolve
+      rejectAppend = reject
     })
+
+    // ATOMIC: Get the previous lock AND set our lock in one synchronous block
+    // This prevents race conditions where another caller could slip in
+    const previousAppend = this.appendLocks.get(path)
     this.appendLocks.set(path, ourAppend)
 
     try {
+      // Now wait for the previous operation to complete (if any)
+      if (previousAppend) {
+        await previousAppend
+      }
+
+      // Perform the actual append
       const existing = this.files.get(path)
       if (existing) {
         // Append to existing file
@@ -344,13 +354,16 @@ export class MemoryBackend implements StorageBackend {
         // Create new file
         await this.write(path, data)
       }
+      resolveAppend!()
+    } catch (err) {
+      rejectAppend!(err)
+      throw err
     } finally {
-      // Release our lock only if we're still the current lock holder
-      // (another append may have already taken over)
+      // Clean up the lock only if we're still the current lock holder
+      // (another append may have already chained onto us)
       if (this.appendLocks.get(path) === ourAppend) {
         this.appendLocks.delete(path)
       }
-      resolveAppend!()
     }
   }
 

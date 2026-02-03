@@ -12,6 +12,7 @@ import type { DBSchema } from '../db'
 import { detectRuntime } from './runtime'
 import { detectStoragePaths } from './env'
 import type { ActorResolver } from './auth'
+import { logger } from '../utils/logger'
 
 /**
  * Layout configuration - array for no tabs, object for tabs
@@ -274,7 +275,7 @@ export async function loadConfig(): Promise<ParqueDBConfig | null> {
   } catch (error) {
     // Config file exists but failed to load
     if (process.env.DEBUG || process.env.PARQUEDB_DEBUG) {
-      console.warn('[ParqueDB] Failed to load config:', error)
+      logger.warn('[ParqueDB] Failed to load config:', error)
     }
     _configLoaded = true
     return null

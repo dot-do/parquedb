@@ -42,20 +42,17 @@ interface MockEntity {
  */
 function createMockDB() {
   const collections: Map<string, MockEntity[]> = new Map()
+  const collectionInstances: Map<string, ReturnType<typeof createCollectionMock>> = new Map()
 
-  const mockCollection = (collectionName: string) => {
-    if (!collections.has(collectionName)) {
-      collections.set(collectionName, [])
-    }
-
+  const createCollectionMock = (collectionName: string) => {
     return {
       find: vi.fn(async (filter?: Record<string, unknown>, _options?: Record<string, unknown>) => {
         const data = collections.get(collectionName) ?? []
         if (!filter || Object.keys(filter).length === 0) {
-          return data
+          return { items: data }
         }
 
-        return data.filter((item) => {
+        const filteredData = data.filter((item) => {
           for (const [key, value] of Object.entries(filter)) {
             if (key === 'expiresAt' && typeof value === 'object') {
               const dateValue = item[key] as Date
@@ -71,6 +68,7 @@ function createMockDB() {
           }
           return true
         })
+        return { items: filteredData }
       }),
 
       findOne: vi.fn(async (filter: Record<string, unknown>) => {
@@ -134,6 +132,16 @@ function createMockDB() {
         return { deletedCount: initialCount - remaining.length }
       }),
     }
+  }
+
+  const mockCollection = (collectionName: string) => {
+    if (!collections.has(collectionName)) {
+      collections.set(collectionName, [])
+    }
+    if (!collectionInstances.has(collectionName)) {
+      collectionInstances.set(collectionName, createCollectionMock(collectionName))
+    }
+    return collectionInstances.get(collectionName)!
   }
 
   return {
@@ -665,8 +673,10 @@ describe('Vercel AI SDK Middleware', () => {
         model,
       })
 
-      // Wait for response promise to resolve (async logging)
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      // Allow async logging to complete using fake timers
+      vi.useFakeTimers()
+      await vi.advanceTimersByTimeAsync(50)
+      vi.useRealTimers()
 
       const logs = mockDB._getCollection('ai_logs')
       expect(logs.length).toBe(1)

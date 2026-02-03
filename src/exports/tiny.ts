@@ -24,6 +24,7 @@
 
 import { parquetReadObjects, parquetMetadataAsync } from 'hyparquet'
 import type { FileMetaData } from 'hyparquet'
+import { createSafeRegex } from '../utils/safe-regex'
 
 // =============================================================================
 // Types
@@ -242,7 +243,7 @@ function matchesCondition(value: unknown, condition: unknown): boolean {
 
           case '$regex': {
             if (typeof value !== 'string') return false
-            const pattern = opValue instanceof RegExp ? opValue : new RegExp(opValue as string)
+            const pattern = createSafeRegex(opValue as string | RegExp)
             if (!pattern.test(value)) return false
             break
           }

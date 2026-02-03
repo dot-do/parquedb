@@ -7,6 +7,7 @@
 
 import { ParqueDB } from '../../ParqueDB'
 import type { EntityId } from '../../types'
+import { logger } from '../../utils/logger'
 import type {
   PayloadAdapterConfig,
   ResolvedAdapterConfig,
@@ -106,7 +107,7 @@ export class PayloadAdapter {
    */
   async init(): Promise<void> {
     if (this.config.debug) {
-      console.log('[PayloadAdapter] Initialized with ParqueDB storage')
+      logger.info('[PayloadAdapter] Initialized with ParqueDB storage')
     }
   }
 
@@ -116,7 +117,7 @@ export class PayloadAdapter {
   async connect(): Promise<void> {
     // ParqueDB doesn't require explicit connection
     if (this.config.debug) {
-      console.log('[PayloadAdapter] Connected')
+      logger.info('[PayloadAdapter] Connected')
     }
   }
 
@@ -128,7 +129,7 @@ export class PayloadAdapter {
     this.transactions.cleanupStaleTransactions()
 
     if (this.config.debug) {
-      console.log('[PayloadAdapter] Destroyed')
+      logger.info('[PayloadAdapter] Destroyed')
     }
   }
 
@@ -383,7 +384,7 @@ export class PayloadAdapter {
     // Payload handles the actual migration execution
     // We just need to track which migrations have run
     if (this.config.debug) {
-      console.log('[PayloadAdapter] Migration triggered')
+      logger.info('[PayloadAdapter] Migration triggered')
     }
   }
 
@@ -424,9 +425,9 @@ export class PayloadAdapter {
   async migrateStatus(): Promise<void> {
     const migrations = await this.migrations.getMigrations()
 
-    console.log('[PayloadAdapter] Migration status:')
+    logger.info('[PayloadAdapter] Migration status:')
     for (const m of migrations) {
-      console.log(`  - ${m.name} (batch ${m.batch}) at ${m.createdAt.toISOString()}`)
+      logger.info(`  - ${m.name} (batch ${m.batch}) at ${m.createdAt.toISOString()}`)
     }
   }
 

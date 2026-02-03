@@ -80,7 +80,7 @@ function formatDate(timestamp: number): string {
  *   parquedb log <branch>                Show history for a specific branch
  *   parquedb log --oneline               Compact format
  *   parquedb log -n 10                   Limit to 10 commits
- *   parquedb log --graph                 Show ASCII graph (TODO)
+ *   parquedb log --graph                 Show ASCII graph (not yet implemented)
  */
 export async function logCommand(parsed: ParsedArgs): Promise<number> {
   try {
@@ -162,8 +162,8 @@ export async function logCommand(parsed: ParsedArgs): Promise<number> {
     if (oneline) {
       displayOneline(commits)
     } else if (graph) {
-      // TODO: Implement graph display
-      print('Graph display not yet implemented. Showing oneline format:')
+      // ASCII graph display is a future enhancement
+      print('Note: --graph flag is recognized but not yet implemented. Showing oneline format:')
       print('')
       displayOneline(commits)
     } else {

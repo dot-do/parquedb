@@ -41,6 +41,7 @@
 import type { ParqueDB } from '../../ParqueDB'
 import type { TimeGranularity } from '../ai/types'
 import { MAX_BATCH_SIZE, MS_PER_HOUR, MS_PER_MINUTE } from '../../constants'
+import { logger } from '../../utils/logger'
 
 // =============================================================================
 // Constants
@@ -334,7 +335,7 @@ export class RetentionManager {
         }
 
         if (this.config.debug) {
-          console.log(`[RetentionManager] Found ${countResult} ${granularity} records to delete`)
+          logger.info(`[RetentionManager] Found ${countResult} ${granularity} records to delete`)
         }
 
         // Delete in batches

@@ -859,22 +859,27 @@ describe('SyncEngine', () => {
     })
 
     it('should update lastSyncedAt after sync', async () => {
-      const { engine, local, remote } = createTestEngine()
+      vi.useFakeTimers()
+      try {
+        const { engine, local } = createTestEngine()
 
-      await populateBackend(local, {
-        'data/posts/data.parquet': 'content',
-      })
+        await populateBackend(local, {
+          'data/posts/data.parquet': 'content',
+        })
 
-      const beforeSync = new Date().toISOString()
+        const beforeSync = new Date().toISOString()
 
-      // Small delay to ensure timestamp difference
-      await new Promise(resolve => setTimeout(resolve, 10))
+        // Advance time to ensure timestamp difference
+        await vi.advanceTimersByTimeAsync(10)
 
-      const result = await engine.push()
+        const result = await engine.push()
 
-      expect(result.manifest.lastSyncedAt).toBeDefined()
-      expect(new Date(result.manifest.lastSyncedAt).getTime())
-        .toBeGreaterThanOrEqual(new Date(beforeSync).getTime())
+        expect(result.manifest.lastSyncedAt).toBeDefined()
+        expect(new Date(result.manifest.lastSyncedAt).getTime())
+          .toBeGreaterThanOrEqual(new Date(beforeSync).getTime())
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('should ignore manifest file in file listing', async () => {
@@ -1013,33 +1018,38 @@ describe('SyncEngine', () => {
     })
 
     it('should throw TimeoutError when operation times out', async () => {
-      const local = new MemoryBackend()
-      const remote = new MemoryBackend()
+      vi.useFakeTimers()
+      try {
+        const local = new MemoryBackend()
+        const remote = new MemoryBackend()
 
-      // Create a slow remote backend
-      const originalWrite = remote.write.bind(remote)
-      vi.spyOn(remote, 'write').mockImplementation(async (path, data, options) => {
-        // Simulate slow write (100ms)
-        await new Promise(resolve => setTimeout(resolve, 100))
-        return originalWrite(path, data, options)
-      })
+        // Create a slow remote backend
+        const originalWrite = remote.write.bind(remote)
+        vi.spyOn(remote, 'write').mockImplementation(async (path, data, options) => {
+          // Simulate slow write (100ms)
+          await vi.advanceTimersByTimeAsync(100)
+          return originalWrite(path, data, options)
+        })
 
-      const engine = createSyncEngine({
-        local,
-        remote,
-        databaseId: 'test-db',
-        name: 'test',
-        timeout: 50, // Very short timeout
-      })
+        const engine = createSyncEngine({
+          local,
+          remote,
+          databaseId: 'test-db',
+          name: 'test',
+          timeout: 50, // Very short timeout
+        })
 
-      await populateBackend(local, {
-        'data/posts/data.parquet': 'content',
-      })
+        await populateBackend(local, {
+          'data/posts/data.parquet': 'content',
+        })
 
-      // Should timeout before the slow write completes
-      await expect(engine.push()).rejects.toThrow(/timed out/)
+        // Should timeout before the slow write completes
+        await expect(engine.push()).rejects.toThrow(/timed out/)
 
-      vi.restoreAllMocks()
+        vi.restoreAllMocks()
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('should use custom timeout from options', async () => {

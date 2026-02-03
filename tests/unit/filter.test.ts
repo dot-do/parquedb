@@ -15,8 +15,11 @@ import {
   getValueType,
   setFilterConfig,
   getFilterConfig,
+  resetFilterConfig,
+  DEFAULT_FILTER_CONFIG,
   type FilterConfig,
 } from '../../src/query/filter'
+import { logger, setLogger, noopLogger } from '../../src/utils/logger'
 import type { Filter } from '../../src/types/filter'
 
 // =============================================================================
@@ -1004,38 +1007,50 @@ describe('real-world scenarios', () => {
 // =============================================================================
 
 describe('unknown operator validation', () => {
-  // Save original config and spy on console.warn
-  let originalConfig: FilterConfig
-  let consoleWarnSpy: ReturnType<typeof vi.spyOn>
+  // Spy on logger.warn for testing warn mode
+  let loggerWarnSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
-    originalConfig = getFilterConfig()
-    consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    loggerWarnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
   })
 
   afterEach(() => {
-    // Restore original config
-    setFilterConfig(originalConfig)
-    consoleWarnSpy.mockRestore()
+    loggerWarnSpy.mockRestore()
   })
+
+  // Config objects for explicit dependency injection
+  const ignoreConfig: FilterConfig = { unknownOperatorBehavior: 'ignore' }
+  const warnConfig: FilterConfig = { unknownOperatorBehavior: 'warn' }
+  const errorConfig: FilterConfig = { unknownOperatorBehavior: 'error' }
 
   describe('ignore mode (default)', () => {
     it('silently ignores unknown operators by default', () => {
       const doc = { name: 'test', score: 100 }
 
-      // Unknown operator is ignored, other conditions still match
+      // Unknown operator is ignored, other conditions still match (default behavior)
       expect(matchesFilter(doc, {
         name: 'test',
         score: { $foo: 'bar', $gte: 50 }
       })).toBe(true)
 
-      expect(consoleWarnSpy).not.toHaveBeenCalled()
+      expect(loggerWarnSpy).not.toHaveBeenCalled()
+    })
+
+    it('silently ignores unknown operators with explicit ignore config', () => {
+      const doc = { name: 'test', score: 100 }
+
+      expect(matchesFilter(doc, {
+        name: 'test',
+        score: { $foo: 'bar', $gte: 50 }
+      }, ignoreConfig)).toBe(true)
+
+      expect(loggerWarnSpy).not.toHaveBeenCalled()
     })
 
     it('ignores unknown top-level operators', () => {
       const doc = { name: 'test' }
       expect(matchesFilter(doc, { name: 'test', $unknownOp: 'value' } as Filter)).toBe(true)
-      expect(consoleWarnSpy).not.toHaveBeenCalled()
+      expect(loggerWarnSpy).not.toHaveBeenCalled()
     })
 
     it('ignores unknown operators in nested conditions', () => {
@@ -1043,29 +1058,25 @@ describe('unknown operator validation', () => {
       expect(matchesFilter(doc, {
         items: { $elemMatch: { price: { $gte: 15, $customOp: 'test' } } }
       })).toBe(true)
-      expect(consoleWarnSpy).not.toHaveBeenCalled()
+      expect(loggerWarnSpy).not.toHaveBeenCalled()
     })
 
     it('ignores unknown operators for primitive values', () => {
       expect(matchesCondition(42, { $eq: 42, $unknownOp: 'value' })).toBe(true)
-      expect(consoleWarnSpy).not.toHaveBeenCalled()
+      expect(loggerWarnSpy).not.toHaveBeenCalled()
     })
   })
 
-  describe('warn mode', () => {
-    beforeEach(() => {
-      setFilterConfig({ unknownOperatorBehavior: 'warn' })
-    })
-
+  describe('warn mode (via explicit config)', () => {
     it('warns about unknown operators', () => {
       const doc = { name: 'test', score: 100 }
 
       // Should still match but warn
       expect(matchesFilter(doc, {
         score: { $foo: 'bar', $gte: 50 }
-      })).toBe(true)
+      }, warnConfig)).toBe(true)
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith('Unknown query operator: $foo')
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $foo')
     })
 
     it('warns about multiple unknown operators', () => {
@@ -1073,11 +1084,11 @@ describe('unknown operator validation', () => {
 
       matchesFilter(doc, {
         score: { $customOp1: 'a', $customOp2: 'b', $gte: 50 }
-      })
+      }, warnConfig)
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp1')
-      expect(consoleWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp2')
-      expect(consoleWarnSpy).toHaveBeenCalledTimes(2)
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp1')
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp2')
+      expect(loggerWarnSpy).toHaveBeenCalledTimes(2)
     })
 
     it('warns about unknown operators in nested conditions', () => {
@@ -1085,9 +1096,9 @@ describe('unknown operator validation', () => {
 
       matchesFilter(doc, {
         items: { $elemMatch: { price: { $customCompare: 15 } } }
-      })
+      }, warnConfig)
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customCompare')
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customCompare')
     })
 
     it('does not warn about known operators', () => {
@@ -1097,35 +1108,31 @@ describe('unknown operator validation', () => {
         name: { $eq: 'test', $ne: 'other' },
         score: { $gte: 50, $lte: 200 },
         tags: { $all: ['a'], $size: 2 },
-      })
+      }, warnConfig)
 
-      expect(consoleWarnSpy).not.toHaveBeenCalled()
+      expect(loggerWarnSpy).not.toHaveBeenCalled()
     })
 
-    it('can override global config per call', () => {
+    it('can override warn config to ignore per call', () => {
       const doc = { score: 100 }
 
       // Override to ignore for this specific call
       matchesFilter(doc, {
         score: { $customOp: 'test' }
-      }, { unknownOperatorBehavior: 'ignore' })
+      }, ignoreConfig)
 
-      expect(consoleWarnSpy).not.toHaveBeenCalled()
+      expect(loggerWarnSpy).not.toHaveBeenCalled()
     })
   })
 
-  describe('error mode', () => {
-    beforeEach(() => {
-      setFilterConfig({ unknownOperatorBehavior: 'error' })
-    })
-
+  describe('error mode (via explicit config)', () => {
     it('throws error for unknown operators', () => {
       const doc = { name: 'test', score: 100 }
 
       expect(() => {
         matchesFilter(doc, {
           score: { $foo: 'bar', $gte: 50 }
-        })
+        }, errorConfig)
       }).toThrow('Unknown query operator: $foo')
     })
 
@@ -1135,7 +1142,7 @@ describe('unknown operator validation', () => {
       expect(() => {
         matchesFilter(doc, {
           items: { $elemMatch: { price: { $customCompare: 15 } } }
-        })
+        }, errorConfig)
       }).toThrow('Unknown query operator: $customCompare')
     })
 
@@ -1146,77 +1153,77 @@ describe('unknown operator validation', () => {
         matchesFilter(doc, {
           name: { $eq: 'test' },
           score: { $gte: 50, $lte: 200 },
-        })
+        }, errorConfig)
       }).not.toThrow()
     })
 
-    it('can override global config per call', () => {
+    it('can override error config to ignore per call', () => {
       const doc = { score: 100 }
 
       // Override to ignore for this specific call
       expect(() => {
         matchesFilter(doc, {
           score: { $customOp: 'test' }
-        }, { unknownOperatorBehavior: 'ignore' })
+        }, ignoreConfig)
       }).not.toThrow()
     })
   })
 
   describe('createPredicate with config', () => {
     it('passes config through to matchesFilter', () => {
-      setFilterConfig({ unknownOperatorBehavior: 'warn' })
-
-      const predicate = createPredicate({ score: { $customOp: 'test', $gte: 50 } })
+      const predicate = createPredicate({ score: { $customOp: 'test', $gte: 50 } }, warnConfig)
       predicate({ score: 100 })
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp')
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp')
     })
 
-    it('accepts config parameter', () => {
-      // Global is set to ignore
-      setFilterConfig({ unknownOperatorBehavior: 'ignore' })
-
-      // But we pass warn config to createPredicate
+    it('accepts config parameter for warn mode', () => {
+      // Pass warn config to createPredicate
       const predicate = createPredicate(
         { score: { $customOp: 'test', $gte: 50 } },
-        { unknownOperatorBehavior: 'warn' }
+        warnConfig
       )
       predicate({ score: 100 })
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp')
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp')
+    })
+
+    it('respects error config in createPredicate', () => {
+      const predicate = createPredicate(
+        { score: { $customOp: 'test', $gte: 50 } },
+        errorConfig
+      )
+
+      expect(() => predicate({ score: 100 })).toThrow('Unknown query operator: $customOp')
     })
   })
 
   describe('edge cases', () => {
-    beforeEach(() => {
-      setFilterConfig({ unknownOperatorBehavior: 'warn' })
-    })
-
     it('handles typos in common operators', () => {
       const doc = { score: 100 }
 
       // Common typo: $gte misspelled as $get
-      matchesFilter(doc, { score: { $get: 50 } })
-      expect(consoleWarnSpy).toHaveBeenCalledWith('Unknown query operator: $get')
+      matchesFilter(doc, { score: { $get: 50 } }, warnConfig)
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $get')
     })
 
     it('handles operators with different casing', () => {
       const doc = { score: 100 }
 
       // Case matters - $GT is not the same as $gt
-      matchesFilter(doc, { score: { $GT: 50 } })
-      expect(consoleWarnSpy).toHaveBeenCalledWith('Unknown query operator: $GT')
+      matchesFilter(doc, { score: { $GT: 50 } }, warnConfig)
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $GT')
     })
 
     it('does not warn for known special operators', () => {
       const doc = { name: 'test' }
 
       // These are known but handled elsewhere
-      matchesFilter(doc, { $text: { $search: 'test' } } as Filter)
-      matchesFilter(doc, { $vector: { $near: [1, 2], $k: 10, $field: 'vec' } } as Filter)
-      matchesFilter(doc, { $geo: { $near: { lat: 0, lng: 0 } } } as Filter)
+      matchesFilter(doc, { $text: { $search: 'test' } } as Filter, warnConfig)
+      matchesFilter(doc, { $vector: { $near: [1, 2], $k: 10, $field: 'vec' } } as Filter, warnConfig)
+      matchesFilter(doc, { $geo: { $near: { lat: 0, lng: 0 } } } as Filter, warnConfig)
 
-      expect(consoleWarnSpy).not.toHaveBeenCalled()
+      expect(loggerWarnSpy).not.toHaveBeenCalled()
     })
 
     it('validates operators in logical conditions', () => {
@@ -1227,44 +1234,84 @@ describe('unknown operator validation', () => {
           { a: { $eq: 1 } },
           { b: { $customOp: 2 } },
         ],
-      })
+      }, warnConfig)
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp')
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp')
     })
 
     it('validates operators in primitive value filters', () => {
       // Testing matchesCondition directly for primitive value
-      matchesCondition(42, { $eq: 42, $foobar: 'test' }, { unknownOperatorBehavior: 'warn' })
-      expect(consoleWarnSpy).toHaveBeenCalledWith('Unknown query operator: $foobar')
+      matchesCondition(42, { $eq: 42, $foobar: 'test' }, warnConfig)
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $foobar')
     })
   })
 
-  describe('configuration management', () => {
-    it('gets current config', () => {
-      setFilterConfig({ unknownOperatorBehavior: 'warn' })
-      const config = getFilterConfig()
-      expect(config.unknownOperatorBehavior).toBe('warn')
+  describe('DEFAULT_FILTER_CONFIG', () => {
+    it('has expected defaults', () => {
+      expect(DEFAULT_FILTER_CONFIG.unknownOperatorBehavior).toBe('ignore')
     })
 
-    it('merges config updates', () => {
-      setFilterConfig({ unknownOperatorBehavior: 'warn' })
-      const config = getFilterConfig()
-      expect(config.unknownOperatorBehavior).toBe('warn')
+    it('is frozen and immutable', () => {
+      // Attempting to modify should throw in strict mode or be silently ignored
+      expect(() => {
+        (DEFAULT_FILTER_CONFIG as FilterConfig).unknownOperatorBehavior = 'error'
+      }).toThrow()
+    })
+  })
 
-      setFilterConfig({ unknownOperatorBehavior: 'error' })
-      const config2 = getFilterConfig()
-      expect(config2.unknownOperatorBehavior).toBe('error')
+  describe('deprecated functions emit warnings', () => {
+    it('setFilterConfig logs deprecation warning', () => {
+      setFilterConfig({ unknownOperatorBehavior: 'warn' })
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        'setFilterConfig is deprecated and has no effect. Pass config directly to filter functions.'
+      )
     })
 
-    it('returns a copy of config', () => {
-      setFilterConfig({ unknownOperatorBehavior: 'warn' })
+    it('getFilterConfig logs deprecation warning and returns default', () => {
       const config = getFilterConfig()
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        'getFilterConfig is deprecated. Use DEFAULT_FILTER_CONFIG or pass config explicitly.'
+      )
+      expect(config.unknownOperatorBehavior).toBe('ignore')
+    })
 
-      // Modifying returned config should not affect global
-      config.unknownOperatorBehavior = 'error'
+    it('resetFilterConfig is a no-op', () => {
+      // Should not throw and should be a no-op
+      expect(() => resetFilterConfig()).not.toThrow()
+    })
+  })
 
-      const config2 = getFilterConfig()
-      expect(config2.unknownOperatorBehavior).toBe('warn')
+  describe('explicit config parameter works correctly', () => {
+    it('explicit ignore config prevents warnings', () => {
+      const doc = { score: 100 }
+
+      // Pass explicit ignore - should not warn
+      matchesFilter(doc, { score: { $customOp: 'test' } }, ignoreConfig)
+      expect(loggerWarnSpy).not.toHaveBeenCalled()
+    })
+
+    it('explicit warn config triggers warnings', () => {
+      const doc = { score: 100 }
+
+      matchesFilter(doc, { score: { $customOp: 'test' } }, warnConfig)
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp')
+    })
+
+    it('explicit error config throws on unknown operators', () => {
+      expect(() => {
+        matchesCondition(42, { $unknownOp: 'test' }, errorConfig)
+      }).toThrow('Unknown query operator: $unknownOp')
+    })
+
+    it('explicit config works for createPredicate', () => {
+      // Pass explicit warn config
+      const predicate = createPredicate(
+        { score: { $customOp: 'test' } },
+        warnConfig
+      )
+      predicate({ score: 100 })
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Unknown query operator: $customOp')
     })
   })
 })

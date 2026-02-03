@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   parseConfig,
   loadConfigFromRepo,
@@ -251,73 +251,83 @@ diff:
     it('deduplicates concurrent requests (race condition prevention)', async () => {
       // This test verifies that when multiple concurrent requests come in
       // for the same repo config, only ONE fetch is made (promise deduplication)
-      let fetchCallCount = 0
-      const mockFetch = vi.fn().mockImplementation(async () => {
-        fetchCallCount++
-        // Simulate network delay to ensure requests overlap
-        await new Promise(resolve => setTimeout(resolve, 50))
-        return {
-          ok: true,
-          text: async () => 'database:\n  name: test-db',
+      vi.useFakeTimers()
+      try {
+        let fetchCallCount = 0
+        const mockFetch = vi.fn().mockImplementation(async () => {
+          fetchCallCount++
+          // Simulate network delay to ensure requests overlap
+          await vi.advanceTimersByTimeAsync(50)
+          return {
+            ok: true,
+            text: async () => 'database:\n  name: test-db',
+          }
+        })
+        global.fetch = mockFetch
+
+        // Fire off 5 concurrent requests for the same repo
+        const promises = [
+          loadConfigFromRepo('owner', 'concurrent-repo'),
+          loadConfigFromRepo('owner', 'concurrent-repo'),
+          loadConfigFromRepo('owner', 'concurrent-repo'),
+          loadConfigFromRepo('owner', 'concurrent-repo'),
+          loadConfigFromRepo('owner', 'concurrent-repo'),
+        ]
+
+        const results = await Promise.all(promises)
+
+        // All results should be the same config object
+        expect(results[0].database.name).toBe('test-db')
+        for (const result of results) {
+          expect(result).toBe(results[0]) // Same reference
         }
-      })
-      global.fetch = mockFetch
 
-      // Fire off 5 concurrent requests for the same repo
-      const promises = [
-        loadConfigFromRepo('owner', 'concurrent-repo'),
-        loadConfigFromRepo('owner', 'concurrent-repo'),
-        loadConfigFromRepo('owner', 'concurrent-repo'),
-        loadConfigFromRepo('owner', 'concurrent-repo'),
-        loadConfigFromRepo('owner', 'concurrent-repo'),
-      ]
-
-      const results = await Promise.all(promises)
-
-      // All results should be the same config object
-      expect(results[0].database.name).toBe('test-db')
-      for (const result of results) {
-        expect(result).toBe(results[0]) // Same reference
+        // Critical: only ONE fetch should have been made
+        // The promise deduplication ensures that when multiple concurrent requests
+        // arrive, they all share the same in-flight promise rather than each
+        // starting their own fetch. This prevents the "thundering herd" problem.
+        expect(fetchCallCount).toBe(1)
+        expect(mockFetch).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
       }
-
-      // Critical: only ONE fetch should have been made
-      // The promise deduplication ensures that when multiple concurrent requests
-      // arrive, they all share the same in-flight promise rather than each
-      // starting their own fetch. This prevents the "thundering herd" problem.
-      expect(fetchCallCount).toBe(1)
-      expect(mockFetch).toHaveBeenCalledTimes(1)
     })
 
     it('handles concurrent request errors correctly', async () => {
-      const mockFetch = vi.fn().mockImplementation(async () => {
-        await new Promise(resolve => setTimeout(resolve, 10))
-        return {
+      vi.useFakeTimers()
+      try {
+        const mockFetch = vi.fn().mockImplementation(async () => {
+          await vi.advanceTimersByTimeAsync(10)
+          return {
+            ok: true,
+            text: async () => { throw new Error('Network error') },
+          }
+        })
+        global.fetch = mockFetch
+
+        // Fire concurrent requests that will fail
+        const promises = [
+          loadConfigFromRepo('owner', 'error-repo'),
+          loadConfigFromRepo('owner', 'error-repo'),
+          loadConfigFromRepo('owner', 'error-repo'),
+        ]
+
+        // All should reject with the same error
+        await expect(Promise.all(promises)).rejects.toThrow()
+
+        // After error, cache should be cleared so retry works
+        clearConfigCache()
+        const mockFetchSuccess = vi.fn().mockResolvedValue({
           ok: true,
-          text: async () => { throw new Error('Network error') },
-        }
-      })
-      global.fetch = mockFetch
+          text: async () => 'database:\n  name: recovered',
+        })
+        global.fetch = mockFetchSuccess
 
-      // Fire concurrent requests that will fail
-      const promises = [
-        loadConfigFromRepo('owner', 'error-repo'),
-        loadConfigFromRepo('owner', 'error-repo'),
-        loadConfigFromRepo('owner', 'error-repo'),
-      ]
-
-      // All should reject with the same error
-      await expect(Promise.all(promises)).rejects.toThrow()
-
-      // After error, cache should be cleared so retry works
-      clearConfigCache()
-      const mockFetchSuccess = vi.fn().mockResolvedValue({
-        ok: true,
-        text: async () => 'database:\n  name: recovered',
-      })
-      global.fetch = mockFetchSuccess
-
-      const result = await loadConfigFromRepo('owner', 'error-repo')
-      expect(result.database.name).toBe('recovered')
+        const result = await loadConfigFromRepo('owner', 'error-repo')
+        expect(result.database.name).toBe('recovered')
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('respects cache TTL and refetches after expiration', async () => {

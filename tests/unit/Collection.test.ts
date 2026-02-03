@@ -5,8 +5,17 @@
  * Uses real in-memory storage (no mocks) for all CRUD operations.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Collection, type AggregationStage, clearGlobalStorage } from '../../src/Collection'
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest'
+import {
+  Collection,
+  type AggregationStage,
+  clearGlobalStorage,
+  configureGlobalStorage,
+  getGlobalStorageStats,
+  runGlobalStorageCleanup,
+  startGlobalStorageCleanup,
+  stopGlobalStorageCleanup,
+} from '../../src/Collection'
 import type {
   Entity,
   EntityId,
@@ -1742,6 +1751,204 @@ describe('Collection', () => {
       // Filter can include any field, not just typed ones
       const results = await collection.find({ status: 'published' })
       expect(Array.isArray(results)).toBe(true)
+    })
+  })
+
+  // ===========================================================================
+  // Memory Leak Prevention Tests
+  // ===========================================================================
+
+  describe('memory leak prevention', () => {
+    beforeEach(() => {
+      clearGlobalStorage()
+    })
+
+    afterEach(() => {
+      clearGlobalStorage()
+    })
+
+    describe('getGlobalStorageStats', () => {
+      it('should return storage statistics', async () => {
+        const stats = getGlobalStorageStats()
+        expect(stats).toHaveProperty('namespaceCount')
+        expect(stats).toHaveProperty('totalEntities')
+        expect(stats).toHaveProperty('totalRelationships')
+        expect(stats).toHaveProperty('eventLogSize')
+        expect(stats).toHaveProperty('config')
+      })
+
+      it('should track entities across namespaces', async () => {
+        // Create fresh collections for this test
+        const posts = new Collection<Post>('posts-stats')
+        const users = new Collection<User>('users-stats')
+
+        await posts.create({ $type: 'Post', name: 'p1', title: 'T1', content: 'C1', status: 'draft', views: 0, tags: [] })
+        await posts.create({ $type: 'Post', name: 'p2', title: 'T2', content: 'C2', status: 'draft', views: 0, tags: [] })
+        await users.create({ $type: 'User', name: 'u1', email: 'a@b.c', username: 'u1', age: 25, active: true, roles: [] })
+
+        const stats = getGlobalStorageStats()
+        expect(stats.namespaceCount).toBe(2)
+        expect(stats.totalEntities).toBe(3)
+      })
+
+      it('should track event log size', async () => {
+        await collection.create({ $type: 'Post', name: 'p1', title: 'T1', content: 'C1', status: 'draft', views: 0, tags: [] })
+
+        const stats = getGlobalStorageStats()
+        expect(stats.eventLogSize).toBeGreaterThan(0)
+      })
+    })
+
+    describe('configureGlobalStorage', () => {
+      it('should allow configuring storage limits', () => {
+        configureGlobalStorage({
+          maxEntitiesPerNs: 5000,
+          eventLogTtlMs: 30 * 60 * 1000,
+        })
+
+        const stats = getGlobalStorageStats()
+        expect(stats.config.maxEntitiesPerNs).toBe(5000)
+        expect(stats.config.eventLogTtlMs).toBe(30 * 60 * 1000)
+      })
+    })
+
+    describe('LRU eviction', () => {
+      it('should evict oldest entities when limit exceeded', async () => {
+        // Configure a very small limit for testing
+        configureGlobalStorage({
+          maxEntitiesPerNs: 3,
+        })
+        clearGlobalStorage() // Apply new config
+
+        const smallCollection = new Collection<Post>('small-posts')
+
+        // Create 5 entities - should evict oldest 2
+        for (let i = 0; i < 5; i++) {
+          await smallCollection.create({
+            $type: 'Post',
+            name: `p${i}`,
+            title: `Title ${i}`,
+            content: 'Content',
+            status: 'draft',
+            views: 0,
+            tags: [],
+          })
+        }
+
+        // Should only have 3 entities (the most recent)
+        const entities = await smallCollection.find()
+        expect(entities.length).toBe(3)
+
+        // The oldest entities (p0, p1) should be evicted
+        const names = entities.map(e => e.name)
+        expect(names).not.toContain('p0')
+        expect(names).not.toContain('p1')
+        expect(names).toContain('p2')
+        expect(names).toContain('p3')
+        expect(names).toContain('p4')
+
+        // Reset config
+        configureGlobalStorage({
+          maxEntitiesPerNs: 10000,
+        })
+      })
+    })
+
+    describe('event log eviction', () => {
+      it('should evict events when size limit exceeded', async () => {
+        // Configure very small event log limit
+        configureGlobalStorage({
+          maxEventLogEntries: 3,
+        })
+        clearGlobalStorage() // Apply new config
+
+        const smallCollection = new Collection<Post>('event-posts')
+
+        // Create 5 entities - should generate 5 CREATE events, evicting oldest 2
+        for (let i = 0; i < 5; i++) {
+          await smallCollection.create({
+            $type: 'Post',
+            name: `p${i}`,
+            title: `Title ${i}`,
+            content: 'Content',
+            status: 'draft',
+            views: 0,
+            tags: [],
+          })
+        }
+
+        const stats = getGlobalStorageStats()
+        expect(stats.eventLogSize).toBe(3)
+
+        // Reset config
+        configureGlobalStorage({
+          maxEventLogEntries: 10000,
+        })
+      })
+
+      it('should evict expired events based on TTL', async () => {
+        // Configure short TTL for testing
+        configureGlobalStorage({
+          eventLogTtlMs: 100, // 100ms TTL
+        })
+        clearGlobalStorage() // Apply new config
+
+        const ttlCollection = new Collection<Post>('ttl-posts')
+
+        await ttlCollection.create({
+          $type: 'Post',
+          name: 'p1',
+          title: 'Title',
+          content: 'Content',
+          status: 'draft',
+          views: 0,
+          tags: [],
+        })
+
+        const statsBefore = getGlobalStorageStats()
+        expect(statsBefore.eventLogSize).toBe(1)
+
+        // Use setSystemTime to advance the system clock past TTL expiration
+        // This ensures Date.now() returns a future time for the cleanup check
+        vi.useFakeTimers()
+        vi.setSystemTime(Date.now() + 150)
+
+        // Run cleanup
+        const result = runGlobalStorageCleanup()
+        expect(result.evictedEvents).toBe(1)
+
+        const statsAfter = getGlobalStorageStats()
+        expect(statsAfter.eventLogSize).toBe(0)
+
+        vi.useRealTimers()
+
+        // Reset config
+        configureGlobalStorage({
+          eventLogTtlMs: 60 * 60 * 1000,
+        })
+      })
+    })
+
+    describe('automatic cleanup', () => {
+      it('should start and stop cleanup timer', () => {
+        startGlobalStorageCleanup()
+        // Timer is running (no way to directly verify, but should not throw)
+
+        stopGlobalStorageCleanup()
+        // Timer is stopped
+
+        // Should be idempotent
+        stopGlobalStorageCleanup()
+        startGlobalStorageCleanup()
+        startGlobalStorageCleanup() // Should be no-op
+        stopGlobalStorageCleanup()
+      })
+
+      it('should be stopped by clearGlobalStorage', () => {
+        startGlobalStorageCleanup()
+        clearGlobalStorage()
+        // Timer should be stopped - no errors should occur
+      })
     })
   })
 })

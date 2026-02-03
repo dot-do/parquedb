@@ -47,7 +47,8 @@ import type {
   AIUsageQueryOptions,
   RefreshResult,
   TimeGranularity,
-  TokenUsage,
+  TenantUsageSummary,
+  CrossTenantAggregate,
 } from './types'
 import { DEFAULT_MODEL_PRICING } from './types'
 import { AI_USAGE_MAX_AGE_MS, MAX_BATCH_SIZE } from '../../constants'
@@ -206,14 +207,32 @@ function buildPricingMap(
  * Resolve configuration with defaults
  */
 function resolveConfig(config: AIUsageMVConfig): ResolvedAIUsageMVConfig {
+  const tenantScopedStorage = config.tenantScopedStorage ?? false
+  const tenantId = config.tenantId
+
+  // Build tenant-scoped collection names if enabled
+  const baseSourceCollection = config.sourceCollection ?? DEFAULT_SOURCE_COLLECTION
+  const baseTargetCollection = config.targetCollection ?? DEFAULT_TARGET_COLLECTION
+
+  const sourceCollection = tenantScopedStorage && tenantId
+    ? `tenant_${tenantId}/${baseSourceCollection}`
+    : baseSourceCollection
+  const targetCollection = tenantScopedStorage && tenantId
+    ? `tenant_${tenantId}/${baseTargetCollection}`
+    : baseTargetCollection
+
   return {
-    sourceCollection: config.sourceCollection ?? DEFAULT_SOURCE_COLLECTION,
-    targetCollection: config.targetCollection ?? DEFAULT_TARGET_COLLECTION,
+    sourceCollection,
+    targetCollection,
     granularity: config.granularity ?? DEFAULT_GRANULARITY,
     pricing: buildPricingMap(config.customPricing, config.mergeWithDefaultPricing ?? true),
+    pricingService: config.pricingService,
     maxAgeMs: config.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
     batchSize: config.batchSize ?? DEFAULT_BATCH_SIZE,
     debug: config.debug ?? false,
+    tenantId,
+    tenantScopedStorage,
+    allowCrossTenantQueries: config.allowCrossTenantQueries ?? false,
   }
 }
 
@@ -245,8 +264,17 @@ export class AIUsageMV {
 
   /**
    * Get pricing information for a model
+   *
+   * If a pricingService is configured, it will be used for dynamic pricing.
+   * Otherwise, falls back to the static pricing map.
    */
   getPricing(modelId: string, providerId: string): ModelPricing | undefined {
+    // Use pricing service if available (dynamic pricing)
+    if (this.config.pricingService) {
+      return this.config.pricingService.getPricing(modelId, providerId)
+    }
+
+    // Fall back to static pricing map
     const normalizedModelId = normalizeModelId(modelId)
     return this.config.pricing.get(`${normalizedModelId}:${providerId}`)
   }
@@ -283,6 +311,11 @@ export class AIUsageMV {
         filter.timestamp = { $gte: this.lastRefreshTime }
       }
 
+      // Apply tenant filter if configured (unless using tenant-scoped storage)
+      if (this.config.tenantId && !this.config.tenantScopedStorage) {
+        filter.tenantId = this.config.tenantId
+      }
+
       // Fetch logs in batches
       const logs = await sourceCollection.find(filter, {
         limit: this.config.batchSize,
@@ -314,17 +347,23 @@ export class AIUsageMV {
         let aggregate = aggregates.get(aggregateId)
         if (!aggregate) {
           // Try to load existing aggregate from DB
-          const existingAggregates = await targetCollection.find({ dateKey, modelId, providerId }, { limit: 1 })
+          // Include tenantId in the lookup if not using scoped storage
+          const aggregateFilter: Record<string, unknown> = { dateKey, modelId, providerId }
+          if (this.config.tenantId && !this.config.tenantScopedStorage) {
+            aggregateFilter.tenantId = this.config.tenantId
+          }
+          const existingAggregates = await targetCollection.find(aggregateFilter, { limit: 1 })
           if (existingAggregates.length > 0) {
             aggregate = normalizeAggregateFromDB(existingAggregates[0] as unknown as AIUsageAggregate)
           } else {
-            aggregate = createEmptyAggregate(aggregateId, modelId, providerId, dateKey, this.config.granularity)
+            aggregate = createEmptyAggregate(aggregateId, modelId, providerId, dateKey, this.config.granularity, this.config.tenantId)
           }
           aggregates.set(aggregateId, aggregate)
         }
 
         // Update aggregate with log entry
-        updateAggregateFromLog(aggregate, log as Record<string, unknown>, this.config.pricing)
+        // Use bound getPricing method to support both static and dynamic pricing
+        updateAggregateFromLog(aggregate, log as Record<string, unknown>, (modelId, providerId) => this.getPricing(modelId, providerId))
       }
 
       // Save all aggregates
@@ -340,7 +379,12 @@ export class AIUsageMV {
         aggregate.p99LatencyMs = percentiles.p99
 
         // Check if this aggregate exists
-        const existing = await targetCollection.find({ dateKey: aggregate.dateKey, modelId: aggregate.modelId, providerId: aggregate.providerId }, { limit: 1 })
+        // Include tenantId in the lookup if not using scoped storage
+        const existingFilter: Record<string, unknown> = { dateKey: aggregate.dateKey, modelId: aggregate.modelId, providerId: aggregate.providerId }
+        if (this.config.tenantId && !this.config.tenantScopedStorage) {
+          existingFilter.tenantId = this.config.tenantId
+        }
+        const existing = await targetCollection.find(existingFilter, { limit: 1 })
 
         if (existing.length > 0) {
           const existingId = ((existing[0] as Record<string, unknown>).$id as string).split('/').pop()
@@ -374,7 +418,8 @@ export class AIUsageMV {
             })
           }
         } else {
-          await targetCollection.create({
+          // Build create payload with optional tenantId
+          const createPayload: Record<string, unknown> = {
             $type: 'AIUsage',
             name: `${aggregate.modelId}/${aggregate.providerId} (${aggregate.dateKey})`,
             modelId: aggregate.modelId,
@@ -405,7 +450,12 @@ export class AIUsageMV {
             createdAt: aggregate.createdAt,
             updatedAt: aggregate.updatedAt,
             version: aggregate.version,
-          })
+          }
+          // Add tenantId if configured
+          if (aggregate.tenantId) {
+            createPayload.tenantId = aggregate.tenantId
+          }
+          await targetCollection.create(createPayload)
         }
         aggregatesUpdated++
       }
@@ -440,6 +490,18 @@ export class AIUsageMV {
 
     // Build filter
     const filter: Record<string, unknown> = {}
+
+    // Apply tenant filtering
+    if (!options.allTenants) {
+      // Use query tenantId, fall back to config tenantId
+      const tenantId = options.tenantId ?? this.config.tenantId
+      if (tenantId && !this.config.tenantScopedStorage) {
+        filter.tenantId = tenantId
+      }
+    } else if (!this.config.allowCrossTenantQueries) {
+      // allTenants requested but not allowed
+      throw new Error('Cross-tenant queries are not enabled. Set allowCrossTenantQueries: true in config.')
+    }
 
     if (options.modelId) {
       filter.modelId = options.modelId
@@ -627,6 +689,149 @@ export class AIUsageMV {
   }
 
   /**
+   * Get usage summary for a specific tenant
+   *
+   * Provides detailed usage information for billing and quota tracking.
+   *
+   * @param tenantId - Tenant identifier (defaults to config tenantId)
+   * @param options - Query options for time range
+   * @returns Tenant usage summary
+   */
+  async getTenantSummary(
+    tenantId?: string,
+    options: { from?: Date; to?: Date } = {}
+  ): Promise<TenantUsageSummary> {
+    const effectiveTenantId = tenantId ?? this.config.tenantId
+    if (!effectiveTenantId) {
+      throw new Error('Tenant ID is required for getTenantSummary')
+    }
+
+    const aggregates = await this.getUsage({
+      tenantId: effectiveTenantId,
+      from: options.from,
+      to: options.to,
+      limit: 10000,
+    })
+
+    // Calculate totals
+    let totalRequests = 0
+    let successCount = 0
+    let errorCount = 0
+    let totalTokens = 0
+    let promptTokens = 0
+    let completionTokens = 0
+    let totalCost = 0
+    let totalLatency = 0
+    let cacheHits = 0
+
+    const costByModel: Record<string, number> = {}
+    const costByProvider: Record<string, number> = {}
+
+    for (const agg of aggregates) {
+      totalRequests += agg.requestCount
+      successCount += agg.successCount
+      errorCount += agg.errorCount
+      totalTokens += agg.totalTokens
+      promptTokens += agg.totalPromptTokens
+      completionTokens += agg.totalCompletionTokens
+      totalCost += agg.estimatedTotalCost
+      totalLatency += agg.totalLatencyMs
+      cacheHits += agg.cachedCount
+
+      costByModel[agg.modelId] = (costByModel[agg.modelId] ?? 0) + agg.estimatedTotalCost
+      costByProvider[agg.providerId] = (costByProvider[agg.providerId] ?? 0) + agg.estimatedTotalCost
+    }
+
+    return {
+      tenantId: effectiveTenantId,
+      period: {
+        from: options.from ?? new Date(0),
+        to: options.to ?? new Date(),
+      },
+      totalRequests,
+      successCount,
+      errorCount,
+      errorRate: totalRequests > 0 ? errorCount / totalRequests : 0,
+      tokens: {
+        total: totalTokens,
+        prompt: promptTokens,
+        completion: completionTokens,
+      },
+      cost: {
+        total: totalCost,
+        byModel: costByModel,
+        byProvider: costByProvider,
+      },
+      avgLatencyMs: totalRequests > 0 ? totalLatency / totalRequests : 0,
+      cacheHitRatio: totalRequests > 0 ? cacheHits / totalRequests : 0,
+    }
+  }
+
+  /**
+   * Get cross-tenant aggregates for platform analytics
+   *
+   * Returns usage aggregates grouped by tenant for platform operators.
+   * Requires allowCrossTenantQueries: true in config.
+   *
+   * @param options - Query options
+   * @returns Array of cross-tenant aggregates
+   */
+  async getCrossTenantAggregates(options: {
+    from?: Date
+    to?: Date
+    granularity?: 'day' | 'week' | 'month'
+  } = {}): Promise<CrossTenantAggregate[]> {
+    if (!this.config.allowCrossTenantQueries) {
+      throw new Error('Cross-tenant queries are not enabled. Set allowCrossTenantQueries: true in config.')
+    }
+
+    const aggregates = await this.getUsage({
+      allTenants: true,
+      from: options.from,
+      to: options.to,
+      granularity: options.granularity,
+      limit: 10000,
+    })
+
+    // Group by tenant and date
+    const byTenantDate = new Map<string, CrossTenantAggregate>()
+
+    for (const agg of aggregates) {
+      const tenantId = agg.tenantId ?? 'unknown'
+      const key = `${tenantId}:${agg.dateKey}`
+
+      const existing = byTenantDate.get(key)
+      if (existing) {
+        existing.requestCount += agg.requestCount
+        existing.totalTokens += agg.totalTokens
+        existing.totalPromptTokens += agg.totalPromptTokens
+        existing.totalCompletionTokens += agg.totalCompletionTokens
+        existing.estimatedTotalCost += agg.estimatedTotalCost
+        existing.errorCount += agg.errorCount
+        existing.cacheHits += agg.cachedCount
+        // Recalculate average latency
+        const totalLatency = existing.avgLatencyMs * (existing.requestCount - agg.requestCount) + agg.totalLatencyMs
+        existing.avgLatencyMs = totalLatency / existing.requestCount
+      } else {
+        byTenantDate.set(key, {
+          tenantId,
+          dateKey: agg.dateKey,
+          requestCount: agg.requestCount,
+          totalTokens: agg.totalTokens,
+          totalPromptTokens: agg.totalPromptTokens,
+          totalCompletionTokens: agg.totalCompletionTokens,
+          estimatedTotalCost: agg.estimatedTotalCost,
+          avgLatencyMs: agg.avgLatencyMs,
+          errorCount: agg.errorCount,
+          cacheHits: agg.cachedCount,
+        })
+      }
+    }
+
+    return Array.from(byTenantDate.values())
+  }
+
+  /**
    * Get the current configuration
    */
   getConfig(): ResolvedAIUsageMVConfig {
@@ -697,7 +902,8 @@ function createEmptyAggregate(
   modelId: string,
   providerId: string,
   dateKey: string,
-  granularity: TimeGranularity
+  granularity: TimeGranularity,
+  tenantId?: string
 ): WorkingAggregate {
   const now = new Date()
   return {
@@ -728,10 +934,16 @@ function createEmptyAggregate(
     createdAt: now,
     updatedAt: now,
     version: 0,
+    tenantId,
     _latencySamples: [],
     _sampleCount: 0,
   }
 }
+
+/**
+ * Pricing lookup function type
+ */
+type PricingLookup = (modelId: string, providerId: string) => ModelPricing | undefined
 
 /**
  * Update an aggregate from a log entry
@@ -739,7 +951,7 @@ function createEmptyAggregate(
 function updateAggregateFromLog(
   aggregate: WorkingAggregate,
   log: Record<string, unknown>,
-  pricingMap: Map<string, ModelPricing>
+  getPricing: PricingLookup
 ): void {
   // Update request counts
   aggregate.requestCount++
@@ -772,9 +984,8 @@ function updateAggregateFromLog(
     aggregate.totalCompletionTokens += completionTokens
     aggregate.totalTokens += totalTokens
 
-    // Calculate cost
-    const normalizedModelId = normalizeModelId(aggregate.modelId)
-    const pricing = pricingMap.get(`${normalizedModelId}:${aggregate.providerId}`)
+    // Calculate cost using pricing lookup (supports both static and dynamic pricing)
+    const pricing = getPricing(aggregate.modelId, aggregate.providerId)
     const cost = calculateCost(promptTokens, completionTokens, pricing)
 
     aggregate.estimatedInputCost += cost.inputCost

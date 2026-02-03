@@ -44,6 +44,14 @@ import type { Env, FlushConfig } from '../types/worker'
 import { initDOSqliteSchema } from '../types/worker'
 import { parseStoredData } from '../utils'
 import { generateULID } from './do/ulid'
+import {
+  EVENT_BATCH_COUNT_THRESHOLD as IMPORTED_EVENT_BATCH_COUNT_THRESHOLD,
+  DEFAULT_EVENT_BATCH_SIZE_BYTES,
+  BULK_WRITE_THRESHOLD,
+  DEFAULT_ENTITY_CACHE_SIZE,
+  MAX_PENDING_INVALIDATIONS as IMPORTED_MAX_PENDING_INVALIDATIONS,
+  DEFAULT_DO_FLUSH_INTERVAL_MS,
+} from '../constants'
 
 // =============================================================================
 // Cache Invalidation Types
@@ -179,11 +187,11 @@ interface StoredRelationship {
  * - Event log periodically flushed to Parquet for reads
  */
 /** WAL batch thresholds */
-const EVENT_BATCH_COUNT_THRESHOLD = 100
-const EVENT_BATCH_SIZE_THRESHOLD = 64 * 1024 // 64KB
+const EVENT_BATCH_COUNT_THRESHOLD = IMPORTED_EVENT_BATCH_COUNT_THRESHOLD
+const EVENT_BATCH_SIZE_THRESHOLD = DEFAULT_EVENT_BATCH_SIZE_BYTES
 
 /** Bulk write threshold - 5+ entities go directly to R2 instead of SQLite buffer */
-const BULK_THRESHOLD = 5
+const BULK_THRESHOLD = BULK_WRITE_THRESHOLD
 
 export class ParqueDBDO extends DurableObject<Env> {
   /** SQLite storage */
@@ -194,10 +202,10 @@ export class ParqueDBDO extends DurableObject<Env> {
 
   /** Flush configuration */
   private flushConfig: FlushConfig = {
-    minEvents: 100,
-    maxInterval: 60000,
-    maxEvents: 10000,
-    rowGroupSize: 1000,
+    minEvents: EVENT_BATCH_COUNT_THRESHOLD,
+    maxInterval: DEFAULT_DO_FLUSH_INTERVAL_MS * 2, // 60 seconds
+    maxEvents: 10000, // DEFAULT_MAX_EVENTS from constants
+    rowGroupSize: 1000, // MAX_BATCH_SIZE from constants
   }
 
   /** Pending flush alarm */
@@ -221,7 +229,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   private entityCache: Map<string, { entity: Entity; version: number }> = new Map()
 
   /** Maximum size of the entity cache */
-  private static readonly ENTITY_CACHE_MAX_SIZE = 1000
+  private static readonly ENTITY_CACHE_MAX_SIZE = DEFAULT_ENTITY_CACHE_SIZE
 
   /** Cache invalidation version per namespace - used by Workers to detect stale caches */
   private invalidationVersions: Map<string, number> = new Map()
@@ -230,7 +238,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   private pendingInvalidations: CacheInvalidationSignal[] = []
 
   /** Maximum pending invalidation signals to keep (circular buffer behavior) */
-  private static readonly MAX_PENDING_INVALIDATIONS = 100
+  private static readonly MAX_PENDING_INVALIDATIONS = IMPORTED_MAX_PENDING_INVALIDATIONS
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)

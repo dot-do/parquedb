@@ -39,6 +39,7 @@
  */
 
 import type { StorageBackend, WriteResult } from '../types/storage'
+import { logger } from '../utils/logger'
 import type { ParquetSchema } from '../parquet/types'
 import { ParquetWriter } from '../parquet/writer'
 import {
@@ -505,7 +506,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
 
       // Log recovery status
       if (!recoveryResult.cleanRecovery) {
-        console.log(
+        logger.info(
           `[StreamProcessor:${this.config.name}] Recovery completed: ` +
             `${recoveryResult.walEntriesRecovered} WAL entries, ` +
             `${recoveryResult.dlqEntriesRecovered} DLQ entries, ` +
@@ -739,7 +740,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
       try {
         await this.persistence.clearDLQ()
       } catch (error) {
-        console.warn(`[StreamProcessor:${this.config.name}] Failed to clear persisted DLQ:`, error)
+        logger.warn(`[StreamProcessor:${this.config.name}] Failed to clear persisted DLQ:`, error)
       }
     }
 
@@ -849,7 +850,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
       })
       this.stats.lastCheckpointSequence = this.batchCounter
     } catch (error) {
-      console.warn(`[StreamProcessor:${this.config.name}] Failed to save checkpoint:`, error)
+      logger.warn(`[StreamProcessor:${this.config.name}] Failed to save checkpoint:`, error)
     }
   }
 
@@ -922,7 +923,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
         walEntryId = walEntry.id
       } catch (walError) {
         // WAL write failed - continue without WAL protection
-        console.warn(`[StreamProcessor:${this.config.name}] WAL write failed:`, walError)
+        logger.warn(`[StreamProcessor:${this.config.name}] WAL write failed:`, walError)
       }
     }
 
@@ -953,7 +954,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
           await this.persistence.commitWAL(walEntryId)
         } catch (commitError) {
           // WAL commit failed - not critical since data was written
-          console.warn(`[StreamProcessor:${this.config.name}] WAL commit failed:`, commitError)
+          logger.warn(`[StreamProcessor:${this.config.name}] WAL commit failed:`, commitError)
         }
       }
 
@@ -1012,7 +1013,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
       }
 
       // Log detailed info for replay capability
-      console.error(`[StreamProcessor:${this.config.name}] Write failure after ${failedBatch.attempts} attempts:`, {
+      logger.error(`[StreamProcessor:${this.config.name}] Write failure after ${failedBatch.attempts} attempts:`, {
         batchNumber,
         filePath,
         recordCount: records.length,
@@ -1061,7 +1062,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
           try {
             await this.persistence.persistDLQ(failedBatch)
           } catch (persistError) {
-            console.error(
+            logger.error(
               `[StreamProcessor:${this.config.name}] Failed to persist DLQ entry to disk:`,
               persistError
             )
@@ -1070,7 +1071,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
 
         // Apply backpressure if DLQ is getting full
         if (this.deadLetterQueue.length >= this.config.maxDeadLetterQueueSize) {
-          console.warn(
+          logger.warn(
             `[StreamProcessor:${this.config.name}] Dead-letter queue is full (${this.deadLetterQueue.length} batches). ` +
               `Consider processing failed batches with retryDeadLetterQueue() or clearDeadLetterQueue().`
           )
@@ -1088,7 +1089,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
             await this.config.onWriteError(failedBatch)
           } catch (callbackErr) {
             // Log but don't fail on callback errors
-            console.error(`[StreamProcessor:${this.config.name}] onWriteError callback threw:`, callbackErr)
+            logger.error(`[StreamProcessor:${this.config.name}] onWriteError callback threw:`, callbackErr)
           }
         }
         break
@@ -1275,4 +1276,441 @@ export function createProcessorSink<T extends Record<string, unknown>>(
       await processor.push(chunk)
     },
   })
+}
+
+// =============================================================================
+// MV-Specific Stream Processor
+// =============================================================================
+
+import type { MVStorageManager } from './storage'
+import type { ViewState, Filter, Projection } from './types'
+import { matchesFilter } from '../query/filter'
+
+/**
+ * Configuration for MVStreamProcessor
+ */
+export interface MVStreamProcessorConfig<T> {
+  /** View name */
+  viewName: string
+
+  /** MV storage manager for metadata updates */
+  mvStorage: MVStorageManager
+
+  /** Storage backend for writing Parquet files */
+  storage: StorageBackend
+
+  /** Parquet schema for the records */
+  schema: ParquetSchema
+
+  /**
+   * Number of records to batch before writing
+   * @default 1000
+   */
+  batchSize?: number
+
+  /**
+   * Maximum time (ms) to wait before flushing a partial batch
+   * @default 5000
+   */
+  flushIntervalMs?: number
+
+  /**
+   * Filter to apply to incoming records
+   */
+  filter?: Filter
+
+  /**
+   * Projection to apply to incoming records
+   */
+  project?: Projection
+
+  /**
+   * Update metadata after each batch write
+   * @default false
+   */
+  updateMetadataOnBatch?: boolean
+
+  /**
+   * Callback when a batch is written
+   */
+  onBatchWritten?: (result: MVBatchWriteResult) => void
+
+  /**
+   * Callback when state changes
+   */
+  onStateChange?: (newState: ViewState, oldState: ViewState) => void
+
+  /**
+   * Callback when an error occurs
+   */
+  onError?: (context: MVErrorContext<T>) => void
+}
+
+/**
+ * Statistics for MVStreamProcessor
+ */
+export interface MVStreamProcessorStats {
+  /** View name */
+  viewName: string
+
+  /** Total records received */
+  totalReceived: number
+
+  /** Records that passed filter */
+  totalPassed: number
+
+  /** Records written to storage */
+  recordsWritten: number
+
+  /** Records that were filtered out */
+  recordsFilteredOut: number
+
+  /** Total MV records (cumulative across all batches) */
+  totalMVRecords: number
+
+  /** Number of batches written */
+  batchesWritten: number
+
+  /** Errors encountered */
+  errorsEncountered: number
+
+  /** Current MV state */
+  state: ViewState
+}
+
+/**
+ * Result of a batch write operation
+ */
+export interface MVBatchWriteResult {
+  /** Whether the write succeeded */
+  success: boolean
+
+  /** Number of records written */
+  recordsWritten: number
+
+  /** Number of records written (alias) */
+  recordCount: number
+
+  /** View name */
+  viewName: string
+
+  /** Error if write failed */
+  error?: Error
+
+  /** Path where data was written */
+  path?: string
+}
+
+/**
+ * Error context for MV operations
+ */
+export interface MVErrorContext<T> {
+  /** View name */
+  viewName: string
+
+  /** Records that failed */
+  records: T[]
+
+  /** Error that occurred */
+  error: Error
+
+  /** Operation that failed */
+  operation: 'filter' | 'project' | 'write' | 'state_update'
+}
+
+/**
+ * MV-specific stream processor that integrates with MV infrastructure
+ *
+ * Extends StreamProcessor with:
+ * - MV state management (pending -> building -> ready/error)
+ * - Filter and projection application
+ * - Integration with MVStorageManager for metadata updates
+ */
+export class MVStreamProcessor<T extends Record<string, unknown> = Record<string, unknown>> {
+  private viewName: string
+  private mvStorage: MVStorageManager
+  private storage: StorageBackend
+  private schema: ParquetSchema
+  private batchSize: number
+  private flushIntervalMs: number
+  private filter?: Filter
+  private project?: Projection
+  private updateMetadataOnBatch: boolean
+  private onBatchWritten?: (result: MVBatchWriteResult) => void
+  private onStateChange?: (newState: ViewState, oldState: ViewState) => void
+  private onError?: (context: MVErrorContext<T>) => void
+
+  private buffer: T[] = []
+  private running = false
+  private flushTimer?: ReturnType<typeof setTimeout>
+  private stats: MVStreamProcessorStats
+  private totalRecords = 0
+  private batchCount = 0
+
+  constructor(config: MVStreamProcessorConfig<T>) {
+    this.viewName = config.viewName
+    this.mvStorage = config.mvStorage
+    this.storage = config.storage
+    this.schema = config.schema
+    this.batchSize = config.batchSize ?? 1000
+    this.flushIntervalMs = config.flushIntervalMs ?? 5000
+    this.filter = config.filter
+    this.project = config.project
+    this.updateMetadataOnBatch = config.updateMetadataOnBatch ?? false
+    this.onBatchWritten = config.onBatchWritten
+    this.onStateChange = config.onStateChange
+    this.onError = config.onError
+
+    this.stats = {
+      viewName: config.viewName,
+      totalReceived: 0,
+      totalPassed: 0,
+      recordsWritten: 0,
+      recordsFilteredOut: 0,
+      totalMVRecords: 0,
+      batchesWritten: 0,
+      errorsEncountered: 0,
+      state: 'pending',
+    }
+  }
+
+  /**
+   * Start the processor
+   */
+  async start(): Promise<void> {
+    if (this.running) return
+
+    this.running = true
+    const oldState = this.stats.state
+    this.stats.state = 'building'
+    this.onStateChange?.('building', oldState)
+
+    try {
+      await this.mvStorage.updateViewState(this.viewName, 'building')
+    } catch (error) {
+      logger.warn?.(`Failed to update MV state to building: ${error}`)
+    }
+
+    this.scheduleFlush()
+  }
+
+  /**
+   * Stop the processor
+   */
+  async stop(): Promise<void> {
+    if (!this.running) return
+
+    this.running = false
+
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = undefined
+    }
+
+    // Flush any remaining records
+    if (this.buffer.length > 0) {
+      await this.flush()
+    }
+
+    // Update state based on errors
+    const oldState = this.stats.state
+    const finalState: ViewState = this.stats.errorsEncountered > 0 ? 'error' : 'ready'
+    this.stats.state = finalState
+    this.onStateChange?.(finalState, oldState)
+
+    try {
+      await this.mvStorage.updateViewState(this.viewName, finalState)
+    } catch (error) {
+      logger.warn?.(`Failed to update MV state to ${finalState}: ${error}`)
+    }
+  }
+
+  /**
+   * Push a record to the processor
+   */
+  async push(record: T): Promise<void> {
+    if (!this.running) {
+      throw new Error('Processor is not running')
+    }
+
+    this.stats.totalReceived++
+
+    // Apply filter
+    if (this.filter) {
+      if (!matchesFilter(record, this.filter)) {
+        this.stats.recordsFilteredOut++
+        return
+      }
+    }
+
+    // Apply projection
+    let processed: T = record
+    if (this.project) {
+      processed = this.applyProjection(record)
+    }
+
+    this.stats.totalPassed++
+    this.buffer.push(processed)
+    this.totalRecords++
+    this.stats.totalMVRecords++
+
+    // Check if we need to flush
+    if (this.buffer.length >= this.batchSize) {
+      await this.flush()
+    }
+  }
+
+  /**
+   * Flush buffered records to storage
+   */
+  async flush(): Promise<MVBatchWriteResult> {
+    if (this.buffer.length === 0) {
+      return { success: true, recordsWritten: 0, recordCount: 0, viewName: this.viewName }
+    }
+
+    const records = [...this.buffer]
+    this.buffer = []
+
+    try {
+      const path = `_views/${this.viewName}/data/batch_${this.batchCount.toString().padStart(6, '0')}.parquet`
+
+      const writer = new ParquetWriter(this.storage)
+      await writer.write(path, records, this.schema)
+
+      this.batchCount++
+      this.stats.batchesWritten++
+      this.stats.totalWritten += records.length
+
+      // Reschedule flush
+      this.scheduleFlush()
+
+      const result: MVBatchWriteResult = {
+        success: true,
+        recordsWritten: records.length,
+        recordCount: records.length,
+        viewName: this.viewName,
+        path,
+      }
+      this.onBatchWritten?.(result)
+      return result
+    } catch (error) {
+      // Put records back in buffer
+      this.buffer = [...records, ...this.buffer]
+      this.stats.errorsEncountered++
+
+      const err = error instanceof Error ? error : new Error(String(error))
+      const result: MVBatchWriteResult = {
+        success: false,
+        recordsWritten: 0,
+        recordCount: 0,
+        viewName: this.viewName,
+        error: err,
+      }
+      this.onBatchWritten?.(result)
+      this.onError?.({
+        viewName: this.viewName,
+        records: records as T[],
+        error: err,
+        operation: 'write',
+      })
+      return result
+    }
+  }
+
+  /**
+   * Check if processor is running
+   */
+  isRunning(): boolean {
+    return this.running
+  }
+
+  /**
+   * Get the view name
+   */
+  getViewName(): string {
+    return this.viewName
+  }
+
+  /**
+   * Get current MV state
+   */
+  getMVState(): ViewState {
+    return this.stats.state
+  }
+
+  /**
+   * Get processor statistics
+   */
+  getStats(): MVStreamProcessorStats {
+    return { ...this.stats }
+  }
+
+  /**
+   * Get total records processed
+   */
+  getTotalRecords(): number {
+    return this.totalRecords
+  }
+
+  /**
+   * Reset statistics
+   */
+  resetStats(): void {
+    const currentState = this.stats.state
+    this.stats = {
+      totalReceived: 0,
+      totalPassed: 0,
+      totalWritten: 0,
+      totalFiltered: 0,
+      batchesWritten: 0,
+      errorsEncountered: 0,
+      state: currentState,
+    }
+    this.totalRecords = 0
+  }
+
+  /**
+   * Apply projection to a record
+   */
+  private applyProjection(record: T): T {
+    if (!this.project) return record
+
+    const result: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(this.project)) {
+      if (value === 1 || value === true) {
+        if (key in record) {
+          result[key] = record[key]
+        }
+      }
+    }
+    return result as T
+  }
+
+  /**
+   * Schedule the next flush
+   */
+  private scheduleFlush(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer)
+    }
+
+    if (this.running) {
+      this.flushTimer = setTimeout(() => {
+        if (this.running && this.buffer.length > 0) {
+          this.flush().catch((error) => {
+            logger.error?.(`Auto-flush failed: ${error}`)
+          })
+        }
+      }, this.flushIntervalMs)
+    }
+  }
+}
+
+/**
+ * Create an MVStreamProcessor with the given configuration
+ */
+export function createMVStreamProcessor<T extends Record<string, unknown>>(
+  config: MVStreamProcessorConfig<T>
+): MVStreamProcessor<T> {
+  return new MVStreamProcessor(config)
 }

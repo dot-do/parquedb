@@ -7,6 +7,8 @@
  * @see https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
  */
 
+import { isNullish } from '../utils/comparison'
+
 // =============================================================================
 // Constants
 // =============================================================================
@@ -135,7 +137,7 @@ class VariantEncoder {
   }
 
   writeValue(value: unknown): void {
-    if (value === null || value === undefined) {
+    if (isNullish(value)) {
       this.writeNull();
     } else if (typeof value === 'boolean') {
       this.writeBoolean(value);
@@ -495,7 +497,7 @@ class VariantDecoder {
  * Check if a value can be encoded as Variant
  */
 export function isEncodable(value: unknown): boolean {
-  if (value === null || value === undefined) return true;
+  if (isNullish(value)) return true;
   if (typeof value === 'boolean') return true;
   if (typeof value === 'number') return Number.isFinite(value);
   if (typeof value === 'string') return true;
@@ -516,7 +518,7 @@ export function estimateVariantSize(value: unknown): number {
   // Header
   let size = 2;
 
-  if (value === null || value === undefined) {
+  if (isNullish(value)) {
     return size + 1;
   }
 

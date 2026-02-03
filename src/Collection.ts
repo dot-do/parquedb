@@ -63,7 +63,17 @@ import { matchesFilter as canonicalMatchesFilter } from './query/filter'
 import { QueryBuilder } from './query/builder'
 import { executeAggregation, executeAggregationWithIndex, type AggregationStage } from './aggregation'
 import { applyOperators } from './mutation/operators'
-import { DEFAULT_PAGINATE_LIMIT, DEFAULT_MAX_INBOUND } from './constants'
+import {
+  DEFAULT_PAGINATE_LIMIT,
+  DEFAULT_MAX_INBOUND,
+  DEFAULT_GLOBAL_STORAGE_MAX_NAMESPACES,
+  DEFAULT_GLOBAL_STORAGE_MAX_ENTITIES_PER_NS,
+  DEFAULT_GLOBAL_STORAGE_MAX_RELS_PER_NS,
+  DEFAULT_GLOBAL_EVENT_LOG_MAX_ENTRIES,
+  DEFAULT_GLOBAL_EVENT_LOG_TTL_MS,
+  DEFAULT_GLOBAL_STORAGE_CLEANUP_INTERVAL_MS,
+} from './constants'
+import { isNotFoundError, NotFoundError } from './storage/errors'
 
 // Re-export AggregationStage for backwards compatibility
 export type { AggregationStage } from './aggregation'
@@ -74,15 +84,14 @@ export type { AggregationStage } from './aggregation'
 // These global Maps provide standalone in-memory storage for testing.
 // They are NOT used by production ParqueDB instances which delegate to storage backends.
 // Use clearGlobalStorage() between tests for isolation.
+//
+// Memory leak prevention:
+// - Size limits with LRU eviction for entities and relationships
+// - TTL-based eviction for event log entries
+// - Automatic cleanup on configurable interval
 // =============================================================================
 
-// In-memory storage for entities (per namespace)
-const globalStorage = new Map<string, Map<string, Entity<unknown>>>()
-
-// Relationship storage
-const globalRelationships = new Map<string, Array<{ from: EntityId; predicate: string; to: EntityId }>>()
-
-// Event log storage - stores all events for all entities
+// Event log entry type
 export interface EventLogEntry {
   id: string
   ts: Date
@@ -94,7 +103,250 @@ export interface EventLogEntry {
   actor?: EntityId
 }
 
-const globalEventLog: EventLogEntry[] = []
+/**
+ * LRU Map wrapper that enforces a maximum size limit
+ * When the limit is exceeded, the least recently accessed entries are evicted
+ */
+class LRUMap<K, V> {
+  private map = new Map<K, V>()
+  private maxSize: number
+
+  constructor(maxSize: number) {
+    this.maxSize = maxSize
+  }
+
+  get(key: K): V | undefined {
+    const value = this.map.get(key)
+    if (value !== undefined) {
+      // Move to end (most recently used)
+      this.map.delete(key)
+      this.map.set(key, value)
+    }
+    return value
+  }
+
+  set(key: K, value: V): this {
+    // If key exists, delete it first (to update insertion order)
+    if (this.map.has(key)) {
+      this.map.delete(key)
+    }
+    this.map.set(key, value)
+    // Evict oldest entries if over limit
+    while (this.map.size > this.maxSize) {
+      const firstKey = this.map.keys().next().value
+      if (firstKey !== undefined) {
+        this.map.delete(firstKey)
+      }
+    }
+    return this
+  }
+
+  has(key: K): boolean {
+    return this.map.has(key)
+  }
+
+  delete(key: K): boolean {
+    return this.map.delete(key)
+  }
+
+  clear(): void {
+    this.map.clear()
+  }
+
+  get size(): number {
+    return this.map.size
+  }
+
+  values(): IterableIterator<V> {
+    return this.map.values()
+  }
+
+  keys(): IterableIterator<K> {
+    return this.map.keys()
+  }
+
+  entries(): IterableIterator<[K, V]> {
+    return this.map.entries()
+  }
+
+  [Symbol.iterator](): IterableIterator<[K, V]> {
+    return this.map[Symbol.iterator]()
+  }
+}
+
+/**
+ * Bounded event log with TTL-based and size-based eviction
+ * Uses getter functions to read current config for dynamic configuration
+ */
+class BoundedEventLog {
+  private events: EventLogEntry[] = []
+  private getMaxEntries: () => number
+  private getTtlMs: () => number
+
+  constructor(getMaxEntries: () => number, getTtlMs: () => number) {
+    this.getMaxEntries = getMaxEntries
+    this.getTtlMs = getTtlMs
+  }
+
+  push(event: EventLogEntry): void {
+    this.events.push(event)
+    // Evict if over size limit
+    const maxEntries = this.getMaxEntries()
+    while (this.events.length > maxEntries) {
+      this.events.shift()
+    }
+  }
+
+  filter(predicate: (event: EventLogEntry) => boolean): EventLogEntry[] {
+    return this.events.filter(predicate)
+  }
+
+  /**
+   * Remove events older than TTL
+   * Called automatically during cleanup or manually
+   */
+  evictExpired(): number {
+    const now = Date.now()
+    const cutoff = now - this.getTtlMs()
+    const originalLength = this.events.length
+    this.events = this.events.filter(e => e.ts.getTime() > cutoff)
+    return originalLength - this.events.length
+  }
+
+  clear(): void {
+    this.events.length = 0
+  }
+
+  get length(): number {
+    return this.events.length
+  }
+}
+
+/**
+ * Global storage configuration
+ * Allows runtime configuration of storage limits
+ */
+export interface GlobalStorageConfig {
+  maxNamespaces?: number
+  maxEntitiesPerNs?: number
+  maxRelsPerNs?: number
+  maxEventLogEntries?: number
+  eventLogTtlMs?: number
+  cleanupIntervalMs?: number
+}
+
+// Current configuration (can be updated via configureGlobalStorage)
+let storageConfig: Required<GlobalStorageConfig> = {
+  maxNamespaces: DEFAULT_GLOBAL_STORAGE_MAX_NAMESPACES,
+  maxEntitiesPerNs: DEFAULT_GLOBAL_STORAGE_MAX_ENTITIES_PER_NS,
+  maxRelsPerNs: DEFAULT_GLOBAL_STORAGE_MAX_RELS_PER_NS,
+  maxEventLogEntries: DEFAULT_GLOBAL_EVENT_LOG_MAX_ENTRIES,
+  eventLogTtlMs: DEFAULT_GLOBAL_EVENT_LOG_TTL_MS,
+  cleanupIntervalMs: DEFAULT_GLOBAL_STORAGE_CLEANUP_INTERVAL_MS,
+}
+
+// In-memory storage for entities (per namespace) with LRU eviction
+const globalStorage = new LRUMap<string, LRUMap<string, Entity<unknown>>>(
+  storageConfig.maxNamespaces
+)
+
+// Relationship storage with size limits
+const globalRelationships = new LRUMap<string, Array<{ from: EntityId; predicate: string; to: EntityId }>>(
+  storageConfig.maxNamespaces
+)
+
+// Event log with TTL and size limits (uses getters for dynamic config)
+const globalEventLog = new BoundedEventLog(
+  () => storageConfig.maxEventLogEntries,
+  () => storageConfig.eventLogTtlMs
+)
+
+// Cleanup timer reference
+let cleanupTimer: ReturnType<typeof setInterval> | null = null
+
+/**
+ * Configure global storage limits
+ * Call this before creating any Collection instances to customize behavior
+ *
+ * @example
+ * configureGlobalStorage({
+ *   maxEntitiesPerNs: 5000,  // Lower limit for constrained environments
+ *   eventLogTtlMs: 30 * 60 * 1000,  // 30 minute TTL
+ * })
+ */
+export function configureGlobalStorage(config: GlobalStorageConfig): void {
+  storageConfig = { ...storageConfig, ...config }
+
+  // Note: This only affects new namespaces, not existing ones
+  // To apply to existing, call clearGlobalStorage() first
+}
+
+/**
+ * Get current global storage statistics
+ * Useful for monitoring memory usage in long-running processes
+ */
+export function getGlobalStorageStats(): {
+  namespaceCount: number
+  totalEntities: number
+  totalRelationships: number
+  eventLogSize: number
+  config: Required<GlobalStorageConfig>
+} {
+  let totalEntities = 0
+  let totalRelationships = 0
+
+  for (const nsStorage of globalStorage.values()) {
+    totalEntities += nsStorage.size
+  }
+
+  for (const rels of globalRelationships.values()) {
+    totalRelationships += rels.length
+  }
+
+  return {
+    namespaceCount: globalStorage.size,
+    totalEntities,
+    totalRelationships,
+    eventLogSize: globalEventLog.length,
+    config: { ...storageConfig },
+  }
+}
+
+/**
+ * Run cleanup to evict expired event log entries
+ * Called automatically on interval, but can be triggered manually
+ */
+export function runGlobalStorageCleanup(): { evictedEvents: number } {
+  const evictedEvents = globalEventLog.evictExpired()
+  return { evictedEvents }
+}
+
+/**
+ * Start automatic cleanup timer
+ * Automatically evicts expired entries on a regular interval
+ */
+export function startGlobalStorageCleanup(): void {
+  if (cleanupTimer) return // Already running
+
+  cleanupTimer = setInterval(() => {
+    runGlobalStorageCleanup()
+  }, storageConfig.cleanupIntervalMs)
+
+  // Ensure timer doesn't prevent process exit
+  if (cleanupTimer.unref) {
+    cleanupTimer.unref()
+  }
+}
+
+/**
+ * Stop automatic cleanup timer
+ */
+export function stopGlobalStorageCleanup(): void {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer)
+    cleanupTimer = null
+  }
+}
 
 // Counter for event ordering within the same millisecond
 let eventCounter = 0
@@ -188,7 +440,7 @@ export function getEntityStateAtTime(entityId: string, asOf: Date): Record<strin
  * Clear event log (for testing)
  */
 export function clearEventLog(): void {
-  globalEventLog.length = 0
+  globalEventLog.clear()
   eventCounter = 0
 }
 
@@ -297,17 +549,17 @@ function applyProjection<T>(entity: Entity<T>, projection: Projection): Entity<T
  * const newPost = await posts.create({ $type: 'Post', name: 'Hello', title: 'Hello World' })
  */
 export class Collection<T extends EntityData = EntityData> {
-  private storage: Map<string, Entity<T>>
+  private storage: LRUMap<string, Entity<T>>
 
   constructor(
     public readonly namespace: string,
     // db reference would be injected here
   ) {
-    // Initialize storage for this namespace
+    // Initialize storage for this namespace with LRU eviction
     if (!globalStorage.has(namespace)) {
-      globalStorage.set(namespace, new Map())
+      globalStorage.set(namespace, new LRUMap<string, Entity<unknown>>(storageConfig.maxEntitiesPerNs))
     }
-    this.storage = globalStorage.get(namespace) as Map<string, Entity<T>>
+    this.storage = globalStorage.get(namespace) as LRUMap<string, Entity<T>>
   }
 
   /**
@@ -527,12 +779,12 @@ export class Collection<T extends EntityData = EntityData> {
     const entity = this.storage.get(localId)
 
     if (!entity) {
-      throw new Error(`Entity not found: ${entityId}`)
+      throw new NotFoundError(entityId)
     }
 
     // Check soft-deleted
     if (!options?.includeDeleted && (entity as Record<string, unknown>).deletedAt) {
-      throw new Error(`Entity not found: ${entityId}`)
+      throw new NotFoundError(entityId)
     }
 
     let result = { ...entity } as Record<string, unknown>
@@ -1133,9 +1385,11 @@ export class Collection<T extends EntityData = EntityData> {
     try {
       await this.get(id)
       return true
-    } catch {
-      // Intentionally ignored: get() throws when entity doesn't exist, which means exists() should return false
-      return false
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return false
+      }
+      throw error
     }
   }
 
@@ -1199,8 +1453,10 @@ export class Collection<T extends EntityData = EntityData> {
 /**
  * Clear all global storage (for testing purposes)
  * This clears all entities and relationships from all namespaces.
+ * Also stops the automatic cleanup timer if running.
  */
 export function clearGlobalStorage(): void {
+  stopGlobalStorageCleanup()
   globalStorage.clear()
   globalRelationships.clear()
   clearEventLog()

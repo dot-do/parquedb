@@ -331,7 +331,12 @@ describe('QueryEmbeddingCache', () => {
   let cache: QueryEmbeddingCache
 
   beforeEach(() => {
+    vi.useFakeTimers()
     cache = new QueryEmbeddingCache({ maxSize: 3, ttlMs: 100 })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('stores and retrieves embeddings', () => {
@@ -369,8 +374,8 @@ describe('QueryEmbeddingCache', () => {
     cache.set('test', [0.1])
     expect(cache.get('test')).toEqual([0.1])
 
-    // Wait for TTL to expire
-    await new Promise(resolve => setTimeout(resolve, 150))
+    // Advance time past TTL to expire
+    await vi.advanceTimersByTimeAsync(150)
 
     expect(cache.get('test')).toBeUndefined()
   })
@@ -388,7 +393,8 @@ describe('QueryEmbeddingCache', () => {
     cache.set('b', [2])
     expect(cache.size).toBe(2)
 
-    await new Promise(resolve => setTimeout(resolve, 150))
+    // Advance time past TTL to expire entries
+    await vi.advanceTimersByTimeAsync(150)
 
     const pruned = cache.prune()
     expect(pruned).toBe(2)
@@ -469,6 +475,14 @@ describe('CachingEmbeddingProvider', () => {
 // =============================================================================
 
 describe('withQueryCache', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('wraps provider with caching', async () => {
     const baseProvider = createMockProvider()
     const cached = withQueryCache(baseProvider)
@@ -487,8 +501,8 @@ describe('withQueryCache', () => {
 
     await cached.embed('test', { isQuery: true })
 
-    // Wait for TTL
-    await new Promise(resolve => setTimeout(resolve, 20))
+    // Advance time past TTL
+    await vi.advanceTimersByTimeAsync(20)
 
     await cached.embed('test', { isQuery: true })
 

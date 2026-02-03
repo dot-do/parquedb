@@ -6,9 +6,14 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { SyncClient, createSyncClient } from '../../../src/sync/client'
-
-// Mock fetch globally
-const originalFetch = globalThis.fetch
+import {
+  createMockFetch,
+  createJsonResponse,
+  createErrorResponse,
+  installMockFetch,
+  restoreGlobalFetch,
+  type MockFetch,
+} from '../../mocks'
 
 // Complete mock DatabaseInfo for tests
 const mockDatabaseInfo = {
@@ -21,15 +26,15 @@ const mockDatabaseInfo = {
 }
 
 describe('SyncClient', () => {
-  let mockFetch: ReturnType<typeof vi.fn>
+  let mockFetch: MockFetch
 
   beforeEach(() => {
-    mockFetch = vi.fn()
-    globalThis.fetch = mockFetch
+    mockFetch = createMockFetch()
+    installMockFetch(mockFetch)
   })
 
   afterEach(() => {
-    globalThis.fetch = originalFetch
+    restoreGlobalFetch()
   })
 
   describe('lookupDatabase', () => {

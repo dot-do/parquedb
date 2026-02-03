@@ -7,6 +7,7 @@
 import type { Event } from '../types/entity'
 import type { SubscriptionEventSource } from './types'
 import { DEFAULT_EVENT_SOURCE_BUFFER_SIZE, DEFAULT_POLLING_INTERVAL_MS } from '../constants'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // In-Memory Event Source (for testing)
@@ -61,7 +62,7 @@ export class InMemoryEventSource implements SubscriptionEventSource {
       try {
         handler(event)
       } catch (error) {
-        console.error('[InMemoryEventSource] Handler error:', error)
+        logger.error('[InMemoryEventSource] Handler error:', error)
       }
     }
   }
@@ -191,7 +192,7 @@ export class EventWriterSource implements SubscriptionEventSource {
       try {
         handler(event)
       } catch (error) {
-        console.error('[EventWriterSource] Handler error:', error)
+        logger.error('[EventWriterSource] Handler error:', error)
       }
     }
   }
@@ -275,7 +276,7 @@ export class PollingEventSource implements SubscriptionEventSource {
     this.started = true
     this.timer = setInterval(() => {
       this.poll().catch((err) => {
-        console.error('[PollingEventSource] Unexpected poll error:', err)
+        logger.error('[PollingEventSource] Unexpected poll error:', err)
       })
     }, this.intervalMs)
 
@@ -308,12 +309,12 @@ export class PollingEventSource implements SubscriptionEventSource {
           try {
             handler(event)
           } catch (error) {
-            console.error('[PollingEventSource] Handler error:', error)
+            logger.error('[PollingEventSource] Handler error:', error)
           }
         }
       }
     } catch (error) {
-      console.error('[PollingEventSource] Poll error:', error)
+      logger.error('[PollingEventSource] Poll error:', error)
     }
   }
 

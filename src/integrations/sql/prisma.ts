@@ -19,6 +19,7 @@
 
 import type { ParqueDB } from '../../ParqueDB.js'
 import type { EntityId } from '../../types/entity.js'
+import { logger } from '../../utils/logger.js'
 import type {
   PrismaDriverAdapter,
   PrismaQuery,
@@ -66,8 +67,8 @@ export class PrismaParqueDBAdapter implements PrismaDriverAdapter {
     const { sql, args } = query
 
     if (this.debug) {
-      console.log('[prisma-parquedb] queryRaw:', sql)
-      console.log('[prisma-parquedb] args:', args)
+      logger.debug('[prisma-parquedb] queryRaw:', sql)
+      logger.debug('[prisma-parquedb] args:', args)
     }
 
     try {
@@ -92,7 +93,7 @@ export class PrismaParqueDBAdapter implements PrismaDriverAdapter {
       return this.formatResults(result.items as Record<string, unknown>[], translated.columns)
     } catch (error) {
       if (this.debug) {
-        console.error('[prisma-parquedb] queryRaw error:', error)
+        logger.error('[prisma-parquedb] queryRaw error:', error)
       }
       throw error
     }
@@ -106,8 +107,8 @@ export class PrismaParqueDBAdapter implements PrismaDriverAdapter {
     const { sql, args } = query
 
     if (this.debug) {
-      console.log('[prisma-parquedb] executeRaw:', sql)
-      console.log('[prisma-parquedb] args:', args)
+      logger.debug('[prisma-parquedb] executeRaw:', sql)
+      logger.debug('[prisma-parquedb] args:', args)
     }
 
     try {
@@ -173,7 +174,7 @@ export class PrismaParqueDBAdapter implements PrismaDriverAdapter {
       }
     } catch (error) {
       if (this.debug) {
-        console.error('[prisma-parquedb] executeRaw error:', error)
+        logger.error('[prisma-parquedb] executeRaw error:', error)
       }
       throw error
     }
@@ -296,7 +297,7 @@ class PrismaParqueDBTransaction implements PrismaTransaction {
     // ParqueDB doesn't support true rollback for Parquet files
     // Log a warning
     if (this.debug) {
-      console.warn('[prisma-parquedb] Rollback called, but ParqueDB uses append-only storage')
+      logger.warn('[prisma-parquedb] Rollback called, but ParqueDB uses append-only storage')
     }
   }
 }

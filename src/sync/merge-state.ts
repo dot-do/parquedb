@@ -6,6 +6,7 @@
  */
 
 import type { StorageBackend } from '../types/storage'
+import { createSafeRegex } from '../utils/safe-regex'
 
 // =============================================================================
 // Types
@@ -234,7 +235,9 @@ export function getUnresolvedConflicts(state: MergeState): ConflictInfo[] {
  */
 export function getConflictsByPattern(state: MergeState, pattern: string): ConflictInfo[] {
   // Simple glob matching for now (supports * wildcard)
-  const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$')
+  // Escape special regex characters except *, then convert * to .*
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
+  const regex = createSafeRegex('^' + escaped + '$')
   return state.conflicts.filter((c) => regex.test(c.entityId))
 }
 

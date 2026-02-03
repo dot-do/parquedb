@@ -4,7 +4,7 @@
  * Provides materialized views and utilities for tracking AI API usage,
  * costs, and performance metrics.
  *
- * @example
+ * @example Basic Usage with AIUsageMV
  * ```typescript
  * import { AIUsageMV, createAIUsageMV } from 'parquedb/observability/ai'
  * import { DB } from 'parquedb'
@@ -33,6 +33,40 @@
  * console.log(`Total tokens: ${summary.totalTokens.toLocaleString()}`)
  * ```
  *
+ * @example Auto-updating Model Pricing
+ * ```typescript
+ * import { createModelPricingService, createAIUsageMV } from 'parquedb/observability/ai'
+ * import { DB } from 'parquedb'
+ *
+ * // Create pricing service with auto-refresh
+ * const pricingService = createModelPricingService({
+ *   refreshIntervalMs: 24 * 60 * 60 * 1000, // Daily refresh
+ *   enterpriseOverrides: [
+ *     // Custom pricing for enterprise agreements
+ *     { modelId: 'gpt-4', providerId: 'openai', inputPricePerMillion: 25.00, outputPricePerMillion: 50.00 }
+ *   ]
+ * })
+ *
+ * // Start auto-refresh (fetches from pricing API)
+ * await pricingService.startAutoRefresh()
+ *
+ * // Use with AIUsageMV for accurate cost tracking
+ * const usageMV = createAIUsageMV(DB(), {
+ *   pricingService: pricingService // Dynamic pricing instead of static
+ * })
+ *
+ * // Get current pricing for a model
+ * const gpt4Pricing = pricingService.getPricing('gpt-4', 'openai')
+ * console.log(`GPT-4 input: $${gpt4Pricing?.inputPricePerMillion}/1M tokens`)
+ *
+ * // Check pricing status
+ * const status = pricingService.getStatus()
+ * console.log(`Cache version: ${status.cacheVersion}, entries: ${status.entryCount}`)
+ *
+ * // Stop auto-refresh when done
+ * pricingService.stopAutoRefresh()
+ * ```
+ *
  * @module observability/ai
  */
 
@@ -40,6 +74,7 @@
 export type {
   // Model Pricing
   ModelPricing,
+  PricingProvider,
 
   // Token Usage
   TokenUsage,
@@ -59,6 +94,13 @@ export type {
 
   // Results
   RefreshResult,
+
+  // Multi-Tenancy
+  MultiTenantConfig,
+  MultiTenantQueryOptions,
+  CrossTenantAggregate,
+  TenantUsageSummary,
+  TenantQuota,
 } from './types'
 
 // Constants
@@ -72,6 +114,7 @@ export {
   AIRequestsMV,
   createAIRequestsMV,
   generateRequestId,
+  hashContent as hashRequestContent,
   type AIRequestType,
   type AIProvider,
   type AIRequestStatus,
@@ -82,6 +125,9 @@ export {
   type AIRequestsMVConfig,
   type ResolvedAIRequestsMVConfig,
   type CleanupResult as AIRequestsCleanupResult,
+  type ContentSamplingConfig,
+  type ResolvedContentSamplingConfig,
+  type ContentRedactor,
 } from './AIRequestsMV'
 
 // GeneratedContentMV
@@ -101,3 +147,55 @@ export {
   type ResolvedContentMVConfig,
   type CleanupResult as ContentCleanupResult,
 } from './GeneratedContentMV'
+
+// Model Pricing Service - Auto-updating pricing with API refresh, caching, and enterprise overrides
+export {
+  ModelPricingService,
+  createModelPricingService,
+  getDefaultPricingService,
+  resetDefaultPricingService,
+  type PricingSource,
+  type PricingWithMetadata,
+  type PricingCache,
+  type PricingFetchResult,
+  type ModelPricingServiceConfig,
+  type ResolvedPricingServiceConfig,
+  type PricingServiceStatus,
+} from './pricing'
+
+// Anomaly Detection
+export {
+  AnomalyDetector,
+  createAnomalyDetector,
+  createAnomalyDetectorWithWebhook,
+  createObservationFromMetrics,
+  DEFAULT_ANOMALY_THRESHOLDS,
+  type AnomalySeverity,
+  type AnomalyType,
+  type AnomalyEvent,
+  type WindowStats,
+  type AnomalyObservation,
+  type AnomalyThresholds,
+  type AnomalyDetectorConfig,
+  type ResolvedAnomalyDetectorConfig,
+  type AnomalyDetectorStats,
+} from './anomaly-detection'
+
+// Rate Limit Metrics - Token/cost rate limiting awareness for AI workloads
+export {
+  RateLimitMetrics,
+  createRateLimitMetrics,
+  createRateLimitMetricsWithWebhook,
+  DEFAULT_RATE_LIMIT_THRESHOLDS,
+  type RateLimitAlertSeverity,
+  type RateLimitMetricType,
+  type ThresholdConfig,
+  type RateLimitThresholds,
+  type RateLimitAlert,
+  type RateLimitObservation,
+  type RateSnapshot,
+  type AggregatedRateSnapshot,
+  type RateLimitStats,
+  type RateLimitMetricsConfig,
+  type ResolvedRateLimitMetricsConfig,
+} from './rate-limit-metrics'

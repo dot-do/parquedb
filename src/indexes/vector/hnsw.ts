@@ -50,7 +50,7 @@ export const _ML = 1 / Math.log(DEFAULT_M)
 
 // File format magic and version
 const MAGIC = new Uint8Array([0x50, 0x51, 0x56, 0x49]) // "PQVI"
-const VERSION = 1
+const VERSION = 2 // Bumped for incremental update support
 
 // =============================================================================
 // Types
@@ -66,6 +66,56 @@ export interface VectorIndexMemoryOptions {
   maxBytes?: number
   /** Callback when a node is evicted from cache */
   onEvict?: (nodeId: number) => void
+}
+
+/**
+ * Metadata about a row group for incremental update tracking
+ */
+export interface RowGroupMetadata {
+  /** Row group number */
+  rowGroup: number
+  /** Number of vectors indexed from this row group */
+  vectorCount: number
+  /** Minimum row offset indexed */
+  minRowOffset: number
+  /** Maximum row offset indexed */
+  maxRowOffset: number
+  /** Checksum/hash of the row group content for change detection */
+  checksum?: string
+  /** Timestamp when this row group was indexed */
+  indexedAt: number
+}
+
+/**
+ * Result of an incremental update operation
+ */
+export interface IncrementalUpdateResult {
+  /** Number of vectors removed (from stale row groups) */
+  removed: number
+  /** Number of vectors added (from new/changed row groups) */
+  added: number
+  /** Row groups that were updated */
+  updatedRowGroups: number[]
+  /** Row groups that were removed */
+  removedRowGroups: number[]
+  /** Whether the update was successful */
+  success: boolean
+  /** Error message if update failed */
+  error?: string
+}
+
+/**
+ * Options for incremental update
+ */
+export interface IncrementalUpdateOptions {
+  /** Row group checksums for change detection (rowGroup -> checksum) */
+  checksums?: Map<number, string>
+  /** Specific row groups to update (if not provided, auto-detect changes) */
+  rowGroupsToUpdate?: number[]
+  /** Row group number remapping after compaction (oldRowGroup -> newRowGroup) */
+  rowGroupRemapping?: Map<number, number>
+  /** Progress callback */
+  onProgress?: (processed: number, total: number) => void
 }
 
 interface HNSWNode {
@@ -276,6 +326,19 @@ export class VectorIndex {
   private readonly metric: VectorMetric
   private readonly distanceFn: (a: number[], b: number[]) => number
 
+  // ===========================================================================
+  // Incremental Update Tracking
+  // ===========================================================================
+
+  /** Row group metadata for incremental updates */
+  private rowGroupMetadata: Map<number, RowGroupMetadata> = new Map()
+  /** Index version/etag for change detection */
+  private indexVersion: number = 0
+  /** Timestamp when index was last built/updated */
+  private lastUpdatedAt: number = 0
+  /** Node ID to row group mapping for efficient removal */
+  private nodeIdToRowGroup: Map<number, number> = new Map()
+
   constructor(
     private storage: StorageBackend,
     readonly namespace: string,
@@ -355,14 +418,6 @@ export class VectorIndex {
   }
 
   /**
-   * Check if a node exists in cache
-   * @private
-   */
-  private hasNode(nodeId: number): boolean {
-    return this.nodeCache.has(nodeId)
-  }
-
-  /**
    * Delete a node from cache
    * @private
    */
@@ -376,18 +431,6 @@ export class VectorIndex {
    */
   private *iterateNodes(): IterableIterator<HNSWNode> {
     yield* this.nodeCache.values()
-  }
-
-  /**
-   * Legacy accessor for nodes (returns iterable for backward compat)
-   * @deprecated Use iterateNodes() instead
-   */
-  private get nodes(): { size: number; values: () => IterableIterator<HNSWNode>; get: (id: number) => HNSWNode | undefined } {
-    return {
-      size: this.nodeCache.size,
-      values: () => this.iterateNodes(),
-      get: (id: number) => this.getNode(id),
-    }
   }
 
   // ===========================================================================
@@ -557,10 +600,14 @@ export class VectorIndex {
    * - 'pre-filter': Restricts vector search to a set of candidate IDs
    * - 'post-filter': Performs full vector search, results are filtered by caller
    *
+   * Strategy selection for 'auto' mode uses cost-based analysis:
+   * - Pre-filter is efficient when candidate set is small (brute-force O(n) on small n)
+   * - Post-filter is efficient when filter selectivity is high (HNSW O(log n) + filter)
+   *
    * @param query - Query vector
    * @param k - Number of results to return
    * @param options - Hybrid search options including candidateIds for pre-filtering
-   * @returns Hybrid search results
+   * @returns Hybrid search results with strategy reasoning
    */
   hybridSearch(
     query: number[],
@@ -570,21 +617,68 @@ export class VectorIndex {
     const strategy = options?.strategy ?? 'auto'
     const candidateIds = options?.candidateIds
     const overFetchMultiplier = options?.overFetchMultiplier ?? 3
+    const efSearch = options?.efSearch ?? Math.max(k, DEFAULT_EF_SEARCH)
 
-    // Determine actual strategy to use
+    // Determine actual strategy to use with cost-based analysis
     let actualStrategy: HybridSearchStrategy = strategy
+    let strategyReason = ''
 
     if (strategy === 'auto') {
-      // Heuristic: use pre-filter if candidate set is small relative to index size
-      // Use post-filter if no candidates provided or candidates are most of the index
       if (candidateIds && candidateIds.size > 0) {
-        const selectivity = candidateIds.size / this.totalNodeCount
-        // If filtering removes more than 50% of docs, pre-filter is more efficient
-        actualStrategy = selectivity < 0.5 ? 'pre-filter' : 'post-filter'
+        // Cost-based strategy selection
+        const candidateCount = candidateIds.size
+        const indexSize = this.totalNodeCount
+        const selectivity = candidateCount / indexSize
+
+        // Estimate pre-filter cost: brute-force search over candidates
+        // Cost = O(candidateCount * dimensions) for distance computations
+        const preFilterCost = candidateCount * this.dimensions * 0.01
+
+        // Estimate post-filter cost: HNSW search + over-fetch + filter
+        // Cost = O(efSearch * log(indexSize)) for HNSW + O(k * overFetch) for filtering
+        const hnswLayers = Math.max(1, Math.floor(Math.log2(indexSize) / 2))
+        const postFilterCost = efSearch * hnswLayers * 5 + k * overFetchMultiplier * 0.5
+
+        // Additional factor: post-filter risk of not getting enough results
+        // If selectivity is very low, we might need to over-fetch even more
+        const postFilterRiskPenalty = selectivity < 0.1 ? 50 : (selectivity < 0.3 ? 20 : 0)
+        const adjustedPostFilterCost = postFilterCost + postFilterRiskPenalty
+
+        // Choose strategy based on cost comparison
+        if (preFilterCost < adjustedPostFilterCost) {
+          actualStrategy = 'pre-filter'
+          strategyReason = `Pre-filter selected (cost: ${preFilterCost.toFixed(0)} vs ${adjustedPostFilterCost.toFixed(0)}): ` +
+            `${candidateCount.toLocaleString()} candidates (${(selectivity * 100).toFixed(1)}% selectivity) ` +
+            `efficient for brute-force scan`
+        } else {
+          actualStrategy = 'post-filter'
+          strategyReason = `Post-filter selected (cost: ${adjustedPostFilterCost.toFixed(0)} vs ${preFilterCost.toFixed(0)}): ` +
+            `HNSW search more efficient for ${indexSize.toLocaleString()} vectors, ` +
+            `selectivity ${(selectivity * 100).toFixed(1)}% is high enough`
+        }
+
+        // Edge case: very small candidate sets always use pre-filter
+        if (candidateCount < k * 2) {
+          actualStrategy = 'pre-filter'
+          strategyReason = `Pre-filter selected: candidate count (${candidateCount}) ` +
+            `is smaller than 2x topK (${k * 2}), brute-force is optimal`
+        }
+
+        // Edge case: very large candidate sets (>80%) should use post-filter
+        if (selectivity > 0.8 && candidateCount > 1000) {
+          actualStrategy = 'post-filter'
+          strategyReason = `Post-filter selected: selectivity ${(selectivity * 100).toFixed(1)}% is too high, ` +
+            `HNSW search with filtering is more efficient`
+        }
       } else {
-        // No candidates means no filtering needed - fall through to standard search
+        // No candidates means no filtering needed - use standard HNSW search
         actualStrategy = 'post-filter'
+        strategyReason = 'Post-filter selected: no candidate set provided, using standard HNSW search'
       }
+
+      logger.debug(`[VectorIndex.hybridSearch] ${strategyReason}`)
+    } else {
+      strategyReason = `Strategy explicitly set to ${strategy}`
     }
 
     // Handle pre-filter strategy with candidates
@@ -761,6 +855,10 @@ export class VectorIndex {
     this.docIdToNodeId.set(docId, nodeId)
     this.totalNodeCount++
 
+    // Track node to row group mapping for incremental updates
+    this.nodeIdToRowGroup.set(nodeId, rowGroup)
+    this.updateRowGroupMetadata(rowGroup, rowOffset)
+
     // Handle first node
     if (this.entryPoint === null) {
       this.entryPoint = nodeId
@@ -865,12 +963,20 @@ export class VectorIndex {
     const nodeId = this.docIdToNodeId.get(docId)
     if (nodeId === undefined) return false
 
+    // Get row group for metadata tracking before removal
+    const rowGroup = this.nodeIdToRowGroup.get(nodeId)
+
     const node = this.getNode(nodeId)
     if (!node) {
       // Node was evicted from cache but still tracked - clean up mapping
       this.docIdToNodeId.delete(docId)
       this.evictedNodeIds.delete(nodeId)
+      this.nodeIdToRowGroup.delete(nodeId)
       this.totalNodeCount--
+      // Update row group metadata
+      if (rowGroup !== undefined) {
+        this.decrementRowGroupMetadata(rowGroup)
+      }
       return true
     }
 
@@ -891,7 +997,13 @@ export class VectorIndex {
     this.deleteNode(nodeId)
     this.docIdToNodeId.delete(docId)
     this.evictedNodeIds.delete(nodeId)
+    this.nodeIdToRowGroup.delete(nodeId)
     this.totalNodeCount--
+
+    // Update row group metadata
+    if (rowGroup !== undefined) {
+      this.decrementRowGroupMetadata(rowGroup)
+    }
 
     // Update entry point if necessary
     if (this.entryPoint === nodeId) {
@@ -914,6 +1026,20 @@ export class VectorIndex {
     }
 
     return true
+  }
+
+  /**
+   * Decrement the vector count for a row group
+   * @private
+   */
+  private decrementRowGroupMetadata(rowGroup: number): void {
+    const metadata = this.rowGroupMetadata.get(rowGroup)
+    if (metadata) {
+      metadata.vectorCount--
+      if (metadata.vectorCount <= 0) {
+        this.rowGroupMetadata.delete(rowGroup)
+      }
+    }
   }
 
   /**
@@ -956,6 +1082,403 @@ export class VectorIndex {
     this.maxLayerInGraph = -1
     this.nextNodeId = 0
     this.totalNodeCount = 0
+    // Clear incremental update tracking
+    this.rowGroupMetadata.clear()
+    this.nodeIdToRowGroup.clear()
+    this.indexVersion = 0
+    this.lastUpdatedAt = 0
+  }
+
+  // ===========================================================================
+  // Incremental Update Operations
+  // ===========================================================================
+
+  /**
+   * Update row group metadata when inserting a vector
+   * @private
+   */
+  private updateRowGroupMetadata(rowGroup: number, rowOffset: number): void {
+    const existing = this.rowGroupMetadata.get(rowGroup)
+    if (existing) {
+      existing.vectorCount++
+      existing.minRowOffset = Math.min(existing.minRowOffset, rowOffset)
+      existing.maxRowOffset = Math.max(existing.maxRowOffset, rowOffset)
+      existing.indexedAt = Date.now()
+    } else {
+      this.rowGroupMetadata.set(rowGroup, {
+        rowGroup,
+        vectorCount: 1,
+        minRowOffset: rowOffset,
+        maxRowOffset: rowOffset,
+        indexedAt: Date.now(),
+      })
+    }
+  }
+
+  /**
+   * Get metadata for all indexed row groups
+   */
+  getRowGroupMetadata(): Map<number, RowGroupMetadata> {
+    return new Map(this.rowGroupMetadata)
+  }
+
+  /**
+   * Get the current index version
+   */
+  getIndexVersion(): number {
+    return this.indexVersion
+  }
+
+  /**
+   * Get the timestamp of the last update
+   */
+  getLastUpdatedAt(): number {
+    return this.lastUpdatedAt
+  }
+
+  /**
+   * Get document IDs for a specific row group
+   */
+  getDocIdsForRowGroup(rowGroup: number): string[] {
+    const docIds: string[] = []
+    for (const [docId, nodeId] of this.docIdToNodeId) {
+      const rg = this.nodeIdToRowGroup.get(nodeId)
+      if (rg === rowGroup) {
+        docIds.push(docId)
+      }
+    }
+    return docIds
+  }
+
+  /**
+   * Remove all vectors from a specific row group
+   * @returns Number of vectors removed
+   */
+  removeRowGroup(rowGroup: number): number {
+    const docIdsToRemove = this.getDocIdsForRowGroup(rowGroup)
+    let removed = 0
+    for (const docId of docIdsToRemove) {
+      if (this.remove(docId)) {
+        removed++
+      }
+    }
+    this.rowGroupMetadata.delete(rowGroup)
+    return removed
+  }
+
+  /**
+   * Detect which row groups have changed based on checksums
+   *
+   * @param currentChecksums - Map of current row group checksums
+   * @returns Object with added, modified, and removed row groups
+   */
+  detectChangedRowGroups(currentChecksums: Map<number, string>): {
+    added: number[]
+    modified: number[]
+    removed: number[]
+  } {
+    const added: number[] = []
+    const modified: number[] = []
+    const removed: number[] = []
+
+    // Check for added and modified row groups
+    for (const [rowGroup, checksum] of currentChecksums) {
+      const existing = this.rowGroupMetadata.get(rowGroup)
+      if (!existing) {
+        added.push(rowGroup)
+      } else if (existing.checksum !== checksum) {
+        modified.push(rowGroup)
+      }
+    }
+
+    // Check for removed row groups
+    for (const rowGroup of this.rowGroupMetadata.keys()) {
+      if (!currentChecksums.has(rowGroup)) {
+        removed.push(rowGroup)
+      }
+    }
+
+    return { added, modified, removed }
+  }
+
+  /**
+   * Apply row group renumbering after compaction
+   *
+   * When Parquet files are compacted, row group numbers may change.
+   * This method updates the internal mappings to reflect the new numbering.
+   *
+   * @param remapping - Map from old row group number to new row group number
+   */
+  remapRowGroups(remapping: Map<number, number>): void {
+    // Update row group metadata
+    const newRowGroupMetadata = new Map<number, RowGroupMetadata>()
+    for (const [oldRowGroup, metadata] of this.rowGroupMetadata) {
+      const newRowGroup = remapping.get(oldRowGroup)
+      if (newRowGroup !== undefined) {
+        newRowGroupMetadata.set(newRowGroup, {
+          ...metadata,
+          rowGroup: newRowGroup,
+        })
+      }
+      // If no mapping exists, the row group was removed
+    }
+    this.rowGroupMetadata = newRowGroupMetadata
+
+    // Update node to row group mapping
+    const newNodeIdToRowGroup = new Map<number, number>()
+    for (const [nodeId, oldRowGroup] of this.nodeIdToRowGroup) {
+      const newRowGroup = remapping.get(oldRowGroup)
+      if (newRowGroup !== undefined) {
+        newNodeIdToRowGroup.set(nodeId, newRowGroup)
+      }
+    }
+    this.nodeIdToRowGroup = newNodeIdToRowGroup
+
+    // Update nodes in cache
+    for (const node of this.iterateNodes()) {
+      const newRowGroup = remapping.get(node.rowGroup)
+      if (newRowGroup !== undefined) {
+        node.rowGroup = newRowGroup
+      }
+    }
+
+    this.indexVersion++
+    this.lastUpdatedAt = Date.now()
+  }
+
+  /**
+   * Perform an incremental update of the index
+   *
+   * This method efficiently updates the index when the underlying data changes,
+   * without requiring a full rebuild. It:
+   * 1. Removes vectors from stale (deleted/modified) row groups
+   * 2. Inserts vectors from new/changed row groups
+   * 3. Optionally handles row group renumbering after compaction
+   *
+   * @param data - Iterator over documents to add/update
+   * @param options - Incremental update options
+   * @returns Result of the incremental update
+   */
+  async incrementalUpdate(
+    data: AsyncIterable<{
+      doc: Record<string, unknown>
+      docId: string
+      rowGroup: number
+      rowOffset: number
+    }>,
+    options?: IncrementalUpdateOptions
+  ): Promise<IncrementalUpdateResult> {
+    const result: IncrementalUpdateResult = {
+      removed: 0,
+      added: 0,
+      updatedRowGroups: [],
+      removedRowGroups: [],
+      success: true,
+    }
+
+    try {
+      // Handle row group remapping first (e.g., after compaction)
+      if (options?.rowGroupRemapping) {
+        this.remapRowGroups(options.rowGroupRemapping)
+      }
+
+      // Determine which row groups to update
+      let rowGroupsToProcess: Set<number>
+
+      if (options?.rowGroupsToUpdate) {
+        // Explicit list of row groups to update
+        rowGroupsToProcess = new Set(options.rowGroupsToUpdate)
+      } else if (options?.checksums) {
+        // Auto-detect changes from checksums
+        const changes = this.detectChangedRowGroups(options.checksums)
+
+        // Remove vectors from deleted row groups
+        for (const rowGroup of changes.removed) {
+          const removedCount = this.removeRowGroup(rowGroup)
+          result.removed += removedCount
+          result.removedRowGroups.push(rowGroup)
+        }
+
+        // Process added and modified row groups
+        rowGroupsToProcess = new Set([...changes.added, ...changes.modified])
+
+        // Remove vectors from modified row groups before re-inserting
+        for (const rowGroup of changes.modified) {
+          const removedCount = this.removeRowGroup(rowGroup)
+          result.removed += removedCount
+        }
+      } else {
+        // No checksums or explicit list - process all incoming data
+        rowGroupsToProcess = new Set<number>()
+      }
+
+      // Process incoming data
+      let processed = 0
+      let total = 0
+
+      // First pass: count total if progress callback is provided
+      if (options?.onProgress) {
+        const dataArray: Array<{
+          doc: Record<string, unknown>
+          docId: string
+          rowGroup: number
+          rowOffset: number
+        }> = []
+        for await (const item of data) {
+          dataArray.push(item)
+        }
+        total = dataArray.length
+
+        // Process the collected data
+        for (const { doc, docId, rowGroup, rowOffset } of dataArray) {
+          // Skip if we have a specific set and this row group isn't in it
+          if (rowGroupsToProcess.size > 0 && !rowGroupsToProcess.has(rowGroup)) {
+            continue
+          }
+
+          const vector = this.extractVector(doc)
+          if (vector !== undefined && vector.length === this.dimensions) {
+            this.insert(vector, docId, rowGroup, rowOffset)
+            result.added++
+            if (!result.updatedRowGroups.includes(rowGroup)) {
+              result.updatedRowGroups.push(rowGroup)
+            }
+          }
+
+          processed++
+          if (processed % 100 === 0) {
+            options.onProgress(processed, total)
+          }
+        }
+
+        options.onProgress(processed, total)
+      } else {
+        // No progress callback - process directly from iterator
+        for await (const { doc, docId, rowGroup, rowOffset } of data) {
+          // Skip if we have a specific set and this row group isn't in it
+          if (rowGroupsToProcess.size > 0 && !rowGroupsToProcess.has(rowGroup)) {
+            continue
+          }
+
+          const vector = this.extractVector(doc)
+          if (vector !== undefined && vector.length === this.dimensions) {
+            this.insert(vector, docId, rowGroup, rowOffset)
+            result.added++
+            if (!result.updatedRowGroups.includes(rowGroup)) {
+              result.updatedRowGroups.push(rowGroup)
+            }
+          }
+        }
+      }
+
+      // Update checksums in metadata if provided
+      if (options?.checksums) {
+        for (const [rowGroup, checksum] of options.checksums) {
+          const metadata = this.rowGroupMetadata.get(rowGroup)
+          if (metadata) {
+            metadata.checksum = checksum
+          }
+        }
+      }
+
+      // Update index version and timestamp
+      this.indexVersion++
+      this.lastUpdatedAt = Date.now()
+
+    } catch (error) {
+      result.success = false
+      result.error = error instanceof Error ? error.message : String(error)
+      logger.error('VectorIndex incremental update failed', error)
+    }
+
+    return result
+  }
+
+  /**
+   * Perform an incremental update from an array of documents (for testing)
+   */
+  incrementalUpdateFromArray(
+    data: Array<{
+      doc: Record<string, unknown>
+      docId: string
+      rowGroup: number
+      rowOffset: number
+    }>,
+    options?: Omit<IncrementalUpdateOptions, 'onProgress'>
+  ): IncrementalUpdateResult {
+    const result: IncrementalUpdateResult = {
+      removed: 0,
+      added: 0,
+      updatedRowGroups: [],
+      removedRowGroups: [],
+      success: true,
+    }
+
+    try {
+      // Handle row group remapping first (e.g., after compaction)
+      if (options?.rowGroupRemapping) {
+        this.remapRowGroups(options.rowGroupRemapping)
+      }
+
+      // Determine which row groups to update
+      let rowGroupsToProcess: Set<number>
+
+      if (options?.rowGroupsToUpdate) {
+        rowGroupsToProcess = new Set(options.rowGroupsToUpdate)
+      } else if (options?.checksums) {
+        const changes = this.detectChangedRowGroups(options.checksums)
+
+        for (const rowGroup of changes.removed) {
+          const removedCount = this.removeRowGroup(rowGroup)
+          result.removed += removedCount
+          result.removedRowGroups.push(rowGroup)
+        }
+
+        rowGroupsToProcess = new Set([...changes.added, ...changes.modified])
+
+        for (const rowGroup of changes.modified) {
+          const removedCount = this.removeRowGroup(rowGroup)
+          result.removed += removedCount
+        }
+      } else {
+        rowGroupsToProcess = new Set<number>()
+      }
+
+      // Process incoming data
+      for (const { doc, docId, rowGroup, rowOffset } of data) {
+        if (rowGroupsToProcess.size > 0 && !rowGroupsToProcess.has(rowGroup)) {
+          continue
+        }
+
+        const vector = this.extractVector(doc)
+        if (vector !== undefined && vector.length === this.dimensions) {
+          this.insert(vector, docId, rowGroup, rowOffset)
+          result.added++
+          if (!result.updatedRowGroups.includes(rowGroup)) {
+            result.updatedRowGroups.push(rowGroup)
+          }
+        }
+      }
+
+      // Update checksums
+      if (options?.checksums) {
+        for (const [rowGroup, checksum] of options.checksums) {
+          const metadata = this.rowGroupMetadata.get(rowGroup)
+          if (metadata) {
+            metadata.checksum = checksum
+          }
+        }
+      }
+
+      this.indexVersion++
+      this.lastUpdatedAt = Date.now()
+
+    } catch (error) {
+      result.success = false
+      result.error = error instanceof Error ? error.message : String(error)
+    }
+
+    return result
   }
 
   // ===========================================================================
@@ -1217,10 +1740,29 @@ export class VectorIndex {
   /**
    * Serialize the index to bytes
    * Note: Only serializes nodes currently in cache
+   * Format v2 includes incremental update metadata
    */
   private serialize(): Uint8Array {
+    const encoder = new TextEncoder()
+
     // Calculate size
-    let totalSize = 4 + 1 + 4 + 4 + 4 + 4 + 1 + 1 // header
+    // Header: magic(4) + version(1) + dimensions(4) + m(4) + nodeCount(4) + entryPoint(4) + maxLayer(1) + metric(1)
+    // V2 additions: indexVersion(4) + lastUpdatedAt(8) + rowGroupMetadataCount(4) + nodeIdToRowGroupCount(4)
+    let totalSize = 4 + 1 + 4 + 4 + 4 + 4 + 1 + 1 + 4 + 8 + 4 + 4
+
+    // Row group metadata
+    for (const metadata of this.rowGroupMetadata.values()) {
+      // rowGroup(4) + vectorCount(4) + minRowOffset(4) + maxRowOffset(4) + indexedAt(8) + checksumLen(4) + checksum
+      totalSize += 4 + 4 + 4 + 4 + 8 + 4
+      if (metadata.checksum) {
+        totalSize += encoder.encode(metadata.checksum).length
+      }
+    }
+
+    // Node to row group mappings
+    totalSize += this.nodeIdToRowGroup.size * 8 // nodeId(4) + rowGroup(4)
+
+    // Nodes
     for (const node of this.iterateNodes()) {
       totalSize += 4 // node ID
       totalSize += 4 + node.docId.length // docId length + docId
@@ -1239,7 +1781,6 @@ export class VectorIndex {
     const buffer = new ArrayBuffer(totalSize)
     const view = new DataView(buffer)
     const bytes = new Uint8Array(buffer)
-    const encoder = new TextEncoder()
     let offset = 0
 
     // Header
@@ -1268,6 +1809,50 @@ export class VectorIndex {
     const metricCode = this.metric === 'euclidean' ? 1 : this.metric === 'dot' ? 2 : 0
     view.setUint8(offset, metricCode)
     offset += 1
+
+    // V2: Incremental update metadata
+    view.setUint32(offset, this.indexVersion, false)
+    offset += 4
+
+    // Store lastUpdatedAt as BigInt64
+    view.setBigInt64(offset, BigInt(this.lastUpdatedAt), false)
+    offset += 8
+
+    // Row group metadata
+    view.setUint32(offset, this.rowGroupMetadata.size, false)
+    offset += 4
+
+    for (const metadata of this.rowGroupMetadata.values()) {
+      view.setUint32(offset, metadata.rowGroup, false)
+      offset += 4
+      view.setUint32(offset, metadata.vectorCount, false)
+      offset += 4
+      view.setUint32(offset, metadata.minRowOffset, false)
+      offset += 4
+      view.setUint32(offset, metadata.maxRowOffset, false)
+      offset += 4
+      view.setBigInt64(offset, BigInt(metadata.indexedAt), false)
+      offset += 8
+
+      const checksumBytes = metadata.checksum ? encoder.encode(metadata.checksum) : new Uint8Array(0)
+      view.setUint32(offset, checksumBytes.length, false)
+      offset += 4
+      if (checksumBytes.length > 0) {
+        bytes.set(checksumBytes, offset)
+        offset += checksumBytes.length
+      }
+    }
+
+    // Node to row group mappings
+    view.setUint32(offset, this.nodeIdToRowGroup.size, false)
+    offset += 4
+
+    for (const [nodeId, rowGroup] of this.nodeIdToRowGroup) {
+      view.setUint32(offset, nodeId, false)
+      offset += 4
+      view.setUint32(offset, rowGroup, false)
+      offset += 4
+    }
 
     // Nodes
     for (const node of this.iterateNodes()) {
@@ -1316,6 +1901,7 @@ export class VectorIndex {
 
   /**
    * Deserialize the index from bytes
+   * Supports both v1 (no incremental metadata) and v2 (with incremental metadata)
    */
   private deserialize(data: Uint8Array): void {
     this.clear()
@@ -1334,7 +1920,9 @@ export class VectorIndex {
 
     const version = view.getUint8(offset)
     offset += 1
-    if (version !== VERSION) {
+
+    // Support both v1 and v2
+    if (version !== 1 && version !== VERSION) {
       throw new Error(`Unsupported vector index version: ${version}`)
     }
 
@@ -1363,6 +1951,61 @@ export class VectorIndex {
     const __metricCode = view.getUint8(offset)
     offset += 1
     void __metricCode // Reserved field for future use
+
+    // V2: Read incremental update metadata
+    if (version >= 2) {
+      this.indexVersion = view.getUint32(offset, false)
+      offset += 4
+
+      this.lastUpdatedAt = Number(view.getBigInt64(offset, false))
+      offset += 8
+
+      // Read row group metadata
+      const rowGroupMetadataCount = view.getUint32(offset, false)
+      offset += 4
+
+      for (let i = 0; i < rowGroupMetadataCount; i++) {
+        const rowGroup = view.getUint32(offset, false)
+        offset += 4
+        const vectorCount = view.getUint32(offset, false)
+        offset += 4
+        const minRowOffset = view.getUint32(offset, false)
+        offset += 4
+        const maxRowOffset = view.getUint32(offset, false)
+        offset += 4
+        const indexedAt = Number(view.getBigInt64(offset, false))
+        offset += 8
+
+        const checksumLen = view.getUint32(offset, false)
+        offset += 4
+        let checksum: string | undefined
+        if (checksumLen > 0) {
+          checksum = decoder.decode(data.slice(offset, offset + checksumLen))
+          offset += checksumLen
+        }
+
+        this.rowGroupMetadata.set(rowGroup, {
+          rowGroup,
+          vectorCount,
+          minRowOffset,
+          maxRowOffset,
+          indexedAt,
+          checksum,
+        })
+      }
+
+      // Read node to row group mappings
+      const nodeToRowGroupCount = view.getUint32(offset, false)
+      offset += 4
+
+      for (let i = 0; i < nodeToRowGroupCount; i++) {
+        const nodeId = view.getUint32(offset, false)
+        offset += 4
+        const rowGroup = view.getUint32(offset, false)
+        offset += 4
+        this.nodeIdToRowGroup.set(nodeId, rowGroup)
+      }
+    }
 
     // Read nodes
     for (let i = 0; i < nodeCount; i++) {
@@ -1420,6 +2063,12 @@ export class VectorIndex {
       this.setNode(nodeId, node)
       this.docIdToNodeId.set(docId, nodeId)
       this.totalNodeCount++
+
+      // For v1 indexes, rebuild the nodeIdToRowGroup mapping
+      if (version === 1) {
+        this.nodeIdToRowGroup.set(nodeId, rowGroup)
+        this.updateRowGroupMetadata(rowGroup, rowOffset)
+      }
 
       if (nodeId >= this.nextNodeId) {
         this.nextNodeId = nodeId + 1

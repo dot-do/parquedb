@@ -11,6 +11,7 @@ import type { CacheConfig } from './CacheStrategy'
 import { DEFAULT_CACHE_CONFIG } from './CacheStrategy'
 import { asBodyInit } from '../types/cast'
 import { MissingBucketError } from './r2-errors'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Errors
@@ -552,7 +553,7 @@ export class ReadPath {
       }
     }).catch((err) => {
       // Log revalidation errors - these indicate potential cache coherence issues
-      console.warn(`[ReadPath] Background revalidation failed for ${path}:`, err)
+      logger.warn(`[ReadPath] Background revalidation failed for ${path}:`, err)
     })
 
     // Use waitUntil if ExecutionContext is available, otherwise fire-and-forget

@@ -19,6 +19,7 @@
  */
 
 import { DurableObject } from 'cloudflare:workers'
+import { logger } from '../utils/logger'
 
 // Re-export utility types and functions for convenience
 export {
@@ -269,7 +270,7 @@ export class RateLimitDO extends DurableObject<RateLimitEnv> {
 
       return Response.json({ error: 'Not found' }, { status: 404 })
     } catch (error) {
-      console.error('[RateLimitDO] Error:', error)
+      logger.error('[RateLimitDO] Error:', error)
       return Response.json(
         { error: error instanceof Error ? error.message : 'Internal error' },
         { status: 500 }

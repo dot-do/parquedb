@@ -2,6 +2,8 @@
  * Utility functions for migration operations
  */
 
+import { createSafeRegex } from '../utils/safe-regex'
+
 /**
  * Get a nested value from an object using dot notation
  */
@@ -246,7 +248,7 @@ export function convertBsonValue(value: unknown): unknown {
 
     // Regular expression: { "$regex": "...", "$options": "..." }
     if ('$regex' in obj && typeof obj.$regex === 'string') {
-      return new RegExp(obj.$regex as string, obj.$options as string | undefined)
+      return createSafeRegex(obj.$regex as string, obj.$options as string | undefined)
     }
 
     // Recursively convert arrays and objects

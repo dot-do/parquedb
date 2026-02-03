@@ -1145,3 +1145,237 @@ describe('CompactionStateDO - Two-Phase Commit', () => {
     })
   })
 })
+
+// =============================================================================
+// Per-Window Storage Tests (128KB Limit Fix)
+// =============================================================================
+
+describe('CompactionStateDO - Per-Window Storage (128KB Limit Fix)', () => {
+  let state: MockDurableObjectState
+  let compactionDO: TestableCompactionStateDO
+
+  beforeEach(() => {
+    state = new MockDurableObjectState()
+    compactionDO = new TestableCompactionStateDO(state)
+  })
+
+  describe('storage key structure', () => {
+    it('should store metadata in separate key from windows', async () => {
+      await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          namespace: 'users',
+          updates: [createUpdate({ timestamp: 1700001234000 })],
+        })),
+      }))
+
+      // Verify metadata is stored separately
+      const metadata = state.getData('metadata') as { namespace: string; knownWriters: string[] }
+      expect(metadata).toBeDefined()
+      expect(metadata.namespace).toBe('users')
+      expect(metadata.knownWriters).toContain('writer1')
+    })
+
+    it('should store each window in its own key', async () => {
+      const timestamp = 1700001234000
+      const windowStart = Math.floor(timestamp / 3600000) * 3600000
+
+      await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: [createUpdate({ timestamp })],
+        })),
+      }))
+
+      // Verify window is stored with its own key
+      const windowData = state.getData(`window:${windowStart}`)
+      expect(windowData).toBeDefined()
+    })
+
+    it('should store multiple windows in separate keys', async () => {
+      const timestamp1 = 1700000000000
+      const timestamp2 = 1700003600000 // +1 hour
+      const windowStart1 = Math.floor(timestamp1 / 3600000) * 3600000
+      const windowStart2 = Math.floor(timestamp2 / 3600000) * 3600000
+
+      await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: [
+            createUpdate({ timestamp: timestamp1, file: 'file1.parquet' }),
+            createUpdate({ timestamp: timestamp2, file: 'file2.parquet' }),
+          ],
+        })),
+      }))
+
+      // Verify each window has its own key
+      expect(state.getData(`window:${windowStart1}`)).toBeDefined()
+      expect(state.getData(`window:${windowStart2}`)).toBeDefined()
+    })
+
+    it('should delete window key when workflow completes successfully', async () => {
+      const oldTimestamp = Date.now() - (3600000 + 400000)
+      const windowStart = Math.floor(oldTimestamp / 3600000) * 3600000
+      const windowKey = String(windowStart)
+
+      // Create a ready window and confirm dispatch
+      await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({
+          updates: Array.from({ length: 15 }, (_, i) =>
+            createUpdate({ timestamp: oldTimestamp, file: `file${i}.parquet` })
+          ),
+        })),
+      }))
+
+      await compactionDO.fetch(new Request('http://internal/confirm-dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey, workflowId: 'workflow-123' }),
+      }))
+
+      // Complete workflow successfully
+      await compactionDO.fetch(new Request('http://internal/workflow-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowKey, workflowId: 'workflow-123', success: true }),
+      }))
+
+      // Window key should be deleted
+      expect(state.getData(`window:${windowStart}`)).toBeUndefined()
+    })
+  })
+
+  describe('storage size limits', () => {
+    it('should handle large number of files without exceeding per-key limit', async () => {
+      // Each file path is ~50 bytes, 128KB / 50 = ~2600 files max per window
+      // Test with 1000 files per window to stay well under limit
+      const timestamp = Date.now() - (3600000 + 400000)
+      const updates = Array.from({ length: 1000 }, (_, i) =>
+        createUpdate({
+          timestamp,
+          file: `data/users/${timestamp}-writer1-${i}.parquet`,
+        })
+      )
+
+      const response = await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({ updates })),
+      }))
+
+      expect(response.status).toBe(200)
+      const body = await response.json() as { windowsReady: WindowReadyEntry[] }
+      expect(body.windowsReady).toHaveLength(1)
+      expect(body.windowsReady[0].files).toHaveLength(1000)
+    })
+
+    it('should handle many windows without exceeding total storage', async () => {
+      // Create 50 windows with 20 files each
+      // Each window stored separately, so no single key is too large
+      const baseTimestamp = Date.now() - (100 * 3600000) // 100 hours ago
+      const updates: ReturnType<typeof createUpdate>[] = []
+
+      for (let hour = 0; hour < 50; hour++) {
+        const timestamp = baseTimestamp + (hour * 3600000) + 400000 // Add offset to make windows ready
+        for (let file = 0; file < 20; file++) {
+          updates.push(createUpdate({
+            timestamp,
+            file: `data/users/${timestamp}-writer1-${file}.parquet`,
+          }))
+        }
+      }
+
+      const response = await compactionDO.fetch(new Request('http://internal/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUpdateRequest({ updates })),
+      }))
+
+      expect(response.status).toBe(200)
+      const body = await response.json() as { windowsReady: WindowReadyEntry[] }
+      // Some windows may be ready depending on timing
+      expect(compactionDO.getWindowCount()).toBeGreaterThanOrEqual(50)
+    })
+  })
+
+  describe('state restoration from per-window keys', () => {
+    it('should restore state from per-window storage keys', async () => {
+      const windowStart = 1700000000000
+
+      // Pre-populate with new per-window storage format
+      state.setData('metadata', {
+        namespace: 'preloaded',
+        knownWriters: ['writer1', 'writer2'],
+        writerLastSeen: {
+          'writer1': Date.now(),
+          'writer2': Date.now() - 1000,
+        },
+        priority: 1,
+      })
+
+      state.setData(`window:${windowStart}`, {
+        windowStart,
+        windowEnd: windowStart + 3600000,
+        filesByWriter: { 'writer1': ['preloaded-file.parquet'] },
+        writers: ['writer1'],
+        lastActivityAt: 1700001234000,
+        totalSize: 1024,
+        processingStatus: { state: 'pending' },
+      })
+
+      // Create new DO instance (simulates restart)
+      const newDO = new TestableCompactionStateDO(state)
+
+      const response = await newDO.fetch(new Request('http://internal/status'))
+      const body = await response.json() as {
+        namespace: string
+        activeWindows: number
+        knownWriters: string[]
+      }
+
+      expect(body.namespace).toBe('preloaded')
+      expect(body.activeWindows).toBe(1)
+      expect(body.knownWriters).toContain('writer1')
+      expect(body.knownWriters).toContain('writer2')
+    })
+
+    it('should handle mixed old and new storage format (migration)', async () => {
+      // Pre-populate with old format for backwards compatibility during migration
+      const preloadedState: StoredState = {
+        namespace: 'legacy',
+        windows: {
+          '1700000000000': {
+            windowStart: 1700000000000,
+            windowEnd: 1700003600000,
+            filesByWriter: { 'writer1': ['legacy-file.parquet'] },
+            writers: ['writer1'],
+            lastActivityAt: 1700001234000,
+            totalSize: 1024,
+          },
+        },
+        knownWriters: ['writer1'],
+        writerLastSeen: { 'writer1': Date.now() },
+      }
+
+      state.setData('compactionState', preloadedState)
+
+      // Create new DO instance (simulates restart)
+      const newDO = new TestableCompactionStateDO(state)
+
+      const response = await newDO.fetch(new Request('http://internal/status'))
+      const body = await response.json() as {
+        namespace: string
+        activeWindows: number
+      }
+
+      // Should still work with old format
+      expect(body.namespace).toBe('legacy')
+      expect(body.activeWindows).toBe(1)
+    })
+  })
+})

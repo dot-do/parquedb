@@ -44,6 +44,7 @@ import type {
 import { getUserDatabaseIndex } from '../worker/DatabaseIndexDO'
 import { getUser, type AuthUser, type AuthVariables } from '../integrations/hono/auth'
 import { validateCsrf } from '../security/csrf'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types
@@ -169,7 +170,7 @@ export function createDatabaseRoutes<
 
       return c.json({ databases } satisfies ListDatabasesResponse)
     } catch (error) {
-      console.error('[DatabaseAPI] Error listing databases:', error)
+      logger.error('[DatabaseAPI] Error listing databases:', error)
       return c.json(
         { error: error instanceof Error ? error.message : 'Failed to list databases' },
         500
@@ -238,7 +239,7 @@ export function createDatabaseRoutes<
 
       return c.json(database, 201)
     } catch (error) {
-      console.error('[DatabaseAPI] Error creating database:', error)
+      logger.error('[DatabaseAPI] Error creating database:', error)
 
       // Handle duplicate slug error
       if (error instanceof Error && error.message.includes('already exists')) {
@@ -281,7 +282,7 @@ export function createDatabaseRoutes<
 
       return c.json(database)
     } catch (error) {
-      console.error('[DatabaseAPI] Error getting database:', error)
+      logger.error('[DatabaseAPI] Error getting database:', error)
       return c.json(
         { error: error instanceof Error ? error.message : 'Failed to get database' },
         500
@@ -366,7 +367,7 @@ export function createDatabaseRoutes<
 
       return c.json(database)
     } catch (error) {
-      console.error('[DatabaseAPI] Error updating database:', error)
+      logger.error('[DatabaseAPI] Error updating database:', error)
 
       // Handle duplicate slug error
       if (error instanceof Error && error.message.includes('already exists')) {
@@ -438,7 +439,7 @@ export function createDatabaseRoutes<
 
       return c.json({ deleted: true } satisfies DeleteDatabaseResponse)
     } catch (error) {
-      console.error('[DatabaseAPI] Error deleting database:', error)
+      logger.error('[DatabaseAPI] Error deleting database:', error)
       return c.json(
         { error: error instanceof Error ? error.message : 'Failed to delete database' },
         500

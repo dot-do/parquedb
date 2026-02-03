@@ -13,6 +13,8 @@ import {
   BackgroundEmbeddingConfigBuilder,
   type BackgroundEmbeddingConfig,
   type EmbeddingQueueItem,
+  type DeadLetterItem,
+  type ErrorCallback,
   type EntityLoader,
   type EntityUpdater,
 } from '../../../src/embeddings/background'
@@ -715,8 +717,13 @@ describe('priority handling', () => {
   let processedOrder: string[]
 
   beforeEach(() => {
+    vi.useFakeTimers()
     storage = createMockStorage()
     processedOrder = []
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('processes higher priority items first within a batch', async () => {
@@ -758,9 +765,9 @@ describe('priority handling', () => {
 
     // Add items with slight delay to ensure different timestamps
     await queue.enqueue('posts', 'first', 50)
-    await new Promise(r => setTimeout(r, 10))
+    await vi.advanceTimersByTimeAsync(10)
     await queue.enqueue('posts', 'second', 50)
-    await new Promise(r => setTimeout(r, 10))
+    await vi.advanceTimersByTimeAsync(10)
     await queue.enqueue('posts', 'third', 50)
 
     // Process all items in one batch
@@ -769,5 +776,503 @@ describe('priority handling', () => {
     expect(processedOrder[0]).toBe('first')
     expect(processedOrder[1]).toBe('second')
     expect(processedOrder[2]).toBe('third')
+  })
+})
+
+// =============================================================================
+// Metrics Tests
+// =============================================================================
+
+describe('getMetrics', () => {
+  let storage: ReturnType<typeof createMockStorage>
+  let queue: EmbeddingQueue
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    storage = createMockStorage()
+    const config = createTestConfig()
+    queue = new EmbeddingQueue(storage, config)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('returns initial metrics for empty queue', async () => {
+    const metrics = await queue.getMetrics()
+
+    expect(metrics.queueDepth).toBe(0)
+    expect(metrics.totalProcessed).toBe(0)
+    expect(metrics.totalFailed).toBe(0)
+    expect(metrics.deadLetterCount).toBe(0)
+    expect(metrics.errorRate).toBe(0)
+    expect(metrics.backlogAgeMs).toBe(0)
+  })
+
+  it('tracks queue depth', async () => {
+    await queue.enqueue('posts', 'abc123')
+    await queue.enqueue('posts', 'def456')
+
+    const metrics = await queue.getMetrics()
+
+    expect(metrics.queueDepth).toBe(2)
+  })
+
+  it('tracks processing metrics', async () => {
+    queue.setEntityLoader(async () => ({
+      description: 'Test description',
+    }))
+    queue.setEntityUpdater(vi.fn().mockResolvedValue(undefined))
+
+    await queue.enqueue('posts', 'abc123')
+    await queue.processQueue()
+
+    const metrics = await queue.getMetrics()
+
+    expect(metrics.totalProcessed).toBe(1)
+    expect(metrics.queueDepth).toBe(0)
+  })
+
+  it('tracks failed processing', async () => {
+    const failingProvider = {
+      ...createMockProvider(),
+      embedBatch: vi.fn().mockRejectedValue(new Error('API error')),
+    }
+
+    const failingQueue = new EmbeddingQueue(storage, {
+      ...createTestConfig(),
+      provider: failingProvider,
+      retryAttempts: 1, // Fail immediately
+    })
+    failingQueue.setEntityLoader(async () => ({ description: 'Test' }))
+    failingQueue.setEntityUpdater(vi.fn())
+
+    await failingQueue.enqueue('posts', 'abc123')
+    await failingQueue.processQueue()
+
+    const metrics = await failingQueue.getMetrics()
+
+    expect(metrics.totalFailed).toBe(1)
+  })
+
+  it('calculates error rate', async () => {
+    queue.setEntityLoader(async (_, id) =>
+      id === 'good' ? { description: 'Test' } : null
+    )
+    queue.setEntityUpdater(vi.fn().mockResolvedValue(undefined))
+
+    await queue.enqueue('posts', 'good')
+    await queue.processQueue()
+
+    await queue.enqueue('posts', 'bad')
+    await queue.processQueue()
+
+    const metrics = await queue.getMetrics()
+
+    expect(metrics.totalProcessed).toBe(1)
+    expect(metrics.totalFailed).toBe(1)
+    expect(metrics.errorRate).toBe(0.5)
+  })
+
+  it('tracks backlog age', async () => {
+    await queue.enqueue('posts', 'old')
+    await vi.advanceTimersByTimeAsync(50)
+
+    const metrics = await queue.getMetrics()
+
+    expect(metrics.backlogAgeMs).toBeGreaterThanOrEqual(50)
+    expect(metrics.backlogAgeMs).toBeLessThan(5000)
+  })
+})
+
+describe('resetMetrics', () => {
+  it('resets all metrics to zero', async () => {
+    const storage = createMockStorage()
+    const queue = new EmbeddingQueue(storage, createTestConfig())
+
+    queue.setEntityLoader(async () => ({ description: 'Test' }))
+    queue.setEntityUpdater(vi.fn().mockResolvedValue(undefined))
+
+    await queue.enqueue('posts', 'abc123')
+    await queue.processQueue()
+
+    let metrics = await queue.getMetrics()
+    expect(metrics.totalProcessed).toBe(1)
+
+    await queue.resetMetrics()
+
+    metrics = await queue.getMetrics()
+    expect(metrics.totalProcessed).toBe(0)
+    expect(metrics.totalFailed).toBe(0)
+  })
+})
+
+// =============================================================================
+// Dead Letter Queue Tests
+// =============================================================================
+
+describe('dead letter queue', () => {
+  let storage: ReturnType<typeof createMockStorage>
+  let queue: EmbeddingQueue
+  let entityLoader: EntityLoader
+  let entityUpdater: EntityUpdater
+
+  beforeEach(() => {
+    storage = createMockStorage()
+    entityLoader = vi.fn().mockResolvedValue({ description: 'Test' })
+    entityUpdater = vi.fn().mockResolvedValue(undefined)
+  })
+
+  it('moves exhausted items to dead letter queue', async () => {
+    const failingProvider = {
+      ...createMockProvider(),
+      embedBatch: vi.fn().mockRejectedValue(new Error('API error')),
+    }
+
+    queue = new EmbeddingQueue(storage, {
+      ...createTestConfig(),
+      provider: failingProvider,
+      retryAttempts: 2,
+      enableDeadLetter: true,
+    })
+    queue.setEntityLoader(entityLoader)
+    queue.setEntityUpdater(entityUpdater)
+
+    await queue.enqueue('posts', 'abc123')
+
+    // First attempt - item has 1 attempt, still retriable
+    await queue.processQueue()
+    let stats = await queue.getStats()
+    expect(stats.total).toBe(1)
+    expect(stats.retrying).toBe(1)
+
+    // Second attempt - item now exhausted
+    await queue.processQueue()
+
+    // Third process - should move to DLQ
+    await queue.processQueue()
+
+    const dlqItems = await queue.getDeadLetterItems()
+    expect(dlqItems).toHaveLength(1)
+    expect(dlqItems[0].entityType).toBe('posts')
+    expect(dlqItems[0].entityId).toBe('abc123')
+    expect(dlqItems[0].lastError).toBe('API error')
+
+    // Should be removed from main queue
+    stats = await queue.getStats()
+    expect(stats.total).toBe(0)
+  })
+
+  it('getDeadLetterItems returns items', async () => {
+    queue = new EmbeddingQueue(storage, createTestConfig({ enableDeadLetter: true }))
+
+    // Manually add to DLQ for testing
+    const dlqKey = 'embed_dlq:posts:abc123'
+    await storage.put(dlqKey, {
+      entityType: 'posts',
+      entityId: 'abc123',
+      createdAt: Date.now() - 60000,
+      movedAt: Date.now(),
+      attempts: 3,
+      lastError: 'Test error',
+    } as DeadLetterItem)
+
+    const items = await queue.getDeadLetterItems()
+
+    expect(items).toHaveLength(1)
+    expect(items[0].entityId).toBe('abc123')
+    expect(items[0].lastError).toBe('Test error')
+  })
+
+  it('getDeadLetterCount returns correct count', async () => {
+    queue = new EmbeddingQueue(storage, createTestConfig())
+
+    await storage.put('embed_dlq:posts:item1', { entityType: 'posts', entityId: 'item1' } as DeadLetterItem)
+    await storage.put('embed_dlq:posts:item2', { entityType: 'posts', entityId: 'item2' } as DeadLetterItem)
+
+    const count = await queue.getDeadLetterCount()
+
+    expect(count).toBe(2)
+  })
+
+  it('retryDeadLetterItem moves item back to queue', async () => {
+    queue = new EmbeddingQueue(storage, createTestConfig())
+
+    // Add item to DLQ
+    const dlqKey = 'embed_dlq:posts:abc123'
+    await storage.put(dlqKey, {
+      entityType: 'posts',
+      entityId: 'abc123',
+      createdAt: Date.now() - 60000,
+      movedAt: Date.now(),
+      attempts: 3,
+      lastError: 'Test error',
+      priority: 50,
+    } as DeadLetterItem)
+
+    const result = await queue.retryDeadLetterItem('posts', 'abc123')
+
+    expect(result).toBe(true)
+
+    // Should be in main queue
+    const stats = await queue.getStats()
+    expect(stats.total).toBe(1)
+    expect(stats.pending).toBe(1)
+
+    // Should not be in DLQ
+    const dlqCount = await queue.getDeadLetterCount()
+    expect(dlqCount).toBe(0)
+  })
+
+  it('retryDeadLetterItem returns false for non-existent item', async () => {
+    queue = new EmbeddingQueue(storage, createTestConfig())
+
+    const result = await queue.retryDeadLetterItem('posts', 'nonexistent')
+
+    expect(result).toBe(false)
+  })
+
+  it('retryAllDeadLetterItems moves all items back to queue', async () => {
+    queue = new EmbeddingQueue(storage, createTestConfig())
+
+    // Add items to DLQ
+    await storage.put('embed_dlq:posts:item1', {
+      entityType: 'posts',
+      entityId: 'item1',
+      createdAt: Date.now(),
+      movedAt: Date.now(),
+      attempts: 3,
+      lastError: 'Error 1',
+    } as DeadLetterItem)
+    await storage.put('embed_dlq:posts:item2', {
+      entityType: 'posts',
+      entityId: 'item2',
+      createdAt: Date.now(),
+      movedAt: Date.now(),
+      attempts: 3,
+      lastError: 'Error 2',
+    } as DeadLetterItem)
+
+    const retried = await queue.retryAllDeadLetterItems()
+
+    expect(retried).toBe(2)
+
+    const stats = await queue.getStats()
+    expect(stats.total).toBe(2)
+    expect(stats.pending).toBe(2)
+
+    const dlqCount = await queue.getDeadLetterCount()
+    expect(dlqCount).toBe(0)
+  })
+
+  it('clearDeadLetterQueue removes all DLQ items', async () => {
+    queue = new EmbeddingQueue(storage, createTestConfig())
+
+    await storage.put('embed_dlq:posts:item1', {} as DeadLetterItem)
+    await storage.put('embed_dlq:posts:item2', {} as DeadLetterItem)
+
+    const cleared = await queue.clearDeadLetterQueue()
+
+    expect(cleared).toBe(2)
+
+    const count = await queue.getDeadLetterCount()
+    expect(count).toBe(0)
+  })
+
+  it('deleteDeadLetterItem removes specific item', async () => {
+    queue = new EmbeddingQueue(storage, createTestConfig())
+
+    await storage.put('embed_dlq:posts:item1', { entityType: 'posts', entityId: 'item1' } as DeadLetterItem)
+    await storage.put('embed_dlq:posts:item2', { entityType: 'posts', entityId: 'item2' } as DeadLetterItem)
+
+    const result = await queue.deleteDeadLetterItem('posts', 'item1')
+
+    expect(result).toBe(true)
+
+    const count = await queue.getDeadLetterCount()
+    expect(count).toBe(1)
+  })
+
+  it('deleteDeadLetterItem returns false for non-existent item', async () => {
+    queue = new EmbeddingQueue(storage, createTestConfig())
+
+    const result = await queue.deleteDeadLetterItem('posts', 'nonexistent')
+
+    expect(result).toBe(false)
+  })
+
+  it('does not use DLQ when enableDeadLetter is false', async () => {
+    const failingProvider = {
+      ...createMockProvider(),
+      embedBatch: vi.fn().mockRejectedValue(new Error('API error')),
+    }
+
+    queue = new EmbeddingQueue(storage, {
+      ...createTestConfig(),
+      provider: failingProvider,
+      retryAttempts: 1,
+      enableDeadLetter: false,
+    })
+    queue.setEntityLoader(entityLoader)
+    queue.setEntityUpdater(entityUpdater)
+
+    await queue.enqueue('posts', 'abc123')
+
+    // Process until exhausted
+    await queue.processQueue()
+    await queue.processQueue()
+
+    // Should not be in DLQ
+    const dlqCount = await queue.getDeadLetterCount()
+    expect(dlqCount).toBe(0)
+  })
+})
+
+// =============================================================================
+// Error Callback Tests
+// =============================================================================
+
+describe('error callback', () => {
+  let storage: ReturnType<typeof createMockStorage>
+
+  beforeEach(() => {
+    storage = createMockStorage()
+  })
+
+  it('calls onError callback on failure', async () => {
+    const onError = vi.fn()
+
+    const failingProvider = {
+      ...createMockProvider(),
+      embedBatch: vi.fn().mockRejectedValue(new Error('API error')),
+    }
+
+    const queue = new EmbeddingQueue(storage, {
+      ...createTestConfig(),
+      provider: failingProvider,
+      onError,
+    })
+    queue.setEntityLoader(async () => ({ description: 'Test' }))
+    queue.setEntityUpdater(vi.fn())
+
+    await queue.enqueue('posts', 'abc123')
+    await queue.processQueue()
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityType: 'posts',
+        entityId: 'abc123',
+      }),
+      'API error',
+      false // Not exhausted yet
+    )
+  })
+
+  it('passes isExhausted=true when retries exhausted', async () => {
+    const onError = vi.fn()
+
+    const failingProvider = {
+      ...createMockProvider(),
+      embedBatch: vi.fn().mockRejectedValue(new Error('API error')),
+    }
+
+    const queue = new EmbeddingQueue(storage, {
+      ...createTestConfig(),
+      provider: failingProvider,
+      retryAttempts: 1,
+      onError,
+    })
+    queue.setEntityLoader(async () => ({ description: 'Test' }))
+    queue.setEntityUpdater(vi.fn())
+
+    await queue.enqueue('posts', 'abc123')
+    await queue.processQueue()
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityType: 'posts',
+        entityId: 'abc123',
+      }),
+      'API error',
+      true // Exhausted
+    )
+  })
+
+  it('handles error callback exceptions gracefully', async () => {
+    const onError = vi.fn().mockRejectedValue(new Error('Callback error'))
+
+    const failingProvider = {
+      ...createMockProvider(),
+      embedBatch: vi.fn().mockRejectedValue(new Error('API error')),
+    }
+
+    const queue = new EmbeddingQueue(storage, {
+      ...createTestConfig(),
+      provider: failingProvider,
+      onError,
+    })
+    queue.setEntityLoader(async () => ({ description: 'Test' }))
+    queue.setEntityUpdater(vi.fn())
+
+    await queue.enqueue('posts', 'abc123')
+
+    // Should not throw even though callback throws
+    await expect(queue.processQueue()).resolves.not.toThrow()
+  })
+
+  it('calls onError when entity not found', async () => {
+    const onError = vi.fn()
+
+    const queue = new EmbeddingQueue(storage, {
+      ...createTestConfig(),
+      onError,
+    })
+    queue.setEntityLoader(async () => null) // Entity not found
+    queue.setEntityUpdater(vi.fn())
+
+    await queue.enqueue('posts', 'missing')
+    await queue.processQueue()
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityType: 'posts',
+        entityId: 'missing',
+      }),
+      'Entity not found',
+      false
+    )
+  })
+})
+
+// =============================================================================
+// Config Builder Extended Tests
+// =============================================================================
+
+describe('BackgroundEmbeddingConfigBuilder extended', () => {
+  it('sets onError callback', () => {
+    const provider = createMockProvider()
+    const onError: ErrorCallback = vi.fn()
+
+    const config = configureBackgroundEmbeddings()
+      .provider(provider)
+      .fields(['description'])
+      .vectorField('embedding')
+      .onError(onError)
+      .build()
+
+    expect(config.onError).toBe(onError)
+  })
+
+  it('sets enableDeadLetter', () => {
+    const provider = createMockProvider()
+
+    const config = configureBackgroundEmbeddings()
+      .provider(provider)
+      .fields(['description'])
+      .vectorField('embedding')
+      .enableDeadLetter(false)
+      .build()
+
+    expect(config.enableDeadLetter).toBe(false)
   })
 })

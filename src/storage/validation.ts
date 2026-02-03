@@ -6,6 +6,8 @@
  */
 
 import { InvalidPathError } from './errors'
+import { MAX_MULTIPART_PART_NUMBER } from '../constants'
+import { isNullish } from '../utils/comparison'
 
 /**
  * Error thrown when range parameters are invalid
@@ -55,7 +57,7 @@ export function validateRange(start: number, end: number): void {
  * @throws InvalidPathError if path is null or undefined
  */
 export function validatePath(path: string, operation: string): void {
-  if (path === undefined || path === null) {
+  if (isNullish(path)) {
     throw new InvalidPathError('', `${operation}: path is required`)
   }
 }
@@ -67,8 +69,8 @@ export function validatePath(path: string, operation: string): void {
  * @throws Error if part number is out of range
  */
 export function validatePartNumber(partNumber: number): void {
-  if (partNumber < 1 || partNumber > 10000) {
-    throw new Error(`Invalid part number: ${partNumber}. Must be between 1 and 10000`)
+  if (partNumber < 1 || partNumber > MAX_MULTIPART_PART_NUMBER) {
+    throw new Error(`Invalid part number: ${partNumber}. Must be between 1 and ${MAX_MULTIPART_PART_NUMBER}`)
   }
 }
 
@@ -80,7 +82,7 @@ export function validatePartNumber(partNumber: number): void {
  * @throws Error if data is null or undefined
  */
 export function validateData(data: Uint8Array | null | undefined, operation: string): void {
-  if (data === null || data === undefined) {
+  if (isNullish(data)) {
     throw new Error(`${operation}: data is required`)
   }
 }

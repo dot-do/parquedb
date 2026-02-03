@@ -477,18 +477,25 @@ describe('Validation modes', () => {
     expect(result.errors.length).toBeGreaterThan(0)
   })
 
-  it('warn mode logs and returns errors', () => {
-    const consoleSpy = { warn: vi.fn() }
-    vi.spyOn(console, 'warn').mockImplementation(consoleSpy.warn)
+  it('warn mode logs and returns errors', async () => {
+    // Import and mock the logger module
+    const loggerModule = await import('../../../src/utils/logger')
+    const warnSpy = vi.fn()
+    const originalLogger = loggerModule.logger
+    loggerModule.setLogger({
+      ...loggerModule.noopLogger,
+      warn: warnSpy,
+    })
 
     const validator = new SchemaValidator(schema, { mode: 'warn' })
 
     const result = validator.validate('User', { name: 'Alice' })
 
     expect(result.valid).toBe(false)
-    expect(consoleSpy.warn).toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalled()
 
-    vi.restoreAllMocks()
+    // Restore original logger
+    loggerModule.setLogger(originalLogger)
   })
 })
 

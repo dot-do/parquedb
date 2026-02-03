@@ -184,10 +184,12 @@ export class BranchManager {
     }
 
     // In a full implementation, we would check if the branch has unmerged changes
-    // and require --force if it does. For now, we'll skip that check.
+    // and require --force if it does. For now, deletion is allowed without the check.
+    // Implementing unmerged commit detection would require:
+    // 1. Finding the merge-base with the main branch
+    // 2. Checking if there are commits on this branch not reachable from main
     if (!opts?.force) {
-      // TODO: Check for unmerged commits
-      // For now, allow deletion without force
+      // Unmerged commit check not yet implemented - allow deletion
     }
 
     // Delete the branch ref

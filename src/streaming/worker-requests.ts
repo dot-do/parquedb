@@ -43,6 +43,8 @@
 import type { ParqueDB } from '../ParqueDB'
 import type { ViewDefinition, ViewOptions } from '../materialized-views/types'
 import { viewName } from '../materialized-views/types'
+import { asCreatedRecord, asTypedResults } from '../types/cast'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Constants
@@ -508,7 +510,7 @@ export async function recordRequest(
     ...request,
   })
 
-  return created as unknown as WorkerRequest
+  return asCreatedRecord<WorkerRequest>(created)
 }
 
 /**
@@ -562,7 +564,7 @@ export async function recordRequests(
     }))
   )
 
-  return created as unknown as WorkerRequest[]
+  return asTypedResults<WorkerRequest>(created)
 }
 
 // =============================================================================
@@ -748,10 +750,10 @@ export async function getRequestMetrics(
   }
 
   // Fetch requests
-  const requests = await db.collection(collection).find(filter, {
+  const requests = asTypedResults<WorkerRequest>(await db.collection(collection).find(filter, {
     limit: options?.limit ?? 10000,
     sort: { timestamp: 1 },
-  }) as unknown as WorkerRequest[]
+  }))
 
   // Group by time bucket
   const bucketMap = new Map<string, WorkerRequest[]>()
@@ -859,10 +861,10 @@ export async function getPathLatency(
     }
   }
 
-  const requests = await db.collection(collection).find(filter, {
+  const requests = asTypedResults<WorkerRequest>(await db.collection(collection).find(filter, {
     limit: options?.limit ?? 1000,
     sort: { timestamp: -1 },
-  }) as unknown as WorkerRequest[]
+  }))
 
   return calculateLatencyStats(requests)
 }
@@ -911,10 +913,10 @@ export async function getErrorSummary(
     }
   }
 
-  const requests = await db.collection(collection).find(filter, {
+  const requests = asTypedResults<WorkerRequest>(await db.collection(collection).find(filter, {
     limit: options?.limit ?? 1000,
     sort: { timestamp: -1 },
-  }) as unknown as WorkerRequest[]
+  }))
 
   // Aggregate by path
   const byPath: Record<string, number> = {}
@@ -1104,7 +1106,7 @@ export class RequestBuffer {
     this.flushTimer = setInterval(() => {
       if (this.buffer.length > 0 && !this.flushPromise) {
         this.flush().catch(err => {
-          console.error('[RequestBuffer] Flush failed:', err)
+          logger.error('[RequestBuffer] Flush failed:', err)
         })
       }
     }, this.options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS)

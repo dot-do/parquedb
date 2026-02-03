@@ -49,6 +49,9 @@ import {
   extractDataFields,
 } from './parquet-utils'
 
+// Import update operators
+import { applyOperators } from '../mutation/operators'
+
 // Import from @dotdo/iceberg
 import {
   // Metadata operations
@@ -220,8 +223,9 @@ export class IcebergBackend implements EntityBackend {
   }
 
   async count(ns: string, filter?: Filter): Promise<number> {
-    // For now, just count by reading all matching entities
-    // TODO: Optimize with manifest statistics
+    // Count by reading all matching entities.
+    // Performance note: Could be optimized by using manifest statistics
+    // for unfiltered counts, avoiding full data scan.
     const entities = await this.find(ns, filter)
     return entities.length
   }
@@ -527,7 +531,8 @@ export class IcebergBackend implements EntityBackend {
       }
     }
 
-    // TODO: Handle field removals, renames, type changes
+    // Note: Field removals, renames, and type changes are more complex operations
+    // that require careful migration of existing data. For now, only additions are supported.
 
     // Apply evolution
     // const result = builder.build()
@@ -562,9 +567,9 @@ export class IcebergBackend implements EntityBackend {
       throw new ReadOnlyError('compact', 'IcebergBackend')
     }
 
-    // For R2 Data Catalog, compaction is managed by Cloudflare
+    // For R2 Data Catalog, compaction is managed by Cloudflare automatically.
+    // Manual triggering would require R2 Data Catalog API support.
     if (this.catalogConfig?.type === 'r2-data-catalog') {
-      // TODO: Trigger compaction via R2 Data Catalog API if available
       return {
         filesCompacted: 0,
         filesCreated: 0,
@@ -574,8 +579,11 @@ export class IcebergBackend implements EntityBackend {
       }
     }
 
-    // For other catalogs, implement manual compaction
-    // TODO: Implement file compaction
+    // Manual compaction would involve:
+    // 1. Reading multiple small data files
+    // 2. Merging them into fewer larger files
+    // 3. Updating the Iceberg metadata
+    // For now, return no-op result. Use vacuum() for cleanup.
     return {
       filesCompacted: 0,
       filesCreated: 0,
@@ -602,11 +610,15 @@ export class IcebergBackend implements EntityBackend {
     const result = manager.expireSnapshots(olderThanMs)
 
     if (!options?.dryRun) {
-      // TODO: Write updated metadata and delete orphaned files
+      // Full vacuum implementation would:
+      // 1. Write updated metadata with expired snapshots removed
+      // 2. Identify orphaned data files no longer referenced
+      // 3. Delete orphaned files from storage
+      // For now, only snapshot expiration tracking is implemented
     }
 
     return {
-      filesDeleted: 0, // TODO: Count deleted files
+      filesDeleted: 0, // File deletion not yet implemented
       bytesReclaimed: 0,
       snapshotsExpired: result.expiredSnapshotIds?.length ?? 0,
     }
@@ -1537,35 +1549,17 @@ export class IcebergBackend implements EntityBackend {
 
   /**
    * Apply update operators to an entity
+   *
+   * Supports all MongoDB-style operators via the mutation/operators module:
+   * - Field: $set, $unset, $rename, $setOnInsert
+   * - Numeric: $inc, $mul, $min, $max
+   * - Array: $push, $pull, $pullAll, $addToSet, $pop
+   * - Date: $currentDate
+   * - Bitwise: $bit
    */
   private applyUpdate<T>(entity: Entity<T>, update: Update): Entity<T> {
-    const result = { ...entity }
-
-    // Handle $set
-    if (update.$set) {
-      Object.assign(result, update.$set)
-    }
-
-    // Handle $unset
-    if (update.$unset) {
-      for (const key of Object.keys(update.$unset)) {
-        delete (result as Record<string, unknown>)[key]
-      }
-    }
-
-    // Handle $inc
-    if (update.$inc) {
-      for (const [key, value] of Object.entries(update.$inc)) {
-        const current = (result as Record<string, unknown>)[key]
-        if (typeof current === 'number' && typeof value === 'number') {
-          (result as Record<string, unknown>)[key] = current + value
-        }
-      }
-    }
-
-    // TODO: Handle other operators ($push, $pull, $addToSet, etc.)
-
-    return result
+    const result = applyOperators(entity as Record<string, unknown>, update)
+    return result.document as Entity<T>
   }
 
   /**

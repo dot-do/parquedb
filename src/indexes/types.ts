@@ -223,6 +223,34 @@ export interface RangeQuery {
 }
 
 /**
+ * Fuzzy matching options for FTS
+ */
+export interface FTSFuzzyOptions {
+  /** Enable fuzzy matching (default: false) */
+  enabled?: boolean
+  /** Maximum edit distance allowed (default: 2) */
+  maxDistance?: number
+  /** Minimum term length to apply fuzzy matching (default: 4) */
+  minTermLength?: number
+  /** Number of characters that must match exactly at start (default: 1) */
+  prefixLength?: number
+}
+
+/**
+ * Highlight options for FTS
+ */
+export interface FTSHighlightOptions {
+  /** HTML tag to insert before matches (default: '<mark>') */
+  preTag?: string
+  /** HTML tag to insert after matches (default: '</mark>') */
+  postTag?: string
+  /** Maximum number of snippets per field (default: 3) */
+  maxSnippets?: number
+  /** Maximum length of each snippet in characters (default: 150) */
+  maxSnippetLength?: number
+}
+
+/**
  * FTS search options
  */
 export interface FTSSearchOptions {
@@ -232,8 +260,10 @@ export interface FTSSearchOptions {
   minScore?: number
   /** Language for query analysis */
   language?: string
-  /** Highlight matching terms */
-  highlight?: boolean
+  /** Highlight matching terms (true for defaults, or options object) */
+  highlight?: boolean | FTSHighlightOptions
+  /** Fuzzy matching options for typo tolerance */
+  fuzzy?: FTSFuzzyOptions | boolean
 }
 
 /**

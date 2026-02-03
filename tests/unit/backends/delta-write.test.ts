@@ -10,7 +10,7 @@
  * - `_last_checkpoint` file for optimization
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { DeltaBackend, createDeltaBackend } from '../../../src/backends/delta'
 import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import type { Entity, EntityId } from '../../../src/types/entity'
@@ -490,24 +490,29 @@ describe('DeltaBackend', () => {
     })
 
     it('should support querying at specific timestamp', async () => {
-      const created = await backend.create('users', {
-        $type: 'User',
-        name: 'Alice',
-      })
+      vi.useFakeTimers()
+      try {
+        const created = await backend.create('users', {
+          $type: 'User',
+          name: 'Alice',
+        })
 
-      const creationTime = new Date()
+        const creationTime = new Date()
 
-      // Wait a bit and update
-      await new Promise(resolve => setTimeout(resolve, 10))
+        // Advance time and update
+        await vi.advanceTimersByTimeAsync(10)
 
-      await backend.update('users', created.$id.split('/')[1]!, {
-        $set: { name: 'Alicia' },
-      })
+        await backend.update('users', created.$id.split('/')[1]!, {
+          $set: { name: 'Alicia' },
+        })
 
-      // Query at creation time should show original name
-      const snapshotBackend = await backend.snapshot('users', creationTime)
-      const oldEntities = await snapshotBackend.find('users', {})
-      expect(oldEntities[0]!.name).toBe('Alice')
+        // Query at creation time should show original name
+        const snapshotBackend = await backend.snapshot('users', creationTime)
+        const oldEntities = await snapshotBackend.find('users', {})
+        expect(oldEntities[0]!.name).toBe('Alice')
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('should list available versions/snapshots', async () => {

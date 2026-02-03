@@ -39,6 +39,7 @@ import { createEmptyProxy, toR2Bucket, getCollection, extendFunction } from '../
 import type { R2Bucket } from '../storage/types/r2'
 import type { Collection } from '../Collection'
 import type { SQLQueryOptions } from '../integrations/sql'
+import { logger } from '../utils/logger'
 
 // Module-scoped instance cache
 let _db: DBInstance | null = null
@@ -105,7 +106,7 @@ export async function initializeDB(env?: Env): Promise<DBInstance> {
     if (!storage) {
       storage = new MemoryBackend()
       if (process.env.DEBUG || process.env.PARQUEDB_DEBUG) {
-        console.debug('[ParqueDB] Using MemoryBackend (no storage configured)')
+        logger.debug('[ParqueDB] Using MemoryBackend (no storage configured)')
       }
     }
 
@@ -206,7 +207,10 @@ async function resolveStorage(
       }
     }
 
-    // TODO: S3 support
+    // S3 support would require:
+    // 1. An S3Backend implementation similar to R2Backend
+    // 2. AWS credentials detection (env vars, IAM role, etc.)
+    // For now, use R2 or filesystem storage
   }
 
   return undefined

@@ -40,6 +40,7 @@
 
 import type { Context, MiddlewareHandler, Next } from 'hono'
 import type { EntityId } from '../../types/entity'
+import { logger } from '../../utils/logger'
 
 /**
  * Auth user from oauth.do
@@ -153,9 +154,8 @@ export function auth(options: AuthOptions): MiddlewareHandler {
       }
     } catch (error) {
       // Token verification failed, continue without user
-      if (process.env.DEBUG || process.env.PARQUEDB_DEBUG) {
-        console.warn('[ParqueDB] Auth verification failed:', error)
-      }
+      // Use logger.debug - configure logger to consoleLogger for debugging
+      logger.debug('[ParqueDB] Auth verification failed:', error)
     }
 
     return next()

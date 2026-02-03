@@ -7,6 +7,18 @@
  * - Bloom filters: ID lookup filters (longest TTL, stable after creation)
  */
 
+import {
+  DEFAULT_DATA_CACHE_TTL_SECONDS,
+  DEFAULT_METADATA_CACHE_TTL_SECONDS,
+  DEFAULT_BLOOM_CACHE_TTL_SECONDS,
+  READ_HEAVY_DATA_CACHE_TTL_SECONDS,
+  READ_HEAVY_METADATA_CACHE_TTL_SECONDS,
+  READ_HEAVY_BLOOM_CACHE_TTL_SECONDS,
+  WRITE_HEAVY_DATA_CACHE_TTL_SECONDS,
+  WRITE_HEAVY_METADATA_CACHE_TTL_SECONDS,
+  WRITE_HEAVY_BLOOM_CACHE_TTL_SECONDS,
+} from '../constants'
+
 // =============================================================================
 // Cache Configuration
 // =============================================================================
@@ -43,9 +55,9 @@ export interface CacheConfig {
  * - Bloom: 10 minutes (stable after creation)
  */
 export const DEFAULT_CACHE_CONFIG: CacheConfig = {
-  dataTtl: 60, // 1 minute
-  metadataTtl: 300, // 5 minutes
-  bloomTtl: 600, // 10 minutes
+  dataTtl: DEFAULT_DATA_CACHE_TTL_SECONDS,
+  metadataTtl: DEFAULT_METADATA_CACHE_TTL_SECONDS,
+  bloomTtl: DEFAULT_BLOOM_CACHE_TTL_SECONDS,
   staleWhileRevalidate: true,
 }
 
@@ -53,9 +65,9 @@ export const DEFAULT_CACHE_CONFIG: CacheConfig = {
  * Aggressive caching for read-heavy workloads
  */
 export const READ_HEAVY_CACHE_CONFIG: CacheConfig = {
-  dataTtl: 300, // 5 minutes
-  metadataTtl: 900, // 15 minutes
-  bloomTtl: 1800, // 30 minutes
+  dataTtl: READ_HEAVY_DATA_CACHE_TTL_SECONDS,
+  metadataTtl: READ_HEAVY_METADATA_CACHE_TTL_SECONDS,
+  bloomTtl: READ_HEAVY_BLOOM_CACHE_TTL_SECONDS,
   staleWhileRevalidate: true,
 }
 
@@ -63,9 +75,9 @@ export const READ_HEAVY_CACHE_CONFIG: CacheConfig = {
  * Conservative caching for write-heavy workloads
  */
 export const WRITE_HEAVY_CACHE_CONFIG: CacheConfig = {
-  dataTtl: 15, // 15 seconds
-  metadataTtl: 60, // 1 minute
-  bloomTtl: 120, // 2 minutes
+  dataTtl: WRITE_HEAVY_DATA_CACHE_TTL_SECONDS,
+  metadataTtl: WRITE_HEAVY_METADATA_CACHE_TTL_SECONDS,
+  bloomTtl: WRITE_HEAVY_BLOOM_CACHE_TTL_SECONDS,
   staleWhileRevalidate: false,
 }
 

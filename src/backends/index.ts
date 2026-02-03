@@ -219,8 +219,8 @@ export async function createBackend(config: BackendConfig): Promise<EntityBacken
       break
 
     case 'native':
-      // TODO: Implement NativeBackend
-      throw new Error('Native backend not yet implemented - use createBackendWithMigration to auto-migrate to iceberg or delta')
+      // NativeBackend is intentionally not implemented - use Iceberg or Delta instead
+      throw new Error('Native backend not supported as EntityBackend - use createBackendWithMigration to auto-migrate to iceberg or delta')
 
     default: {
       const _exhaustive: never = config.type

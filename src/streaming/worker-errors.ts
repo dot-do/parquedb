@@ -35,6 +35,7 @@
 import type { Event } from '../types/entity'
 import type { StorageBackend } from '../types/storage'
 import type { ParquetSchema } from '../parquet/types'
+import { logger } from '../utils/logger'
 import {
   type MVHandler,
   type WorkerError,
@@ -730,7 +731,7 @@ export class WorkerErrorsMV implements MVHandler {
     this.flushTimer = setInterval(() => {
       if (this.buffer.length > 0 && !this.flushPromise) {
         this.flush().catch((err) => {
-          console.error('[WorkerErrorsMV] Periodic flush failed:', err)
+          logger.error('[WorkerErrorsMV] Periodic flush failed:', err)
         })
       }
     }, this.flushIntervalMs)

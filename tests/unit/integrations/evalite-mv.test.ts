@@ -5,7 +5,7 @@
  * covering built-in views, custom views, and analytics queries.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import {
   createEvaliteAdapter,
@@ -628,8 +628,10 @@ describe('EvaliteMVIntegration', () => {
       const beforeRuns = await shortRetentionIntegration.queryRuns()
       expect(beforeRuns).toHaveLength(1)
 
-      // Wait a bit to ensure timestamp is in the past
-      await new Promise(resolve => setTimeout(resolve, 10))
+      // Advance time past retention period using fake timers
+      vi.useFakeTimers()
+      vi.advanceTimersByTime(10)
+      vi.useRealTimers()
 
       const removed = shortRetentionIntegration.applyRetention()
 

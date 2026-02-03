@@ -38,3 +38,56 @@ export { EventLogImpl } from './events'
 
 // Re-export core
 export { ParqueDBImpl } from './core'
+
+// Re-export entity operations types and helpers
+export {
+  deriveTypeFromNamespace,
+  isFieldRequired,
+  hasDefault,
+  validateFieldType,
+  applySchemaDefaults,
+  type EntityOperationsContext,
+} from './entity-operations'
+
+// Re-export relationship operations types and helpers
+export {
+  indexRelationshipsForEntity,
+  unindexRelationshipsForEntity,
+  applyRelationshipOperators,
+  parseReverseRelation,
+  getReverseRelatedIds,
+  hydrateEntity,
+  applyMaxInboundToEntity,
+  getRelatedEntities,
+  type RelationshipOperationsContext,
+} from './relationship-operations'
+
+// Re-export event operations types and helpers
+export {
+  recordEvent,
+  flushEvents,
+  archiveEvents as archiveEventsOp,
+  reconstructEntityAtTime,
+  reconstructFromEvents,
+  binarySearchLastEventBeforeTime,
+  getEntityHistory,
+  getEntityAtVersion,
+  computeDiff,
+  revertEntity,
+  type EventOperationsContext,
+} from './event-operations'
+
+// Re-export schema operations types and helpers
+export {
+  registerSchema,
+  validateAgainstSchema,
+  legacyValidateAgainstSchema,
+  hasTypeSchema,
+  getTypeSchema,
+  getFieldSchema,
+  isRelationshipField,
+  isReverseRelationshipField,
+  getRelationshipFields,
+  getReverseRelationshipFields,
+  type SchemaOperationsContext,
+} from './schema-operations'

@@ -7,6 +7,11 @@
  * @module observability/evals/types
  */
 
+import type { MultiTenantConfig, CrossTenantAggregate, TenantUsageSummary } from '../ai/types'
+
+// Re-export multi-tenancy types for convenience
+export type { MultiTenantConfig, CrossTenantAggregate, TenantUsageSummary }
+
 // =============================================================================
 // Time Granularity
 // =============================================================================
@@ -138,6 +143,8 @@ export interface EvalScoreAggregate {
   updatedAt: Date
   /** Version for optimistic concurrency */
   version: number
+  /** Tenant identifier (for multi-tenant deployments) */
+  tenantId?: string
 }
 
 /**

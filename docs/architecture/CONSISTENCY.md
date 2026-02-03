@@ -243,7 +243,7 @@ ParqueDB implements CQRS with physical separation of reads and writes:
 | High read throughput | Eventual consistency for reads |
 | Low read latency | Stale data possible |
 | Cost efficient | Complexity of cache invalidation |
-| Write ordering | Single-point-of-write bottleneck |
+| Write ordering | Single-point-of-write bottleneck (~30 req/s per DO, see [DO Write Bottleneck](./do-write-bottleneck.md)) |
 
 ---
 

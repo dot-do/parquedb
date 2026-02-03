@@ -27,6 +27,9 @@
  * @see https://developers.cloudflare.com/workers/observability/logs/tail-workers/
  */
 
+import { createSafeRegex } from '../../utils/safe-regex'
+import { DEFAULT_TAIL_BATCH_MAX_WAIT_MS } from '../../constants'
+
 // =============================================================================
 // TailEvents Stream Collection Definition
 // =============================================================================
@@ -449,7 +452,7 @@ function matchUrlPattern(url: string, pattern: string): boolean {
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*/g, '.*')
     .replace(/\?/g, '.')
-  return new RegExp(`^${regexPattern}$`).test(url)
+  return createSafeRegex(`^${regexPattern}$`).test(url)
 }
 
 /**
@@ -530,7 +533,7 @@ export interface BatchConfig {
  */
 export const DEFAULT_BATCH_CONFIG: BatchConfig = {
   maxEvents: 100,
-  maxWaitMs: 10000,
+  maxWaitMs: DEFAULT_TAIL_BATCH_MAX_WAIT_MS,
   minEvents: 1,
 }
 

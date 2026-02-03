@@ -180,6 +180,34 @@ describe('QueryBuilder', () => {
         const { filter } = builder.build()
         expect(filter).toEqual({ deletedAt: { $exists: false } })
       })
+
+      it('builds $type filter with "type" operator', () => {
+        const builder = new QueryBuilder()
+          .where('views', 'type', 'number')
+        const { filter } = builder.build()
+        expect(filter).toEqual({ views: { $type: 'number' } })
+      })
+
+      it('builds $type filter for array type', () => {
+        const builder = new QueryBuilder()
+          .where('tags', 'type', 'array')
+        const { filter } = builder.build()
+        expect(filter).toEqual({ tags: { $type: 'array' } })
+      })
+
+      it('builds $type filter for string type', () => {
+        const builder = new QueryBuilder()
+          .where('name', 'type', 'string')
+        const { filter } = builder.build()
+        expect(filter).toEqual({ name: { $type: 'string' } })
+      })
+
+      it('builds $type filter for object type', () => {
+        const builder = new QueryBuilder()
+          .where('metadata', 'type', 'object')
+        const { filter } = builder.build()
+        expect(filter).toEqual({ metadata: { $type: 'object' } })
+      })
     })
 
     describe('nested field access', () => {

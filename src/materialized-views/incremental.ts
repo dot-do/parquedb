@@ -26,7 +26,7 @@ import type {
 } from './types'
 import type { Filter } from '../types/filter'
 import type { AggregationStage } from '../aggregation/types'
-import { generateULID } from '../utils'
+import { generateULID, createSafeRegex } from '../utils'
 
 // =============================================================================
 // Types
@@ -817,7 +817,7 @@ export class IncrementalRefresher {
       case '$regex':
         if (typeof fieldValue !== 'string' || typeof operand !== 'string') return false
         try {
-          return new RegExp(operand).test(fieldValue)
+          return createSafeRegex(operand).test(fieldValue)
         } catch {
           return false
         }

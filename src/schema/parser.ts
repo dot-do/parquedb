@@ -24,6 +24,7 @@ import {
   isRelationString as _isRelationString,
 } from '../types/schema'
 import { DEFAULT_SCHEMA_SAMPLE_SIZE, DEFAULT_SCHEMA_MAX_DEPTH } from '../constants'
+import { isNullish } from '../utils/comparison'
 
 // Re-export parsing helpers from types/schema
 export { parseFieldType, parseRelation, isRelationString } from '../types/schema'
@@ -67,6 +68,7 @@ const KNOWN_META_FIELDS = new Set([
   '$abstract',
   '$extends',
   '$indexes',
+  '$visibility',
 ])
 
 // =============================================================================
@@ -542,7 +544,7 @@ function validateEntity(type: ParsedType, data: unknown): ValidationResult {
     const value = obj[fieldName]
 
     // Check required fields
-    if (field.required && (value === undefined || value === null)) {
+    if (field.required && isNullish(value)) {
       errors.push({
         path: fieldName,
         message: `Field '${fieldName}' is required`,
@@ -740,6 +742,25 @@ export function isValidFieldType(value: string): boolean {
     type = type.slice(0, -2)
   }
 
+  // Check for index modifiers (must be before required/optional check)
+  // Order matters: check longer patterns first
+  if (type.endsWith('#fts!') || type.endsWith('#fts')) {
+    type = type.replace(/#fts!?$/, '')
+    if (value.includes('#fts!')) hasRequired = true
+  } else if (type.endsWith('#vec!') || type.endsWith('#vec')) {
+    type = type.replace(/#vec!?$/, '')
+    if (value.includes('#vec!')) hasRequired = true
+  } else if (type.endsWith('#hash!') || type.endsWith('#hash')) {
+    type = type.replace(/#hash!?$/, '')
+    if (value.includes('#hash!')) hasRequired = true
+  } else if (type.endsWith('##!') || type.endsWith('##')) {
+    type = type.replace(/##!?$/, '')
+    if (value.includes('##!')) hasRequired = true
+  } else if (type.endsWith('#!') || type.endsWith('#')) {
+    type = type.replace(/#!?$/, '')
+    if (value.includes('#!')) hasRequired = true
+  }
+
   // Check for required: !
   if (type.endsWith('!')) {
     if (hasRequired) {
@@ -921,7 +942,7 @@ export function inferSchema(
 
       stats.count++
 
-      if (value === null || value === undefined) {
+      if (isNullish(value)) {
         stats.types.add('null')
       } else if (Array.isArray(value)) {
         stats.isArray = true
@@ -984,7 +1005,7 @@ export function inferSchema(
  * Infer the type of a single value
  */
 function inferValueType(value: unknown): string {
-  if (value === null || value === undefined) return 'null'
+  if (isNullish(value)) return 'null'
   if (typeof value === 'string') {
     // Check for specific string formats
     if (/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?/.test(value)) return 'datetime'
@@ -1205,7 +1226,7 @@ export function validateEntityCoreFields(entity: unknown): ValidationResult {
   const obj = entity as Record<string, unknown>
 
   // Check for $id
-  if (!('$id' in obj) || obj.$id === undefined || obj.$id === null) {
+  if (!('$id' in obj) || isNullish(obj.$id)) {
     errors.push({
       path: '$id',
       message: 'Entity must have a $id field',
@@ -1220,7 +1241,7 @@ export function validateEntityCoreFields(entity: unknown): ValidationResult {
   }
 
   // Check for $type
-  if (!('$type' in obj) || obj.$type === undefined || obj.$type === null) {
+  if (!('$type' in obj) || isNullish(obj.$type)) {
     errors.push({
       path: '$type',
       message: 'Entity must have a $type field',
@@ -1235,7 +1256,7 @@ export function validateEntityCoreFields(entity: unknown): ValidationResult {
   }
 
   // Check for name
-  if (!('name' in obj) || obj.name === undefined || obj.name === null) {
+  if (!('name' in obj) || isNullish(obj.name)) {
     errors.push({
       path: 'name',
       message: 'Entity must have a name field',

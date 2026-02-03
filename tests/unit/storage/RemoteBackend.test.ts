@@ -15,20 +15,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { RemoteBackend, createRemoteBackend } from '../../../src/storage/RemoteBackend'
 import { NotFoundError, PermissionDeniedError, NetworkError } from '../../../src/storage/errors'
+import { createMockFetch, type MockFetch } from '../../mocks'
 
 // =============================================================================
 // Test Helpers
 // =============================================================================
 
 /**
- * Create a mock fetch function
- */
-function createMockFetch() {
-  return vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>()
-}
-
-/**
- * Create a mock Response object
+ * Create a mock Response object with specific behavior for RemoteBackend tests.
+ *
+ * This local helper creates Response objects that properly simulate
+ * HTTP responses including status codes, headers, and body handling.
  */
 function createMockResponse(options: {
   status?: number
@@ -78,7 +75,7 @@ function createTestBackend(options: {
   token?: string
   headers?: Record<string, string>
   timeout?: number
-  mockFetch?: ReturnType<typeof createMockFetch>
+  mockFetch?: MockFetch
 }) {
   const mockFetch = options.mockFetch ?? createMockFetch()
   const backend = new RemoteBackend({

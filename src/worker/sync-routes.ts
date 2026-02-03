@@ -23,9 +23,265 @@ import {
   verifyDownloadToken,
   type TokenPayload,
 } from './sync-token'
+import { logger } from '../utils/logger'
+import { SECONDS_PER_DAY, SYNC_TOKEN_URL_EXPIRY_MS } from '../constants'
 
 // Re-export token functions for backwards compatibility and testing
 export { signUploadToken, signDownloadToken, verifyUploadToken, verifyDownloadToken, type TokenPayload }
+
+// =============================================================================
+// URL Parameter Validation
+// =============================================================================
+
+/**
+ * Error thrown when URL parameter validation fails
+ */
+export class InvalidUrlParameterError extends Error {
+  override readonly name = 'InvalidUrlParameterError'
+  readonly parameter: string
+  readonly value: string
+
+  constructor(message: string, parameter: string, value: string) {
+    super(message)
+    Object.setPrototypeOf(this, InvalidUrlParameterError.prototype)
+    this.parameter = parameter
+    this.value = value
+  }
+}
+
+/**
+ * Characters that are dangerous in URL parameters
+ * - Null byte: Can truncate strings in some systems
+ * - Line breaks: Could be used for log injection or header injection
+ */
+const DANGEROUS_CHARS = ['\0', '\n', '\r']
+
+/**
+ * URL-encoded dangerous characters to check before decoding
+ */
+const ENCODED_DANGEROUS_PATTERNS = [
+  '%00',      // Null byte
+  '%0a', '%0A', // Line feed
+  '%0d', '%0D', // Carriage return
+]
+
+/**
+ * Patterns indicating path traversal attempts
+ * These are checked both before and after URL decoding
+ */
+const PATH_TRAVERSAL_PATTERNS = [
+  '../',    // Unix path traversal
+  '..\\',   // Windows path traversal
+  '..',     // Generic traversal (at path boundaries)
+  '%2e%2e', // URL-encoded ..
+  '%2E%2E', // URL-encoded .. (uppercase)
+]
+
+/**
+ * Check if a value contains dangerous characters
+ */
+function hasDangerousChars(value: string): boolean {
+  return DANGEROUS_CHARS.some(char => value.includes(char))
+}
+
+/**
+ * Check if a value contains URL-encoded dangerous characters
+ */
+function hasEncodedDangerousChars(value: string): boolean {
+  const lowerValue = value.toLowerCase()
+  return ENCODED_DANGEROUS_PATTERNS.some(pattern =>
+    lowerValue.includes(pattern.toLowerCase())
+  )
+}
+
+/**
+ * Recursively decode a URL-encoded string up to a maximum depth
+ * This handles double-encoding, triple-encoding, etc.
+ */
+function fullyDecode(value: string, maxDepth: number = 3): string {
+  let current = value
+  for (let i = 0; i < maxDepth; i++) {
+    try {
+      const decoded = decodeURIComponent(current)
+      if (decoded === current) {
+        // No more encoding to decode
+        break
+      }
+      current = decoded
+    } catch {
+      // Invalid encoding, stop decoding
+      break
+    }
+  }
+  return current
+}
+
+/**
+ * Check if a value contains path traversal patterns
+ * Checks the raw value for encoded traversal and decoded value for actual traversal
+ */
+function hasPathTraversal(value: string): boolean {
+  // Check for encoded traversal patterns in the raw value
+  const lowerValue = value.toLowerCase()
+  if (PATH_TRAVERSAL_PATTERNS.some(p => lowerValue.includes(p.toLowerCase()))) {
+    return true
+  }
+
+  // Fully decode (handles double/triple encoding) and check again
+  try {
+    const fullyDecoded = fullyDecode(value)
+    if (fullyDecoded !== value) {
+      // Value was encoded, check fully decoded version
+      const normalizedDecoded = fullyDecoded.replace(/\\/g, '/')
+      const parts = normalizedDecoded.split('/')
+      if (parts.some(part => part === '..')) {
+        return true
+      }
+    }
+  } catch {
+    // If decoding fails, the value might be malformed - still check raw value
+  }
+
+  // Check raw value with normalized separators
+  const normalized = value.replace(/\\/g, '/')
+  const parts = normalized.split('/')
+  return parts.some(part => part === '..')
+}
+
+/**
+ * Validate a URL-derived parameter for security issues
+ *
+ * This function checks for:
+ * 1. Null bytes and other dangerous characters
+ * 2. URL-encoded dangerous characters
+ * 3. Path traversal attempts (../, ..\)
+ * 4. Double-encoded path traversal
+ *
+ * @param value - The parameter value to validate
+ * @param paramName - The parameter name for error messages
+ * @throws InvalidUrlParameterError if validation fails
+ */
+export function validateUrlParameter(value: string, paramName: string): void {
+  // Empty values are invalid
+  if (!value || value.trim() === '') {
+    throw new InvalidUrlParameterError(
+      `${paramName} cannot be empty`,
+      paramName,
+      value
+    )
+  }
+
+  // Check for URL-encoded dangerous characters in raw value
+  if (hasEncodedDangerousChars(value)) {
+    throw new InvalidUrlParameterError(
+      `${paramName} contains dangerous encoded characters`,
+      paramName,
+      value
+    )
+  }
+
+  // Check for path traversal in raw and decoded value
+  if (hasPathTraversal(value)) {
+    throw new InvalidUrlParameterError(
+      `${paramName} contains path traversal sequence`,
+      paramName,
+      value
+    )
+  }
+
+  // Try to decode and check the decoded value
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(value)
+  } catch {
+    throw new InvalidUrlParameterError(
+      `${paramName} contains invalid URL encoding`,
+      paramName,
+      value
+    )
+  }
+
+  // Check decoded value for dangerous characters
+  if (hasDangerousChars(decoded)) {
+    throw new InvalidUrlParameterError(
+      `${paramName} contains dangerous characters`,
+      paramName,
+      value
+    )
+  }
+}
+
+/**
+ * Validate a database ID parameter
+ * Database IDs should be alphanumeric with limited special characters
+ */
+export function validateDatabaseId(databaseId: string): void {
+  validateUrlParameter(databaseId, 'databaseId')
+
+  // Database IDs should match a safe pattern (alphanumeric, hyphens, underscores)
+  // This prevents any path manipulation even if they pass basic traversal checks
+  const safeIdPattern = /^[a-zA-Z0-9_-]+$/
+  if (!safeIdPattern.test(databaseId)) {
+    throw new InvalidUrlParameterError(
+      'databaseId must contain only alphanumeric characters, hyphens, and underscores',
+      'databaseId',
+      databaseId
+    )
+  }
+}
+
+/**
+ * Validate a file path parameter
+ * File paths can contain slashes but must not contain traversal sequences
+ */
+export function validateFilePath(filePath: string): void {
+  validateUrlParameter(filePath, 'filePath')
+
+  // Decode the path for additional validation
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(filePath)
+  } catch {
+    throw new InvalidUrlParameterError(
+      'filePath contains invalid URL encoding',
+      'filePath',
+      filePath
+    )
+  }
+
+  // File paths should not start with a slash (they're relative paths)
+  if (decoded.startsWith('/') || decoded.startsWith('\\')) {
+    throw new InvalidUrlParameterError(
+      'filePath must be a relative path (cannot start with / or \\)',
+      'filePath',
+      filePath
+    )
+  }
+
+  // Validate each path segment
+  const segments = decoded.replace(/\\/g, '/').split('/')
+  for (const segment of segments) {
+    if (segment === '..') {
+      throw new InvalidUrlParameterError(
+        'filePath contains path traversal sequence',
+        'filePath',
+        filePath
+      )
+    }
+    if (segment === '.') {
+      // Single dots are allowed but unusual - skip them
+      continue
+    }
+    // Check for null bytes in segment
+    if (segment.includes('\0')) {
+      throw new InvalidUrlParameterError(
+        'filePath contains null byte',
+        'filePath',
+        filePath
+      )
+    }
+  }
+}
 
 // =============================================================================
 // Types
@@ -60,7 +316,7 @@ const SYNC_CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Max-Age': '86400',
+  'Access-Control-Max-Age': String(SECONDS_PER_DAY),
 }
 
 function addCorsHeaders(response: Response): Response {
@@ -137,6 +393,20 @@ export async function handleSyncRoutes(
   const manifestMatch = path.match(/^\/api\/sync\/manifest\/([^/]+)$/)
   if (manifestMatch) {
     const databaseId = manifestMatch[1]!
+
+    // Validate database ID to prevent path traversal attacks
+    try {
+      validateDatabaseId(databaseId)
+    } catch (error) {
+      if (error instanceof InvalidUrlParameterError) {
+        return addCorsHeaders(Response.json(
+          { error: error.message },
+          { status: 400 }
+        ))
+      }
+      throw error
+    }
+
     if (request.method === 'GET') {
       return addCorsHeaders(await handleGetManifest(env, user, databaseId))
     }
@@ -201,7 +471,7 @@ async function handleRegister(
       prefix: database.prefix,
     }, { status: 201 })
   } catch (error) {
-    console.error('[handleRegister] Error:', error)
+    logger.error('[handleRegister] Error:', error)
     return Response.json(
       { error: error instanceof Error ? error.message : 'Registration failed' },
       { status: 500 }
@@ -231,6 +501,34 @@ async function handleUploadUrls(
       )
     }
 
+    // Validate databaseId to prevent injection attacks
+    try {
+      validateDatabaseId(body.databaseId)
+    } catch (error) {
+      if (error instanceof InvalidUrlParameterError) {
+        return Response.json(
+          { error: error.message },
+          { status: 400 }
+        )
+      }
+      throw error
+    }
+
+    // Validate all file paths to prevent path traversal
+    for (const file of body.files) {
+      try {
+        validateFilePath(file.path)
+      } catch (error) {
+        if (error instanceof InvalidUrlParameterError) {
+          return Response.json(
+            { error: `Invalid file path '${file.path}': ${error.message}` },
+            { status: 400 }
+          )
+        }
+        throw error
+      }
+    }
+
     // Verify user owns the database
     const database = await verifyDatabaseOwnership(env, user, body.databaseId)
     if (!database) {
@@ -251,7 +549,7 @@ async function handleUploadUrls(
     // Generate signed upload URLs
     // For simplicity, we generate worker-proxied URLs with signed tokens
     const baseUrl = new URL(request.url).origin
-    const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString() // 1 hour
+    const expiresAt = new Date(Date.now() + SYNC_TOKEN_URL_EXPIRY_MS).toISOString() // 1 hour
 
     const urls = await Promise.all(body.files.map(async file => {
       const uploadPath = database.prefix
@@ -279,7 +577,7 @@ async function handleUploadUrls(
 
     return Response.json({ urls })
   } catch (error) {
-    console.error('[handleUploadUrls] Error:', error)
+    logger.error('[handleUploadUrls] Error:', error)
     return Response.json(
       { error: error instanceof Error ? error.message : 'Failed to generate upload URLs' },
       { status: 500 }
@@ -305,6 +603,34 @@ async function handleDownloadUrls(
       )
     }
 
+    // Validate databaseId to prevent injection attacks
+    try {
+      validateDatabaseId(body.databaseId)
+    } catch (error) {
+      if (error instanceof InvalidUrlParameterError) {
+        return Response.json(
+          { error: error.message },
+          { status: 400 }
+        )
+      }
+      throw error
+    }
+
+    // Validate all file paths to prevent path traversal
+    for (const path of body.paths) {
+      try {
+        validateFilePath(path)
+      } catch (error) {
+        if (error instanceof InvalidUrlParameterError) {
+          return Response.json(
+            { error: `Invalid file path '${path}': ${error.message}` },
+            { status: 400 }
+          )
+        }
+        throw error
+      }
+    }
+
     // Verify user has access to the database
     const database = await verifyDatabaseAccess(env, user, body.databaseId)
     if (!database) {
@@ -324,7 +650,7 @@ async function handleDownloadUrls(
 
     // Generate download URLs
     const baseUrl = new URL(request.url).origin
-    const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString() // 1 hour
+    const expiresAt = new Date(Date.now() + SYNC_TOKEN_URL_EXPIRY_MS).toISOString() // 1 hour
 
     const urls = await Promise.all(body.paths.map(async path => {
       const downloadToken = await signDownloadToken({
@@ -343,7 +669,7 @@ async function handleDownloadUrls(
 
     return Response.json({ urls })
   } catch (error) {
-    console.error('[handleDownloadUrls] Error:', error)
+    logger.error('[handleDownloadUrls] Error:', error)
     return Response.json(
       { error: error instanceof Error ? error.message : 'Failed to generate download URLs' },
       { status: 500 }
@@ -389,7 +715,7 @@ async function handleGetManifest(
 
     return Response.json(manifest)
   } catch (error) {
-    console.error('[handleGetManifest] Error:', error)
+    logger.error('[handleGetManifest] Error:', error)
     return Response.json(
       { error: error instanceof Error ? error.message : 'Failed to get manifest' },
       { status: 500 }
@@ -434,7 +760,7 @@ async function handleUpdateManifest(
 
     return Response.json({ success: true })
   } catch (error) {
-    console.error('[handleUpdateManifest] Error:', error)
+    logger.error('[handleUpdateManifest] Error:', error)
     return Response.json(
       { error: error instanceof Error ? error.message : 'Failed to update manifest' },
       { status: 500 }
@@ -456,6 +782,20 @@ export async function handleUpload(
   filePath: string
 ): Promise<Response> {
   try {
+    // Validate URL-derived parameters to prevent path traversal attacks
+    try {
+      validateDatabaseId(databaseId)
+      validateFilePath(filePath)
+    } catch (error) {
+      if (error instanceof InvalidUrlParameterError) {
+        return addCorsHeaders(Response.json(
+          { error: error.message },
+          { status: 400 }
+        ))
+      }
+      throw error
+    }
+
     // Validate R2 bucket is configured
     if (!env.BUCKET) {
       const error = new MissingBucketError('BUCKET', 'Required for file uploads.')
@@ -514,7 +854,7 @@ export async function handleUpload(
 
     return addCorsHeaders(Response.json({ success: true, path: filePath }))
   } catch (error) {
-    console.error('[handleUpload] Error:', error)
+    logger.error('[handleUpload] Error:', error)
     return addCorsHeaders(Response.json(
       { error: error instanceof Error ? error.message : 'Upload failed' },
       { status: 500 }
@@ -532,6 +872,20 @@ export async function handleDownload(
   filePath: string
 ): Promise<Response> {
   try {
+    // Validate URL-derived parameters to prevent path traversal attacks
+    try {
+      validateDatabaseId(databaseId)
+      validateFilePath(filePath)
+    } catch (error) {
+      if (error instanceof InvalidUrlParameterError) {
+        return addCorsHeaders(Response.json(
+          { error: error.message },
+          { status: 400 }
+        ))
+      }
+      throw error
+    }
+
     // Validate R2 bucket is configured
     if (!env.BUCKET) {
       const error = new MissingBucketError('BUCKET', 'Required for file downloads.')
@@ -602,7 +956,7 @@ export async function handleDownload(
 
     return new Response(object.body as ReadableStream, { headers })
   } catch (error) {
-    console.error('[handleDownload] Error:', error)
+    logger.error('[handleDownload] Error:', error)
     return addCorsHeaders(Response.json(
       { error: error instanceof Error ? error.message : 'Download failed' },
       { status: 500 }
@@ -644,8 +998,10 @@ async function verifyDatabaseAccess(
   user: UserInfo,
   databaseId: string
 ): Promise<DatabaseInfo | null> {
-  // For now, just check ownership
-  // TODO: Add support for shared databases
+  // Currently only ownership is checked. Shared database access would require:
+  // 1. A sharing/permissions model in the database metadata
+  // 2. Checking if the user has been granted access
+  // For now, only owners can access their databases.
   return verifyDatabaseOwnership(env, user, databaseId)
 }
 

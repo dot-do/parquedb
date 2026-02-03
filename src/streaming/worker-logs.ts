@@ -32,6 +32,7 @@
 import type { StorageBackend } from '../types/storage'
 import type { ParquetSchema } from '../parquet/types'
 import { countFetchSubrequestsFromUnknown } from '../worker/subrequest-tracking'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Tail Worker Types (from Cloudflare Workers Runtime)
@@ -637,7 +638,7 @@ export class WorkerLogsMV {
     this.flushTimer = setInterval(() => {
       if (this.buffer.length > 0 && !this.flushPromise) {
         this.flush().catch((err) => {
-          console.error('[WorkerLogsMV] Periodic flush failed:', err)
+          logger.error('[WorkerLogsMV] Periodic flush failed:', err)
         })
       }
     }, this.flushIntervalMs)

@@ -8,6 +8,7 @@
  */
 
 import type { Env } from '../../types/worker'
+import { logger } from '../../utils/logger'
 import {
   verifyWebhookSignature,
   handleInstallationCreated,
@@ -209,11 +210,11 @@ export async function handleGitHubWebhook(
 
       case 'ping':
         // GitHub sends a ping event when the webhook is first configured
-        console.log(`[GitHub Webhook] Ping received, delivery: ${deliveryId}`)
+        logger.debug(`[GitHub Webhook] Ping received, delivery: ${deliveryId}`)
         break
 
       default:
-        console.log(`[GitHub Webhook] Unhandled event type: ${eventType}`)
+        logger.debug(`[GitHub Webhook] Unhandled event type: ${eventType}`)
     }
 
     return new Response(JSON.stringify({ success: true, event: eventType }), {
@@ -221,7 +222,7 @@ export async function handleGitHubWebhook(
       headers: { 'Content-Type': 'application/json' },
     })
   } catch (error) {
-    console.error(`[GitHub Webhook] Error handling ${eventType}:`, error)
+    logger.error(`[GitHub Webhook] Error handling ${eventType}:`, error)
     return new Response(
       JSON.stringify({
         error: 'Internal error',
@@ -342,14 +343,14 @@ async function getPullRequestDetails(
     )
 
     if (!response.ok) {
-      console.error(`Failed to get PR details: ${response.status}`)
+      logger.error(`[GitHub Webhook] Failed to get PR details: ${response.status}`)
       return null
     }
 
     const pr = (await response.json()) as PullRequestFromComment
     return pr
   } catch (error) {
-    console.error('Error fetching PR details:', error)
+    logger.error('[GitHub Webhook] Error fetching PR details:', error)
     return null
   }
 }
@@ -365,25 +366,26 @@ async function getPullRequestDetails(
  * In a real implementation, this would use the Durable Object bindings.
  */
 function createDatabaseIndexAdapter(_env: GitHubAppEnv): DatabaseIndexService {
-  // TODO: Implement actual DO binding integration
+  // Stub implementation - actual DO binding integration would use:
+  // const stub = env.DATABASE_INDEX.get(env.DATABASE_INDEX.idFromName('global'))
   // For now, return a stub that logs operations
   return {
     getUserByInstallation: async (installationId: number) => {
-      console.log(`[DatabaseIndex] Looking up user for installation ${installationId}`)
+      logger.debug(`[DatabaseIndex] Looking up user for installation ${installationId}`)
       // In production, this would query the DO
       return null
     },
     linkGitHubInstallation: async (userId: string, installationId: number, data) => {
-      console.log(`[DatabaseIndex] Linking installation ${installationId} to user ${userId}`, data)
+      logger.debug(`[DatabaseIndex] Linking installation ${installationId} to user ${userId}`, data)
       // In production, this would update the DO
     },
     unlinkGitHubInstallation: async (installationId: number) => {
-      console.log(`[DatabaseIndex] Unlinking installation ${installationId}`)
+      logger.debug(`[DatabaseIndex] Unlinking installation ${installationId}`)
       // In production, this would update the DO
       return true
     },
     getDatabaseByRepo: async (fullName: string) => {
-      console.log(`[DatabaseIndex] Looking up database for repo ${fullName}`)
+      logger.debug(`[DatabaseIndex] Looking up database for repo ${fullName}`)
       // In production, this would query the DO
       return null
     },
@@ -397,29 +399,30 @@ function createDatabaseIndexAdapter(_env: GitHubAppEnv): DatabaseIndexService {
  * In a real implementation, this would use the Durable Object bindings.
  */
 function createParqueDBAdapter(_env: GitHubAppEnv): ParqueDBService {
-  // TODO: Implement actual DO binding integration
+  // Stub implementation - actual DO binding integration would use:
+  // const stub = env.PARQUEDB.get(env.PARQUEDB.idFromName(databaseId))
   // For now, return a stub that logs operations
   return {
     branch: {
       create: async (name: string, options) => {
-        console.log(`[ParqueDB] Creating branch ${name}`, options)
+        logger.debug(`[ParqueDB] Creating branch ${name}`, options)
         return { name }
       },
       delete: async (name: string) => {
-        console.log(`[ParqueDB] Deleting branch ${name}`)
+        logger.debug(`[ParqueDB] Deleting branch ${name}`)
         return true
       },
       exists: async (name: string) => {
-        console.log(`[ParqueDB] Checking if branch ${name} exists`)
+        logger.debug(`[ParqueDB] Checking if branch ${name} exists`)
         return false
       },
     },
     merge: async (source: string, target: string, options) => {
-      console.log(`[ParqueDB] Merging ${source} into ${target}`, options)
+      logger.debug(`[ParqueDB] Merging ${source} into ${target}`, options)
       return { conflicts: [] }
     },
     diff: async (source: string, target: string) => {
-      console.log(`[ParqueDB] Computing diff between ${source} and ${target}`)
+      logger.debug(`[ParqueDB] Computing diff between ${source} and ${target}`)
       return { entities: {}, relationships: {} }
     },
   }
@@ -438,44 +441,44 @@ async function createOctokitAdapter(
   // Get installation ID from payload
   const installationId = (payload as { installation?: { id: number } })?.installation?.id
 
-  // TODO: Implement actual GitHub App authentication
-  // This would:
-  // 1. Generate JWT using App private key
-  // 2. Exchange JWT for installation access token
-  // 3. Create authenticated Octokit client
+  // GitHub App authentication would require:
+  // 1. Generating JWT using App private key (stored in env.GITHUB_APP_PRIVATE_KEY)
+  // 2. Exchanging JWT for installation access token via POST /app/installations/{id}/access_tokens
+  // 3. Creating authenticated Octokit client with the installation token
+  // For now, return a stub client that logs operations.
 
-  console.log(`[GitHub] Creating Octokit client for installation ${installationId}`)
+  logger.debug(`[GitHub] Creating Octokit client for installation ${installationId}`)
 
   // Return a stub client that logs operations
   return {
     rest: {
       checks: {
         create: async (params) => {
-          console.log('[GitHub] Creating check run', params)
+          logger.debug('[GitHub] Creating check run', params)
           return { data: { id: Date.now() } }
         },
         update: async (params) => {
-          console.log('[GitHub] Updating check run', params)
+          logger.debug('[GitHub] Updating check run', params)
           return { data: { id: params.check_run_id } }
         },
       },
       issues: {
         createComment: async (params) => {
-          console.log('[GitHub] Creating comment', params)
+          logger.debug('[GitHub] Creating comment', params)
           return { data: { id: Date.now() } }
         },
         updateComment: async (params) => {
-          console.log('[GitHub] Updating comment', params)
+          logger.debug('[GitHub] Updating comment', params)
           return { data: { id: params.comment_id } }
         },
         listComments: async (params) => {
-          console.log('[GitHub] Listing comments', params)
+          logger.debug('[GitHub] Listing comments', params)
           return { data: [] }
         },
       },
       reactions: {
         createForIssueComment: async (params) => {
-          console.log('[GitHub] Creating reaction', params)
+          logger.debug('[GitHub] Creating reaction', params)
           return { data: { id: Date.now() } }
         },
       },

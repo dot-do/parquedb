@@ -31,6 +31,7 @@
  */
 
 import type { Context, MiddlewareHandler, Next } from 'hono'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types
@@ -164,7 +165,7 @@ export function csrf(options: CsrfOptions = {}): MiddlewareHandler {
     // Skip excluded paths
     if (isPathExcluded(path, excludePaths)) {
       if (debug) {
-        console.log(`[CSRF] Skipping excluded path: ${path}`)
+        logger.debug(`[CSRF] Skipping excluded path: ${path}`)
       }
       return next()
     }
@@ -178,11 +179,11 @@ export function csrf(options: CsrfOptions = {}): MiddlewareHandler {
 
     if (!result.valid) {
       if (debug) {
-        console.warn(`[CSRF] Validation failed: ${result.reason}`)
-        console.warn(`[CSRF] Request: ${method} ${path}`)
-        console.warn(`[CSRF] Origin: ${c.req.header('Origin')}`)
-        console.warn(`[CSRF] Referer: ${c.req.header('Referer')}`)
-        console.warn(`[CSRF] X-Requested-With: ${c.req.header('X-Requested-With')}`)
+        logger.warn(`[CSRF] Validation failed: ${result.reason}`)
+        logger.warn(`[CSRF] Request: ${method} ${path}`)
+        logger.warn(`[CSRF] Origin: ${c.req.header('Origin')}`)
+        logger.warn(`[CSRF] Referer: ${c.req.header('Referer')}`)
+        logger.warn(`[CSRF] X-Requested-With: ${c.req.header('X-Requested-With')}`)
       }
 
       if (onError) {
@@ -200,7 +201,7 @@ export function csrf(options: CsrfOptions = {}): MiddlewareHandler {
     }
 
     if (debug) {
-      console.log(`[CSRF] Validation passed for ${method} ${path}`)
+      logger.debug(`[CSRF] Validation passed for ${method} ${path}`)
     }
 
     return next()

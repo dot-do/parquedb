@@ -54,6 +54,7 @@ import type { StorageBackend } from '../types/storage'
 import type { EntityId } from '../types'
 import type { DatabaseInfo } from '../worker/DatabaseIndexDO'
 import { parseRoute, resolveDatabase, generateDatabaseNotFoundHtml } from './database'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Constants
@@ -643,7 +644,7 @@ export function databaseContextMiddleware(
       return next()
     } catch (error) {
       // Error resolving database - context is null
-      console.error('[databaseContextMiddleware] Error:', error)
+      logger.error('[databaseContextMiddleware] Error:', error)
       c.set('databaseContext', null)
       return next()
     }

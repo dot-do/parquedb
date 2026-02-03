@@ -51,8 +51,8 @@ function createMockDB(
       getRelatedCallCount++
       getRelatedCalls.push({ namespace, id, relation: relationField })
 
-      // Simulate some latency
-      await new Promise((resolve) => setTimeout(resolve, 1))
+      // Use yield to allow other promises to run (simulates async without real delay)
+      await Promise.resolve()
 
       const nsData = mockData.get(namespace)
       if (!nsData) {

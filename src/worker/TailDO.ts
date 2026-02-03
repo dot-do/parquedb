@@ -38,6 +38,8 @@ import type { StorageBackend } from '../types/storage'
 import type { R2Bucket as InternalR2Bucket } from '../storage/types/r2'
 import { toR2Bucket } from '../utils/type-utils'
 import type { ValidatedTraceItem } from './tail-validation'
+import { logger } from '../utils/logger'
+import { DEFAULT_TAIL_BUFFER_SIZE, DEFAULT_DO_FLUSH_INTERVAL_MS } from '../constants'
 
 // =============================================================================
 // Types
@@ -170,7 +172,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
   private stateLoaded = false
 
   /** Maximum buffer size before forced flush (prevents unbounded memory growth) */
-  private static readonly MAX_BUFFER_SIZE = 1000
+  private static readonly MAX_BUFFER_SIZE = DEFAULT_TAIL_BUFFER_SIZE
 
   /** Storage keys for persisted state */
   private static readonly STORAGE_KEY_BUFFER = 'rawEventsBuffer'
@@ -206,7 +208,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
 
     if (buffer !== undefined) {
       this.rawEventsBuffer = buffer
-      console.log(`[TailDO] Restored ${buffer.length} events from storage after hibernation`)
+      logger.debug(`[TailDO] Restored ${buffer.length} events from storage after hibernation`)
     }
 
     if (batchSeq !== undefined) {
@@ -250,7 +252,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
     const bucket = toR2Bucket<InternalR2Bucket>(this.env.LOGS_BUCKET)
     this.storage = new R2Backend(bucket)
 
-    console.log('[TailDO] Initialized, raw events will be written to R2')
+    logger.info('[TailDO] Initialized, raw events will be written to R2')
   }
 
   /**
@@ -311,7 +313,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
     // Persist the updated batchSeq to survive hibernation
     await this.ctx.storage.put(TailDO.STORAGE_KEY_BATCH_SEQ, this.batchSeq)
 
-    console.log(`[TailDO] Wrote ${events.length} raw events to ${filePath}`)
+    logger.debug(`[TailDO] Wrote ${events.length} raw events to ${filePath}`)
   }
 
   /**
@@ -348,7 +350,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
     if (!this.alarmScheduled && this.rawEventsBuffer.length > 0) {
       const flushIntervalMs = this.env.FLUSH_INTERVAL_MS
         ? parseInt(this.env.FLUSH_INTERVAL_MS, 10)
-        : 30000
+        : DEFAULT_DO_FLUSH_INTERVAL_MS
       await this.ctx.storage.setAlarm(Date.now() + flushIntervalMs)
       this.alarmScheduled = true
     }
@@ -446,7 +448,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
-      console.error('[TailDO] Error processing message:', message)
+      logger.error('[TailDO] Error processing message:', message)
       this.sendError(ws, message)
     }
   }
@@ -464,7 +466,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
   ): Promise<void> {
     const meta = this.connections.get(ws)
     if (meta) {
-      console.log(
+      logger.info(
         `[TailDO] Connection closed: instanceId=${meta.instanceId}, ` +
         `eventsReceived=${meta.eventsReceived}, code=${code}, wasClean=${wasClean}`
       )
@@ -484,7 +486,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
    */
   override async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
     const message = error instanceof Error ? error.message : 'Unknown error'
-    console.error('[TailDO] WebSocket error:', message)
+    logger.error('[TailDO] WebSocket error:', message)
 
     // Clean up connection
     this.connections.delete(ws)
@@ -542,7 +544,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
     this.alarmScheduled = false
 
     if (this.rawEventsBuffer.length > 0) {
-      console.log(`[TailDO] Alarm flush: ${this.rawEventsBuffer.length} raw events`)
+      logger.debug(`[TailDO] Alarm flush: ${this.rawEventsBuffer.length} raw events`)
       await this.flushRawEvents()
     }
 
@@ -550,7 +552,7 @@ export class TailDO extends DurableObject<TailDOEnv> {
     if (this.connections.size > 0 || this.rawEventsBuffer.length > 0) {
       const flushIntervalMs = this.env.FLUSH_INTERVAL_MS
         ? parseInt(this.env.FLUSH_INTERVAL_MS, 10)
-        : 30000
+        : DEFAULT_DO_FLUSH_INTERVAL_MS
       await this.ctx.storage.setAlarm(Date.now() + flushIntervalMs)
       this.alarmScheduled = true
     }

@@ -22,6 +22,7 @@ import type { IndexManager, SelectedIndex } from '../indexes/manager'
 export type { IndexLookupResult, FTSSearchResult } from '../indexes/types'
 import { logger } from '../utils/logger'
 import { stringToBase64 } from '../utils/base64'
+import { isNullish } from '../utils/comparison'
 import {
   globalHookRegistry,
   createQueryContext,
@@ -112,6 +113,27 @@ export interface QueryPlan {
     field?: string
     /** Whether index will be used */
     willUse: boolean
+  }
+  /** Vector search plan (for $vector queries) */
+  vectorSearch?: {
+    /** Vector index name */
+    indexName: string
+    /** Field being searched */
+    field: string
+    /** Number of results requested */
+    topK: number
+    /** efSearch parameter */
+    efSearch: number
+    /** Minimum similarity score */
+    minScore?: number
+    /** Whether this is a hybrid search */
+    isHybrid: boolean
+    /** Hybrid search strategy (if applicable) */
+    hybridStrategy?: 'pre-filter' | 'post-filter' | 'auto'
+    /** Strategy reasoning */
+    strategyReason?: string
+    /** Estimated filter selectivity for hybrid search */
+    filterSelectivity?: number
   }
 }
 
@@ -491,7 +513,8 @@ export class QueryExecutor {
       const columns = this.selectColumns(filter, options)
 
       // Read all rows and filter by candidate IDs
-      // TODO: Optimize to read only specific row groups based on index hints
+      // Performance note: Row group filtering based on index hints could optimize this further
+      // by using candidate docIds to determine which row groups contain relevant data
       const allRows = await this.reader.readAll<T>(dataPath, columns.length > 0 ? columns : undefined)
 
       // Filter to candidate documents
@@ -866,6 +889,72 @@ export class QueryExecutor {
         },
       }
 
+      // Add vector search plan if applicable
+      if (filter.$vector) {
+        const vq = filter.$vector as {
+          query?: number[] | string
+          field?: string
+          topK?: number
+          minScore?: number
+          efSearch?: number
+          strategy?: 'pre-filter' | 'post-filter' | 'auto'
+          $near?: number[]
+          $k?: number
+          $field?: string
+          $minScore?: number
+        }
+
+        const field = vq.field ?? vq.$field ?? 'embedding'
+        const topK = vq.topK ?? vq.$k ?? 10
+        const efSearch = vq.efSearch ?? Math.max(topK * 2, 50)
+
+        // Check if this is a hybrid search
+        const metadataFilterKeys = Object.keys(filter).filter(
+          k => k !== '$vector' && k !== '$and' && k !== '$or' && k !== '$not'
+        )
+        const isHybrid = metadataFilterKeys.length > 0
+
+        // Estimate filter selectivity for hybrid search
+        let filterSelectivity: number | undefined
+        let strategyReason: string | undefined
+
+        if (isHybrid) {
+          // Simple heuristic: estimate based on number of filter conditions
+          filterSelectivity = Math.max(0.1, 1 - (metadataFilterKeys.length * 0.2))
+          const strategy = vq.strategy ?? 'auto'
+
+          if (strategy === 'auto') {
+            const usePreFilter = filterSelectivity < 0.3
+            strategyReason = usePreFilter
+              ? `Auto-selected pre-filter: filter selectivity ${(filterSelectivity * 100).toFixed(0)}% is low enough for efficient candidate filtering`
+              : `Auto-selected post-filter: filter selectivity ${(filterSelectivity * 100).toFixed(0)}% is too high for pre-filtering to be efficient`
+          } else {
+            strategyReason = `Strategy explicitly set to ${strategy}`
+          }
+        }
+
+        // Get index name from index manager if available
+        let indexName = `idx_${field}`
+        if (this.indexManager) {
+          const selectedIndex = await this.indexManager.selectIndex(ns, filter)
+          if (selectedIndex?.index) {
+            indexName = selectedIndex.index.name
+          }
+        }
+
+        plan.vectorSearch = {
+          indexName,
+          field,
+          topK,
+          efSearch,
+          minScore: vq.minScore ?? vq.$minScore,
+          isHybrid,
+          hybridStrategy: isHybrid ? (vq.strategy ?? 'auto') : undefined,
+          strategyReason,
+          filterSelectivity,
+        }
+      }
+
       // Dispatch query end hook
       await globalHookRegistry.dispatchQueryEnd(hookContext, {
         rowCount: 0,
@@ -1102,7 +1191,7 @@ export class QueryExecutor {
     if (!options.includeDeleted) {
       result = result.filter(row => {
         const r = row as Record<string, unknown>
-        return r.deletedAt === undefined || r.deletedAt === null
+        return isNullish(r.deletedAt)
       })
     }
 
@@ -1169,13 +1258,13 @@ export class QueryExecutor {
    * Get field value with dot notation support
    */
   private getFieldValue(obj: unknown, path: string): unknown {
-    if (obj === null || obj === undefined) return undefined
+    if (isNullish(obj)) return undefined
 
     const parts = path.split('.')
     let current: unknown = obj
 
     for (const part of parts) {
-      if (current === null || current === undefined) return undefined
+      if (isNullish(current)) return undefined
       if (typeof current !== 'object') return undefined
       current = (current as Record<string, unknown>)[part]
     }
@@ -1188,10 +1277,10 @@ export class QueryExecutor {
    */
   private compareValues(a: unknown, b: unknown): number {
     // Nulls sort first
-    if (a === null || a === undefined) {
-      return b === null || b === undefined ? 0 : -1
+    if (isNullish(a)) {
+      return isNullish(b) ? 0 : -1
     }
-    if (b === null || b === undefined) return 1
+    if (isNullish(b)) return 1
 
     // Same type comparisons
     if (typeof a === 'number' && typeof b === 'number') return a - b
@@ -1534,7 +1623,7 @@ export class QueryExecutor {
 
     for (const row of rows) {
       const val = this.evaluateExpression(row, expr)
-      if (val === null || val === undefined) continue
+      if (isNullish(val)) continue
       if (min === undefined || this.compareValues(val, min) < 0) {
         min = val
       }
@@ -1553,7 +1642,7 @@ export class QueryExecutor {
 
     for (const row of rows) {
       const val = this.evaluateExpression(row, expr)
-      if (val === null || val === undefined) continue
+      if (isNullish(val)) continue
       if (max === undefined || this.compareValues(val, max) > 0) {
         max = val
       }

@@ -12,6 +12,13 @@ import type {
   Id,
   Relationship,
 } from '../../types'
+import {
+  DEFAULT_BACKPRESSURE_MAX_BUFFER_BYTES,
+  DEFAULT_BACKPRESSURE_MAX_EVENTS,
+  DEFAULT_BACKPRESSURE_MAX_PENDING_FLUSHES,
+  DEFAULT_BACKPRESSURE_RELEASE_THRESHOLD,
+  DEFAULT_BACKPRESSURE_TIMEOUT_MS,
+} from '../../constants'
 
 // =============================================================================
 // Cache Invalidation Types
@@ -182,6 +189,109 @@ export interface FlushConfig {
   maxInterval: number
   maxEvents: number
   rowGroupSize: number
+}
+
+// =============================================================================
+// Backpressure Configuration
+// =============================================================================
+
+/**
+ * Configuration for backpressure handling in WAL managers.
+ *
+ * Backpressure prevents unbounded memory growth under sustained write load by:
+ * - Pausing new writes when buffer exceeds configurable thresholds
+ * - Tracking pending flush promises
+ * - Providing feedback to callers via Promises
+ * - Releasing backpressure when buffer drops below release threshold
+ */
+export interface BackpressureConfig {
+  /**
+   * Maximum buffer size in bytes before backpressure is applied.
+   * @default 1048576 (1MB)
+   */
+  maxBufferSizeBytes: number
+
+  /**
+   * Maximum number of events in buffer before backpressure is applied.
+   * @default 1000
+   */
+  maxBufferEventCount: number
+
+  /**
+   * Maximum number of pending flushes before backpressure is applied.
+   * @default 10
+   */
+  maxPendingFlushes: number
+
+  /**
+   * Threshold (0-1) at which backpressure is released.
+   * Backpressure is released when buffer drops below this percentage of max.
+   * @default 0.5 (50%)
+   */
+  releaseThreshold: number
+
+  /**
+   * Timeout in milliseconds for waiting on backpressure.
+   * If exceeded, throws BackpressureTimeoutError.
+   * @default 30000 (30 seconds)
+   */
+  timeoutMs: number
+}
+
+/**
+ * Default backpressure configuration values.
+ */
+export const DEFAULT_BACKPRESSURE_CONFIG: BackpressureConfig = {
+  maxBufferSizeBytes: DEFAULT_BACKPRESSURE_MAX_BUFFER_BYTES,
+  maxBufferEventCount: DEFAULT_BACKPRESSURE_MAX_EVENTS,
+  maxPendingFlushes: DEFAULT_BACKPRESSURE_MAX_PENDING_FLUSHES,
+  releaseThreshold: DEFAULT_BACKPRESSURE_RELEASE_THRESHOLD,
+  timeoutMs: DEFAULT_BACKPRESSURE_TIMEOUT_MS,
+}
+
+/**
+ * Current state of backpressure in a WAL manager.
+ */
+export interface BackpressureState {
+  /** Whether backpressure is currently active */
+  active: boolean
+
+  /** Current buffer size in bytes */
+  currentBufferSizeBytes: number
+
+  /** Current number of events in buffer */
+  currentEventCount: number
+
+  /** Number of pending flush operations */
+  pendingFlushCount: number
+
+  /** Total number of backpressure events since last reset */
+  backpressureEvents: number
+
+  /** Total time spent waiting on backpressure in milliseconds */
+  totalWaitTimeMs: number
+
+  /** Timestamp of last backpressure activation, or null if never */
+  lastBackpressureAt: number | null
+}
+
+/**
+ * Error thrown when backpressure timeout is exceeded.
+ */
+export class BackpressureTimeoutError extends Error {
+  name = 'BackpressureTimeoutError'
+
+  constructor(
+    public readonly timeoutMs: number,
+    public readonly state: BackpressureState
+  ) {
+    super(
+      `Backpressure timeout exceeded (${timeoutMs}ms). ` +
+        `Buffer: ${state.currentBufferSizeBytes} bytes, ` +
+        `${state.currentEventCount} events, ` +
+        `${state.pendingFlushCount} pending flushes`
+    )
+  }
 }
 
 // =============================================================================

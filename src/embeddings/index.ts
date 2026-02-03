@@ -82,6 +82,9 @@ export {
   type EmbeddingQueueItem,
   type QueueProcessingResult,
   type QueueStats,
+  type QueueMetrics,
+  type DeadLetterItem,
+  type ErrorCallback,
   type EntityLoader,
   type EntityUpdater,
 } from './background'

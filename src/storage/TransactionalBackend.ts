@@ -37,6 +37,37 @@ import { generateEtag } from './utils'
 import { NotFoundError } from './errors'
 
 // =============================================================================
+// Configuration
+// =============================================================================
+
+// Import from centralized constants
+// Note: Using local constants for now to maintain existing API compatibility
+// These can be unified with central constants in a future refactor
+
+/** Default maximum number of operations per transaction */
+const DEFAULT_MAX_TRANSACTION_OPERATIONS = 10000 // Matches constants.ts DEFAULT_MAX_EVENTS
+
+/** Default maximum total bytes per transaction (100MB) */
+const DEFAULT_MAX_TRANSACTION_BYTES = 100 * 1024 * 1024
+
+/** Options for configuring TransactionalBackend */
+export interface TransactionalBackendOptions {
+  /**
+   * Maximum number of operations (writes + deletes) allowed per transaction.
+   * Prevents memory pressure from extremely large transactions.
+   * @default 10000
+   */
+  maxTransactionOperations?: number
+
+  /**
+   * Maximum total bytes of write data allowed per transaction.
+   * Prevents memory exhaustion from large payloads.
+   * @default 104857600 (100MB)
+   */
+  maxTransactionBytes?: number
+}
+
+// =============================================================================
 // Transaction State
 // =============================================================================
 
@@ -63,6 +94,15 @@ interface OriginalState {
   data: Uint8Array | null
 }
 
+/** Transaction limits configuration */
+interface TransactionLimits {
+  /** Maximum number of operations allowed */
+  maxOperations: number
+
+  /** Maximum bytes allowed */
+  maxBytes: number
+}
+
 /** Transaction state */
 interface TransactionState {
   /** Unique transaction ID */
@@ -76,6 +116,12 @@ interface TransactionState {
 
   /** Timestamp when transaction started */
   startedAt: Date
+
+  /** Current total bytes of pending write data */
+  currentBytes: number
+
+  /** Transaction limits */
+  limits: TransactionLimits
 }
 
 // =============================================================================
@@ -132,10 +178,61 @@ class TransactionImpl implements Transaction {
   }
 
   /**
+   * Check if adding an operation would exceed transaction limits
+   */
+  private checkLimits(newBytes: number): void {
+    const { limits, pending, currentBytes } = this.state
+
+    // Check operation count limit
+    // Note: We check after incrementing because this is a new operation
+    if (pending.size >= limits.maxOperations) {
+      throw new TransactionTooLargeError(
+        this.id,
+        'operations',
+        limits.maxOperations,
+        pending.size + 1
+      )
+    }
+
+    // Check bytes limit
+    const projectedBytes = currentBytes + newBytes
+    if (projectedBytes > limits.maxBytes) {
+      throw new TransactionTooLargeError(this.id, 'bytes', limits.maxBytes, projectedBytes)
+    }
+  }
+
+  /**
    * Buffer a write operation
    */
   async write(path: string, data: Uint8Array): Promise<void> {
     this.ensureActive()
+
+    // Get the existing operation for this path (if any)
+    const existing = this.state.pending.get(path)
+    const existingBytes = existing?.type === 'write' ? existing.data.length : 0
+
+    // Calculate net new bytes (new data minus any existing data for this path)
+    const netNewBytes = data.length - existingBytes
+
+    // Check limits before adding the operation
+    // Only check operation count if this is a new path
+    if (!existing) {
+      this.checkLimits(netNewBytes)
+    } else if (netNewBytes > 0) {
+      // Existing path, just check bytes limit
+      const projectedBytes = this.state.currentBytes + netNewBytes
+      if (projectedBytes > this.state.limits.maxBytes) {
+        throw new TransactionTooLargeError(
+          this.id,
+          'bytes',
+          this.state.limits.maxBytes,
+          projectedBytes
+        )
+      }
+    }
+
+    // Update bytes tracking
+    this.state.currentBytes += netNewBytes
 
     this.state.pending.set(path, {
       type: 'write',
@@ -148,6 +245,26 @@ class TransactionImpl implements Transaction {
    */
   async delete(path: string): Promise<void> {
     this.ensureActive()
+
+    // Get the existing operation for this path (if any)
+    const existing = this.state.pending.get(path)
+
+    // Check operation count limit only if this is a new path
+    if (!existing) {
+      if (this.state.pending.size >= this.state.limits.maxOperations) {
+        throw new TransactionTooLargeError(
+          this.id,
+          'operations',
+          this.state.limits.maxOperations,
+          this.state.pending.size + 1
+        )
+      }
+    }
+
+    // If replacing a write with a delete, reclaim the bytes
+    if (existing?.type === 'write') {
+      this.state.currentBytes -= existing.data.length
+    }
 
     this.state.pending.set(path, {
       type: 'delete',
@@ -330,8 +447,18 @@ export class TransactionalBackend implements ITransactionalBackend {
   /** Counter for generating transaction IDs */
   private txCounter = 0
 
-  constructor(private readonly backend: StorageBackend) {
+  /** Transaction limits configuration */
+  private readonly limits: TransactionLimits
+
+  constructor(
+    private readonly backend: StorageBackend,
+    options?: TransactionalBackendOptions
+  ) {
     this.type = `transactional:${backend.type}`
+    this.limits = {
+      maxOperations: options?.maxTransactionOperations ?? DEFAULT_MAX_TRANSACTION_OPERATIONS,
+      maxBytes: options?.maxTransactionBytes ?? DEFAULT_MAX_TRANSACTION_BYTES,
+    }
   }
 
   /**
@@ -370,6 +497,8 @@ export class TransactionalBackend implements ITransactionalBackend {
       pending: new Map(),
       active: true,
       startedAt: new Date(),
+      currentBytes: 0,
+      limits: this.limits,
     }
 
     this.transactions.set(id, state)
@@ -499,6 +628,38 @@ export class TransactionCommitError extends TransactionError {
   }
 }
 
+/**
+ * Error thrown when a transaction exceeds configured size limits
+ */
+export class TransactionTooLargeError extends TransactionError {
+  constructor(
+    transactionId: string,
+    public readonly limitType: 'operations' | 'bytes',
+    public readonly limit: number,
+    public readonly actual: number
+  ) {
+    const limitDescription =
+      limitType === 'operations'
+        ? `operation count limit of ${limit.toLocaleString()}`
+        : `size limit of ${formatBytes(limit)}`
+    const actualDescription =
+      limitType === 'operations' ? actual.toLocaleString() : formatBytes(actual)
+
+    super(transactionId, `Transaction exceeds ${limitDescription} (attempted: ${actualDescription})`)
+    this.name = 'TransactionTooLargeError'
+  }
+}
+
+/**
+ * Format bytes as human-readable string
+ */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
+}
+
 // =============================================================================
 // Helper Functions
 // =============================================================================
@@ -515,13 +676,24 @@ export class TransactionCommitError extends TransactionError {
  * await tx.write('file.txt', data)
  * await tx.commit()
  * ```
+ *
+ * @example With custom limits
+ * ```typescript
+ * const txBackend = withTransactions(backend, {
+ *   maxTransactionOperations: 5000,
+ *   maxTransactionBytes: 50 * 1024 * 1024 // 50MB
+ * })
+ * ```
  */
-export function withTransactions(backend: StorageBackend): TransactionalBackend {
+export function withTransactions(
+  backend: StorageBackend,
+  options?: TransactionalBackendOptions
+): TransactionalBackend {
   // Don't double-wrap
   if (backend instanceof TransactionalBackend) {
     return backend
   }
-  return new TransactionalBackend(backend)
+  return new TransactionalBackend(backend, options)
 }
 
 /**

@@ -34,7 +34,7 @@
  */
 
 import type { Filter } from '../types/filter'
-import { deepEqual, compareValues, getNestedValue, getValueType, createSafeRegex, UnsafeRegexError } from '../utils'
+import { deepEqual, compareValues, getNestedValue, getValueType, createSafeRegex, UnsafeRegexError, logger, isNullish } from '../utils'
 
 // =============================================================================
 // Configuration
@@ -54,25 +54,53 @@ export interface FilterConfig {
 }
 
 /**
- * Global filter configuration
- * Can be overridden per operation
+ * Default filter configuration
+ * This is the recommended way to use configuration - pass it explicitly to filter functions
  */
-let globalFilterConfig: FilterConfig = {
+export const DEFAULT_FILTER_CONFIG: Readonly<FilterConfig> = Object.freeze({
   unknownOperatorBehavior: 'ignore',
-}
+})
 
 /**
  * Set global filter configuration
+ *
+ * @deprecated This function is deprecated and has no effect. Pass config directly to
+ * matchesFilter/createPredicate/matchesCondition instead. This avoids issues in
+ * concurrent/multi-tenant environments.
+ *
+ * Example:
+ * ```typescript
+ * // Instead of:
+ * setFilterConfig({ unknownOperatorBehavior: 'warn' })
+ * matchesFilter(doc, filter)
+ *
+ * // Use:
+ * matchesFilter(doc, filter, { unknownOperatorBehavior: 'warn' })
+ * ```
  */
-export function setFilterConfig(config: FilterConfig): void {
-  globalFilterConfig = { ...globalFilterConfig, ...config }
+export function setFilterConfig(_config: FilterConfig): void {
+  logger.warn('setFilterConfig is deprecated and has no effect. Pass config directly to filter functions.')
 }
 
 /**
  * Get current filter configuration
+ *
+ * @deprecated This function is deprecated and always returns DEFAULT_FILTER_CONFIG.
+ * Use DEFAULT_FILTER_CONFIG directly or pass config explicitly to filter functions.
  */
 export function getFilterConfig(): FilterConfig {
-  return { ...globalFilterConfig }
+  logger.warn('getFilterConfig is deprecated. Use DEFAULT_FILTER_CONFIG or pass config explicitly.')
+  return { ...DEFAULT_FILTER_CONFIG }
+}
+
+/**
+ * Reset global filter configuration to defaults
+ *
+ * @deprecated This function is deprecated and has no effect. There is no longer any
+ * global state to reset. Pass config explicitly to filter functions instead.
+ */
+export function resetFilterConfig(): void {
+  // No-op: there is no global state to reset
 }
 
 /**
@@ -95,9 +123,14 @@ const KNOWN_OPERATORS = new Set([
 
 /**
  * Handle unknown operator
+ *
+ * Uses the explicit config parameter if provided, otherwise falls back to DEFAULT_FILTER_CONFIG.
+ * There is no global mutable state - configuration must be passed explicitly for non-default behavior.
  */
 function handleUnknownOperator(operator: string, config?: FilterConfig): void {
-  const behavior = config?.unknownOperatorBehavior ?? globalFilterConfig.unknownOperatorBehavior ?? 'ignore'
+  const behavior = config?.unknownOperatorBehavior
+    ?? DEFAULT_FILTER_CONFIG.unknownOperatorBehavior
+    ?? 'ignore'
 
   if (behavior === 'ignore') {
     return
@@ -106,7 +139,7 @@ function handleUnknownOperator(operator: string, config?: FilterConfig): void {
   const message = `Unknown query operator: ${operator}`
 
   if (behavior === 'warn') {
-    console.warn(message)
+    logger.warn(message)
   } else if (behavior === 'error') {
     throw new Error(message)
   }
@@ -129,7 +162,7 @@ export function matchesFilter(row: unknown, filter: Filter, config?: FilterConfi
     return true
   }
 
-  if (row === null || row === undefined) {
+  if (isNullish(row)) {
     return false
   }
 
@@ -246,7 +279,7 @@ export function createPredicate(filter: Filter, config?: FilterConfig): (row: un
 export function matchesCondition(value: unknown, condition: unknown, config?: FilterConfig): boolean {
   // Null condition - matches both null and undefined (MongoDB behavior)
   if (condition === null) {
-    return value === null || value === undefined
+    return isNullish(value)
   }
 
   // Undefined condition - no condition specified, always matches
@@ -301,25 +334,25 @@ function evaluateComparisonOperator(value: unknown, op: string, opValue: unknown
       return !deepEqual(value, opValue)
 
     case '$gt': {
-      if (value === null || value === undefined) return false
+      if (isNullish(value)) return false
       const cmp = compareValues(value, opValue)
       return !Number.isNaN(cmp) && cmp > 0
     }
 
     case '$gte': {
-      if (value === null || value === undefined) return false
+      if (isNullish(value)) return false
       const cmp = compareValues(value, opValue)
       return !Number.isNaN(cmp) && cmp >= 0
     }
 
     case '$lt': {
-      if (value === null || value === undefined) return false
+      if (isNullish(value)) return false
       const cmp = compareValues(value, opValue)
       return !Number.isNaN(cmp) && cmp < 0
     }
 
     case '$lte': {
-      if (value === null || value === undefined) return false
+      if (isNullish(value)) return false
       const cmp = compareValues(value, opValue)
       return !Number.isNaN(cmp) && cmp <= 0
     }
@@ -334,7 +367,7 @@ function evaluateComparisonOperator(value: unknown, op: string, opValue: unknown
 
     case '$mod': {
       // $mod: [divisor, remainder] - matches when value % divisor === remainder
-      if (typeof value !== 'number' || value === null || value === undefined) return false
+      if (typeof value !== 'number' || isNullish(value)) return false
       if (!Array.isArray(opValue) || opValue.length !== 2) return false
       const [divisor, remainder] = opValue as [number, number]
       if (typeof divisor !== 'number' || typeof remainder !== 'number') return false

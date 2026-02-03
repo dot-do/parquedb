@@ -19,6 +19,7 @@
 
 import type { ParqueDB } from '../../ParqueDB.js'
 import type { EntityId } from '../../types/entity.js'
+import { logger } from '../../utils/logger.js'
 import type {
   DrizzleProxyCallback,
   DrizzleProxyResult,
@@ -53,9 +54,9 @@ export function createDrizzleProxy(
 
   return async (sql: string, params: unknown[], method: DrizzleMethod): Promise<DrizzleProxyResult> => {
     if (debug) {
-      console.log('[drizzle-parquedb] SQL:', sql)
-      console.log('[drizzle-parquedb] Params:', params)
-      console.log('[drizzle-parquedb] Method:', method)
+      logger.debug('[drizzle-parquedb] SQL:', sql)
+      logger.debug('[drizzle-parquedb] Params:', params)
+      logger.debug('[drizzle-parquedb] Method:', method)
     }
 
     try {
@@ -158,7 +159,7 @@ export function createDrizzleProxy(
       }
     } catch (error) {
       if (debug) {
-        console.error('[drizzle-parquedb] Error:', error)
+        logger.error('[drizzle-parquedb] Error:', error)
       }
       throw error
     }

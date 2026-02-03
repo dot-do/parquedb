@@ -23,6 +23,8 @@ import {
   parseSchema,
 } from './parser'
 
+import { logger } from '../utils/logger'
+
 // =============================================================================
 // Validation Error Classes
 // =============================================================================
@@ -675,7 +677,7 @@ export class SchemaValidator {
         throw new SchemaValidationError(typeName, errors)
 
       case 'warn':
-        console.warn(formatValidationErrors(typeName, errors))
+        logger.warn(formatValidationErrors(typeName, errors))
         return { valid: false, errors }
 
       case 'permissive':

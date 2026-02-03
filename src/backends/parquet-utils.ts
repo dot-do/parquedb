@@ -9,6 +9,7 @@ import type { Entity, EntityId, CreateInput } from '../types/entity'
 import type { Filter } from '../types/filter'
 import type { ParquetSchema } from '../parquet/types'
 import { encodeVariant, decodeVariant } from '../parquet/variant'
+import { createSafeRegex } from '../utils/safe-regex'
 
 // =============================================================================
 // Entity Serialization
@@ -308,7 +309,7 @@ export function matchesFilter(entity: Record<string, unknown>, filter: Filter): 
           if (!expected && value !== undefined) return false
           break
         case '$regex': {
-          const regex = expected instanceof RegExp ? expected : new RegExp(expected as string)
+          const regex = createSafeRegex(expected as string | RegExp)
           if (!regex.test(String(value))) return false
           break
         }

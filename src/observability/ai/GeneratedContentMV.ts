@@ -51,7 +51,7 @@
  */
 
 import type { ParqueDB } from '../../ParqueDB'
-import type { ModelPricing } from './types'
+import type { ModelPricing, MultiTenantConfig } from './types'
 import { DEFAULT_MODEL_PRICING } from './types'
 import {
   DEFAULT_CONTENT_RETENTION_MS,
@@ -201,6 +201,8 @@ export interface GeneratedContentRecord {
   rootContentId?: string
   /** Reason for creating this version */
   versionReason?: string
+  /** Tenant identifier (for multi-tenant deployments) */
+  tenantId?: string
 }
 
 /**
@@ -262,6 +264,8 @@ export interface RecordContentInput {
   rootContentId?: string
   /** Reason for creating this version */
   versionReason?: string
+  /** Tenant identifier (overrides config tenantId for this record) */
+  tenantId?: string
 }
 
 /**
@@ -302,6 +306,10 @@ export interface ContentQueryOptions {
   offset?: number
   /** Sort field */
   sort?: 'timestamp' | '-timestamp' | 'contentLength' | '-contentLength' | 'estimatedCost' | '-estimatedCost' | 'version' | '-version'
+  /** Filter by tenant ID (overrides config tenantId for this query) */
+  tenantId?: string
+  /** Query all tenants (requires allowCrossTenantQueries: true) */
+  allTenants?: boolean
 }
 
 /**
@@ -354,7 +362,7 @@ export interface ContentStats {
 /**
  * Configuration for GeneratedContentMV
  */
-export interface GeneratedContentMVConfig {
+export interface GeneratedContentMVConfig extends MultiTenantConfig {
   /** Collection name for storing content (default: 'generated_content') */
   collection?: string
   /** Maximum age of content to keep (default: 30 days) */
@@ -378,6 +386,9 @@ export interface ResolvedContentMVConfig {
   batchSize: number
   pricing: Map<string, ModelPricing>
   debug: boolean
+  tenantId?: string
+  tenantScopedStorage: boolean
+  allowCrossTenantQueries: boolean
 }
 
 /**
@@ -476,12 +487,24 @@ function calculateCost(
  * Resolve configuration with defaults
  */
 function resolveConfig(config: GeneratedContentMVConfig): ResolvedContentMVConfig {
+  const baseCollection = config.collection ?? DEFAULT_COLLECTION
+  const tenantScopedStorage = config.tenantScopedStorage ?? false
+  const tenantId = config.tenantId
+
+  // Build tenant-scoped collection name if enabled
+  const collection = tenantScopedStorage && tenantId
+    ? `tenant_${tenantId}/${baseCollection}`
+    : baseCollection
+
   return {
-    collection: config.collection ?? DEFAULT_COLLECTION,
+    collection,
     maxAgeMs: config.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
     batchSize: config.batchSize ?? DEFAULT_BATCH_SIZE,
     pricing: buildPricingMap(config.customPricing, config.mergeWithDefaultPricing ?? true),
     debug: config.debug ?? false,
+    tenantId,
+    tenantScopedStorage,
+    allowCrossTenantQueries: config.allowCrossTenantQueries ?? false,
   }
 }
 
@@ -546,6 +569,9 @@ export class GeneratedContentMV {
     const version = isNewVersion ? 2 : 1 // Will be overwritten if parent exists
     const rootContentId = input.rootContentId ?? (isNewVersion ? undefined : contentId)
 
+    // Use input tenantId or fall back to config tenantId
+    const tenantId = input.tenantId ?? this.config.tenantId
+
     const data: Omit<GeneratedContentRecord, '$id'> = {
       $type: 'GeneratedContent',
       name: contentId,
@@ -580,6 +606,7 @@ export class GeneratedContentMV {
       parentContentId: input.parentContentId,
       rootContentId,
       versionReason: input.versionReason,
+      tenantId,
     }
 
     const created = await collection.create(data as Record<string, unknown>)
@@ -621,6 +648,9 @@ export class GeneratedContentMV {
       const version = isNewVersion ? 2 : 1
       const rootContentId = input.rootContentId ?? (isNewVersion ? undefined : contentId)
 
+      // Use input tenantId or fall back to config tenantId
+      const tenantId = input.tenantId ?? this.config.tenantId
+
       return {
         $type: 'GeneratedContent',
         name: contentId,
@@ -655,6 +685,7 @@ export class GeneratedContentMV {
         parentContentId: input.parentContentId,
         rootContentId,
         versionReason: input.versionReason,
+        tenantId,
       }
     })
 
@@ -671,6 +702,18 @@ export class GeneratedContentMV {
   async find(options: ContentQueryOptions = {}): Promise<GeneratedContentRecord[]> {
     const collection = this.db.collection(this.config.collection)
     const filter: Record<string, unknown> = {}
+
+    // Apply tenant filtering
+    if (!options.allTenants) {
+      // Use query tenantId, fall back to config tenantId
+      const tenantId = options.tenantId ?? this.config.tenantId
+      if (tenantId) {
+        filter.tenantId = tenantId
+      }
+    } else if (!this.config.allowCrossTenantQueries) {
+      // allTenants requested but not allowed
+      throw new Error('Cross-tenant queries are not enabled. Set allowCrossTenantQueries: true in config.')
+    }
 
     // Apply filters
     if (options.modelId) {

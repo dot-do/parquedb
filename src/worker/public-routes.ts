@@ -28,8 +28,10 @@ import {
   buildRateLimitResponse,
 } from './RateLimitDO'
 import { MissingBucketError } from './r2-errors'
+import { logger } from '../utils/logger'
 import { extractBearerToken, verifyOwnership } from './jwt-utils'
 import { parsePaginationParams } from './routing'
+import { SECONDS_PER_DAY } from '../constants'
 
 /**
  * Get the database index stub for a user
@@ -66,7 +68,7 @@ const PUBLIC_CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Range',
   'Access-Control-Expose-Headers': 'Content-Range, Content-Length, ETag, Accept-Ranges',
-  'Access-Control-Max-Age': '86400',
+  'Access-Control-Max-Age': String(SECONDS_PER_DAY),
 }
 
 const AUTHENTICATED_CORS_HEADERS = {
@@ -74,7 +76,7 @@ const AUTHENTICATED_CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Range, Authorization',
   'Access-Control-Expose-Headers': 'Content-Range, Content-Length, ETag, Accept-Ranges',
-  'Access-Control-Max-Age': '86400',
+  'Access-Control-Max-Age': String(SECONDS_PER_DAY),
 }
 
 /**
@@ -170,7 +172,7 @@ async function checkRateLimit(
     return await limiter.checkLimit(endpointType)
   } catch (error) {
     // If rate limiting fails, log but allow the request through
-    console.error('[RateLimit] Error checking rate limit:', error)
+    logger.error('[RateLimit] Error checking rate limit:', error)
     return null
   }
 }
@@ -286,12 +288,10 @@ async function handleListPublic(
       defaultLimit: 50,
     })
 
-    // For now, we need a way to aggregate public databases across all users
-    // This would typically require a global index or aggregation service
-    // For MVP, return empty list or use a known list of public database owners
-
-    // TODO: Implement global public database index
-    // For now, return a placeholder response
+    // Global public database listing would require:
+    // 1. A centralized index DO that tracks all public databases across users
+    // 2. Periodic scanning or push-based updates when visibility changes
+    // For MVP, this returns an empty list. Users should access databases directly via /owner/slug
     const databases: DatabaseInfo[] = []
 
     return Response.json({
@@ -407,10 +407,13 @@ async function handleCollectionQuery(
     const { limit: _limit, offset: _offset } = parsePaginationParams(url.searchParams, {
       defaultLimit: 100,
     })
-    void _filter; void _limit; void _offset // Will be used in future implementation
+    void _filter; void _limit; void _offset // Reserved for future query implementation
 
-    // TODO: Execute query against the database's R2 bucket
-    // For now, return placeholder
+    // Public query execution would require:
+    // 1. Resolving the database's R2 bucket from the index
+    // 2. Using QueryExecutor to read from R2 directly
+    // 3. Applying filter, pagination, and projection
+    // For now, return empty result. Use authenticated API for actual queries.
     return Response.json({
       items: [],
       total: 0,
@@ -541,7 +544,7 @@ async function handleRawFileAccess(
       headers,
     })
   } catch (error) {
-    console.error('Raw file access error:', error)
+    logger.error('[PublicRoutes] Raw file access error:', error)
     return new Response('Internal Server Error', { status: 500 })
   }
 }

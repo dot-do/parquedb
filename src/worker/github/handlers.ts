@@ -10,6 +10,9 @@
  * @module
  */
 
+import { logger } from '../../utils/logger'
+import { createSafeRegex } from '../../utils/safe-regex'
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -371,7 +374,7 @@ export async function handleInstallationCreated(
 
   if (!user) {
     // User not found - log warning but don't throw
-    console.warn(
+    logger.warn(
       `[GitHub] No ParqueDB user found for installation ${installation.id} (${installation.account.login})`
     )
     return
@@ -797,10 +800,10 @@ function matchesPattern(value: string, patterns: readonly string[]): boolean {
         return true
       }
     } else if (pattern.includes('*')) {
-      // Convert glob to regex
-      const regex = new RegExp(
-        '^' + pattern.replace(/\*/g, '.*').replace(/\?/g, '.') + '$'
-      )
+      // Convert glob to regex - escape special regex characters first
+      const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      const regexPattern = '^' + escaped.replace(/\*/g, '.*').replace(/\?/g, '.') + '$'
+      const regex = createSafeRegex(regexPattern)
       if (regex.test(value)) {
         return true
       }

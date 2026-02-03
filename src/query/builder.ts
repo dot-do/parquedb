@@ -43,6 +43,7 @@ export type ComparisonOp =
   | 'lte' | '<='
   | 'in'
   | 'nin'
+  | 'type'
 
 /** Supported negation operators (for notWhere) */
 export type NegationOp = ComparisonOp | StringOp
@@ -81,6 +82,7 @@ const operatorMap: Record<string, string> = {
   'endsWith': '$endsWith',
   'contains': '$contains',
   'exists': '$exists',
+  'type': '$type',
 }
 
 /** Valid operators set for validation */

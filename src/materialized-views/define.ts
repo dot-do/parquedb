@@ -47,8 +47,10 @@ export type MVDefinitionErrorCode =
   | 'INVALID_EXPAND'
   | 'INVALID_FLATTEN'
   | 'INVALID_FILTER'
+  | 'INVALID_SELECT'
   | 'INVALID_GROUP_BY'
   | 'INVALID_COMPUTE'
+  | 'INVALID_UNNEST'
   | 'INVALID_REFRESH_MODE'
   | 'INVALID_SCHEDULE'
   | 'MISSING_SCHEDULE'
@@ -63,6 +65,31 @@ export class MVDefinitionError extends Error {
   constructor(code: MVDefinitionErrorCode, field: string, message: string) {
     super(message)
     this.name = 'MVDefinitionError'
+    this.code = code
+    this.field = field
+  }
+}
+
+/**
+ * Error codes for collection definition validation errors
+ */
+export type CollectionDefinitionErrorCode =
+  | 'INVALID_TYPE'
+  | 'INVALID_FIELDS'
+  | 'RESERVED_FIELD_NAME'
+  | 'INVALID_FIELD_TYPE'
+  | 'INVALID_INGEST_SOURCE'
+
+/**
+ * Error thrown when collection definition validation fails
+ */
+export class CollectionDefinitionError extends Error {
+  readonly code: CollectionDefinitionErrorCode
+  readonly field: string
+
+  constructor(code: CollectionDefinitionErrorCode, field: string, message: string) {
+    super(message)
+    this.name = 'CollectionDefinitionError'
     this.code = code
     this.field = field
   }
@@ -105,7 +132,7 @@ function validateNameStrict(name: string): void {
  * Validate $from and throw if invalid
  */
 function validateFromStrict(from: string | undefined): void {
-  if (!from) {
+  if (from === undefined) {
     throw new MVDefinitionError(
       'MISSING_FROM',
       '$from',
@@ -113,11 +140,11 @@ function validateFromStrict(from: string | undefined): void {
     )
   }
 
-  if (typeof from !== 'string') {
+  if (typeof from !== 'string' || from === '') {
     throw new MVDefinitionError(
       'INVALID_FROM',
       '$from',
-      '$from must be a string (source collection name)'
+      '$from must be a non-empty string (source collection name)'
     )
   }
 }
@@ -152,6 +179,407 @@ function validateRefreshStrict(refresh: RefreshConfig | undefined): void {
         `Invalid cron expression: "${refresh.schedule}". Expected format: "minute hour day month weekday"`
       )
     }
+  }
+}
+
+/**
+ * Validate $expand and throw if invalid
+ */
+function validateExpandStrict(expand: unknown): void {
+  if (expand === undefined) return
+
+  if (!Array.isArray(expand)) {
+    throw new MVDefinitionError(
+      'INVALID_EXPAND',
+      '$expand',
+      '$expand must be an array of strings'
+    )
+  }
+
+  for (const item of expand) {
+    if (typeof item !== 'string' || item === '') {
+      throw new MVDefinitionError(
+        'INVALID_EXPAND',
+        '$expand',
+        '$expand must contain only non-empty strings'
+      )
+    }
+  }
+}
+
+/**
+ * Known filter operators
+ */
+const KNOWN_FILTER_OPERATORS = new Set([
+  '$eq', '$ne', '$gt', '$gte', '$lt', '$lte',
+  '$in', '$nin', '$exists', '$type',
+  '$and', '$or', '$not', '$nor',
+  '$regex', '$elemMatch', '$all', '$size',
+])
+
+/**
+ * Validate a filter object recursively
+ */
+function validateFilterObject(filter: unknown, path: string): void {
+  if (typeof filter !== 'object' || filter === null || Array.isArray(filter)) {
+    throw new MVDefinitionError(
+      'INVALID_FILTER',
+      path,
+      `${path} must be a filter object`
+    )
+  }
+
+  for (const [key, value] of Object.entries(filter)) {
+    if (key.startsWith('$')) {
+      // It's an operator - check if known
+      if (!KNOWN_FILTER_OPERATORS.has(key)) {
+        throw new MVDefinitionError(
+          'INVALID_FILTER',
+          '$filter',
+          `Unknown filter operator: "${key}"`
+        )
+      }
+
+      // For logical operators, validate nested filters
+      if (key === '$and' || key === '$or' || key === '$nor') {
+        if (!Array.isArray(value)) {
+          throw new MVDefinitionError(
+            'INVALID_FILTER',
+            '$filter',
+            `${key} must be an array`
+          )
+        }
+        for (let i = 0; i < value.length; i++) {
+          validateFilterObject(value[i], `${path}.${key}[${i}]`)
+        }
+      } else if (key === '$not') {
+        validateFilterObject(value, `${path}.${key}`)
+      }
+    } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      // Nested filter conditions like { field: { $gt: 5 } }
+      for (const op of Object.keys(value)) {
+        if (op.startsWith('$') && !KNOWN_FILTER_OPERATORS.has(op)) {
+          throw new MVDefinitionError(
+            'INVALID_FILTER',
+            '$filter',
+            `Unknown filter operator: "${op}"`
+          )
+        }
+      }
+    }
+    // Simple equality like { field: value } is always valid
+  }
+}
+
+/**
+ * Validate $filter and throw if invalid
+ */
+function validateFilterStrict(filter: unknown): void {
+  if (filter === undefined) return
+
+  if (typeof filter !== 'object' || filter === null || Array.isArray(filter)) {
+    throw new MVDefinitionError(
+      'INVALID_FILTER',
+      '$filter',
+      '$filter must be a filter object'
+    )
+  }
+
+  validateFilterObject(filter, '$filter')
+}
+
+/**
+ * Validate $flatten and throw if invalid
+ */
+function validateFlattenStrict(flatten: unknown): void {
+  if (flatten === undefined) return
+
+  if (typeof flatten !== 'object' || flatten === null || Array.isArray(flatten)) {
+    throw new MVDefinitionError(
+      'INVALID_FLATTEN',
+      '$flatten',
+      '$flatten must be an object mapping relation names to aliases'
+    )
+  }
+
+  for (const [key, value] of Object.entries(flatten)) {
+    if (typeof value !== 'string' || value === '') {
+      throw new MVDefinitionError(
+        'INVALID_FLATTEN',
+        '$flatten',
+        `$flatten value for "${key}" must be a non-empty string`
+      )
+    }
+  }
+}
+
+/**
+ * Validate $select and throw if invalid
+ */
+function validateSelectStrict(select: unknown): void {
+  if (select === undefined) return
+
+  if (typeof select !== 'object' || select === null || Array.isArray(select)) {
+    throw new MVDefinitionError(
+      'INVALID_SELECT',
+      '$select',
+      '$select must be an object mapping output fields to source expressions'
+    )
+  }
+
+  for (const [key, value] of Object.entries(select)) {
+    if (typeof value !== 'string') {
+      throw new MVDefinitionError(
+        'INVALID_SELECT',
+        '$select',
+        `$select value for "${key}" must be a string`
+      )
+    }
+  }
+}
+
+/**
+ * Validate $groupBy and throw if invalid
+ */
+function validateGroupByStrict(groupBy: unknown): void {
+  if (groupBy === undefined) return
+
+  if (!Array.isArray(groupBy)) {
+    throw new MVDefinitionError(
+      'INVALID_GROUP_BY',
+      '$groupBy',
+      '$groupBy must be an array'
+    )
+  }
+
+  for (const item of groupBy) {
+    if (typeof item === 'string') {
+      // Valid: field name string
+      continue
+    } else if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+      // Valid: { alias: expression } object
+      continue
+    } else {
+      throw new MVDefinitionError(
+        'INVALID_GROUP_BY',
+        '$groupBy',
+        '$groupBy items must be strings or objects'
+      )
+    }
+  }
+}
+
+/**
+ * Known aggregate functions
+ */
+const KNOWN_AGGREGATE_FUNCTIONS = new Set([
+  '$count', '$sum', '$avg', '$min', '$max', '$first', '$last',
+])
+
+/**
+ * Validate $compute and throw if invalid
+ */
+function validateComputeStrict(compute: unknown): void {
+  if (compute === undefined) return
+
+  if (typeof compute !== 'object' || compute === null || Array.isArray(compute)) {
+    throw new MVDefinitionError(
+      'INVALID_COMPUTE',
+      '$compute',
+      '$compute must be an object mapping field names to aggregate expressions'
+    )
+  }
+
+  for (const [fieldName, expr] of Object.entries(compute)) {
+    if (typeof expr !== 'object' || expr === null || Array.isArray(expr)) {
+      throw new MVDefinitionError(
+        'INVALID_COMPUTE',
+        '$compute',
+        `$compute["${fieldName}"] must be an aggregate expression object`
+      )
+    }
+
+    // Check that at least one aggregate function is present
+    const exprObj = expr as Record<string, unknown>
+    const keys = Object.keys(exprObj)
+    const hasKnownAggregate = keys.some(k => KNOWN_AGGREGATE_FUNCTIONS.has(k))
+
+    if (!hasKnownAggregate) {
+      throw new MVDefinitionError(
+        'INVALID_COMPUTE',
+        '$compute',
+        `$compute["${fieldName}"] must contain a valid aggregate function ($count, $sum, $avg, $min, $max, $first, $last)`
+      )
+    }
+  }
+}
+
+/**
+ * Validate $unnest and throw if invalid
+ */
+function validateUnnestStrict(unnest: unknown): void {
+  if (unnest === undefined) return
+
+  if (typeof unnest !== 'string' || unnest === '') {
+    throw new MVDefinitionError(
+      'INVALID_UNNEST',
+      '$unnest',
+      '$unnest must be a non-empty string (field name to unnest)'
+    )
+  }
+}
+
+// =============================================================================
+// Collection Validation Helpers
+// =============================================================================
+
+/**
+ * Reserved field names that cannot be used in collection definitions
+ */
+const RESERVED_FIELD_NAMES = new Set(['$type', '$ingest', '$from', '$expand', '$flatten', '$filter', '$select', '$groupBy', '$compute', '$unnest', '$refresh'])
+
+/**
+ * Valid primitive types for field definitions
+ */
+const VALID_PRIMITIVE_TYPES = new Set([
+  'string', 'int', 'integer', 'float', 'double', 'number', 'boolean', 'bool',
+  'date', 'datetime', 'timestamp', 'time', 'uuid', 'json', 'any', 'text', 'email', 'url',
+])
+
+/**
+ * Check if a type string is valid
+ */
+function isValidFieldType(typeStr: string): boolean {
+  // Remove optional/required modifiers
+  let baseType = typeStr
+  if (baseType.endsWith('!') || baseType.endsWith('?')) {
+    baseType = baseType.slice(0, -1)
+  }
+
+  // Handle array types (e.g., 'string[]', 'int[]!')
+  if (baseType.endsWith('[]')) {
+    const elementType = baseType.slice(0, -2)
+    return isValidFieldType(elementType) || VALID_PRIMITIVE_TYPES.has(elementType)
+  }
+
+  // Handle relationship types (e.g., '-> User.posts', '<- Comment.post[]', '~> Topic')
+  if (baseType.startsWith('->') || baseType.startsWith('<-') || baseType.startsWith('~>') || baseType.startsWith('<~')) {
+    return true
+  }
+
+  // Handle parametric types (e.g., 'decimal(10,2)', 'varchar(50)', 'vector(1536)', 'enum(...)')
+  const parametricMatch = baseType.match(/^(\w+)\((.+)\)$/)
+  if (parametricMatch) {
+    const typeName = parametricMatch[1]
+    const params = parametricMatch[2]
+    // Known parametric types
+    if (['decimal', 'varchar', 'char', 'vector', 'enum', 'array', 'map', 'set'].includes(typeName!)) {
+      // Ensure params are not empty
+      return params !== undefined && params.length > 0
+    }
+    return false
+  }
+
+  // Handle default values (e.g., "string = 'active'", 'int = 0')
+  if (baseType.includes(' = ')) {
+    const [typePart] = baseType.split(' = ')
+    return isValidFieldType(typePart!.trim())
+  }
+
+  // Check primitive types
+  return VALID_PRIMITIVE_TYPES.has(baseType)
+}
+
+/**
+ * Validate collection type name
+ */
+function validateCollectionType(type: string): void {
+  if (!type || typeof type !== 'string') {
+    throw new CollectionDefinitionError(
+      'INVALID_TYPE',
+      'type',
+      'Collection type name is required and must be a non-empty string'
+    )
+  }
+
+  if (type.startsWith('_')) {
+    throw new CollectionDefinitionError(
+      'INVALID_TYPE',
+      'type',
+      'Collection type name cannot start with underscore (reserved for system types)'
+    )
+  }
+
+  // Must start with a letter, can contain letters, numbers, underscores
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(type)) {
+    throw new CollectionDefinitionError(
+      'INVALID_TYPE',
+      'type',
+      'Collection type name must start with a letter and contain only alphanumeric characters and underscores'
+    )
+  }
+}
+
+/**
+ * Validate collection fields
+ */
+function validateCollectionFields(fields: unknown): void {
+  if (fields === null || fields === undefined || typeof fields !== 'object' || Array.isArray(fields)) {
+    throw new CollectionDefinitionError(
+      'INVALID_FIELDS',
+      'fields',
+      'Collection fields must be an object'
+    )
+  }
+
+  for (const [fieldName, fieldDef] of Object.entries(fields)) {
+    // Check reserved field names
+    if (RESERVED_FIELD_NAMES.has(fieldName)) {
+      throw new CollectionDefinitionError(
+        'RESERVED_FIELD_NAME',
+        fieldName,
+        `Field name "${fieldName}" is reserved and cannot be used`
+      )
+    }
+
+    // Validate field type
+    if (typeof fieldDef === 'string') {
+      if (!isValidFieldType(fieldDef)) {
+        throw new CollectionDefinitionError(
+          'INVALID_FIELD_TYPE',
+          fieldName,
+          `Invalid field type "${fieldDef}" for field "${fieldName}". Expected a valid type like string, int, boolean, etc.`
+        )
+      }
+    } else if (typeof fieldDef === 'object' && fieldDef !== null && !Array.isArray(fieldDef)) {
+      // Object field definition with { type: 'string!', index: true }
+      const fieldObj = fieldDef as Record<string, unknown>
+      if ('type' in fieldObj) {
+        const typeVal = fieldObj.type
+        if (typeof typeVal !== 'string' || !isValidFieldType(typeVal)) {
+          throw new CollectionDefinitionError(
+            'INVALID_FIELD_TYPE',
+            fieldName,
+            `Invalid field type "${typeVal}" for field "${fieldName}". Expected a valid type like string, int, boolean, etc.`
+          )
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Validate ingest source
+ */
+function validateIngestSource(ingestSource: unknown): void {
+  if (ingestSource === undefined) return
+
+  if (typeof ingestSource !== 'string' || ingestSource === '') {
+    throw new CollectionDefinitionError(
+      'INVALID_INGEST_SOURCE',
+      'ingestSource',
+      'Ingest source must be a non-empty string'
+    )
   }
 }
 
@@ -237,8 +665,15 @@ export interface DefineViewInput {
  * })
  */
 export function defineView(input: DefineViewInput): MVDefinition {
-  // Validate
+  // Validate all fields
   validateFromStrict(input.$from)
+  validateExpandStrict(input.$expand)
+  validateFlattenStrict(input.$flatten)
+  validateFilterStrict(input.$filter)
+  validateSelectStrict(input.$select)
+  validateGroupByStrict(input.$groupBy)
+  validateComputeStrict(input.$compute)
+  validateUnnestStrict(input.$unnest)
   validateRefreshStrict(input.$refresh)
 
   // Build definition
@@ -304,6 +739,11 @@ export function defineCollection(
   fields: Record<string, unknown>,
   ingestSource?: IngestSource
 ): CollectionDefinition {
+  // Validate all inputs
+  validateCollectionType(type)
+  validateCollectionFields(fields)
+  validateIngestSource(ingestSource)
+
   const definition: CollectionDefinition = {
     $type: type,
     ...fields,

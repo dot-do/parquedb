@@ -664,8 +664,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
   ): Promise<PaginatedResult<T>> {
     await this.ensureInitialized()
 
-    // TODO: Implement relationship traversal via R2
-    // For now, delegate to DO via RPC
+    // Relationship traversal via R2 would require reading relationship index files
+    // directly from storage. For now, delegate to DO via RPC for consistency.
     const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
     return stub.related(ns, id, options) as Promise<PaginatedResult<T>>
   }

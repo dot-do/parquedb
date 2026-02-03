@@ -3,25 +3,209 @@
  *
  * Handles event batching and WAL operations for relationship events.
  * Similar to EventWalManager but specialized for relationship operations.
+ *
+ * Includes backpressure handling to prevent unbounded memory growth under
+ * sustained write load.
  */
 
 import type { Event } from '../../types'
-import type { EventBuffer } from './types'
+import type { EventBuffer, BackpressureConfig, BackpressureState } from './types'
+import { DEFAULT_BACKPRESSURE_CONFIG, BackpressureTimeoutError } from './types'
 import { deserializeEventBatch, EVENT_BATCH_COUNT_THRESHOLD, EVENT_BATCH_SIZE_THRESHOLD } from './event-wal'
 
 /**
  * Relationship WAL Manager
  *
  * Manages event buffering and WAL operations for relationship events.
+ * Includes backpressure handling to prevent memory exhaustion.
  */
 export class RelationshipWalManager {
   /** Relationship event buffers per namespace */
   private relEventBuffers: Map<string, EventBuffer> = new Map()
 
+  // Backpressure state
+  private backpressureConfig: BackpressureConfig
+  private backpressureActive: boolean = false
+  private backpressureWaiters: Array<{ resolve: () => void; reject: (err: Error) => void }> = []
+  private pendingFlushCount: number = 0
+
+  // Statistics
+  private backpressureEvents: number = 0
+  private totalWaitTimeMs: number = 0
+  private lastBackpressureAt: number | null = null
+
   constructor(
     private sql: SqlStorage,
-    private counters: Map<string, number>
-  ) {}
+    private counters: Map<string, number>,
+    backpressureConfig?: Partial<BackpressureConfig>
+  ) {
+    this.backpressureConfig = {
+      ...DEFAULT_BACKPRESSURE_CONFIG,
+      ...backpressureConfig,
+    }
+  }
+
+  // ===========================================================================
+  // Backpressure Configuration
+  // ===========================================================================
+
+  /**
+   * Get current backpressure configuration
+   */
+  getBackpressureConfig(): BackpressureConfig {
+    return { ...this.backpressureConfig }
+  }
+
+  /**
+   * Update backpressure configuration
+   */
+  setBackpressureConfig(config: Partial<BackpressureConfig>): void {
+    this.backpressureConfig = {
+      ...this.backpressureConfig,
+      ...config,
+    }
+  }
+
+  /**
+   * Get current backpressure state
+   */
+  getBackpressureState(): BackpressureState {
+    return {
+      active: this.backpressureActive,
+      currentBufferSizeBytes: this.getTotalBufferSizeBytes(),
+      currentEventCount: this.getTotalEventCount(),
+      pendingFlushCount: this.pendingFlushCount,
+      backpressureEvents: this.backpressureEvents,
+      totalWaitTimeMs: this.totalWaitTimeMs,
+      lastBackpressureAt: this.lastBackpressureAt,
+    }
+  }
+
+  /**
+   * Reset backpressure statistics
+   */
+  resetBackpressureStats(): void {
+    this.backpressureEvents = 0
+    this.totalWaitTimeMs = 0
+    this.lastBackpressureAt = null
+  }
+
+  /**
+   * Force release backpressure (emergency release)
+   */
+  forceReleaseBackpressure(): void {
+    this.backpressureActive = false
+    this.releaseWaiters()
+  }
+
+  // ===========================================================================
+  // Backpressure Internal Methods
+  // ===========================================================================
+
+  /**
+   * Get total buffer size across all namespace buffers
+   */
+  private getTotalBufferSizeBytes(): number {
+    let total = 0
+    for (const buffer of this.relEventBuffers.values()) {
+      total += buffer.sizeBytes
+    }
+    return total
+  }
+
+  /**
+   * Get total event count across all namespace buffers
+   */
+  private getTotalEventCount(): number {
+    let total = 0
+    for (const buffer of this.relEventBuffers.values()) {
+      total += buffer.events.length
+    }
+    return total
+  }
+
+  /**
+   * Check if backpressure should be activated
+   */
+  private shouldActivateBackpressure(): boolean {
+    const totalBytes = this.getTotalBufferSizeBytes()
+    const totalEvents = this.getTotalEventCount()
+
+    return (
+      totalBytes >= this.backpressureConfig.maxBufferSizeBytes ||
+      totalEvents >= this.backpressureConfig.maxBufferEventCount ||
+      this.pendingFlushCount >= this.backpressureConfig.maxPendingFlushes
+    )
+  }
+
+  /**
+   * Check if backpressure should be released
+   */
+  private shouldReleaseBackpressure(): boolean {
+    const totalBytes = this.getTotalBufferSizeBytes()
+    const totalEvents = this.getTotalEventCount()
+    const threshold = this.backpressureConfig.releaseThreshold
+
+    return (
+      totalBytes < this.backpressureConfig.maxBufferSizeBytes * threshold &&
+      totalEvents < this.backpressureConfig.maxBufferEventCount * threshold &&
+      this.pendingFlushCount < this.backpressureConfig.maxPendingFlushes * threshold
+    )
+  }
+
+  /**
+   * Check and update backpressure state
+   */
+  private checkBackpressure(): void {
+    if (!this.backpressureActive && this.shouldActivateBackpressure()) {
+      this.backpressureActive = true
+      this.backpressureEvents++
+      this.lastBackpressureAt = Date.now()
+    } else if (this.backpressureActive && this.shouldReleaseBackpressure()) {
+      this.backpressureActive = false
+      this.releaseWaiters()
+    }
+  }
+
+  /**
+   * Release all waiting operations
+   */
+  private releaseWaiters(): void {
+    const waiters = this.backpressureWaiters
+    this.backpressureWaiters = []
+    for (const waiter of waiters) {
+      waiter.resolve()
+    }
+  }
+
+  /**
+   * Wait for backpressure to be released
+   */
+  private async waitForBackpressure(): Promise<void> {
+    if (!this.backpressureActive) return
+
+    const startTime = Date.now()
+    const timeoutMs = this.backpressureConfig.timeoutMs
+
+    return new Promise<void>((resolve, reject) => {
+      const waiter = { resolve, reject }
+      this.backpressureWaiters.push(waiter)
+
+      // Set timeout if not infinite
+      if (timeoutMs !== Infinity) {
+        setTimeout(() => {
+          const index = this.backpressureWaiters.indexOf(waiter)
+          if (index >= 0) {
+            this.backpressureWaiters.splice(index, 1)
+            this.totalWaitTimeMs += Date.now() - startTime
+            reject(new BackpressureTimeoutError(timeoutMs, this.getBackpressureState()))
+          }
+        }, timeoutMs)
+      }
+    }).finally(() => {
+      this.totalWaitTimeMs += Date.now() - startTime
+    })
+  }
 
   // ===========================================================================
   // Relationship Event Buffering
@@ -35,6 +219,9 @@ export class RelationshipWalManager {
    * @returns Event ID
    */
   async appendRelEvent(ns: string, event: Omit<Event, 'id'>): Promise<string> {
+    // Wait for backpressure if active
+    await this.waitForBackpressure()
+
     // Get or create buffer for this namespace
     let buffer = this.relEventBuffers.get(ns)
     if (!buffer) {
@@ -56,6 +243,9 @@ export class RelationshipWalManager {
     const eventJson = JSON.stringify(fullEvent)
     buffer.sizeBytes += eventJson.length
 
+    // Check if backpressure should be activated after adding
+    this.checkBackpressure()
+
     // Check if we should flush
     if (
       buffer.events.length >= EVENT_BATCH_COUNT_THRESHOLD ||
@@ -74,28 +264,36 @@ export class RelationshipWalManager {
     const buffer = this.relEventBuffers.get(ns)
     if (!buffer || buffer.events.length === 0) return
 
-    // Serialize events to blob
-    const json = JSON.stringify(buffer.events)
-    const data = new TextEncoder().encode(json)
-    const now = new Date().toISOString()
+    this.pendingFlushCount++
 
-    this.sql.exec(
-      `INSERT INTO rels_wal (ns, first_seq, last_seq, events, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      ns,
-      buffer.firstSeq,
-      buffer.lastSeq - 1, // last_seq is inclusive
-      data,
-      now
-    )
+    try {
+      // Serialize events to blob
+      const json = JSON.stringify(buffer.events)
+      const data = new TextEncoder().encode(json)
+      const now = new Date().toISOString()
 
-    // Reset buffer for next batch
-    this.relEventBuffers.set(ns, {
-      events: [],
-      firstSeq: buffer.lastSeq,
-      lastSeq: buffer.lastSeq,
-      sizeBytes: 0,
-    })
+      this.sql.exec(
+        `INSERT INTO rels_wal (ns, first_seq, last_seq, events, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        ns,
+        buffer.firstSeq,
+        buffer.lastSeq - 1, // last_seq is inclusive
+        data,
+        now
+      )
+
+      // Reset buffer for next batch
+      this.relEventBuffers.set(ns, {
+        events: [],
+        firstSeq: buffer.lastSeq,
+        lastSeq: buffer.lastSeq,
+        sizeBytes: 0,
+      })
+    } finally {
+      this.pendingFlushCount--
+      // Check if backpressure can be released
+      this.checkBackpressure()
+    }
   }
 
   /**
@@ -255,5 +453,7 @@ export class RelationshipWalManager {
    */
   setRelEventBuffers(buffers: Map<string, EventBuffer>): void {
     this.relEventBuffers = buffers
+    // Check backpressure after restoring buffers
+    this.checkBackpressure()
   }
 }

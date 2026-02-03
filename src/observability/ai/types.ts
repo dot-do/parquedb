@@ -215,6 +215,8 @@ export interface AIUsageAggregate {
   updatedAt: Date
   /** Version for optimistic concurrency */
   version: number
+  /** Tenant identifier (for multi-tenant deployments) */
+  tenantId?: string
 }
 
 /**
@@ -265,9 +267,42 @@ export interface AIUsageSummary {
 // =============================================================================
 
 /**
- * Configuration options for AIUsageMV
+ * Interface for a pricing provider
+ *
+ * This allows injection of a ModelPricingService or custom pricing provider
+ * for dynamic pricing updates.
  */
-export interface AIUsageMVConfig {
+export interface PricingProvider {
+  /**
+   * Get pricing for a model
+   *
+   * @param modelId - Model identifier
+   * @param providerId - Provider identifier
+   * @returns Pricing information or undefined if not found
+   */
+  getPricing(modelId: string, providerId: string): ModelPricing | undefined
+}
+
+/**
+ * Configuration options for AIUsageMV
+ *
+ * Extends MultiTenantConfig for multi-tenant deployments.
+ *
+ * @example
+ * ```typescript
+ * // Basic usage
+ * const mv = createAIUsageMV(db, {
+ *   granularity: 'day',
+ * })
+ *
+ * // Multi-tenant usage
+ * const mv = createAIUsageMV(db, {
+ *   tenantId: 'tenant-123',
+ *   tenantScopedStorage: true,
+ * })
+ * ```
+ */
+export interface AIUsageMVConfig extends MultiTenantConfig {
   /** Collection name for source AI logs (default: 'ai_logs') */
   sourceCollection?: string
   /** Collection name for aggregated usage (default: 'ai_usage') */
@@ -278,6 +313,23 @@ export interface AIUsageMVConfig {
   customPricing?: ModelPricing[]
   /** Whether to merge with default pricing (default: true) */
   mergeWithDefaultPricing?: boolean
+  /**
+   * Dynamic pricing provider (e.g., ModelPricingService)
+   *
+   * When provided, pricing is fetched from this service instead of
+   * static customPricing/defaultPricing. This enables auto-updating pricing.
+   *
+   * @example
+   * ```typescript
+   * const pricingService = createModelPricingService()
+   * await pricingService.startAutoRefresh()
+   *
+   * const usageMV = createAIUsageMV(db, {
+   *   pricingService: pricingService
+   * })
+   * ```
+   */
+  pricingService?: PricingProvider
   /** Maximum age of logs to process in milliseconds (default: 30 days) */
   maxAgeMs?: number
   /** Batch size for processing (default: 1000) */
@@ -293,10 +345,19 @@ export interface ResolvedAIUsageMVConfig {
   sourceCollection: string
   targetCollection: string
   granularity: TimeGranularity
+  /** Static pricing map (used when pricingService is not provided) */
   pricing: Map<string, ModelPricing>
+  /** Dynamic pricing provider (takes precedence over static pricing) */
+  pricingService?: PricingProvider
   maxAgeMs: number
   batchSize: number
   debug: boolean
+  /** Tenant identifier */
+  tenantId?: string
+  /** Whether to use tenant-scoped storage paths */
+  tenantScopedStorage: boolean
+  /** Whether cross-tenant queries are allowed */
+  allowCrossTenantQueries: boolean
 }
 
 // =============================================================================
@@ -306,7 +367,7 @@ export interface ResolvedAIUsageMVConfig {
 /**
  * Filter options for querying AI usage
  */
-export interface AIUsageQueryOptions {
+export interface AIUsageQueryOptions extends MultiTenantQueryOptions {
   /** Filter by model ID */
   modelId?: string
   /** Filter by provider ID */
@@ -341,4 +402,187 @@ export interface RefreshResult {
   durationMs: number
   /** Error message if failed */
   error?: string
+}
+
+// =============================================================================
+// Multi-Tenancy Types
+// =============================================================================
+
+/**
+ * Configuration for multi-tenant observability MVs
+ *
+ * Provides tenant isolation, scoped storage, and cross-tenant analytics
+ * for SaaS deployments where multiple customers share infrastructure.
+ *
+ * @example
+ * ```typescript
+ * // Basic tenant isolation
+ * const mv = createAIUsageMV(db, {
+ *   tenantId: 'tenant-123',
+ * })
+ *
+ * // Tenant-scoped storage (separate collections per tenant)
+ * const mv = createAIUsageMV(db, {
+ *   tenantId: 'tenant-123',
+ *   tenantScopedStorage: true, // Collection becomes tenant_tenant-123/ai_usage
+ * })
+ *
+ * // Platform operator with cross-tenant access
+ * const mv = createAIUsageMV(db, {
+ *   allowCrossTenantQueries: true,
+ * })
+ * const allTenantStats = await mv.getUsage({ allTenants: true })
+ * ```
+ */
+export interface MultiTenantConfig {
+  /**
+   * Tenant identifier for data isolation
+   *
+   * When set, all records are tagged with this tenant ID and queries
+   * are automatically filtered to this tenant's data only.
+   */
+  tenantId?: string
+
+  /**
+   * Enable tenant-scoped storage paths
+   *
+   * When true, collections are prefixed with `tenant_{tenantId}/`
+   * providing physical isolation of data per tenant.
+   *
+   * @default false
+   *
+   * @example
+   * // With tenantId='acme', collection='ai_usage'
+   * // Actual collection path: 'tenant_acme/ai_usage'
+   */
+  tenantScopedStorage?: boolean
+
+  /**
+   * Allow queries across multiple tenants
+   *
+   * When true, queries can use `allTenants: true` option to retrieve
+   * data from all tenants. This is intended for platform operators
+   * who need cross-tenant analytics.
+   *
+   * WARNING: Enable only for platform-level admin interfaces.
+   *
+   * @default false
+   */
+  allowCrossTenantQueries?: boolean
+}
+
+/**
+ * Query options that include multi-tenant filtering
+ */
+export interface MultiTenantQueryOptions {
+  /**
+   * Filter by tenant ID (overrides config tenantId for this query)
+   */
+  tenantId?: string
+
+  /**
+   * Query all tenants (requires allowCrossTenantQueries: true)
+   *
+   * When true, returns data from all tenants. The tenantId field
+   * will be included in results for filtering/grouping.
+   */
+  allTenants?: boolean
+}
+
+/**
+ * Cross-tenant aggregate statistics
+ *
+ * Used by platform operators to analyze usage across all tenants.
+ */
+export interface CrossTenantAggregate {
+  /** Tenant identifier */
+  tenantId: string
+  /** Date key for the aggregate period */
+  dateKey: string
+  /** Total number of requests */
+  requestCount: number
+  /** Total tokens used */
+  totalTokens: number
+  /** Total prompt tokens */
+  totalPromptTokens: number
+  /** Total completion tokens */
+  totalCompletionTokens: number
+  /** Estimated total cost in USD */
+  estimatedTotalCost: number
+  /** Average latency in milliseconds */
+  avgLatencyMs: number
+  /** Error count */
+  errorCount: number
+  /** Cache hit count */
+  cacheHits: number
+}
+
+/**
+ * Per-tenant usage summary
+ *
+ * Provides a summary view of a tenant's AI usage for billing,
+ * quota management, and analytics dashboards.
+ */
+export interface TenantUsageSummary {
+  /** Tenant identifier */
+  tenantId: string
+  /** Summary time period */
+  period: {
+    from: Date
+    to: Date
+  }
+  /** Total requests in period */
+  totalRequests: number
+  /** Successful requests */
+  successCount: number
+  /** Failed requests */
+  errorCount: number
+  /** Error rate (0-1) */
+  errorRate: number
+  /** Token usage */
+  tokens: {
+    total: number
+    prompt: number
+    completion: number
+  }
+  /** Cost in USD */
+  cost: {
+    total: number
+    byModel: Record<string, number>
+    byProvider: Record<string, number>
+  }
+  /** Average latency in milliseconds */
+  avgLatencyMs: number
+  /** Cache hit ratio (0-1) */
+  cacheHitRatio: number
+  /** Quota information (if quotas are configured) */
+  quota?: TenantQuota
+}
+
+/**
+ * Tenant quota configuration and usage
+ *
+ * Used for rate limiting and cost controls.
+ */
+export interface TenantQuota {
+  /** Maximum requests per day */
+  maxRequestsPerDay?: number
+  /** Current requests today */
+  currentRequestsToday?: number
+  /** Maximum tokens per day */
+  maxTokensPerDay?: number
+  /** Current tokens today */
+  currentTokensToday?: number
+  /** Maximum cost per day in USD */
+  maxCostPerDay?: number
+  /** Current cost today */
+  currentCostToday?: number
+  /** Maximum cost per month in USD */
+  maxCostPerMonth?: number
+  /** Current cost this month */
+  currentCostThisMonth?: number
+  /** Whether tenant has exceeded any quota */
+  isQuotaExceeded?: boolean
+  /** Which quota was exceeded */
+  exceededQuota?: 'requests' | 'tokens' | 'dailyCost' | 'monthlyCost'
 }

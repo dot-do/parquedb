@@ -564,16 +564,23 @@ describe('CLI Utils - runWithSpinner()', () => {
   })
 
   it('should work with async operations', async () => {
-    const { runWithSpinner } = await import('../../../src/cli/utils')
+    vi.useFakeTimers()
+    try {
+      const { runWithSpinner } = await import('../../../src/cli/utils')
 
-    const result = await runWithSpinner(
-      async () => {
-        await new Promise(resolve => setTimeout(resolve, 10))
-        return { data: 'async result' }
-      },
-      { text: 'Processing...', silent: true }
-    )
+      const resultPromise = runWithSpinner(
+        async () => {
+          await vi.advanceTimersByTimeAsync(10)
+          return { data: 'async result' }
+        },
+        { text: 'Processing...', silent: true }
+      )
 
-    expect(result).toEqual({ data: 'async result' })
+      const result = await resultPromise
+
+      expect(result).toEqual({ data: 'async result' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

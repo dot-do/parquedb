@@ -1,0 +1,359 @@
+name: Deploy Search Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'snippets/worker/**'
+      - 'snippets/lib/**'
+      - 'snippets/build.ts'
+      - '.github/workflows/deploy-search-worker.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'snippets/worker/**'
+      - 'snippets/lib/**'
+      - 'snippets/build.ts'
+      - '.github/workflows/deploy-search-worker.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      skip_tests:
+        description: 'Skip E2E tests (emergency deploy)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-search-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20.x'
+  # Worker size limits
+  MAX_WORKER_SIZE_KB: 1024
+  WARN_WORKER_SIZE_KB: 512
+
+jobs:
+  # ===========================================================================
+  # Build and Size Check
+  # ===========================================================================
+  build:
+    name: Build and Size Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      worker_size_kb: ${{ steps.size.outputs.size_kb }}
+      size_status: ${{ steps.size.outputs.status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install snippets dependencies
+        working-directory: snippets
+        run: npm ci
+
+      - name: Build search worker
+        working-directory: snippets
+        run: npm run build
+
+      - name: Check worker size
+        id: size
+        run: |
+          # Find the built worker file
+          WORKER_FILE="snippets/worker/search.ts"
+
+          # Build with wrangler to get actual bundle size
+          cd snippets
+          npx wrangler deploy --config worker/wrangler.toml --dry-run --outdir=../dist-check 2>/dev/null || true
+          cd ..
+
+          # Check if bundle was created
+          if [ -d "dist-check" ]; then
+            BUNDLE_SIZE=$(du -sk dist-check/*.js 2>/dev/null | cut -f1 | head -1 || echo "0")
+          else
+            # Fallback to source file size estimate
+            BUNDLE_SIZE=$(du -sk "$WORKER_FILE" | cut -f1)
+          fi
+
+          echo "size_kb=$BUNDLE_SIZE" >> $GITHUB_OUTPUT
+
+          if [ "$BUNDLE_SIZE" -gt "${{ env.MAX_WORKER_SIZE_KB }}" ]; then
+            echo "status=error" >> $GITHUB_OUTPUT
+            echo "::error::Worker bundle size (${BUNDLE_SIZE}KB) exceeds maximum allowed (${{ env.MAX_WORKER_SIZE_KB }}KB)"
+            exit 1
+          elif [ "$BUNDLE_SIZE" -gt "${{ env.WARN_WORKER_SIZE_KB }}" ]; then
+            echo "status=warning" >> $GITHUB_OUTPUT
+            echo "::warning::Worker bundle size (${BUNDLE_SIZE}KB) exceeds recommended (${{ env.WARN_WORKER_SIZE_KB }}KB)"
+          else
+            echo "status=ok" >> $GITHUB_OUTPUT
+            echo "Worker bundle size: ${BUNDLE_SIZE}KB"
+          fi
+
+      - name: TypeScript check
+        working-directory: snippets
+        run: npm run typecheck
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-worker-build
+          path: |
+            snippets/worker/*.ts
+            snippets/lib/*.ts
+          retention-days: 7
+
+  # ===========================================================================
+  # Deploy to Staging
+  # ===========================================================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [build]
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch')
+    environment:
+      name: staging
+      url: https://parquedb-search-staging.workers.dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install snippets dependencies
+        working-directory: snippets
+        run: npm ci
+
+      - name: Deploy to staging
+        working-directory: snippets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler deploy \
+            --config worker/wrangler.toml \
+            --env staging \
+            --var ENVIRONMENT:staging
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting for worker to be available..."
+          sleep 10
+
+          # Health check
+          HEALTH_URL="https://parquedb-search-staging.workers.dev/search/health"
+
+          for i in {1..5}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Health check passed!"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $HTTP_CODE, retrying in 5s..."
+            sleep 5
+          done
+
+          echo "::error::Health check failed after 5 attempts"
+          exit 1
+
+  # ===========================================================================
+  # E2E Tests on Staging
+  # ===========================================================================
+  e2e-test:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [deploy-staging]
+    if: |
+      (github.event_name != 'workflow_dispatch') ||
+      (github.event.inputs.skip_tests != 'true')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run E2E tests against staging
+        run: |
+          STAGING_URL="https://parquedb-search-staging.workers.dev"
+
+          echo "Testing O*NET search..."
+          ONET_RESPONSE=$(curl -s "${STAGING_URL}/search/onet?q=engineer&limit=5")
+          ONET_COUNT=$(echo "$ONET_RESPONSE" | jq -r '.data | length')
+          if [ "$ONET_COUNT" -eq 0 ]; then
+            echo "::error::O*NET search returned no results"
+            exit 1
+          fi
+          echo "O*NET search returned $ONET_COUNT results"
+
+          echo "Testing UNSPSC search..."
+          UNSPSC_RESPONSE=$(curl -s "${STAGING_URL}/search/unspsc?q=computer&limit=5")
+          UNSPSC_COUNT=$(echo "$UNSPSC_RESPONSE" | jq -r '.data | length')
+          if [ "$UNSPSC_COUNT" -eq 0 ]; then
+            echo "::error::UNSPSC search returned no results"
+            exit 1
+          fi
+          echo "UNSPSC search returned $UNSPSC_COUNT results"
+
+          echo "Testing IMDB search..."
+          IMDB_RESPONSE=$(curl -s "${STAGING_URL}/search/imdb?q=matrix&limit=5")
+          IMDB_COUNT=$(echo "$IMDB_RESPONSE" | jq -r '.data | length')
+          if [ "$IMDB_COUNT" -eq 0 ]; then
+            echo "::error::IMDB search returned no results"
+            exit 1
+          fi
+          echo "IMDB search returned $IMDB_COUNT results"
+
+          echo "All E2E tests passed!"
+
+      - name: Performance benchmark
+        run: |
+          STAGING_URL="https://parquedb-search-staging.workers.dev"
+
+          echo "## E2E Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Measure response times
+          for dataset in onet unspsc imdb; do
+            TOTAL_TIME=0
+            for i in {1..3}; do
+              TIME=$(curl -s -o /dev/null -w "%{time_total}" "${STAGING_URL}/search/${dataset}?q=test&limit=10")
+              TOTAL_TIME=$(echo "$TOTAL_TIME + $TIME" | bc)
+            done
+            AVG_TIME=$(echo "scale=3; $TOTAL_TIME / 3" | bc)
+            echo "| ${dataset} | ${AVG_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          done
+
+  # ===========================================================================
+  # Deploy to Production
+  # ===========================================================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [e2e-test]
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    environment:
+      name: production
+      url: https://parquedb-search.workers.dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install snippets dependencies
+        working-directory: snippets
+        run: npm ci
+
+      - name: Deploy to production
+        working-directory: snippets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler deploy \
+            --config worker/wrangler.toml \
+            --var ENVIRONMENT:production
+
+      - name: Verify production deployment
+        run: |
+          echo "Waiting for production worker to be available..."
+          sleep 15
+
+          # Health check
+          HEALTH_URL="https://parquedb-search.workers.dev/search/health"
+
+          for i in {1..5}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Production health check passed!"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $HTTP_CODE, retrying in 5s..."
+            sleep 5
+          done
+
+          echo "::error::Production health check failed after 5 attempts"
+          exit 1
+
+      - name: Post-deployment smoke test
+        run: |
+          PROD_URL="https://parquedb-search.workers.dev"
+
+          echo "Running production smoke tests..."
+
+          # Test each endpoint
+          for dataset in onet unspsc imdb; do
+            RESPONSE=$(curl -s "${PROD_URL}/search/${dataset}?q=test&limit=1")
+            if echo "$RESPONSE" | jq -e '.data' > /dev/null 2>&1; then
+              echo "${dataset}: OK"
+            else
+              echo "::error::${dataset} smoke test failed"
+              exit 1
+            fi
+          done
+
+          echo "All production smoke tests passed!"
+
+  # ===========================================================================
+  # Notify on Failure
+  # ===========================================================================
+  notify-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [build, deploy-staging, e2e-test, deploy-production]
+    if: failure()
+    steps:
+      - name: Create failure summary
+        run: |
+          echo "## Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "One or more jobs in the search worker deployment pipeline failed." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow:** ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Run:** [${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY

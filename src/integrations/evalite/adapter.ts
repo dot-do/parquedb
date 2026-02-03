@@ -20,6 +20,7 @@
 
 import { ParqueDB } from '../../ParqueDB'
 import type { EntityId, Entity, Filter } from '../../types'
+import { logger } from '../../utils/logger'
 import type {
   EvaliteAdapterConfig,
   ResolvedEvaliteConfig,
@@ -140,7 +141,7 @@ export class ParqueDBEvaliteAdapter {
     this.initialized = true
 
     if (this.config.debug) {
-      console.log('[EvaliteAdapter] Initialized with ParqueDB storage')
+      logger.info('[EvaliteAdapter] Initialized with ParqueDB storage')
     }
   }
 
@@ -149,7 +150,7 @@ export class ParqueDBEvaliteAdapter {
    */
   async close(): Promise<void> {
     if (this.config.debug) {
-      console.log('[EvaliteAdapter] Closed')
+      logger.info('[EvaliteAdapter] Closed')
     }
   }
 

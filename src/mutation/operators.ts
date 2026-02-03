@@ -14,7 +14,8 @@
 
 import type { UpdateInput, EntityId } from '../types'
 import type { ApplyOperatorsOptions, ApplyOperatorsResult, RelationshipOperation } from './types'
-import { compareValues, deepEqual, asArray } from '../utils'
+import { compareValues, deepEqual, asArray, isNullish } from '../utils'
+import { toUnknownArray } from '../types/cast'
 
 // =============================================================================
 // Path Security
@@ -132,7 +133,7 @@ export function applyOperators<T extends Record<string, unknown>>(
   // $push - Append to array
   if (update.$push) {
     for (const [key, value] of Object.entries(update.$push)) {
-      const arr = [...((getField(result, key) as unknown[]) || [])]
+      const arr = [...toUnknownArray(getField(result, key))]
 
       if (isPushModifier(value)) {
         const modifier = value as PushModifier
@@ -166,12 +167,12 @@ export function applyOperators<T extends Record<string, unknown>>(
   // $pull - Remove elements from array
   if (update.$pull) {
     for (const [key, condition] of Object.entries(update.$pull)) {
-      const currentArr = getField(result, key) as unknown[] | undefined
+      const fieldValue = getField(result, key)
       // If array doesn't exist, skip (MongoDB behavior)
-      if (!Array.isArray(currentArr)) {
+      if (!Array.isArray(fieldValue)) {
         continue
       }
-      const filtered = currentArr.filter((item) => {
+      const filtered = fieldValue.filter((item) => {
         if (isFilterCondition(condition)) {
           return !matchesPullCondition(item, condition as Record<string, unknown>)
         }
@@ -185,8 +186,8 @@ export function applyOperators<T extends Record<string, unknown>>(
   // $pullAll - Remove all matching values
   if (update.$pullAll) {
     for (const [key, values] of Object.entries(update.$pullAll)) {
-      const arr = (getField(result, key) as unknown[]) || []
-      const valuesToRemove = values as unknown[]
+      const arr = toUnknownArray(getField(result, key))
+      const valuesToRemove = toUnknownArray(values)
       const filtered = arr.filter(
         (item) => !valuesToRemove.some((v) => deepEqual(item, v))
       )
@@ -198,7 +199,7 @@ export function applyOperators<T extends Record<string, unknown>>(
   // $addToSet - Add unique value(s) to array
   if (update.$addToSet) {
     for (const [key, value] of Object.entries(update.$addToSet)) {
-      const arr = [...((getField(result, key) as unknown[]) || [])]
+      const arr = [...toUnknownArray(getField(result, key))]
 
       const items = isEachModifier(value)
         ? (value as { $each: unknown[] }).$each
@@ -218,7 +219,7 @@ export function applyOperators<T extends Record<string, unknown>>(
   // $pop - Remove first or last element
   if (update.$pop) {
     for (const [key, direction] of Object.entries(update.$pop)) {
-      const arr = [...((getField(result, key) as unknown[]) || [])]
+      const arr = [...toUnknownArray(getField(result, key))]
       if (direction === 1) {
         arr.pop()
       } else if (direction === -1) {
@@ -340,7 +341,7 @@ export function applyOperators<T extends Record<string, unknown>>(
  */
 export function getField(obj: unknown, path: string): unknown {
   validatePath(path)
-  if (obj === null || obj === undefined) {
+  if (isNullish(obj)) {
     return undefined
   }
 
@@ -348,7 +349,7 @@ export function getField(obj: unknown, path: string): unknown {
   let current: unknown = obj
 
   for (const part of parts) {
-    if (current === null || current === undefined) {
+    if (isNullish(current)) {
       return undefined
     }
 
@@ -409,7 +410,7 @@ export function setField<T>(obj: T, path: string, value: unknown): T {
     const needsArray = nextPart !== undefined && !isNaN(parseInt(nextPart, 10))
 
     let nested: unknown
-    if (currentValue === undefined || currentValue === null) {
+    if (isNullish(currentValue)) {
       nested = needsArray ? [] : {}
     } else if (typeof currentValue === 'object') {
       nested = Array.isArray(currentValue) ? [...currentValue] : { ...currentValue }
@@ -421,7 +422,7 @@ export function setField<T>(obj: T, path: string, value: unknown): T {
     return asArray<T>(newArr)
   }
 
-  const currentValue = obj === null || obj === undefined
+  const currentValue = isNullish(obj)
     ? undefined
     : (obj as Record<string, unknown>)[head]
 
@@ -429,7 +430,7 @@ export function setField<T>(obj: T, path: string, value: unknown): T {
   const needsArray = nextPart !== undefined && !isNaN(parseInt(nextPart, 10))
 
   let nested: unknown
-  if (currentValue === undefined || currentValue === null) {
+  if (isNullish(currentValue)) {
     nested = needsArray ? [] : {}
   } else if (typeof currentValue === 'object') {
     nested = Array.isArray(currentValue) ? [...currentValue] : { ...currentValue }
@@ -471,7 +472,7 @@ export function unsetField<T>(obj: T, path: string): T {
 
   const currentValue = (obj as Record<string, unknown>)[head]
 
-  if (currentValue === undefined || currentValue === null) {
+  if (isNullish(currentValue)) {
     return obj
   }
 

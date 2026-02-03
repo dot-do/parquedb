@@ -862,3 +862,369 @@ describe('Cleanup', () => {
     expect(result.deletedCount).toBe(0)
   })
 })
+
+// =============================================================================
+// Content Sampling Tests
+// =============================================================================
+
+describe('Content Sampling', () => {
+  let db: ReturnType<typeof createMockDB>
+
+  beforeEach(() => {
+    db = createMockDB()
+  })
+
+  describe('Configuration', () => {
+    it('should accept content sampling configuration', () => {
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: true,
+            sampleRate: 0.1, // Sample 10% of requests
+            maxPromptChars: 500,
+            maxCompletionChars: 1000,
+          },
+        }
+      )
+
+      const config = mv.getConfig()
+      expect(config.contentSampling).toBeDefined()
+      expect(config.contentSampling?.enabled).toBe(true)
+      expect(config.contentSampling?.sampleRate).toBe(0.1)
+      expect(config.contentSampling?.maxPromptChars).toBe(500)
+      expect(config.contentSampling?.maxCompletionChars).toBe(1000)
+    })
+
+    it('should default content sampling to disabled', () => {
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0]
+      )
+
+      const config = mv.getConfig()
+      expect(config.contentSampling?.enabled).toBe(false)
+    })
+
+    it('should support sampleAllErrors policy', () => {
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: true,
+            sampleRate: 0,
+            sampleAllErrors: true,
+          },
+        }
+      )
+
+      const config = mv.getConfig()
+      expect(config.contentSampling?.sampleAllErrors).toBe(true)
+    })
+  })
+
+  describe('Recording with Content', () => {
+    it('should record prompt and completion samples when enabled', async () => {
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: true,
+            sampleRate: 1.0, // Sample all requests
+          },
+        }
+      )
+
+      const result = await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 500,
+        promptTokens: 100,
+        completionTokens: 200,
+        promptSample: 'What is the meaning of life?',
+        completionSample: 'The meaning of life is a philosophical question...',
+      })
+
+      expect(result.promptSample).toBe('What is the meaning of life?')
+      expect(result.completionSample).toBe('The meaning of life is a philosophical question...')
+    })
+
+    it('should truncate content to maxChars when specified', async () => {
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: true,
+            sampleRate: 1.0,
+            maxPromptChars: 20,
+            maxCompletionChars: 30,
+          },
+        }
+      )
+
+      const result = await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 500,
+        promptSample: 'This is a very long prompt that should be truncated',
+        completionSample: 'This is a very long completion that should also be truncated',
+      })
+
+      expect(result.promptSample?.length).toBeLessThanOrEqual(20)
+      expect(result.completionSample?.length).toBeLessThanOrEqual(30)
+    })
+
+    it('should not store content when sampling is disabled', async () => {
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: false,
+          },
+        }
+      )
+
+      const result = await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 500,
+        promptSample: 'This should not be stored',
+        completionSample: 'This should not be stored either',
+      })
+
+      expect(result.promptSample).toBeUndefined()
+      expect(result.completionSample).toBeUndefined()
+    })
+
+    it('should sample errors even when sampleRate is 0 if sampleAllErrors is true', async () => {
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: true,
+            sampleRate: 0,
+            sampleAllErrors: true,
+          },
+        }
+      )
+
+      // Error request should be sampled
+      const errorResult = await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 500,
+        success: false,
+        error: 'Rate limit exceeded',
+        promptSample: 'Prompt for error request',
+        completionSample: 'Error response',
+      })
+
+      expect(errorResult.promptSample).toBe('Prompt for error request')
+
+      // Success request should NOT be sampled (sampleRate is 0)
+      const successResult = await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 500,
+        success: true,
+        promptSample: 'Prompt for success request',
+        completionSample: 'Success response',
+      })
+
+      expect(successResult.promptSample).toBeUndefined()
+    })
+  })
+
+  describe('Content Fingerprinting', () => {
+    it('should generate content fingerprint for deduplication', async () => {
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: true,
+            sampleRate: 1.0,
+            generateFingerprint: true,
+          },
+        }
+      )
+
+      const result = await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 500,
+        promptSample: 'What is the meaning of life?',
+      })
+
+      expect(result.promptFingerprint).toBeDefined()
+      expect(typeof result.promptFingerprint).toBe('string')
+    })
+
+    it('should generate same fingerprint for identical prompts', async () => {
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: true,
+            sampleRate: 1.0,
+            generateFingerprint: true,
+          },
+        }
+      )
+
+      const prompt = 'What is the meaning of life?'
+
+      const result1 = await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 500,
+        promptSample: prompt,
+      })
+
+      const result2 = await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 600,
+        promptSample: prompt,
+      })
+
+      expect(result1.promptFingerprint).toBe(result2.promptFingerprint)
+    })
+  })
+
+  describe('PII Detection Hooks', () => {
+    it('should call redactor function before storing content', async () => {
+      const redactor = vi.fn((content: string) => content.replace(/\d{3}-\d{2}-\d{4}/g, '[SSN_REDACTED]'))
+
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: true,
+            sampleRate: 1.0,
+            redactor,
+          },
+        }
+      )
+
+      const result = await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 500,
+        promptSample: 'My SSN is 123-45-6789',
+        completionSample: 'Your SSN 123-45-6789 has been processed',
+      })
+
+      expect(redactor).toHaveBeenCalled()
+      expect(result.promptSample).toBe('My SSN is [SSN_REDACTED]')
+      expect(result.completionSample).toBe('Your SSN [SSN_REDACTED] has been processed')
+    })
+
+    it('should support async redactor functions', async () => {
+      vi.useFakeTimers()
+      const asyncRedactor = vi.fn(async (content: string) => {
+        await vi.advanceTimersByTimeAsync(1)
+        return content.replace(/secret/gi, '[REDACTED]')
+      })
+
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: true,
+            sampleRate: 1.0,
+            redactor: asyncRedactor,
+          },
+        }
+      )
+
+      const result = await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 500,
+        promptSample: 'The secret code is SECRET',
+      })
+
+      expect(asyncRedactor).toHaveBeenCalled()
+      expect(result.promptSample).toBe('The [REDACTED] code is [REDACTED]')
+      vi.useRealTimers()
+    })
+  })
+
+  describe('GeneratedContentMV Correlation', () => {
+    it('should include contentId for correlation with GeneratedContentMV', async () => {
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: true,
+            sampleRate: 1.0,
+          },
+        }
+      )
+
+      const result = await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 500,
+        promptSample: 'Test prompt',
+        completionSample: 'Test completion',
+        contentId: 'gc_abc123',
+      })
+
+      expect(result.contentId).toBe('gc_abc123')
+    })
+  })
+
+  describe('Querying Sampled Content', () => {
+    it('should include hasSampledContent filter in query options', async () => {
+      const mv = new AIRequestsMV(
+        db as unknown as Parameters<typeof createAIRequestsMV>[0],
+        {
+          contentSampling: {
+            enabled: true,
+            sampleRate: 1.0,
+          },
+        }
+      )
+
+      await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 500,
+        promptSample: 'Test prompt 1',
+      })
+
+      await mv.record({
+        modelId: 'gpt-4',
+        providerId: 'openai',
+        requestType: 'generate',
+        latencyMs: 600,
+        // No prompt sample
+      })
+
+      // Verify both records exist
+      const all = await mv.find()
+      expect(all.length).toBe(2)
+
+      // Verify first record has prompt sample
+      const withSample = all.filter(r => r.promptSample !== undefined)
+      expect(withSample.length).toBe(1)
+      expect(withSample[0]!.promptSample).toBe('Test prompt 1')
+
+      // Second record has no prompt sample (no input provided)
+      const withoutSample = all.filter(r => r.promptSample === undefined)
+      expect(withoutSample.length).toBe(1)
+    })
+  })
+})

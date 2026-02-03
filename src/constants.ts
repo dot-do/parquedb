@@ -286,6 +286,24 @@ export const DEFAULT_FTS_MIN_WORD_LENGTH = 2
  */
 export const DEFAULT_FTS_MAX_WORD_LENGTH = 50
 
+/**
+ * Default maximum edit distance for fuzzy matching
+ * Higher values allow more typos but increase false positives
+ */
+export const DEFAULT_FTS_FUZZY_MAX_DISTANCE = 2
+
+/**
+ * Default minimum term length for fuzzy matching
+ * Short terms are matched exactly to avoid excessive false positives
+ */
+export const DEFAULT_FTS_FUZZY_MIN_TERM_LENGTH = 4
+
+/**
+ * Default prefix length for fuzzy matching
+ * Characters that must match exactly at the start of the term
+ */
+export const DEFAULT_FTS_FUZZY_PREFIX_LENGTH = 1
+
 // =============================================================================
 // Schema Inference Constants
 // =============================================================================
@@ -538,6 +556,45 @@ export const EVAL_SCORES_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 export const AI_REQUESTS_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 
 // =============================================================================
+// Global Storage Constants (Testing/Development)
+// =============================================================================
+
+/**
+ * Maximum number of namespaces in global storage
+ * Prevents unbounded memory growth in long-running test processes
+ */
+export const DEFAULT_GLOBAL_STORAGE_MAX_NAMESPACES = 100
+
+/**
+ * Maximum entities per namespace in global storage
+ * LRU eviction applies when this limit is exceeded
+ */
+export const DEFAULT_GLOBAL_STORAGE_MAX_ENTITIES_PER_NS = 10000
+
+/**
+ * Maximum relationships per namespace in global storage
+ */
+export const DEFAULT_GLOBAL_STORAGE_MAX_RELS_PER_NS = 50000
+
+/**
+ * Maximum events in global event log
+ * Oldest events are evicted when this limit is exceeded
+ */
+export const DEFAULT_GLOBAL_EVENT_LOG_MAX_ENTRIES = 10000
+
+/**
+ * TTL for global event log entries in milliseconds (1 hour)
+ * Events older than this are eligible for cleanup
+ */
+export const DEFAULT_GLOBAL_EVENT_LOG_TTL_MS = 60 * 60 * 1000
+
+/**
+ * Cleanup interval for global storage in milliseconds (5 minutes)
+ * How often to run automatic cleanup of expired entries
+ */
+export const DEFAULT_GLOBAL_STORAGE_CLEANUP_INTERVAL_MS = 5 * 60 * 1000
+
+// =============================================================================
 // Hash Constants
 // =============================================================================
 
@@ -578,3 +635,373 @@ export const MS_PER_MINUTE = 60 * 1000
  * Used for human-readable duration formatting
  */
 export const MS_PER_HOUR = 60 * 60 * 1000
+
+/**
+ * Milliseconds per day (86,400,000)
+ * Used for human-readable duration formatting
+ */
+export const MS_PER_DAY = 24 * 60 * 60 * 1000
+
+/**
+ * Seconds per day (86,400)
+ * Used for CORS Access-Control-Max-Age headers
+ */
+export const SECONDS_PER_DAY = 86400
+
+// =============================================================================
+// Worker Constants
+// =============================================================================
+
+/**
+ * Default flush interval for Durable Objects in milliseconds (30 seconds)
+ */
+export const DEFAULT_DO_FLUSH_INTERVAL_MS = 30000
+
+/**
+ * Maximum buffer size for TailDO (events before forced flush)
+ */
+export const DEFAULT_TAIL_BUFFER_SIZE = 1000
+
+/**
+ * Maximum pending invalidation signals to keep in DO
+ */
+export const MAX_PENDING_INVALIDATIONS = 100
+
+/**
+ * Entity cache maximum size in DO
+ */
+export const DEFAULT_ENTITY_CACHE_SIZE = 1000
+
+/**
+ * Event batch count threshold for WAL
+ */
+export const EVENT_BATCH_COUNT_THRESHOLD = 100
+
+/**
+ * Event batch size threshold in bytes (64KB)
+ */
+export const DEFAULT_EVENT_BATCH_SIZE_BYTES = 64 * 1024
+
+/**
+ * Bulk write threshold - entities above this count go directly to R2
+ */
+export const BULK_WRITE_THRESHOLD = 5
+
+// =============================================================================
+// Sync Token Constants
+// =============================================================================
+
+/**
+ * Maximum nonce cache size for replay protection
+ */
+export const MAX_NONCE_CACHE_SIZE = 10000
+
+/**
+ * Nonce cleanup threshold
+ */
+export const NONCE_CLEANUP_THRESHOLD = 1000
+
+/**
+ * Clock skew tolerance in milliseconds (5 seconds)
+ */
+export const CLOCK_SKEW_TOLERANCE_MS = 5000
+
+// =============================================================================
+// JWT/JWKS Constants
+// =============================================================================
+
+/**
+ * JWKS cache TTL in milliseconds (1 hour)
+ */
+export const JWKS_CACHE_TTL = 3600 * 1000
+
+/**
+ * JWKS fetch timeout in milliseconds (10 seconds)
+ */
+export const JWKS_FETCH_TIMEOUT_MS = 10000
+
+// =============================================================================
+// Circuit Breaker Constants
+// =============================================================================
+
+/**
+ * Default failure threshold before opening circuit
+ */
+export const DEFAULT_FAILURE_THRESHOLD = 5
+
+/**
+ * Default success threshold before closing circuit
+ */
+export const DEFAULT_SUCCESS_THRESHOLD = 2
+
+/**
+ * Default circuit breaker reset timeout in milliseconds (30 seconds)
+ */
+export const DEFAULT_CIRCUIT_RESET_TIMEOUT_MS = 30000
+
+/**
+ * Default failure window in milliseconds (60 seconds)
+ */
+export const DEFAULT_FAILURE_WINDOW_MS = 60000
+
+/**
+ * Fast circuit breaker reset timeout in milliseconds (10 seconds)
+ */
+export const FAST_CIRCUIT_RESET_TIMEOUT_MS = 10000
+
+/**
+ * Slow circuit breaker reset timeout in milliseconds (60 seconds)
+ */
+export const SLOW_CIRCUIT_RESET_TIMEOUT_MS = 60000
+
+/**
+ * Fast circuit breaker failure window in milliseconds (30 seconds)
+ */
+export const FAST_FAILURE_WINDOW_MS = 30000
+
+/**
+ * Slow circuit breaker failure window in milliseconds (120 seconds)
+ */
+export const SLOW_FAILURE_WINDOW_MS = 120000
+
+// =============================================================================
+// Lock Acquisition Constants
+// =============================================================================
+
+/**
+ * Default lock timeout in milliseconds (30 seconds)
+ */
+export const DEFAULT_LOCK_TIMEOUT_MS = 30000
+
+/**
+ * Default lock wait timeout in milliseconds (5 seconds)
+ */
+export const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 5000
+
+/**
+ * Stale lock age threshold in milliseconds (30 seconds)
+ */
+export const STALE_LOCK_AGE_MS = 30000
+
+// =============================================================================
+// Cache TTL Constants
+// =============================================================================
+
+/**
+ * Default data cache TTL in seconds (1 minute)
+ */
+export const DEFAULT_DATA_CACHE_TTL_SECONDS = 60
+
+/**
+ * Default metadata cache TTL in seconds (5 minutes)
+ */
+export const DEFAULT_METADATA_CACHE_TTL_SECONDS = 300
+
+/**
+ * Default bloom filter cache TTL in seconds (10 minutes)
+ */
+export const DEFAULT_BLOOM_CACHE_TTL_SECONDS = 600
+
+/**
+ * Read-heavy data cache TTL in seconds (5 minutes)
+ */
+export const READ_HEAVY_DATA_CACHE_TTL_SECONDS = 300
+
+/**
+ * Read-heavy metadata cache TTL in seconds (15 minutes)
+ */
+export const READ_HEAVY_METADATA_CACHE_TTL_SECONDS = 900
+
+/**
+ * Read-heavy bloom cache TTL in seconds (30 minutes)
+ */
+export const READ_HEAVY_BLOOM_CACHE_TTL_SECONDS = 1800
+
+/**
+ * Write-heavy data cache TTL in seconds (15 seconds)
+ */
+export const WRITE_HEAVY_DATA_CACHE_TTL_SECONDS = 15
+
+/**
+ * Write-heavy metadata cache TTL in seconds (1 minute)
+ */
+export const WRITE_HEAVY_METADATA_CACHE_TTL_SECONDS = 60
+
+/**
+ * Write-heavy bloom cache TTL in seconds (2 minutes)
+ */
+export const WRITE_HEAVY_BLOOM_CACHE_TTL_SECONDS = 120
+
+/**
+ * GitHub config cache TTL in milliseconds (5 minutes)
+ */
+export const GITHUB_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000
+
+// =============================================================================
+// Batch Processing Constants
+// =============================================================================
+
+/**
+ * Default tail batch max wait time in milliseconds (10 seconds)
+ */
+export const DEFAULT_TAIL_BATCH_MAX_WAIT_MS = 10000
+
+/**
+ * Default streaming batch wait time in milliseconds (1 second)
+ */
+export const DEFAULT_STREAMING_BATCH_WAIT_MS = 1000
+
+/**
+ * Default observability batch timeout in milliseconds (1 second)
+ */
+export const DEFAULT_OBSERVABILITY_BATCH_TIMEOUT_MS = 1000
+
+/**
+ * Default evalite retention period in milliseconds (30 days)
+ */
+export const DEFAULT_EVALITE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+
+// =============================================================================
+// Validation Constants
+// =============================================================================
+
+/**
+ * Maximum string length for MCP validation
+ */
+export const MAX_MCP_STRING_LENGTH = 10000
+
+/**
+ * Maximum limit for pagination in MCP
+ */
+export const MAX_MCP_PAGINATION_LIMIT = 1000
+
+/**
+ * Maximum string length for prompt/query validation in MCP
+ */
+export const MAX_MCP_PROMPT_LENGTH = 1000
+
+/**
+ * Maximum limit for Payload operations
+ */
+export const MAX_PAYLOAD_OPERATION_LIMIT = 10000
+
+/**
+ * Maximum log length for serialization
+ */
+export const MAX_LOG_SERIALIZE_LENGTH = 10000
+
+// =============================================================================
+// Transaction Stale Threshold
+// =============================================================================
+
+/**
+ * Stale transaction threshold in milliseconds (5 minutes)
+ */
+export const STALE_TRANSACTION_THRESHOLD_MS = 5 * 60 * 1000
+
+// =============================================================================
+// Rate Limit Window
+// =============================================================================
+
+/**
+ * Default rate limit window in milliseconds (1 minute)
+ */
+export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60 * 1000
+
+// =============================================================================
+// Migration/Alarm Constants
+// =============================================================================
+
+/**
+ * Default migration retry base delay in milliseconds (1 second)
+ */
+export const MIGRATION_RETRY_BASE_DELAY_MS = 1000
+
+/**
+ * Migration alarm delay in milliseconds (1 second)
+ */
+export const MIGRATION_ALARM_DELAY_MS = 1000
+
+/**
+ * Sync token URL expiry in milliseconds (1 hour)
+ */
+export const SYNC_TOKEN_URL_EXPIRY_MS = 3600 * 1000
+
+// =============================================================================
+// High Water Mark Constants
+// =============================================================================
+
+/**
+ * Default high water mark for streaming in bytes (64KB)
+ */
+export const DEFAULT_HIGH_WATER_MARK = 64 * 1024
+
+// =============================================================================
+// Backpressure Constants
+// =============================================================================
+
+/**
+ * Default backpressure max buffer size in bytes (1MB)
+ */
+export const DEFAULT_BACKPRESSURE_MAX_BUFFER_BYTES = 1024 * 1024
+
+/**
+ * Default backpressure max event count
+ */
+export const DEFAULT_BACKPRESSURE_MAX_EVENTS = 1000
+
+/**
+ * Default backpressure max pending flushes
+ */
+export const DEFAULT_BACKPRESSURE_MAX_PENDING_FLUSHES = 10
+
+/**
+ * Default backpressure release threshold (50%)
+ */
+export const DEFAULT_BACKPRESSURE_RELEASE_THRESHOLD = 0.5
+
+/**
+ * Default backpressure timeout in milliseconds (30 seconds)
+ */
+export const DEFAULT_BACKPRESSURE_TIMEOUT_MS = 30000
+
+// =============================================================================
+// Workers Paid Limit
+// =============================================================================
+
+/**
+ * Cloudflare Workers paid subrequest limit per invocation
+ */
+export const WORKERS_PAID_SUBREQUEST_LIMIT = 1000
+
+// =============================================================================
+// R2 Multipart Constants
+// =============================================================================
+
+/**
+ * Maximum part number for multipart uploads (R2/S3 limit)
+ */
+export const MAX_MULTIPART_PART_NUMBER = 10000
+
+// =============================================================================
+// CSRF Token Constants
+// =============================================================================
+
+/**
+ * Default CSRF token TTL in milliseconds (1 hour)
+ */
+export const DEFAULT_CSRF_TOKEN_TTL_MS = 3600000
+
+// =============================================================================
+// Iceberg Constants
+// =============================================================================
+
+/**
+ * Default Iceberg max retry delay in milliseconds (10 seconds)
+ */
+export const DEFAULT_ICEBERG_MAX_RETRY_DELAY_MS = 10000
+
+/**
+ * Default write lock timeout in milliseconds (30 seconds)
+ */
+export const DEFAULT_WRITE_LOCK_TIMEOUT_MS = 30000

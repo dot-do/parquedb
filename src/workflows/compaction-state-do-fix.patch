@@ -1,0 +1,64 @@
+--- a/src/workflows/compaction-queue-consumer.ts
++++ b/src/workflows/compaction-queue-consumer.ts
+@@ -1250,16 +1250,42 @@ interface StoredWindowState {
+   processingStatus?: StoredProcessingStatus
+ }
+
+-/** Stored state structure (namespace-sharded - each DO handles one namespace) */
+-interface StoredState {
++/**
++ * Stored metadata structure (separate from windows to avoid 128KB limit)
++ * Windows are stored in individual keys: `window:{windowKey}`
++ */
++interface StoredMetadata {
+   /** The namespace this DO instance handles */
+   namespace: string
+-  /** Windows keyed by windowStart timestamp */
+-  windows: Record<string, StoredWindowState>
++  /** Namespace priority: 0 (critical) to 3 (background). Default: 2 */
++  priority?: NamespacePriority
+   knownWriters: string[]
+   writerLastSeen: Record<string, number>
+-  /** Namespace priority: 0 (critical) to 3 (background). Default: 2 */
++  /** Version for migration detection */
++  version: 2
++}
++
++/**
++ * Legacy stored state structure for migration
++ * @deprecated Use StoredMetadata + per-window keys instead
++ */
++interface LegacyStoredState {
++  /** The namespace this DO instance handles */
++  namespace: string
++  /** Windows keyed by windowStart timestamp */
++  windows: Record<string, StoredWindowState>
++  knownWriters: string[]
++  writerLastSeen: Record<string, number>
+   priority?: NamespacePriority
+ }
+
++/** Storage key prefixes */
++const STORAGE_KEYS = {
++  METADATA: 'metadata',
++  LEGACY: 'compactionState',
++  WINDOW_PREFIX: 'window:',
++} as const
++
+ /**
+  * Durable Object for tracking compaction state across queue messages
+  *
+@@ -1268,6 +1294,13 @@ interface StoredState {
+  * This eliminates the scalability bottleneck of a single global instance.
+  * Windows are keyed by windowStart timestamp since namespace is implicit.
+  *
++ * STORAGE ARCHITECTURE: Per-Window Keys (128KB Limit Mitigation)
++ * To avoid the 128KB Durable Object storage limit per key, state is split:
++ * - `metadata`: Namespace, priority, known writers (small, fixed-size data)
++ * - `window:{windowKey}`: Individual window state (each window in its own key)
++ *
++ * This allows storing many windows without hitting the 128KB limit per key.
++ *
+  * TWO-PHASE COMMIT:
+  * Windows go through states: pending -> processing -> dispatched
+  * - pending: Ready to be picked up for compaction

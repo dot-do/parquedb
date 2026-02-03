@@ -9,6 +9,7 @@ import { parquetMetadataAsync } from 'hyparquet'
 import type { SchemaElement } from 'hyparquet'
 import type { StorageBackend } from '../types/storage'
 import { initializeAsyncBuffer } from '../parquet/reader'
+import { logger } from '../utils/logger'
 import type {
   DiscoveredCollection,
   DiscoveredField,
@@ -105,7 +106,7 @@ export async function discoverCollections(
         const collection = await discoverCollection(storage, file, slug)
         collections.push(collection)
       } catch (error) {
-        console.warn(`Failed to discover ${file}:`, error)
+        logger.warn(`Failed to discover ${file}:`, error)
       }
     }
   }
@@ -122,7 +123,7 @@ export async function discoverCollections(
         const collection = await discoverCollection(storage, dataFile, slug)
         collections.push(collection)
       } catch (error) {
-        console.warn(`Failed to discover ${dataFile}:`, error)
+        logger.warn(`Failed to discover ${dataFile}:`, error)
       }
     }
   }

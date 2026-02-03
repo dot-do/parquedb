@@ -7,6 +7,7 @@
  * - Aggregation and statistics
  * - Error tracking
  * - Performance metrics
+ * - Content sampling for prompts/completions
  *
  * Unlike AIUsageMV which aggregates by time periods, AIRequestsMV provides
  * access to individual request records with filtering capabilities.
@@ -20,6 +21,13 @@
  * const requestsMV = new AIRequestsMV(db, {
  *   collection: 'ai_requests',
  *   maxAgeMs: 7 * 24 * 60 * 60 * 1000, // 7 days
+ *   contentSampling: {
+ *     enabled: true,
+ *     sampleRate: 0.1, // Sample 10% of requests
+ *     sampleAllErrors: true, // Always sample errors
+ *     maxPromptChars: 500,
+ *     maxCompletionChars: 1000,
+ *   },
  * })
  *
  * // Record a request
@@ -30,6 +38,8 @@
  *   latencyMs: 850,
  *   promptTokens: 150,
  *   completionTokens: 200,
+ *   promptSample: 'What is the meaning of life?',
+ *   completionSample: 'The meaning of life is...',
  * })
  *
  * // Query requests
@@ -48,9 +58,10 @@
  */
 
 import type { ParqueDB } from '../../ParqueDB'
-import type { ModelPricing } from './types'
+import type { ModelPricing, MultiTenantConfig } from './types'
 import { DEFAULT_MODEL_PRICING } from './types'
-import { AI_REQUESTS_MAX_AGE_MS, MAX_BATCH_SIZE, DEFAULT_PAGE_SIZE } from '../../constants'
+import { AI_REQUESTS_MAX_AGE_MS, MAX_BATCH_SIZE, DEFAULT_PAGE_SIZE, DJB2_INITIAL } from '../../constants'
+import { asCreatedRecord, asTypedResults, asTypedResult } from '../../types/cast'
 
 // =============================================================================
 // Constants
@@ -152,6 +163,19 @@ export interface AIRequestRecord {
   metadata?: Record<string, unknown>
   /** When the record was created */
   createdAt: Date
+  // Content sampling fields
+  /** Sampled prompt content (if sampling enabled) */
+  promptSample?: string
+  /** Sampled completion content (if sampling enabled) */
+  completionSample?: string
+  /** Prompt content fingerprint for deduplication */
+  promptFingerprint?: string
+  /** Completion content fingerprint for deduplication */
+  completionFingerprint?: string
+  /** Content ID for correlation with GeneratedContentMV */
+  contentId?: string
+  /** Tenant identifier (for multi-tenant deployments) */
+  tenantId?: string
 }
 
 /**
@@ -202,6 +226,15 @@ export interface RecordAIRequestInput {
   estimatedCost?: number
   /** Custom metadata */
   metadata?: Record<string, unknown>
+  // Content sampling fields
+  /** Prompt content to sample (optional, requires sampling to be enabled) */
+  promptSample?: string
+  /** Completion content to sample (optional, requires sampling to be enabled) */
+  completionSample?: string
+  /** Content ID for correlation with GeneratedContentMV */
+  contentId?: string
+  /** Tenant identifier (overrides config tenantId for this record) */
+  tenantId?: string
 }
 
 /**
@@ -230,12 +263,18 @@ export interface AIRequestsQueryOptions {
   cachedOnly?: boolean
   /** Include only requests with errors */
   errorsOnly?: boolean
+  /** Include only requests with sampled content */
+  hasSampledContent?: boolean
   /** Maximum results */
   limit?: number
   /** Skip first N results */
   offset?: number
   /** Sort field */
   sort?: 'timestamp' | '-timestamp' | 'latencyMs' | '-latencyMs' | 'estimatedCost' | '-estimatedCost'
+  /** Filter by tenant ID (overrides config tenantId for this query) */
+  tenantId?: string
+  /** Query all tenants (requires allowCrossTenantQueries: true) */
+  allTenants?: boolean
 }
 
 /**
@@ -289,9 +328,50 @@ export interface AIRequestsStats {
 }
 
 /**
- * Configuration for AIRequestsMV
+ * Content redactor function type
+ * Can be sync or async, receives content and returns redacted content
  */
-export interface AIRequestsMVConfig {
+export type ContentRedactor = (content: string) => string | Promise<string>
+
+/**
+ * Configuration for content sampling
+ */
+export interface ContentSamplingConfig {
+  /** Whether content sampling is enabled (default: false) */
+  enabled: boolean
+  /** Sample rate (0-1) - fraction of requests to sample (default: 0) */
+  sampleRate?: number
+  /** Maximum characters for prompt sample (default: unlimited) */
+  maxPromptChars?: number
+  /** Maximum characters for completion sample (default: unlimited) */
+  maxCompletionChars?: number
+  /** Sample all error requests regardless of sample rate (default: false) */
+  sampleAllErrors?: boolean
+  /** Generate content fingerprint for deduplication (default: false) */
+  generateFingerprint?: boolean
+  /** Redactor function for PII detection/removal */
+  redactor?: ContentRedactor
+}
+
+/**
+ * Resolved content sampling configuration with defaults
+ */
+export interface ResolvedContentSamplingConfig {
+  enabled: boolean
+  sampleRate: number
+  maxPromptChars?: number
+  maxCompletionChars?: number
+  sampleAllErrors: boolean
+  generateFingerprint: boolean
+  redactor?: ContentRedactor
+}
+
+/**
+ * Configuration for AIRequestsMV
+ *
+ * Extends MultiTenantConfig for multi-tenant deployments.
+ */
+export interface AIRequestsMVConfig extends MultiTenantConfig {
   /** Collection name for storing requests (default: 'ai_requests') */
   collection?: string
   /** Maximum age of requests to keep (default: 30 days) */
@@ -304,6 +384,8 @@ export interface AIRequestsMVConfig {
   mergeWithDefaultPricing?: boolean
   /** Enable debug logging */
   debug?: boolean
+  /** Content sampling configuration */
+  contentSampling?: ContentSamplingConfig
 }
 
 /**
@@ -315,6 +397,13 @@ export interface ResolvedAIRequestsMVConfig {
   batchSize: number
   pricing: Map<string, ModelPricing>
   debug: boolean
+  contentSampling: ResolvedContentSamplingConfig
+  /** Tenant identifier */
+  tenantId?: string
+  /** Whether to use tenant-scoped storage paths */
+  tenantScopedStorage: boolean
+  /** Whether cross-tenant queries are allowed */
+  allowCrossTenantQueries: boolean
 }
 
 /**
@@ -342,6 +431,17 @@ export function generateRequestId(): string {
   const timestamp = Date.now().toString(36)
   const random = Math.random().toString(36).substring(2, 10)
   return `ai_${timestamp}_${random}`
+}
+
+/**
+ * Simple hash function for content fingerprinting (djb2 algorithm)
+ */
+export function hashContent(content: string): string {
+  let hash = DJB2_INITIAL
+  for (let i = 0; i < content.length; i++) {
+    hash = ((hash << 5) + hash) ^ content.charCodeAt(i)
+  }
+  return (hash >>> 0).toString(36)
 }
 
 /**
@@ -417,15 +517,52 @@ function percentile(sortedArr: number[], p: number): number {
 }
 
 /**
+ * Resolve content sampling configuration with defaults
+ */
+function resolveContentSamplingConfig(config?: ContentSamplingConfig): ResolvedContentSamplingConfig {
+  if (!config) {
+    return {
+      enabled: false,
+      sampleRate: 0,
+      sampleAllErrors: false,
+      generateFingerprint: false,
+    }
+  }
+
+  return {
+    enabled: config.enabled,
+    sampleRate: config.sampleRate ?? 0,
+    maxPromptChars: config.maxPromptChars,
+    maxCompletionChars: config.maxCompletionChars,
+    sampleAllErrors: config.sampleAllErrors ?? false,
+    generateFingerprint: config.generateFingerprint ?? false,
+    redactor: config.redactor,
+  }
+}
+
+/**
  * Resolve configuration with defaults
  */
 function resolveConfig(config: AIRequestsMVConfig): ResolvedAIRequestsMVConfig {
+  const tenantScopedStorage = config.tenantScopedStorage ?? false
+  const tenantId = config.tenantId
+
+  // Build tenant-scoped collection name if enabled
+  const baseCollection = config.collection ?? DEFAULT_COLLECTION
+  const collection = tenantScopedStorage && tenantId
+    ? `tenant_${tenantId}/${baseCollection}`
+    : baseCollection
+
   return {
-    collection: config.collection ?? DEFAULT_COLLECTION,
+    collection,
     maxAgeMs: config.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
     batchSize: config.batchSize ?? DEFAULT_BATCH_SIZE,
     pricing: buildPricingMap(config.customPricing, config.mergeWithDefaultPricing ?? true),
     debug: config.debug ?? false,
+    contentSampling: resolveContentSamplingConfig(config.contentSampling),
+    tenantId,
+    tenantScopedStorage,
+    allowCrossTenantQueries: config.allowCrossTenantQueries ?? false,
   }
 }
 
@@ -454,6 +591,60 @@ export class AIRequestsMV {
   }
 
   /**
+   * Determine if content should be sampled for a request
+   */
+  private shouldSampleContent(isError: boolean): boolean {
+    const { enabled, sampleRate, sampleAllErrors } = this.config.contentSampling
+
+    if (!enabled) return false
+
+    // Always sample errors if configured to do so
+    if (isError && sampleAllErrors) return true
+
+    // Sample based on rate
+    if (sampleRate <= 0) return false
+    if (sampleRate >= 1) return true
+
+    return Math.random() < sampleRate
+  }
+
+  /**
+   * Process content for sampling (truncate, redact, fingerprint)
+   */
+  private async processContent(
+    content: string | undefined,
+    maxChars: number | undefined,
+    generateFingerprint: boolean,
+    redactor?: ContentRedactor
+  ): Promise<{ sample?: string; fingerprint?: string }> {
+    if (!content) return {}
+
+    let processed = content
+
+    // Apply redactor if configured
+    if (redactor) {
+      const result = redactor(processed)
+      processed = result instanceof Promise ? await result : result
+    }
+
+    // Truncate if needed
+    if (maxChars !== undefined && processed.length > maxChars) {
+      processed = processed.substring(0, maxChars)
+    }
+
+    const result: { sample?: string; fingerprint?: string } = {
+      sample: processed,
+    }
+
+    // Generate fingerprint if requested
+    if (generateFingerprint) {
+      result.fingerprint = hashContent(content) // Use original content for fingerprint
+    }
+
+    return result
+  }
+
+  /**
    * Record a single AI request
    *
    * @param input - Request data
@@ -478,9 +669,44 @@ export class AIRequestsMV {
     const requestId = input.requestId ?? generateRequestId()
     const timestamp = input.timestamp ?? now
 
-    const status: AIRequestStatus = input.success === false
+    const isError = input.success === false
+    const status: AIRequestStatus = isError
       ? (input.errorCode === 'TIMEOUT' ? 'timeout' : 'error')
       : 'success'
+
+    // Process content sampling
+    const shouldSample = this.shouldSampleContent(isError)
+    const { contentSampling } = this.config
+
+    let promptSample: string | undefined
+    let completionSample: string | undefined
+    let promptFingerprint: string | undefined
+    let completionFingerprint: string | undefined
+
+    if (shouldSample && input.promptSample) {
+      const processed = await this.processContent(
+        input.promptSample,
+        contentSampling.maxPromptChars,
+        contentSampling.generateFingerprint,
+        contentSampling.redactor
+      )
+      promptSample = processed.sample
+      promptFingerprint = processed.fingerprint
+    }
+
+    if (shouldSample && input.completionSample) {
+      const processed = await this.processContent(
+        input.completionSample,
+        contentSampling.maxCompletionChars,
+        contentSampling.generateFingerprint,
+        contentSampling.redactor
+      )
+      completionSample = processed.sample
+      completionFingerprint = processed.fingerprint
+    }
+
+    // Use input tenantId or fall back to config tenantId
+    const tenantId = input.tenantId ?? this.config.tenantId
 
     const data: Omit<AIRequestRecord, '$id'> = {
       $type: 'AIRequest',
@@ -509,10 +735,16 @@ export class AIRequestsMV {
       environment: input.environment,
       metadata: input.metadata,
       createdAt: now,
+      promptSample,
+      completionSample,
+      promptFingerprint,
+      completionFingerprint,
+      contentId: shouldSample ? input.contentId : undefined,
+      tenantId,
     }
 
     const created = await collection.create(data as Record<string, unknown>)
-    return created as unknown as AIRequestRecord
+    return asCreatedRecord<AIRequestRecord>(created)
   }
 
   /**
@@ -525,7 +757,7 @@ export class AIRequestsMV {
     const collection = this.db.collection(this.config.collection)
     const now = new Date()
 
-    const records = inputs.map(input => {
+    const records = await Promise.all(inputs.map(async input => {
       const promptTokens = input.promptTokens ?? 0
       const completionTokens = input.completionTokens ?? 0
       const totalTokens = promptTokens + completionTokens
@@ -541,9 +773,44 @@ export class AIRequestsMV {
       const requestId = input.requestId ?? generateRequestId()
       const timestamp = input.timestamp ?? now
 
-      const status: AIRequestStatus = input.success === false
+      const isError = input.success === false
+      const status: AIRequestStatus = isError
         ? (input.errorCode === 'TIMEOUT' ? 'timeout' : 'error')
         : 'success'
+
+      // Process content sampling
+      const shouldSample = this.shouldSampleContent(isError)
+      const { contentSampling } = this.config
+
+      let promptSample: string | undefined
+      let completionSample: string | undefined
+      let promptFingerprint: string | undefined
+      let completionFingerprint: string | undefined
+
+      if (shouldSample && input.promptSample) {
+        const processed = await this.processContent(
+          input.promptSample,
+          contentSampling.maxPromptChars,
+          contentSampling.generateFingerprint,
+          contentSampling.redactor
+        )
+        promptSample = processed.sample
+        promptFingerprint = processed.fingerprint
+      }
+
+      if (shouldSample && input.completionSample) {
+        const processed = await this.processContent(
+          input.completionSample,
+          contentSampling.maxCompletionChars,
+          contentSampling.generateFingerprint,
+          contentSampling.redactor
+        )
+        completionSample = processed.sample
+        completionFingerprint = processed.fingerprint
+      }
+
+      // Use input tenantId or fall back to config tenantId
+      const tenantId = input.tenantId ?? this.config.tenantId
 
       return {
         $type: 'AIRequest',
@@ -572,11 +839,17 @@ export class AIRequestsMV {
         environment: input.environment,
         metadata: input.metadata,
         createdAt: now,
+        promptSample,
+        completionSample,
+        promptFingerprint,
+        completionFingerprint,
+        contentId: shouldSample ? input.contentId : undefined,
+        tenantId,
       }
-    })
+    }))
 
     const created = await collection.createMany(records as Record<string, unknown>[])
-    return created as unknown as AIRequestRecord[]
+    return asTypedResults<AIRequestRecord>(created)
   }
 
   /**
@@ -588,6 +861,18 @@ export class AIRequestsMV {
   async find(options: AIRequestsQueryOptions = {}): Promise<AIRequestRecord[]> {
     const collection = this.db.collection(this.config.collection)
     const filter: Record<string, unknown> = {}
+
+    // Apply tenant filtering
+    if (!options.allTenants) {
+      // Use query tenantId, fall back to config tenantId
+      const tenantId = options.tenantId ?? this.config.tenantId
+      if (tenantId && !this.config.tenantScopedStorage) {
+        filter.tenantId = tenantId
+      }
+    } else if (!this.config.allowCrossTenantQueries) {
+      // allTenants requested but not allowed
+      throw new Error('Cross-tenant queries are not enabled. Set allowCrossTenantQueries: true in config.')
+    }
 
     // Apply filters
     if (options.modelId) {
@@ -636,6 +921,10 @@ export class AIRequestsMV {
       filter.status = 'error'
     }
 
+    if (options.hasSampledContent) {
+      filter.promptSample = { $exists: true, $ne: null }
+    }
+
     // Build sort
     const sortField = options.sort?.replace('-', '') ?? 'timestamp'
     const sortOrder = options.sort?.startsWith('-') ? -1 : 1
@@ -645,7 +934,7 @@ export class AIRequestsMV {
       sort: { [sortField]: sortOrder },
     })
 
-    return results as unknown as AIRequestRecord[]
+    return asTypedResults<AIRequestRecord>(results)
   }
 
   /**
@@ -662,7 +951,7 @@ export class AIRequestsMV {
       return null
     }
 
-    return results[0] as unknown as AIRequestRecord
+    return asTypedResult<AIRequestRecord>(results[0])
   }
 
   /**
@@ -1032,7 +1321,7 @@ export class AIRequestsMV {
    * Get the current configuration
    */
   getConfig(): ResolvedAIRequestsMVConfig {
-    return { ...this.config }
+    return { ...this.config, contentSampling: { ...this.config.contentSampling } }
   }
 }
 

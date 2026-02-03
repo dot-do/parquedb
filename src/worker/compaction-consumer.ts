@@ -21,11 +21,21 @@
  * - Scales horizontally with queue consumers
  * - Decoupled from TailDO for reliability
  *
+ * Dead Letter Queue (DLQ) Support:
+ * - Messages that fail processing are retried up to MAX_RETRIES (default: 3)
+ * - Messages exceeding max retries are NOT retried - Cloudflare sends them to DLQ
+ * - DLQ must be configured in wrangler.toml with `dead_letter_queue` setting
+ * - Parse errors and malformed data are acked (not retried) to avoid blocking
+ * - Each message has an `attempts` property tracking delivery attempts (starts at 1)
+ *
  * @see https://developers.cloudflare.com/r2/buckets/event-notifications/
  * @see https://developers.cloudflare.com/queues/
+ * @see https://developers.cloudflare.com/queues/configuration/batching-retries/
  */
 
 import { WorkerLogsMV, createWorkerLogsMV, type TailEvent, type TailItem } from '../streaming/worker-logs'
+import { DEFAULT_MAX_RETRIES } from '../constants'
+import { logger } from '../utils/logger'
 import { R2Backend } from '../storage/R2Backend'
 import type { StorageBackend } from '../types/storage'
 import type { R2Bucket as InternalR2Bucket } from '../storage/types/r2'
@@ -57,6 +67,12 @@ export interface CompactionConsumerEnv {
 
   /** Optional: Queue for downstream notifications (MV refresh, etc.) */
   DOWNSTREAM_QUEUE?: Queue<DownstreamMessage>
+
+  /**
+   * Optional: Maximum retry attempts before message goes to DLQ (default: 3)
+   * Should match the `max_retries` setting in wrangler.toml queue consumer config
+   */
+  MAX_RETRIES?: string
 }
 
 /**
@@ -155,6 +171,10 @@ export interface BatchResult {
   succeeded: number
   /** Failed to process */
   failed: number
+  /** Messages retried (will be redelivered) */
+  retried: number
+  /** Messages sent to dead letter queue (exceeded max retries or non-retryable) */
+  deadLettered: number
   /** Individual results */
   results: ProcessingResult[]
   /** Parquet files written */
@@ -192,7 +212,7 @@ function parseRawEventsFile(content: string): RawEventsFile {
     try {
       events.push(JSON.parse(line) as ValidatedTraceItem)
     } catch {
-      console.warn(`[CompactionConsumer] Skipping malformed event line ${i}`)
+      logger.warn(`[CompactionConsumer] Skipping malformed event line ${i}`)
     }
   }
 
@@ -240,10 +260,12 @@ export class CompactionConsumer {
   private mv: WorkerLogsMV
   private rawEventsPrefix: string
   private env: CompactionConsumerEnv
+  private maxRetries: number
 
   constructor(env: CompactionConsumerEnv) {
     this.env = env
     this.rawEventsPrefix = env.RAW_EVENTS_PREFIX || 'raw-events'
+    this.maxRetries = env.MAX_RETRIES ? parseInt(env.MAX_RETRIES, 10) : DEFAULT_MAX_RETRIES
 
     // Create R2 storage backend
     const bucket = toR2Bucket<InternalR2Bucket>(env.LOGS_BUCKET)
@@ -267,12 +289,20 @@ export class CompactionConsumer {
    * Process a batch of queue messages
    *
    * Each message contains an R2 event notification for a raw events file.
+   *
+   * DLQ Handling:
+   * - Messages have an `attempts` property (starts at 1) tracking delivery attempts
+   * - If attempts >= maxRetries, the message is NOT retried (will go to DLQ via Cloudflare)
+   * - Non-retryable errors (parse errors, malformed data) are acked (not sent to DLQ)
+   * - Transient errors trigger retry() if attempts < maxRetries
    */
   async processBatch(messages: Message<R2EventNotification>[]): Promise<BatchResult> {
     const result: BatchResult = {
       totalMessages: messages.length,
       succeeded: 0,
       failed: 0,
+      retried: 0,
+      deadLettered: 0,
       results: [],
       parquetFilesWritten: [],
     }
@@ -281,17 +311,18 @@ export class CompactionConsumer {
     for (const message of messages) {
       const notification = message.body
       const key = notification.object.key
+      const attempts = message.attempts ?? 1
 
       // Skip non-raw-events files
       if (!isRawEventsFile(key, this.rawEventsPrefix)) {
-        console.log(`[CompactionConsumer] Skipping non-raw-events file: ${key}`)
+        logger.info(`[CompactionConsumer] Skipping non-raw-events file: ${key}`)
         message.ack()
         continue
       }
 
       // Skip delete events
       if (notification.eventType === 'object-delete') {
-        console.log(`[CompactionConsumer] Skipping delete event: ${key}`)
+        logger.info(`[CompactionConsumer] Skipping delete event: ${key}`)
         message.ack()
         continue
       }
@@ -305,16 +336,39 @@ export class CompactionConsumer {
           message.ack()
         } else {
           result.failed++
-          // Don't retry on parse errors - these won't get better
-          if (processingResult.error?.includes('parse') || processingResult.error?.includes('malformed')) {
+          // Check if this is a non-retryable error (parse/malformed errors won't improve with retry)
+          const isNonRetryable =
+            processingResult.error?.includes('parse') ||
+            processingResult.error?.includes('malformed') ||
+            processingResult.error?.includes('Empty raw events file')
+
+          if (isNonRetryable) {
+            // Non-retryable: ack to prevent blocking, log for visibility
+            logger.warn(
+              `[CompactionConsumer] Non-retryable error for ${key} (attempt ${attempts}): ${processingResult.error}. ` +
+                `Message acknowledged (will not go to DLQ).`
+            )
             message.ack()
+          } else if (attempts >= this.maxRetries) {
+            // Max retries reached: don't call retry(), let Cloudflare send to DLQ
+            logger.error(
+              `[CompactionConsumer] Max retries (${this.maxRetries}) reached for ${key}. ` +
+                `Error: ${processingResult.error}. Message will be sent to DLQ.`
+            )
+            result.deadLettered++
+            // Don't ack, don't retry - Cloudflare will send to DLQ
           } else {
+            // Transient error with retries remaining: schedule retry
+            logger.warn(
+              `[CompactionConsumer] Retrying ${key} (attempt ${attempts}/${this.maxRetries}): ${processingResult.error}`
+            )
             message.retry()
+            result.retried++
           }
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error)
-        console.error(`[CompactionConsumer] Error processing ${key}:`, errorMessage)
+        logger.error(`[CompactionConsumer] Error processing ${key} (attempt ${attempts}):`, errorMessage)
 
         result.failed++
         result.results.push({
@@ -324,8 +378,22 @@ export class CompactionConsumer {
           error: errorMessage,
         })
 
-        // Retry on transient errors
-        message.retry()
+        // Check if max retries reached
+        if (attempts >= this.maxRetries) {
+          logger.error(
+            `[CompactionConsumer] Max retries (${this.maxRetries}) reached for ${key}. ` +
+              `Error: ${errorMessage}. Message will be sent to DLQ.`
+          )
+          result.deadLettered++
+          // Don't ack, don't retry - Cloudflare will send to DLQ
+        } else {
+          // Retry on transient errors
+          logger.warn(
+            `[CompactionConsumer] Retrying ${key} (attempt ${attempts}/${this.maxRetries}): ${errorMessage}`
+          )
+          message.retry()
+          result.retried++
+        }
       }
     }
 
@@ -337,7 +405,7 @@ export class CompactionConsumer {
 
       // Track written files
       if (statsAfter.filesCreated > statsBefore.filesCreated) {
-        console.log(`[CompactionConsumer] Flushed ${statsBefore.bufferSize} records to Parquet`)
+        logger.info(`[CompactionConsumer] Flushed ${statsBefore.bufferSize} records to Parquet`)
       }
 
       // Send downstream notification if configured
@@ -357,7 +425,7 @@ export class CompactionConsumer {
    * Process a single raw events file
    */
   private async processFile(key: string): Promise<ProcessingResult> {
-    console.log(`[CompactionConsumer] Processing ${key}`)
+    logger.info(`[CompactionConsumer] Processing ${key}`)
 
     // Read the raw events file
     const data = await this.storage.read(key)
@@ -423,7 +491,7 @@ export class CompactionConsumer {
     }
 
     await this.env.DOWNSTREAM_QUEUE.send(message)
-    console.log(`[CompactionConsumer] Sent downstream notification for ${recordCount} records`)
+    logger.info(`[CompactionConsumer] Sent downstream notification for ${recordCount} records`)
   }
 
   /**
@@ -480,15 +548,25 @@ export default {
     env: CompactionConsumerEnv,
     _ctx: ExecutionContext
   ): Promise<void> {
-    console.log(`[CompactionConsumer] Processing batch of ${batch.messages.length} messages`)
+    logger.info(`[CompactionConsumer] Processing batch of ${batch.messages.length} messages`)
 
     const consumer = createCompactionConsumer(env)
     // Copy messages to a mutable array since batch.messages is readonly
     const messages = [...batch.messages]
     const result = await consumer.processBatch(messages)
 
-    console.log(
-      `[CompactionConsumer] Batch complete: ${result.succeeded} succeeded, ${result.failed} failed`
-    )
+    // Log summary with DLQ statistics
+    const summary = [
+      `succeeded=${result.succeeded}`,
+      `failed=${result.failed}`,
+      `retried=${result.retried}`,
+      `deadLettered=${result.deadLettered}`,
+    ].join(', ')
+
+    if (result.deadLettered > 0) {
+      logger.warn(`[CompactionConsumer] Batch complete with DLQ messages: ${summary}`)
+    } else {
+      logger.info(`[CompactionConsumer] Batch complete: ${summary}`)
+    }
   },
 }

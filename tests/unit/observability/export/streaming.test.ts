@@ -276,6 +276,7 @@ describe('WebSocket Export', () => {
     let sentMessages: string[]
 
     beforeEach(() => {
+      vi.useFakeTimers()
       sentMessages = []
       state = {
         subscriptions: new Map(),
@@ -286,6 +287,7 @@ describe('WebSocket Export', () => {
     afterEach(() => {
       // Clean up any timers
       cleanupWSConnection(state)
+      vi.useRealTimers()
     })
 
     it('should handle subscribe message', async () => {
@@ -311,8 +313,8 @@ describe('WebSocket Export', () => {
       expect(ack.type).toBe('ack')
       expect(ack.status).toBe('subscribed')
 
-      // Wait for first metric push
-      await new Promise(resolve => setTimeout(resolve, 150))
+      // Advance time for first metric push
+      await vi.advanceTimersByTimeAsync(150)
       expect(getMetrics).toHaveBeenCalled()
     })
 

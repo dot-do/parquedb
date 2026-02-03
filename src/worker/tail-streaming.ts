@@ -24,6 +24,7 @@ import {
   type ValidatedTraceItem,
   type TailValidationConfig,
 } from './tail-validation'
+import { logger } from '../utils/logger'
 
 // Re-export validation types for consumers
 export type { ValidatedTraceItem, TailValidationConfig }
@@ -183,13 +184,13 @@ async function connectToTailDO(
     })
 
     if (response.status !== 101) {
-      console.error('[StreamingTail] Failed to upgrade to WebSocket:', response.status)
+      logger.error('[StreamingTail] Failed to upgrade to WebSocket:', response.status)
       return null
     }
 
     const ws = response.webSocket
     if (!ws) {
-      console.error('[StreamingTail] No WebSocket in response')
+      logger.error('[StreamingTail] No WebSocket in response')
       return null
     }
 
@@ -202,14 +203,14 @@ async function connectToTailDO(
     })
 
     ws.addEventListener('error', (event) => {
-      console.error('[StreamingTail] WebSocket error:', event)
+      logger.error('[StreamingTail] WebSocket error:', event)
       state.ws = null
     })
 
     state.ws = ws
     return ws
   } catch (error) {
-    console.error('[StreamingTail] Connection error:', error)
+    logger.error('[StreamingTail] Connection error:', error)
     return null
   } finally {
     state.connecting = false
@@ -258,7 +259,7 @@ async function sendEvents(
     state.lastSendTime = Date.now()
     return true
   } catch (error) {
-    console.error('[StreamingTail] Send error:', error)
+    logger.error('[StreamingTail] Send error:', error)
     state.pendingEvents.push(...events)
     state.ws = null
     return false

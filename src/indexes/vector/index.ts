@@ -10,7 +10,13 @@
  * - Automatic eviction of least recently used nodes
  */
 
-export { VectorIndex, type VectorIndexMemoryOptions } from './hnsw'
+export {
+  VectorIndex,
+  type VectorIndexMemoryOptions,
+  type RowGroupMetadata,
+  type IncrementalUpdateResult,
+  type IncrementalUpdateOptions,
+} from './hnsw'
 export {
   cosineDistance,
   euclideanDistance,

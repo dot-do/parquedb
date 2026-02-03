@@ -14,6 +14,7 @@ import type { Filter } from '../types/filter'
 import type { FindOptions } from '../types/options'
 import type { ManifestEntry, ManifestFile } from '@dotdo/iceberg'
 import type { ParquetMetadata, RowGroupMetadata, ColumnStatistics } from '../parquet/types'
+import { compareValues } from '../utils'
 
 // =============================================================================
 // Types
@@ -353,42 +354,6 @@ function compareValuesForSkip(a: unknown, b: unknown, op: 'lt' | 'gt' | 'lte' | 
   }
 }
 
-/**
- * Compare two values for ordering
- * Returns negative if a < b, 0 if a === b, positive if a > b
- */
-function compareValues(a: unknown, b: unknown): number {
-  // Handle null/undefined
-  if (a === null || a === undefined) {
-    return b === null || b === undefined ? 0 : -1
-  }
-  if (b === null || b === undefined) {
-    return 1
-  }
-
-  // Handle numbers
-  if (typeof a === 'number' && typeof b === 'number') {
-    return a - b
-  }
-
-  // Handle strings
-  if (typeof a === 'string' && typeof b === 'string') {
-    return a.localeCompare(b)
-  }
-
-  // Handle dates
-  if (a instanceof Date && b instanceof Date) {
-    return a.getTime() - b.getTime()
-  }
-
-  // Handle BigInt
-  if (typeof a === 'bigint' && typeof b === 'bigint') {
-    return a < b ? -1 : a > b ? 1 : 0
-  }
-
-  // Fallback: convert to string
-  return String(a).localeCompare(String(b))
-}
 
 // =============================================================================
 // Manifest File Filtering (for partitioned tables)
@@ -415,7 +380,11 @@ export function canSkipManifest(
   // 2. Having partition bounds in the manifest (partitions field)
   // 3. Evaluating predicates against partition columns
 
-  // TODO: Implement partition-level filtering for partitioned tables
+  // Partition-level filtering for partitioned tables would require:
+  // 1. Knowing the partition spec from table metadata
+  // 2. Having partition bounds in the manifest (partitions field)
+  // 3. Evaluating predicates against partition columns
+  // Currently, unpartitioned tables are assumed and all manifests are read.
   return false
 }
 

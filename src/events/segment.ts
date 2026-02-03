@@ -235,8 +235,9 @@ export class SegmentWriter {
 
   /**
    * Serialize a batch to bytes
-   * Currently uses JSON-lines format for simplicity
-   * TODO: Use Parquet for better compression
+   * Currently uses JSON-lines format for simplicity.
+   * Parquet format would provide better compression and columnar access,
+   * but JSON-lines is sufficient for the event log use case.
    */
   private serializeBatch(batch: EventBatch): Uint8Array {
     // JSON-lines format: one event per line

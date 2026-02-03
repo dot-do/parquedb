@@ -1256,3 +1256,126 @@ export async function refreshView(
 
   return result
 }
+
+// =============================================================================
+// Crash Recovery
+// =============================================================================
+
+/**
+ * Result of view crash recovery
+ */
+export interface ViewRecoveryResult {
+  /** Whether recovery was performed */
+  recovered: boolean
+  /** Action taken during recovery */
+  action: 'none' | 'restored_backup' | 'deleted_backup' | 'deleted_temp'
+  /** View name (for batch recovery) */
+  viewName?: string
+  /** Error message if recovery failed */
+  error?: string
+}
+
+/**
+ * Recover a view from a crash during atomic replace
+ *
+ * This function handles the following scenarios:
+ * 1. Both backup and final exist - clean up orphaned backup
+ * 2. Only backup exists (final deleted but move failed) - restore backup
+ * 3. Only temp exists - clean up orphaned temp file
+ */
+export async function recoverViewFromCrash(
+  storage: StorageBackend,
+  viewName: string
+): Promise<ViewRecoveryResult> {
+  const finalPath = getViewDataPath(viewName)
+  const backupPath = `${finalPath}.backup`
+  const tempPath = getViewTempDataPath(viewName)
+
+  const [finalExists, backupExists, tempExists] = await Promise.all([
+    storage.exists(finalPath),
+    storage.exists(backupPath),
+    storage.exists(tempPath),
+  ])
+
+  // No orphaned files - nothing to recover
+  if (!backupExists && !tempExists) {
+    return { recovered: false, action: 'none' }
+  }
+
+  // Case 1: Final and backup both exist - clean up backup
+  if (finalExists && backupExists) {
+    await storage.delete(backupPath)
+    if (tempExists) {
+      await storage.delete(tempPath)
+    }
+    return { recovered: true, action: 'deleted_backup' }
+  }
+
+  // Case 2: Only backup exists (crash after move-to-backup but before restore)
+  if (backupExists && !finalExists) {
+    // Read backup and write to final
+    const backupData = await storage.read(backupPath)
+    await storage.write(finalPath, backupData)
+    await storage.delete(backupPath)
+    if (tempExists) {
+      await storage.delete(tempPath)
+    }
+    return { recovered: true, action: 'restored_backup' }
+  }
+
+  // Case 3: Only temp exists - clean it up
+  if (tempExists && !backupExists) {
+    await storage.delete(tempPath)
+    return { recovered: true, action: 'deleted_temp' }
+  }
+
+  return { recovered: false, action: 'none' }
+}
+
+/**
+ * Recover all views from crashes
+ *
+ * Scans the _views directory and attempts recovery on each view
+ * Returns array of recovery results (only views that needed recovery)
+ */
+export async function recoverAllViewsFromCrash(
+  storage: StorageBackend
+): Promise<ViewRecoveryResult[]> {
+  const results: ViewRecoveryResult[] = []
+
+  try {
+    const listing = await storage.list('_views/')
+
+    // Extract unique view names from the listing
+    const viewNames = new Set<string>()
+    for (const filePath of listing.files) {
+      // Path format: _views/{viewName}/...
+      const match = filePath.match(/^_views\/([^/]+)\//)
+      if (match) {
+        viewNames.add(match[1])
+      }
+    }
+
+    // Attempt recovery for each view
+    for (const viewName of viewNames) {
+      try {
+        const result = await recoverViewFromCrash(storage, viewName)
+        // Only include views that actually had recovery performed
+        if (result.recovered) {
+          results.push({ ...result, viewName })
+        }
+      } catch (error) {
+        results.push({
+          recovered: false,
+          action: 'none',
+          viewName,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+  } catch {
+    // If we can't list views, return empty results
+  }
+
+  return results
+}

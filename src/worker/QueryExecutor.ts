@@ -35,7 +35,7 @@ import { logger } from '../utils/logger'
 import { stringToBase64 } from '../utils/base64'
 import { createSafeRegex } from '../utils/safe-regex'
 import { tryParseJson, isRecord } from '../utils/json-validation'
-import { asStorageBackend, asIndexStorageBucket, rowAsEntity } from '../types/cast'
+import { asStorageBackend, asIndexStorageBucket, rowAsEntity, asCacheableArray, asBodyInit } from '../types/cast'
 
 // =============================================================================
 // Types
@@ -248,6 +248,9 @@ export interface QueryPlan {
  * Files in CDN bucket are stored under parquedb/ prefix.
  *
  * Implements ReadonlyStorageBackend - only read operations are supported.
+ *
+ * IMPORTANT: File caching uses Cloudflare Cache API instead of per-isolate Map.
+ * This reduces memory usage under load since cache is shared across isolates.
  */
 class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   readonly type = 'r2-cdn-adapter'
@@ -259,31 +262,129 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   public totalReads = 0
   public cacheHits = 0
 
-  // Whole-file cache: path -> Uint8Array (for small files)
-  private fileCache = new Map<string, Uint8Array>()
+  // Cache API instance (initialized lazily)
+  private cache: Cache | null = null
+  private cacheInitPromise: Promise<Cache | null> | null = null
 
-  // Files being loaded (for deduplication)
+  // Cache key prefix for namespacing
+  private readonly cacheKeyPrefix = 'https://parquedb-data/'
+
+  // Files being loaded (for deduplication of concurrent requests within same isolate)
   private loadingFiles = new Map<string, Promise<Uint8Array>>()
 
   // Max file size for whole-file caching - reserved for future size-based caching decisions
   public static readonly _MAX_CACHE_SIZE = _MAX_CACHE_SIZE
 
+  // Cache TTL for file data (in seconds)
+  private readonly fileCacheTtl: number
+
   constructor(
     private cdnBucket: R2Bucket,      // CDN bucket (cdn) for reads
     private primaryBucket: R2Bucket,  // Primary bucket (parquedb) as fallback
     private cdnPrefix: string = 'parquedb',  // Prefix in CDN bucket
-    private r2DevUrl?: string  // r2.dev URL for edge caching (e.g. 'https://pub-xxx.r2.dev/parquedb')
-  ) {}
+    private r2DevUrl?: string,  // r2.dev URL for edge caching (e.g. 'https://pub-xxx.r2.dev/parquedb')
+    fileCacheTtl: number = DEFAULT_CACHE_TTL  // Cache TTL in seconds
+  ) {
+    this.fileCacheTtl = fileCacheTtl
+  }
+
+  /**
+   * Get or initialize the Cache API instance
+   * Uses lazy initialization to handle environments where Cache API may not be available
+   */
+  private async getCache(): Promise<Cache | null> {
+    // Return cached instance if available
+    if (this.cache) {
+      return this.cache
+    }
+
+    // Return existing initialization promise to avoid duplicate opens
+    if (this.cacheInitPromise) {
+      return this.cacheInitPromise
+    }
+
+    // Check if Cache API is available (not available in all environments)
+    if (typeof caches === 'undefined') {
+      return null
+    }
+
+    // Initialize cache
+    this.cacheInitPromise = caches.open('parquedb-data').then((cache) => {
+      this.cache = cache
+      return cache
+    }).catch((err) => {
+      // Cache API not available or failed - log and continue without caching
+      logger.debug('Cache API initialization failed, continuing without file cache', err)
+      return null
+    })
+
+    return this.cacheInitPromise
+  }
+
+  /**
+   * Create a cache key Request for a path
+   */
+  private createCacheKey(path: string): Request {
+    return new Request(`${this.cacheKeyPrefix}${path}`)
+  }
+
+  /**
+   * Try to get data from Cache API
+   */
+  private async getFromCache(path: string): Promise<Uint8Array | null> {
+    const cache = await this.getCache()
+    if (!cache) {
+      return null
+    }
+
+    try {
+      const cacheKey = this.createCacheKey(path)
+      const cached = await cache.match(cacheKey)
+      if (cached) {
+        return new Uint8Array(await cached.arrayBuffer())
+      }
+    } catch (err) {
+      // Cache read failed - log and continue
+      logger.debug(`Cache read failed for ${path}`, err)
+    }
+
+    return null
+  }
+
+  /**
+   * Store data in Cache API
+   */
+  private async putInCache(path: string, data: Uint8Array): Promise<void> {
+    const cache = await this.getCache()
+    if (!cache) {
+      return
+    }
+
+    try {
+      const cacheKey = this.createCacheKey(path)
+      const response = new Response(asBodyInit(data), {
+        headers: {
+          'Cache-Control': `max-age=${this.fileCacheTtl}`,
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': data.byteLength.toString(),
+        },
+      })
+      await cache.put(cacheKey, response)
+    } catch (err) {
+      // Cache write failed - log and continue (non-fatal)
+      logger.debug(`Cache write failed for ${path}`, err)
+    }
+  }
 
   async read(path: string): Promise<Uint8Array> {
-    // Check if file is already cached
-    const cached = this.fileCache.get(path)
+    // Check Cache API first
+    const cached = await this.getFromCache(path)
     if (cached) {
       this.cacheHits++
       return cached
     }
 
-    // Check if file is being loaded
+    // Check if file is being loaded by another request in this isolate
     const loading = this.loadingFiles.get(path)
     if (loading) {
       return loading
@@ -295,7 +396,10 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
 
     try {
       const data = await loadPromise
-      this.fileCache.set(path, data)
+      // Store in Cache API (non-blocking)
+      this.putInCache(path, data).catch(() => {
+        // Ignore cache write errors - they're logged in putInCache
+      })
       return data
     } finally {
       this.loadingFiles.delete(path)
@@ -303,14 +407,14 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
-    // Check if file is already cached - serve range from cache (no network!)
-    const cached = this.fileCache.get(path)
+    // Check Cache API first - serve range from cached whole file
+    const cached = await this.getFromCache(path)
     if (cached) {
       this.cacheHits++
       return cached.slice(start, end)
     }
 
-    // Check if file is being loaded by another request
+    // Check if file is being loaded by another request in this isolate
     const loading = this.loadingFiles.get(path)
     if (loading) {
       const data = await loading
@@ -324,10 +428,32 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
 
     try {
       const data = await loadPromise
-      this.fileCache.set(path, data)
+      // Store in Cache API (non-blocking)
+      this.putInCache(path, data).catch(() => {
+        // Ignore cache write errors - they're logged in putInCache
+      })
       return data.slice(start, end)
     } finally {
       this.loadingFiles.delete(path)
+    }
+  }
+
+  /**
+   * Invalidate cached file data
+   * Call this after writes to ensure cache coherence
+   */
+  async invalidateCache(path: string): Promise<void> {
+    const cache = await this.getCache()
+    if (!cache) {
+      return
+    }
+
+    try {
+      const cacheKey = this.createCacheKey(path)
+      await cache.delete(cacheKey)
+    } catch (err) {
+      // Cache delete failed - log and continue
+      logger.debug(`Cache invalidation failed for ${path}`, err)
     }
   }
 
@@ -472,9 +598,9 @@ export class QueryExecutor {
   /**
    * Get storage stats for debugging
    */
-  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; cacheHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean } {
+  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; cacheHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean; usingCacheApi: boolean } {
     if (!this.storageAdapter) {
-      return { cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false }
+      return { cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false, usingCacheApi: false }
     }
     return {
       cdnHits: this.storageAdapter.cdnHits,
@@ -484,15 +610,63 @@ export class QueryExecutor {
       totalReads: this.storageAdapter.totalReads,
       usingCdn: !!this._cdnBucket,
       usingEdge: !!this._r2DevUrl,
+      // Cache API is used when available (Cloudflare Workers environment)
+      usingCacheApi: typeof caches !== 'undefined',
     }
   }
 
   /**
    * Clear in-memory caches (for benchmarking cold queries)
+   *
+   * Note: This only clears the in-memory dataCache and metadataCache.
+   * The file cache in CdnR2StorageAdapter uses Cloudflare Cache API which
+   * is shared across isolates and has its own TTL-based eviction.
    */
   clearCache(): void {
     this.dataCache.clear()
     this.metadataCache.clear()
+  }
+
+  /**
+   * Invalidate file cache for a specific path
+   *
+   * Call this after writes to ensure cache coherence. This invalidates
+   * both the in-memory caches and the Cloudflare Cache API cache.
+   *
+   * @param path - Path to invalidate (e.g., 'dataset/data.parquet')
+   */
+  async invalidateFileCache(path: string): Promise<void> {
+    // Clear from in-memory dataCache
+    this.dataCache.delete(path)
+
+    // Clear from storage adapter's Cache API cache
+    if (this.storageAdapter) {
+      await this.storageAdapter.invalidateCache(path)
+    }
+  }
+
+  /**
+   * Invalidate all caches for a namespace
+   *
+   * Call this after writes to a namespace to ensure cache coherence.
+   *
+   * @param ns - Namespace to invalidate (e.g., 'dataset' or 'dataset/collection')
+   */
+  async invalidateNamespaceCache(ns: string): Promise<void> {
+    // Build paths that need invalidation
+    const paths = [
+      ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`,
+      `${ns}/rels.parquet`,
+    ]
+
+    // Invalidate each path
+    for (const path of paths) {
+      await this.invalidateFileCache(path)
+    }
+
+    // Also invalidate metadata and bloom caches
+    this.metadataCache.delete(ns)
+    this.bloomCache.delete(ns)
   }
 
   // ===========================================================================
@@ -618,7 +792,7 @@ export class QueryExecutor {
 
         // Cache the unpacked data for subsequent requests (only for full reads without pending)
         if (!pushdownFilter && pendingRows.length === 0) {
-          this.dataCache.set(path, results as unknown[])
+          this.dataCache.set(path, asCacheableArray(results))
         }
 
         // Apply remaining MongoDB-style filters (for nested fields in data)
@@ -1081,7 +1255,7 @@ export class QueryExecutor {
           return row as RelRow
         })
 
-        this.dataCache.set(path, allRels as unknown[])
+        this.dataCache.set(path, asCacheableArray(allRels))
       }
 
       // Filter by from_id, predicate, and shredded field options

@@ -199,15 +199,15 @@ const PROCESSING_KEY = 'mv_scheduler_processing'
 export function parseCronExpression(cron: string): CronExpression {
   const parts = cron.trim().split(/\s+/)
   if (parts.length !== 5) {
-    throw new Error(`Invalid cron expression: expected 5 parts, got ${parts.length}`)
+    throw new Error(`Invalid cron expression: expected 5 fields, got ${parts.length}`)
   }
 
   return {
-    minute: parseCronField(parts[0]!, 0, 59),
-    hour: parseCronField(parts[1]!, 0, 23),
-    dayOfMonth: parseCronField(parts[2]!, 1, 31),
-    month: parseCronField(parts[3]!, 1, 12),
-    dayOfWeek: parseCronField(parts[4]!, 0, 6),
+    minute: parseCronField(parts[0]!, 0, 59, 'minute'),
+    hour: parseCronField(parts[1]!, 0, 23, 'hour'),
+    dayOfMonth: parseCronField(parts[2]!, 1, 31, 'day of month'),
+    month: parseCronField(parts[3]!, 1, 12, 'month'),
+    dayOfWeek: parseCronField(parts[4]!, 0, 6, 'day of week'),
   }
 }
 
@@ -219,7 +219,7 @@ interface CronExpression {
   dayOfWeek: number[]
 }
 
-function parseCronField(field: string, min: number, max: number): number[] {
+function parseCronField(field: string, min: number, max: number, fieldName: string): number[] {
   if (field === '*') {
     return Array.from({ length: max - min + 1 }, (_, i) => min + i)
   }
@@ -228,28 +228,52 @@ function parseCronField(field: string, min: number, max: number): number[] {
 
   for (const part of field.split(',')) {
     if (part.includes('-')) {
-      const [start, end] = part.split('-').map(Number)
-      if (start === undefined || end === undefined || isNaN(start) || isNaN(end)) {
-        throw new Error(`Invalid range in cron field: ${part}`)
+      const [startStr, endStr] = part.split('-')
+      const start = Number(startStr)
+      const end = Number(endStr)
+      if (!Number.isInteger(start) || startStr!.includes('.')) {
+        throw new Error(`Cron field '${fieldName}': '${startStr}' is not a valid integer`)
+      }
+      if (!Number.isInteger(end) || endStr!.includes('.')) {
+        throw new Error(`Cron field '${fieldName}': '${endStr}' is not a valid integer`)
+      }
+      if (start > end) {
+        throw new Error(`Cron field '${fieldName}': start (${start}) is greater than end (${end}) in range '${part}'`)
+      }
+      if (start < min || start > max) {
+        throw new Error(`Cron field '${fieldName}': ${start} is out of range (${min}-${max})`)
+      }
+      if (end < min || end > max) {
+        throw new Error(`Cron field '${fieldName}': ${end} is out of range (${min}-${max})`)
       }
       for (let i = start; i <= end; i++) {
-        if (i >= min && i <= max) values.push(i)
+        values.push(i)
       }
     } else if (part.includes('/')) {
       const [base, step] = part.split('/')
       const stepNum = Number(step)
-      if (isNaN(stepNum) || stepNum <= 0) {
-        throw new Error(`Invalid step in cron field: ${part}`)
+      if (isNaN(stepNum) || stepNum <= 0 || !Number.isInteger(stepNum)) {
+        throw new Error(`Cron field '${fieldName}': Invalid step value '${step}'`)
       }
       const startNum = base === '*' ? min : Number(base)
+      if (base !== '*' && (!Number.isInteger(startNum) || base!.includes('.'))) {
+        throw new Error(`Cron field '${fieldName}': '${base}' is not a valid integer`)
+      }
+      if (base !== '*' && (startNum < min || startNum > max)) {
+        throw new Error(`Cron field '${fieldName}': ${startNum} is out of range (${min}-${max})`)
+      }
       for (let i = startNum; i <= max; i += stepNum) {
         values.push(i)
       }
     } else {
       const num = Number(part)
-      if (!isNaN(num) && num >= min && num <= max) {
-        values.push(num)
+      if (!Number.isInteger(num) || part.includes('.')) {
+        throw new Error(`Cron field '${fieldName}': '${part}' is not a valid integer`)
       }
+      if (num < min || num > max) {
+        throw new Error(`Cron field '${fieldName}': ${num} is out of range (${min}-${max})`)
+      }
+      values.push(num)
     }
   }
 

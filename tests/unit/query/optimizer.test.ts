@@ -860,3 +860,336 @@ describe('Integration: Optimizer with real scenarios', () => {
     expect(plan.estimatedCost.estimatedRowsReturned).toBeLessThanOrEqual(20)
   })
 })
+
+// =============================================================================
+// Vector Search Query Plan Integration Tests
+// =============================================================================
+
+describe('Vector Search Query Plan Integration', () => {
+  let optimizer: QueryOptimizer
+
+  beforeEach(() => {
+    optimizer = new QueryOptimizer()
+  })
+
+  describe('vectorSearchPlan generation', () => {
+    it('generates vector search plan for $vector query', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+      }
+      const statistics = createSampleStatistics(10000)
+
+      const plan = await optimizer.optimize('posts', filter, {}, statistics)
+
+      expect(plan.vectorSearchPlan).toBeDefined()
+      expect(plan.vectorSearchPlan?.field).toBe('embedding')
+      expect(plan.vectorSearchPlan?.topK).toBe(10)
+      expect(plan.vectorSearchPlan?.dimensions).toBe(128)
+    })
+
+    it('includes efSearch parameter in vector plan', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10, efSearch: 100 },
+      }
+
+      const plan = await optimizer.optimize('posts', filter)
+
+      expect(plan.vectorSearchPlan?.efSearch).toBe(100)
+    })
+
+    it('includes minScore in vector plan when specified', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10, minScore: 0.8 },
+      }
+
+      const plan = await optimizer.optimize('posts', filter)
+
+      expect(plan.vectorSearchPlan?.minScore).toBe(0.8)
+    })
+
+    it('supports legacy $near format', async () => {
+      const filter: Filter = {
+        $vector: { $near: Array(128).fill(0.1), $field: 'embedding', $k: 15 },
+      }
+
+      const plan = await optimizer.optimize('posts', filter)
+
+      expect(plan.vectorSearchPlan?.field).toBe('embedding')
+      expect(plan.vectorSearchPlan?.topK).toBe(15)
+    })
+  })
+
+  describe('hybrid search plan', () => {
+    it('detects hybrid search when metadata filters present', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+        category: 'tech',
+      }
+      const statistics = createSampleStatistics(10000)
+
+      const plan = await optimizer.optimize('posts', filter, {}, statistics)
+
+      expect(plan.strategy).toBe('hybrid_search')
+      expect(plan.vectorSearchPlan?.hybridSearch).toBeDefined()
+    })
+
+    it('estimates filter selectivity for hybrid search', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+        status: 'active',
+      }
+      const statistics = createSampleStatistics(10000)
+      statistics.columnCardinality.set('status', 5) // 5 unique values
+
+      const plan = await optimizer.optimize('posts', filter, {}, statistics)
+
+      expect(plan.vectorSearchPlan?.hybridSearch?.filterSelectivity).toBeDefined()
+      expect(plan.vectorSearchPlan?.hybridSearch?.filterSelectivity).toBeGreaterThan(0)
+      expect(plan.vectorSearchPlan?.hybridSearch?.filterSelectivity).toBeLessThanOrEqual(1)
+    })
+
+    it('provides strategy reasoning for selectivity-based decisions', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+        userId: 'user123', // High cardinality = low selectivity
+      }
+      const statistics = createSampleStatistics(100000)
+      statistics.columnCardinality.set('userId', 50000) // High cardinality
+
+      const plan = await optimizer.optimize('posts', filter, {}, statistics)
+
+      // Verify the cost model provides reasoning for its decision
+      expect(plan.vectorSearchPlan?.hybridSearch?.selectedStrategy).toBeDefined()
+      expect(plan.vectorSearchPlan?.hybridSearch?.strategyReason).toContain('selected')
+      expect(plan.vectorSearchPlan?.hybridSearch?.strategyReason).toContain('cost')
+    })
+
+    it('selects post-filter strategy for high selectivity', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+        active: true, // Low cardinality = high selectivity
+      }
+      const statistics = createSampleStatistics(100000)
+      statistics.columnCardinality.set('active', 2) // Boolean field
+
+      const plan = await optimizer.optimize('posts', filter, {}, statistics)
+
+      // With 50% of docs matching, post-filter might be selected
+      expect(plan.vectorSearchPlan?.hybridSearch?.strategyReason).toBeDefined()
+    })
+
+    it('uses explicit strategy when provided', async () => {
+      const filter: Filter = {
+        $vector: {
+          query: Array(128).fill(0.1),
+          field: 'embedding',
+          topK: 10,
+          strategy: 'pre-filter',
+        },
+        category: 'tech',
+      }
+
+      const plan = await optimizer.optimize('posts', filter)
+
+      expect(plan.vectorSearchPlan?.hybridSearch?.strategy).toBe('pre-filter')
+    })
+
+    it('includes pre-filter candidate count estimate', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+        category: 'tech',
+      }
+      const statistics = createSampleStatistics(10000)
+      statistics.columnCardinality.set('category', 10)
+
+      const plan = await optimizer.optimize('posts', filter, {}, statistics)
+
+      if (plan.vectorSearchPlan?.hybridSearch?.selectedStrategy === 'pre-filter') {
+        expect(plan.vectorSearchPlan?.hybridSearch?.preFilterCandidates).toBeDefined()
+        expect(plan.vectorSearchPlan?.hybridSearch?.preFilterCandidates).toBeLessThan(10000)
+      }
+    })
+
+    it('includes over-fetch multiplier for post-filter', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+        active: true,
+      }
+      const statistics = createSampleStatistics(10000)
+      statistics.columnCardinality.set('active', 2)
+
+      const plan = await optimizer.optimize('posts', filter, {}, statistics)
+
+      if (plan.vectorSearchPlan?.hybridSearch?.selectedStrategy === 'post-filter') {
+        expect(plan.vectorSearchPlan?.hybridSearch?.overFetchMultiplier).toBe(3)
+      }
+    })
+  })
+
+  describe('cost breakdown', () => {
+    it('includes HNSW traversal cost', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+      }
+
+      const plan = await optimizer.optimize('posts', filter)
+
+      expect(plan.vectorSearchPlan?.costBreakdown.hnswTraversalCost).toBeGreaterThan(0)
+    })
+
+    it('includes distance computation cost', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+      }
+
+      const plan = await optimizer.optimize('posts', filter)
+
+      expect(plan.vectorSearchPlan?.costBreakdown.distanceComputeCost).toBeGreaterThan(0)
+    })
+
+    it('includes hybrid overhead for hybrid search', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+        category: 'tech',
+      }
+
+      const plan = await optimizer.optimize('posts', filter)
+
+      expect(plan.vectorSearchPlan?.costBreakdown.hybridOverheadCost).toBeGreaterThan(0)
+    })
+
+    it('has zero hybrid overhead for pure vector search', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+      }
+
+      const plan = await optimizer.optimize('posts', filter)
+
+      expect(plan.vectorSearchPlan?.costBreakdown.hybridOverheadCost).toBe(0)
+    })
+
+    it('total cost equals sum of components', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+        category: 'tech',
+      }
+
+      const plan = await optimizer.optimize('posts', filter)
+
+      const breakdown = plan.vectorSearchPlan?.costBreakdown
+      expect(breakdown?.totalCost).toBeCloseTo(
+        (breakdown?.hnswTraversalCost ?? 0) +
+        (breakdown?.distanceComputeCost ?? 0) +
+        (breakdown?.hybridOverheadCost ?? 0),
+        2
+      )
+    })
+  })
+
+  describe('explainPlan with vector search', () => {
+    it('includes vector search section in explain output', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+      }
+
+      const plan = await optimizer.optimize('posts', filter)
+      const explanation = optimizer.explainPlan(plan)
+
+      expect(explanation).toContain('Vector Search Plan')
+      expect(explanation).toContain('embedding')
+      expect(explanation).toContain('Top K: 10')
+    })
+
+    it('includes hybrid search details in explain output', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+        category: 'tech',
+      }
+      const statistics = createSampleStatistics(10000)
+
+      const plan = await optimizer.optimize('posts', filter, {}, statistics)
+      const explanation = optimizer.explainPlan(plan)
+
+      expect(explanation).toContain('Hybrid Search')
+      expect(explanation).toContain('Strategy')
+    })
+
+    it('includes cost breakdown in explain output', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+      }
+
+      const plan = await optimizer.optimize('posts', filter)
+      const explanation = optimizer.explainPlan(plan)
+
+      expect(explanation).toContain('Cost Breakdown')
+      expect(explanation).toContain('HNSW Traversal')
+      expect(explanation).toContain('Distance Compute')
+    })
+
+    it('includes strategy reasoning in explain output', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+        category: 'tech',
+      }
+      const statistics = createSampleStatistics(10000)
+      statistics.columnCardinality.set('category', 10)
+
+      const plan = await optimizer.optimize('posts', filter, {}, statistics)
+      const explanation = optimizer.explainPlan(plan)
+
+      expect(explanation).toContain('Reason')
+    })
+  })
+
+  describe('cost estimation accuracy', () => {
+    it('higher efSearch increases cost', async () => {
+      const filter1: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10, efSearch: 50 },
+      }
+      const filter2: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10, efSearch: 200 },
+      }
+
+      const plan1 = await optimizer.optimize('posts', filter1)
+      const plan2 = await optimizer.optimize('posts', filter2)
+
+      expect(plan2.vectorSearchPlan?.costBreakdown.totalCost).toBeGreaterThan(
+        plan1.vectorSearchPlan?.costBreakdown.totalCost ?? 0
+      )
+    })
+
+    it('larger index size increases cost', async () => {
+      const filter: Filter = {
+        $vector: { query: Array(128).fill(0.1), field: 'embedding', topK: 10 },
+      }
+
+      const smallStats = createSampleStatistics(1000)
+      const largeStats = createSampleStatistics(1000000)
+
+      const plan1 = await optimizer.optimize('posts', filter, {}, smallStats)
+      const plan2 = await optimizer.optimize('posts', filter, {}, largeStats)
+
+      // Larger index should have higher HNSW traversal cost (more layers)
+      expect(plan2.vectorSearchPlan?.costBreakdown.hnswTraversalCost).toBeGreaterThan(
+        plan1.vectorSearchPlan?.costBreakdown.hnswTraversalCost ?? 0
+      )
+    })
+
+    it('vector dimensions affect distance computation cost', async () => {
+      const filter1: Filter = {
+        $vector: { query: Array(64).fill(0.1), field: 'embedding', topK: 10 },
+      }
+      const filter2: Filter = {
+        $vector: { query: Array(512).fill(0.1), field: 'embedding', topK: 10 },
+      }
+
+      const plan1 = await optimizer.optimize('posts', filter1)
+      const plan2 = await optimizer.optimize('posts', filter2)
+
+      expect(plan2.vectorSearchPlan?.costBreakdown.distanceComputeCost).toBeGreaterThan(
+        plan1.vectorSearchPlan?.costBreakdown.distanceComputeCost ?? 0
+      )
+    })
+  })
+})

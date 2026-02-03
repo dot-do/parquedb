@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   createCommit,
   loadCommit,
@@ -73,14 +73,19 @@ describe('commit', () => {
     })
 
     it('should generate different hashes for different commits', async () => {
-      const commit1 = await createCommit(sampleState, { message: 'Commit 1' })
+      vi.useFakeTimers()
+      try {
+        const commit1 = await createCommit(sampleState, { message: 'Commit 1' })
 
-      // Wait a bit to ensure different timestamp
-      await new Promise(resolve => setTimeout(resolve, 10))
+        // Advance time to ensure different timestamp
+        vi.advanceTimersByTime(10)
 
-      const commit2 = await createCommit(sampleState, { message: 'Commit 2' })
+        const commit2 = await createCommit(sampleState, { message: 'Commit 2' })
 
-      expect(commit1.hash).not.toBe(commit2.hash)
+        expect(commit1.hash).not.toBe(commit2.hash)
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 

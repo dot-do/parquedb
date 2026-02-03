@@ -128,6 +128,7 @@ export function compareValues(a: unknown, b: unknown): number {
   }
   if (a instanceof Date && b instanceof Date) return a.getTime() - b.getTime()
   if (typeof a === 'boolean' && typeof b === 'boolean') return (a ? 1 : 0) - (b ? 1 : 0)
+  if (typeof a === 'bigint' && typeof b === 'bigint') return a < b ? -1 : a > b ? 1 : 0
 
   // Fallback to string comparison
   return String(a).localeCompare(String(b))
@@ -238,6 +239,42 @@ export function isNullish(value: unknown): value is null | undefined {
 export function isDefined<T>(value: T | null | undefined): value is T {
   return value !== null && value !== undefined
 }
+
+/**
+ * Alias for isDefined - check if a value is not null and not undefined
+ *
+ * This is particularly useful for array filtering where the name makes
+ * the intent clearer:
+ *
+ * @param value - Value to check
+ * @returns true if value is not null and not undefined
+ *
+ * @example
+ * // Array filtering (clearer intent with isNotNullish)
+ * const filtered = [1, null, 2, undefined, 3].filter(isNotNullish)
+ * // filtered is [1, 2, 3] with type number[]
+ *
+ * // Both are equivalent:
+ * isDefined(value)    // "is the value defined?"
+ * isNotNullish(value) // "is the value not nullish?"
+ *
+ * **When to use `!value` vs `isNullish(value)`:**
+ *
+ * Use `!value` when you want to treat falsy values (0, '', false, null, undefined) as "empty":
+ * - Form validation where empty string should fail
+ * - Checking if a value is "truthy"
+ *
+ * Use `isNullish(value)` when you only want to check for null/undefined:
+ * - Numeric values where 0 is valid
+ * - Boolean values where false is valid
+ * - String values where '' is valid
+ *
+ * @example
+ * const count = 0
+ * if (!count) console.log('falsy') // logs 'falsy' - WRONG if 0 is valid
+ * if (isNullish(count)) console.log('nullish') // doesn't log - CORRECT
+ */
+export const isNotNullish: <T>(value: T | null | undefined) => value is T = isDefined
 
 // =============================================================================
 // Type Helpers

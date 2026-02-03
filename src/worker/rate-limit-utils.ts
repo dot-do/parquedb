@@ -6,6 +6,8 @@
  * cloudflare:workers imports.
  */
 
+import { DEFAULT_RATE_LIMIT_WINDOW_MS } from '../constants'
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -41,81 +43,81 @@ export interface RateLimitResult {
  */
 export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
   /** Public endpoints (list public databases) - generous limits */
-  public: { maxRequests: 100, windowMs: 60 * 1000 }, // 100 req/min
+  public: { maxRequests: 100, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 100 req/min
 
   /** Database metadata endpoints - moderate limits */
-  database: { maxRequests: 200, windowMs: 60 * 1000 }, // 200 req/min
+  database: { maxRequests: 200, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 200 req/min
 
   /** Collection query endpoints - moderate limits */
-  query: { maxRequests: 300, windowMs: 60 * 1000 }, // 300 req/min
+  query: { maxRequests: 300, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 300 req/min
 
   /** Raw file access - higher limits for Parquet reading */
-  file: { maxRequests: 1000, windowMs: 60 * 1000 }, // 1000 req/min
+  file: { maxRequests: 1000, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 1000 req/min
 
   // ==========================================================================
   // Write operations - stricter limits to prevent resource exhaustion
   // ==========================================================================
 
   /** /ns/:namespace write operations (POST, PATCH, DELETE) */
-  ns_write: { maxRequests: 60, windowMs: 60 * 1000 }, // 60 req/min (1/sec avg)
+  ns_write: { maxRequests: 60, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 60 req/min (1/sec avg)
 
   /** /ns/:namespace read operations (GET) */
-  ns_read: { maxRequests: 300, windowMs: 60 * 1000 }, // 300 req/min
+  ns_read: { maxRequests: 300, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 300 req/min
 
   // ==========================================================================
   // Debug endpoints - moderate limits (resource-intensive operations)
   // ==========================================================================
 
   /** Debug endpoints (/debug/*) */
-  debug: { maxRequests: 30, windowMs: 60 * 1000 }, // 30 req/min
+  debug: { maxRequests: 30, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 30 req/min
 
   // ==========================================================================
   // Benchmark endpoints - strict limits (very resource-intensive)
   // ==========================================================================
 
   /** Benchmark endpoints (/benchmark*) */
-  benchmark: { maxRequests: 10, windowMs: 60 * 1000 }, // 10 req/min
+  benchmark: { maxRequests: 10, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 10 req/min
 
   // ==========================================================================
   // Migration endpoints - very strict limits (long-running operations)
   // ==========================================================================
 
   /** Migration endpoints (/migrate*) */
-  migration: { maxRequests: 5, windowMs: 60 * 1000 }, // 5 req/min
+  migration: { maxRequests: 5, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 5 req/min
 
   // ==========================================================================
   // Sync endpoints - moderate limits for CLI operations
   // ==========================================================================
 
   /** Sync API endpoints (/api/sync/*) */
-  sync: { maxRequests: 100, windowMs: 60 * 1000 }, // 100 req/min
+  sync: { maxRequests: 100, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 100 req/min
 
   /** Sync file upload/download */
-  sync_file: { maxRequests: 500, windowMs: 60 * 1000 }, // 500 req/min
+  sync_file: { maxRequests: 500, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 500 req/min
 
   // ==========================================================================
   // Dataset endpoints - read operations
   // ==========================================================================
 
   /** Dataset browsing endpoints (/datasets/*) */
-  datasets: { maxRequests: 200, windowMs: 60 * 1000 }, // 200 req/min
+  datasets: { maxRequests: 200, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 200 req/min
 
   // ==========================================================================
   // Compaction endpoints
   // ==========================================================================
 
   /** Compaction status endpoint */
-  compaction: { maxRequests: 30, windowMs: 60 * 1000 }, // 30 req/min
+  compaction: { maxRequests: 30, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 30 req/min
 
   // ==========================================================================
   // Vacuum endpoints - strict limits (long-running operations)
   // ==========================================================================
 
   /** Vacuum endpoints (/vacuum/*) */
-  vacuum: { maxRequests: 5, windowMs: 60 * 1000 }, // 5 req/min
+  vacuum: { maxRequests: 5, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 5 req/min
 
   /** Global fallback */
-  default: { maxRequests: 100, windowMs: 60 * 1000 }, // 100 req/min
+  default: { maxRequests: 100, windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS }, // 100 req/min
 }
 
 // =============================================================================

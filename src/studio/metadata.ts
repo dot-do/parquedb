@@ -13,6 +13,7 @@ import type {
   DiscoveredCollection,
 } from './types'
 import { findTitleField, findDefaultColumns } from './discovery'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Constants
@@ -50,12 +51,12 @@ export async function loadMetadata(
 
     // Validate version
     if (parsed.version !== METADATA_VERSION) {
-      console.warn(`Metadata version mismatch: ${parsed.version}, expected ${METADATA_VERSION}`)
+      logger.warn(`Metadata version mismatch: ${parsed.version}, expected ${METADATA_VERSION}`)
     }
 
     return parsed as StudioMetadata
   } catch (error) {
-    console.warn(`Failed to load metadata from ${path}:`, error)
+    logger.warn(`Failed to load metadata from ${path}:`, error)
     return createDefaultMetadata()
   }
 }

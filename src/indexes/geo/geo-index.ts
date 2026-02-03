@@ -9,6 +9,7 @@ import type { StorageBackend } from '../../types/storage'
 import type { IndexDefinition, IndexStats } from '../types'
 import { encodeGeohash, geohashesInRadius, decodeGeohash } from './geohash'
 import { haversineDistance, boundingBox, isWithinBoundingBox } from './distance'
+import { logger } from '../../utils/logger'
 
 /**
  * Entry in the geo index
@@ -296,7 +297,7 @@ export class GeoIndex {
       this.loaded = true
     } catch (error) {
       // Log and continue with empty index
-      console.warn('Failed to load geo index, starting fresh:', error)
+      logger.warn('Failed to load geo index, starting fresh:', error)
       this.entries.clear()
       this.buckets.clear()
       this.loaded = true

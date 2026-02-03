@@ -78,6 +78,7 @@ import type {
 } from '../../types'
 import { ParqueDBDO, type DOCreateOptions, type DOUpdateOptions, type DODeleteOptions, type DOLinkOptions } from '../../worker/do'
 import type { Env } from '../../types/worker'
+import { logger } from '../../utils/logger'
 
 // =============================================================================
 // RPC Method Types
@@ -469,7 +470,7 @@ export class ParqueDBDurableRPC extends DurableObject<Env> {
   override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
     // Clean up any resources associated with this connection
     if (this.config.debug) {
-      console.log(`WebSocket closed: code=${code}, reason=${reason}, wasClean=${wasClean}`)
+      logger.debug(`WebSocket closed: code=${code}, reason=${reason}, wasClean=${wasClean}`)
     }
     // Nothing to clean up for now - ParqueDB state persists in the DO
   }
@@ -479,7 +480,7 @@ export class ParqueDBDurableRPC extends DurableObject<Env> {
    */
   override async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
     if (this.config.debug) {
-      console.error('WebSocket error:', error)
+      logger.error('WebSocket error:', error)
     }
     // Try to close gracefully
     try {

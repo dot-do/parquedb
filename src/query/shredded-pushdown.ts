@@ -66,6 +66,7 @@ import {
   type PredicateResult,
 } from '@dotdo/iceberg'
 import { DEFAULT_SHREDDED_STARTING_FIELD_ID } from '../constants'
+import { logger } from '../utils/logger'
 
 import type { Filter } from '../types/filter'
 
@@ -367,12 +368,12 @@ export class ShreddedPushdownContext {
     )
 
     if (this.debug) {
-      console.log(
+      logger.debug(
         `[ShreddedPushdown] Filtered ${result.stats.totalFiles} files, ` +
           `skipped ${result.stats.skippedFiles} (${((result.stats.skippedFiles / result.stats.totalFiles) * 100).toFixed(1)}%)`
       )
       for (const [field, count] of result.stats.skippedByField) {
-        console.log(`  - ${field}: skipped ${count} files`)
+        logger.debug(`  - ${field}: skipped ${count} files`)
       }
     }
 

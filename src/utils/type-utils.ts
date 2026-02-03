@@ -7,53 +7,11 @@
  * @module utils/type-utils
  */
 
-// =============================================================================
-// Nullish Checks
-// =============================================================================
+import pluralize from 'pluralize'
+import { isNullish, isNotNullish } from './comparison'
 
-/**
- * Check if a value is null or undefined (nullish)
- *
- * This is the canonical nullish check used throughout ParqueDB for
- * consistent null/undefined handling.
- *
- * @param value - Value to check
- * @returns true if value is null or undefined
- *
- * @example
- * isNullish(null) // true
- * isNullish(undefined) // true
- * isNullish(0) // false
- * isNullish('') // false
- * isNullish(false) // false
- */
-export function isNullish(value: unknown): value is null | undefined {
-  return value === null || value === undefined
-}
-
-/**
- * Check if a value is not null and not undefined
- *
- * This is the inverse of isNullish and is useful for type narrowing
- * in filter operations and conditional checks.
- *
- * @param value - Value to check
- * @returns true if value is not null and not undefined
- *
- * @example
- * isNotNullish(0) // true
- * isNotNullish('') // true
- * isNotNullish(false) // true
- * isNotNullish(null) // false
- * isNotNullish(undefined) // false
- *
- * // Great for array filtering:
- * const filtered = [1, null, 2, undefined, 3].filter(isNotNullish)
- * // filtered is [1, 2, 3] with type number[]
- */
-export function isNotNullish<T>(value: T | null | undefined): value is T {
-  return value !== null && value !== undefined
-}
+// Re-export nullish utilities from comparison.ts (canonical source)
+export { isNullish, isNotNullish }
 
 /**
  * Check if a value is a plain object (not null, not array, not primitive)
@@ -100,13 +58,13 @@ export function isArray(value: unknown): value is unknown[] {
  * getNestedValue(null, 'a.b') // undefined
  */
 export function getNestedValue(obj: unknown, path: string): unknown {
-  if (obj === null || obj === undefined) return undefined
+  if (isNullish(obj)) return undefined
 
   const parts = path.split('.')
   let current: unknown = obj
 
   for (const part of parts) {
-    if (current === null || current === undefined) return undefined
+    if (isNullish(current)) return undefined
     if (typeof current !== 'object') return undefined
     current = (current as Record<string, unknown>)[part]
   }
@@ -130,7 +88,7 @@ export function getNestedValue(obj: unknown, path: string): unknown {
  */
 export function coalesce<T>(...values: (T | null | undefined)[]): T | undefined {
   for (const value of values) {
-    if (value !== null && value !== undefined) {
+    if (isNotNullish(value)) {
       return value
     }
   }
@@ -150,7 +108,7 @@ export function coalesce<T>(...values: (T | null | undefined)[]): T | undefined 
  */
 export function coalesceDefault<T>(defaultValue: T, ...values: (T | null | undefined)[]): T {
   for (const value of values) {
-    if (value !== null && value !== undefined) {
+    if (isNotNullish(value)) {
       return value
     }
   }
@@ -451,4 +409,57 @@ export function extendFunction<T extends (...args: never[]) => unknown, E extend
   extensions: E
 ): T & E {
   return Object.assign(fn, extensions)
+}
+
+// =============================================================================
+// Type/Namespace Conversion
+// =============================================================================
+
+/**
+ * Convert a type name to a namespace (lowercase, pluralized)
+ *
+ * Uses the 'pluralize' library for proper English pluralization including:
+ * - Regular plurals: User -> users, Post -> posts
+ * - -y to -ies: Category -> categories, Company -> companies
+ * - -s to -ses: Status -> statuses, Alias -> aliases
+ * - -x to -xes/-ces: Index -> indices, Box -> boxes
+ * - Irregular plurals: Person -> people, Child -> children
+ * - Uncountable nouns: News -> news, Equipment -> equipment
+ *
+ * @param type - The type name (e.g., 'User', 'Post', 'Category')
+ * @returns The namespace (e.g., 'users', 'posts', 'categories')
+ *
+ * @example
+ * typeToNamespace('User') // 'users'
+ * typeToNamespace('Category') // 'categories'
+ * typeToNamespace('Person') // 'people'
+ * typeToNamespace('News') // 'news'
+ */
+export function typeToNamespace(type: string): string {
+  const lower = type.toLowerCase()
+  return pluralize.plural(lower)
+}
+
+/**
+ * Convert a namespace to a type name (capitalized, singularized)
+ *
+ * Uses the 'pluralize' library for proper English singularization including:
+ * - Regular singulars: users -> User, posts -> Post
+ * - -ies to -y: categories -> Category, companies -> Company
+ * - -ses to -s: statuses -> Status, aliases -> Alias
+ * - Irregular singulars: people -> Person, children -> Child
+ * - Uncountable nouns: news -> News, equipment -> Equipment
+ *
+ * @param namespace - The namespace (e.g., 'users', 'posts', 'categories')
+ * @returns The type name (e.g., 'User', 'Post', 'Category')
+ *
+ * @example
+ * namespaceToType('users') // 'User'
+ * namespaceToType('categories') // 'Category'
+ * namespaceToType('people') // 'Person'
+ * namespaceToType('news') // 'News'
+ */
+export function namespaceToType(namespace: string): string {
+  const singular = pluralize.singular(namespace)
+  return singular.charAt(0).toUpperCase() + singular.slice(1)
 }

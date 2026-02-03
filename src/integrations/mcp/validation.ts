@@ -8,6 +8,13 @@
  * - Type confusion attacks
  */
 
+import { isNullish } from '../../utils/comparison'
+import {
+  MAX_MCP_STRING_LENGTH,
+  MAX_MCP_PAGINATION_LIMIT,
+  MAX_MCP_PROMPT_LENGTH,
+} from '../../constants'
+
 /**
  * Validation error with field information
  */
@@ -81,13 +88,13 @@ const MAX_NESTING_DEPTH = 10
 /**
  * Maximum string length for fields
  */
-const MAX_STRING_LENGTH = 10000
+const MAX_STRING_LENGTH = MAX_MCP_STRING_LENGTH
 
 /**
  * Validates and sanitizes a collection name
  */
 export function validateCollectionName(name: unknown, field = 'collection'): string {
-  if (name === null || name === undefined) {
+  if (isNullish(name)) {
     throw new ValidationError(field, 'is required')
   }
 
@@ -119,7 +126,7 @@ export function validateCollectionName(name: unknown, field = 'collection'): str
  * Validates and sanitizes an entity ID
  */
 export function validateEntityId(id: unknown, field = 'id'): string {
-  if (id === null || id === undefined) {
+  if (isNullish(id)) {
     throw new ValidationError(field, 'is required')
   }
 
@@ -172,7 +179,7 @@ export function sanitizeObject<T extends Record<string, unknown>>(
     throw new ValidationError(field, `exceeds maximum nesting depth of ${MAX_NESTING_DEPTH}`)
   }
 
-  if (obj === null || obj === undefined) {
+  if (isNullish(obj)) {
     return {} as T
   }
 
@@ -194,7 +201,7 @@ export function sanitizeObject<T extends Record<string, unknown>>(
 
     const value = (obj as Record<string, unknown>)[key]
 
-    if (value === null || value === undefined) {
+    if (isNullish(value)) {
       result[key] = value
     } else if (Array.isArray(value)) {
       result[key] = sanitizeArray(value, `${field}.${key}`, depth + 1)
@@ -222,7 +229,7 @@ function sanitizeArray(arr: unknown[], field: string, depth: number): unknown[] 
   }
 
   return arr.map((item, index) => {
-    if (item === null || item === undefined) {
+    if (isNullish(item)) {
       return item
     }
     if (Array.isArray(item)) {
@@ -275,7 +282,7 @@ function validateFilterOperators(obj: Record<string, unknown>, field: string, de
  * Validates and sanitizes a filter object
  */
 export function validateFilter(filter: unknown, field = 'filter'): Record<string, unknown> | undefined {
-  if (filter === null || filter === undefined) {
+  if (isNullish(filter)) {
     return undefined
   }
 
@@ -325,7 +332,7 @@ function validateUpdateOperators(obj: Record<string, unknown>, field: string): v
  * Validates and sanitizes an update object
  */
 export function validateUpdate(update: unknown, field = 'update'): Record<string, unknown> {
-  if (update === null || update === undefined) {
+  if (isNullish(update)) {
     throw new ValidationError(field, 'is required')
   }
 
@@ -347,7 +354,7 @@ export function validateUpdate(update: unknown, field = 'update'): Record<string
  * Validates and sanitizes entity data for creation
  */
 export function validateEntityData(data: unknown, field = 'data'): Record<string, unknown> {
-  if (data === null || data === undefined) {
+  if (isNullish(data)) {
     throw new ValidationError(field, 'is required')
   }
 
@@ -362,7 +369,7 @@ export function validateEntityData(data: unknown, field = 'data'): Record<string
   const sanitized = sanitizeObject<Record<string, unknown>>(data, field)
 
   // Ensure 'name' field exists (required for entities)
-  if (!('name' in sanitized) || sanitized.name === null || sanitized.name === undefined) {
+  if (!('name' in sanitized) || isNullish(sanitized.name)) {
     throw new ValidationError(`${field}.name`, 'is required')
   }
 
@@ -381,7 +388,7 @@ export function validateEntityData(data: unknown, field = 'data'): Record<string
  * Validates and sanitizes an aggregation pipeline
  */
 export function validatePipeline(pipeline: unknown, field = 'pipeline'): Array<Record<string, unknown>> {
-  if (pipeline === null || pipeline === undefined) {
+  if (isNullish(pipeline)) {
     throw new ValidationError(field, 'is required')
   }
 
@@ -449,7 +456,7 @@ export function validatePipeline(pipeline: unknown, field = 'pipeline'): Array<R
  * Validates a numeric limit parameter
  */
 export function validateLimit(limit: unknown, field = 'limit'): number | undefined {
-  if (limit === null || limit === undefined) {
+  if (isNullish(limit)) {
     return undefined
   }
 
@@ -465,8 +472,8 @@ export function validateLimit(limit: unknown, field = 'limit'): number | undefin
     throw new ValidationError(field, 'must be non-negative')
   }
 
-  if (limit > 1000) {
-    throw new ValidationError(field, 'cannot exceed 1000')
+  if (limit > MAX_MCP_PAGINATION_LIMIT) {
+    throw new ValidationError(field, `cannot exceed ${MAX_MCP_PAGINATION_LIMIT}`)
   }
 
   return limit
@@ -476,7 +483,7 @@ export function validateLimit(limit: unknown, field = 'limit'): number | undefin
  * Validates a numeric skip/offset parameter
  */
 export function validateSkip(skip: unknown, field = 'skip'): number | undefined {
-  if (skip === null || skip === undefined) {
+  if (isNullish(skip)) {
     return undefined
   }
 
@@ -499,7 +506,7 @@ export function validateSkip(skip: unknown, field = 'skip'): number | undefined 
  * Validates a sort specification
  */
 export function validateSort(sort: unknown, field = 'sort'): Record<string, 1 | -1> | undefined {
-  if (sort === null || sort === undefined) {
+  if (isNullish(sort)) {
     return undefined
   }
 
@@ -531,7 +538,7 @@ export function validateSort(sort: unknown, field = 'sort'): Record<string, 1 | 
  * Validates a projection specification
  */
 export function validateProject(project: unknown, field = 'project'): Record<string, 0 | 1> | undefined {
-  if (project === null || project === undefined) {
+  if (isNullish(project)) {
     return undefined
   }
 
@@ -563,7 +570,7 @@ export function validateProject(project: unknown, field = 'project'): Record<str
  * Validates a boolean parameter
  */
 export function validateBoolean(value: unknown, field: string, defaultValue?: boolean): boolean {
-  if (value === null || value === undefined) {
+  if (isNullish(value)) {
     return defaultValue ?? false
   }
 
@@ -578,7 +585,7 @@ export function validateBoolean(value: unknown, field: string, defaultValue?: bo
  * Validates a search query string
  */
 export function validateSearchQuery(query: unknown, field = 'query'): string {
-  if (query === null || query === undefined) {
+  if (isNullish(query)) {
     throw new ValidationError(field, 'is required')
   }
 
@@ -592,8 +599,8 @@ export function validateSearchQuery(query: unknown, field = 'query'): string {
     throw new ValidationError(field, 'cannot be empty')
   }
 
-  if (trimmed.length > 1000) {
-    throw new ValidationError(field, 'must be 1000 characters or fewer')
+  if (trimmed.length > MAX_MCP_PROMPT_LENGTH) {
+    throw new ValidationError(field, `must be ${MAX_MCP_PROMPT_LENGTH} characters or fewer`)
   }
 
   return trimmed

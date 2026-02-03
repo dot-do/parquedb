@@ -4,7 +4,7 @@
  * Tests for the CSRF protection middleware and utilities.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { validateCsrfRequest, csrfErrorResponse } from '../../../src/worker/handlers/csrf-validation'
 import {
   generateCsrfToken,
@@ -240,16 +240,21 @@ describe('CSRF Token Generation and Verification', () => {
     })
 
     it('should reject expired token', async () => {
-      // Create token with very short TTL
-      const token = await generateCsrfToken(testSecret, testSubject, 1) // 1ms TTL
+      vi.useFakeTimers()
+      try {
+        // Create token with very short TTL
+        const token = await generateCsrfToken(testSecret, testSubject, 1) // 1ms TTL
 
-      // Wait for expiration
-      await new Promise(resolve => setTimeout(resolve, 10))
+        // Advance time past expiration
+        await vi.advanceTimersByTimeAsync(10)
 
-      const result = await verifyCsrfToken(testSecret, token, testSubject)
+        const result = await verifyCsrfToken(testSecret, token, testSubject)
 
-      expect(result.valid).toBe(false)
-      expect(result.reason).toContain('expired')
+        expect(result.valid).toBe(false)
+        expect(result.reason).toContain('expired')
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('should reject malformed token', async () => {

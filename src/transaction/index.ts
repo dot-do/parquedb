@@ -38,6 +38,7 @@ import {
   DEFAULT_TRANSACTION_RETRY_DELAY,
   DEFAULT_MAX_RETRIES,
 } from '../constants'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Core Types
@@ -525,7 +526,7 @@ export class TransactionManager<TContext = unknown> {
           } catch (rollbackError) {
             // Log rollback errors on timeout - these indicate potential state inconsistency
             // The error is caught to prevent unhandled rejection, but logged for debugging
-            console.warn(`[TransactionManager] Rollback on timeout failed for transaction ${id}:`, rollbackError)
+            logger.warn(`[TransactionManager] Rollback on timeout failed for transaction ${id}:`, rollbackError)
           }
         }
       }, mergedOptions.timeout)
@@ -665,7 +666,7 @@ export async function withTransaction<TContext, TTx extends Transaction, TResult
       await tx.rollback()
     } catch (rollbackError) {
       // Log rollback error but throw original error
-      console.error('Transaction rollback failed:', rollbackError)
+      logger.error('Transaction rollback failed:', rollbackError)
     }
     throw error
   }
