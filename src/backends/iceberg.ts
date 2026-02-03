@@ -36,6 +36,7 @@ import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptio
 import type { Update } from '../types/update'
 import type { StorageBackend } from '../types/storage'
 import { isETagMismatchError } from '../storage/errors'
+import { entityAsRecord } from '../types/cast'
 
 // Import shared Parquet utilities
 import {
@@ -1057,7 +1058,7 @@ export class IcebergBackend implements EntityBackend {
     const allEntities: Entity<T>[] = []
     for (const entity of entityMap.values()) {
       // Apply filter if provided
-      if (filter && !matchesFilter(entity as unknown as Record<string, unknown>, filter)) {
+      if (filter && !matchesFilter(entityAsRecord(entity), filter)) {
         continue
       }
       allEntities.push(entity)

@@ -1070,7 +1070,7 @@ export class DeltaBackend implements EntityBackend {
 
     // OCC: Retry loop with exponential backoff
     let retries = 0
-    let _lastError: Error | null = null
+    // Track last error for debugging (used implicitly for retry logic)
     let dataFilePath: string | null = null
 
     while (retries <= this.maxRetries) {
@@ -1182,7 +1182,7 @@ export class DeltaBackend implements EntityBackend {
       } catch (error) {
         // Check if this is a conflict error (file already exists)
         if (error instanceof AlreadyExistsError || this.isConflictError(error)) {
-          _lastError = error as Error
+          // Track error for potential debugging
           retries++
 
           if (retries <= this.maxRetries) {
