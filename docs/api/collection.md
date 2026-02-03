@@ -1,4 +1,7 @@
-# Collection Class API Reference
+---
+title: Collection Class
+description: Fluent API for working with entities in a specific namespace. Provides find, create, update, delete, and upsert operations.
+---
 
 The `Collection` class provides a fluent API for working with entities in a specific namespace. Collections are obtained via `db.collection(namespace)` or through proxy-based access like `db.Posts`.
 

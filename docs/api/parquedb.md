@@ -1,4 +1,7 @@
-# ParqueDB Class API Reference
+---
+title: ParqueDB Class
+description: Main entry point for interacting with ParqueDB. Provides explicit namespace-based methods and proxy-based collection access.
+---
 
 The `ParqueDB` class is the main entry point for interacting with ParqueDB. It provides both explicit namespace-based methods and proxy-based collection access.
 

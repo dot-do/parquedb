@@ -1,4 +1,7 @@
-# Query API
+---
+title: Query API
+description: MongoDB-style query API for filtering and retrieving documents
+---
 
 ParqueDB uses a MongoDB-style query API for filtering and retrieving documents. This guide covers all available filter operators with examples.
 

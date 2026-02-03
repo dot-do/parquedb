@@ -1,4 +1,7 @@
-# Node.js Standalone Deployment
+---
+title: Node.js Standalone
+description: Deploy ParqueDB as a standalone Node.js server without Cloudflare Workers for development, self-hosted, or on-premises installations.
+---
 
 This guide covers deploying ParqueDB as a standalone Node.js server without Cloudflare Workers.
 

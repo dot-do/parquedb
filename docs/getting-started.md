@@ -1,4 +1,7 @@
-# Getting Started
+---
+title: Getting Started
+description: Installation, basic usage, and common operations with ParqueDB
+---
 
 This guide covers installation, basic usage, and common operations with ParqueDB.
 

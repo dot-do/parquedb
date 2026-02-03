@@ -1,4 +1,7 @@
-# ParqueDB Performance Benchmarks
+---
+title: Performance Benchmarks
+description: Comprehensive performance benchmarks for ParqueDB operations across different scales and environments
+---
 
 This document provides comprehensive performance benchmarks for ParqueDB operations across different scales and environments.
 

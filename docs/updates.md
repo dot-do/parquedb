@@ -1,4 +1,7 @@
-# Update Operators
+---
+title: Update Operators
+description: MongoDB-style update operators for modifying documents in ParqueDB
+---
 
 ParqueDB uses MongoDB-style update operators to modify documents. This guide covers all available operators with examples.
 

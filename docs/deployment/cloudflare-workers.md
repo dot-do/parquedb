@@ -1,4 +1,7 @@
-# Deploying ParqueDB to Cloudflare Workers
+---
+title: Cloudflare Workers
+description: Deploy ParqueDB to Cloudflare Workers with R2 storage and Durable Objects for a production-ready setup.
+---
 
 This guide covers deploying ParqueDB to Cloudflare Workers with R2 storage and Durable Objects for a production-ready setup.
 

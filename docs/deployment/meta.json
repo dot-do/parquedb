@@ -1,0 +1,4 @@
+{
+  "title": "Deployment",
+  "pages": ["cloudflare-workers", "node-standalone", "r2-setup", "configuration"]
+}

@@ -1,4 +1,7 @@
-# ParqueDB Configuration Reference
+---
+title: Configuration
+description: Complete reference for all ParqueDB configuration options across Node.js, Cloudflare Workers, and browser environments.
+---
 
 Complete reference for all ParqueDB configuration options across different deployment environments.
 

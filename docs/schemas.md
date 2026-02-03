@@ -1,4 +1,7 @@
-# Schema Definition Guide
+---
+title: Schema Definition Guide
+description: Defining types, fields, relationships, and indexes in ParqueDB schemas
+---
 
 ParqueDB supports flexible schema definitions that enable type safety, relationships, and indexing. This guide covers how to define schemas using the native ParqueDB format, GraphDL integration, and IceType integration.
 

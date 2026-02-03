@@ -1,4 +1,7 @@
-# ParqueDB Documentation
+---
+title: ParqueDB Documentation
+description: A Parquet-based database for Node.js, browsers, and Cloudflare Workers
+---
 
 ParqueDB is a Parquet-based database that runs in Node.js, browsers, and Cloudflare Workers. It provides MongoDB-style operations with columnar storage for efficient analytics.
 

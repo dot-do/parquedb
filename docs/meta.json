@@ -1,0 +1,16 @@
+{
+  "title": "ParqueDB",
+  "pages": [
+    "index",
+    "getting-started",
+    "schemas",
+    "queries",
+    "updates",
+    "---Guides---",
+    "benchmarks",
+    "---Reference---",
+    "api",
+    "deployment",
+    "architecture"
+  ]
+}

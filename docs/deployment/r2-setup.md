@@ -1,4 +1,7 @@
-# Deploying ParqueDB to Cloudflare R2
+---
+title: R2 Setup
+description: Configure Cloudflare R2 object storage for ParqueDB data, including bucket creation, data loading, and cost estimation.
+---
 
 This guide covers deploying ParqueDB data to Cloudflare R2 object storage for production use with Cloudflare Workers.
 
