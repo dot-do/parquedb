@@ -4,8 +4,8 @@
 
 ParqueDB supports three storage backends for entity data while maintaining a unified relationship index layer on top:
 
-1. **Native** - ParqueDB's simple, custom Parquet format
-2. **Delta Lake** - Via `@dotdo/deltalake` library
+1. **Native** - ParqueDB's simple, custom Parquet format (planned)
+2. **Delta Lake** - Implemented directly in ParqueDB
 3. **Iceberg** - Via `@dotdo/iceberg` library (including R2 Data Catalog)
 
 The key architectural insight is that **relationships are always stored in ParqueDB's format**, regardless of the entity backend. This enables graph traversal capabilities on top of any table format.
@@ -24,7 +24,7 @@ The key architectural insight is that **relationships are always stored in Parqu
 │  ├──────────────────────┤     ├──────────────────────────────┤ │
 │  │ • NativeBackend      │     │ • SQLite (Durable Objects)   │ │
 │  │ • IcebergBackend     │     │ • Parquet (rels/forward/)    │ │
-│  │ • DeltaLakeBackend   │     │ • Parquet (rels/reverse/)    │ │
+│  │ • DeltaBackend       │     │ • Parquet (rels/reverse/)    │ │
 │  └──────────────────────┘     └──────────────────────────────┘ │
 │           │                              │                      │
 │           │  Entity CRUD                 │  Link/Unlink/Traverse│
@@ -61,56 +61,63 @@ By keeping relationships in our own format, we get:
 // src/backends/types.ts
 
 export interface EntityBackend {
+  // Metadata
+  readonly type: 'native' | 'iceberg' | 'delta'
+  readonly supportsTimeTravel: boolean
+  readonly supportsSchemaEvolution: boolean
+  readonly readOnly: boolean
+
   // Lifecycle
   initialize(): Promise<void>
   close(): Promise<void>
 
   // Read operations
-  get(ns: string, id: string): Promise<Entity | null>
-  find(ns: string, filter?: Filter, options?: FindOptions): Promise<Entity[]>
+  get<T>(ns: string, id: string, options?: GetOptions): Promise<Entity<T> | null>
+  find<T>(ns: string, filter?: Filter, options?: FindOptions): Promise<Entity<T>[]>
   count(ns: string, filter?: Filter): Promise<number>
+  exists(ns: string, id: string): Promise<boolean>
 
   // Write operations
-  create(ns: string, entity: EntityInput): Promise<Entity>
-  update(ns: string, id: string, update: Update): Promise<Entity>
-  delete(ns: string, id: string): Promise<void>
+  create<T>(ns: string, input: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
+  update<T>(ns: string, id: string, update: Update, options?: UpdateOptions): Promise<Entity<T>>
+  delete(ns: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
 
   // Batch operations
-  bulkCreate(ns: string, entities: EntityInput[]): Promise<Entity[]>
-  bulkUpdate(ns: string, filter: Filter, update: Update): Promise<number>
-  bulkDelete(ns: string, filter: Filter): Promise<number>
+  bulkCreate<T>(ns: string, inputs: CreateInput<T>[], options?: CreateOptions): Promise<Entity<T>[]>
+  bulkUpdate(ns: string, filter: Filter, update: Update, options?: UpdateOptions): Promise<UpdateResult>
+  bulkDelete(ns: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
 
-  // Time-travel (backend-specific)
+  // Time-travel (optional)
   snapshot?(ns: string, version: number | Date): Promise<EntityBackend>
+  listSnapshots?(ns: string): Promise<SnapshotInfo[]>
 
   // Schema
-  schema(ns: string): Promise<Schema | null>
+  getSchema(ns: string): Promise<EntitySchema | null>
+  setSchema?(ns: string, schema: EntitySchema): Promise<void>
+  listNamespaces(): Promise<string[]>
 
-  // Metadata
-  readonly type: 'native' | 'iceberg' | 'delta'
-  readonly supportsTimeTravel: boolean
-  readonly supportsSchemaEvolution: boolean
+  // Maintenance (optional)
+  compact?(ns: string, options?: CompactOptions): Promise<CompactResult>
+  vacuum?(ns: string, options?: VacuumOptions): Promise<VacuumResult>
+  stats?(ns: string): Promise<BackendStats>
 }
 ```
 
 ## Backend Implementations
 
-### 1. Native Backend
+### 1. Native Backend (Planned)
 
 ParqueDB's original simple format:
 
 ```typescript
-// src/backends/native.ts
+// src/backends/native.ts (planned)
 
 export class NativeBackend implements EntityBackend {
   readonly type = 'native'
   readonly supportsTimeTravel = true  // via event log
   readonly supportsSchemaEvolution = false
 
-  constructor(
-    private storage: StorageBackend,
-    private options: NativeBackendOptions = {}
-  ) {}
+  constructor(config: NativeBackendConfig) {}
 
   // Storage layout:
   // data/{ns}/data.parquet     - Entity data
@@ -139,28 +146,51 @@ Standard Apache Iceberg format, compatible with DuckDB/Spark/Snowflake:
 ```typescript
 // src/backends/iceberg.ts
 
-import {
-  readTableMetadata,
-  MetadataWriter,
-  R2DataCatalogClient
-} from '@dotdo/iceberg'
+import { createIcebergBackend, createR2IcebergBackend, IcebergBackend } from 'parquedb/backends'
 
-export class IcebergBackend implements EntityBackend {
+// Basic Iceberg backend with filesystem catalog
+const backend = createIcebergBackend({
+  type: 'iceberg',
+  storage: storageBackend,   // ParqueDB StorageBackend (R2, S3, FS, Memory)
+  warehouse: 'warehouse',     // Base path for tables
+  database: 'default',        // Database/namespace prefix
+  readOnly: false,            // Optional: read-only mode
+})
+
+// Or instantiate the class directly
+const backend = new IcebergBackend({
+  type: 'iceberg',
+  storage: storageBackend,
+  warehouse: 'warehouse',
+  database: 'mydb',
+  catalog: {
+    type: 'filesystem',
+  },
+})
+
+// Iceberg with R2 Data Catalog (Cloudflare managed)
+const r2Backend = createR2IcebergBackend(storageBackend, {
+  accountId: env.CF_ACCOUNT_ID,
+  apiToken: env.R2_DATA_CATALOG_TOKEN,
+  bucketName: 'my-bucket',     // Optional
+  warehouse: 'warehouse',
+  database: 'default',
+})
+```
+
+**IcebergBackend Properties:**
+```typescript
+class IcebergBackend implements EntityBackend {
   readonly type = 'iceberg'
   readonly supportsTimeTravel = true   // via snapshots
   readonly supportsSchemaEvolution = true
+  readonly readOnly: boolean
 
-  constructor(
-    private storage: StorageBackend,
-    private catalog: IcebergCatalog,
-    private options: IcebergBackendOptions = {}
-  ) {}
-
-  // Uses standard Iceberg table structure
-  // Catalog can be:
-  // - R2DataCatalogClient (Cloudflare managed)
-  // - RESTCatalog (any Iceberg REST catalog)
-  // - FileSystemCatalog (direct metadata access)
+  // Internal state
+  private storage: StorageBackend
+  private warehouse: string
+  private database: string
+  private tableCache: Map<string, TableMetadata>
 }
 ```
 
@@ -169,40 +199,65 @@ export class IcebergBackend implements EntityBackend {
 bucket/warehouse/db/
 ├── users/
 │   ├── metadata/
-│   │   ├── version-hint.txt
-│   │   ├── v1.metadata.json
-│   │   └── snap-001.avro
+│   │   ├── version-hint.text           # Points to latest metadata file
+│   │   ├── 1-{uuid}.metadata.json      # Table metadata v1
+│   │   ├── snap-{id}-{uuid}.avro       # Manifest list (JSON for now)
+│   │   └── {uuid}-m0.avro              # Manifest file (JSON for now)
 │   └── data/
-│       └── part-00000.parquet
+│       └── {uuid}.parquet              # Data files
 ├── posts/
 │   └── ...
-└── _parquedb/                    # ParqueDB-specific metadata
+└── _parquedb/                          # ParqueDB-specific metadata
     └── rels/
         ├── forward/{ns}.parquet
         └── reverse/{ns}.parquet
 ```
 
+**Iceberg Catalog Options:**
+```typescript
+type IcebergCatalogConfig =
+  | { type: 'filesystem' }                                          // Direct metadata access
+  | { type: 'r2-data-catalog'; accountId: string; apiToken: string; bucketName?: string }
+  | { type: 'rest'; uri: string; credential?: string; warehouse?: string }
+```
+
 ### 3. Delta Lake Backend
 
-Delta Lake format with transaction log:
+Delta Lake format implemented directly in ParqueDB:
 
 ```typescript
 // src/backends/delta.ts
 
-import { DeltaTable, createStorage } from '@dotdo/deltalake'
+import { createDeltaBackend, DeltaBackend } from 'parquedb/backends'
 
-export class DeltaLakeBackend implements EntityBackend {
+// Create via factory function
+const backend = createDeltaBackend({
+  type: 'delta',
+  storage: storageBackend,  // ParqueDB StorageBackend
+  location: 'warehouse',     // Base path for tables
+  readOnly: false,           // Optional: read-only mode
+})
+
+// Or instantiate the class directly
+const backend = new DeltaBackend({
+  type: 'delta',
+  storage: storageBackend,
+  location: 'warehouse',
+})
+```
+
+**DeltaBackend Properties:**
+```typescript
+class DeltaBackend implements EntityBackend {
   readonly type = 'delta'
   readonly supportsTimeTravel = true   // via versions
   readonly supportsSchemaEvolution = true
+  readonly readOnly: boolean
 
-  constructor(
-    private storage: StorageBackend,
-    private options: DeltaLakeBackendOptions = {}
-  ) {}
-
-  // Uses Delta Lake table structure
-  // Transaction log in _delta_log/
+  // Internal state
+  private storage: StorageBackend
+  private location: string
+  private versionCache: Map<string, number>
 }
 ```
 
@@ -211,15 +266,69 @@ export class DeltaLakeBackend implements EntityBackend {
 bucket/
 ├── users/
 │   ├── _delta_log/
-│   │   ├── 00000000000000000000.json
-│   │   └── 00000000000000000001.json
-│   └── part-00000.parquet
+│   │   ├── 00000000000000000000.json   # Initial commit (protocol + metadata + data)
+│   │   ├── 00000000000000000001.json   # Subsequent commits
+│   │   ├── 00000000000000000010.checkpoint.parquet  # Checkpoint every 10 versions
+│   │   └── _last_checkpoint             # Pointer to latest checkpoint
+│   ├── {uuid}.parquet                   # Data files
+│   └── ...
 ├── posts/
 │   └── ...
 └── _parquedb/
     └── rels/
         ├── forward/{ns}.parquet
         └── reverse/{ns}.parquet
+```
+
+**Delta Log Actions:**
+```typescript
+// Protocol action (first commit only)
+{ protocol: { minReaderVersion: 1, minWriterVersion: 2 } }
+
+// Metadata action (first commit, schema changes)
+{ metaData: { id: string, schemaString: string, partitionColumns: [], createdTime: number } }
+
+// Add action (new data file)
+{ add: { path: string, size: number, modificationTime: number, dataChange: boolean } }
+
+// Remove action (deleted file)
+{ remove: { path: string, deletionTimestamp: number, dataChange: boolean } }
+
+// Commit info
+{ commitInfo: { timestamp: number, operation: string, readVersion?: number } }
+```
+
+## Entity Storage Schema
+
+Both backends store entities with the same Parquet schema:
+
+```typescript
+// Built by buildEntityParquetSchema() in src/backends/parquet-utils.ts
+
+const entitySchema = {
+  $id: { type: 'STRING', optional: false },      // "ns/id" format
+  $type: { type: 'STRING', optional: false },    // Entity type
+  name: { type: 'STRING', optional: false },     // Display name
+  createdAt: { type: 'STRING', optional: false }, // ISO timestamp
+  createdBy: { type: 'STRING', optional: false },
+  updatedAt: { type: 'STRING', optional: false },
+  updatedBy: { type: 'STRING', optional: false },
+  deletedAt: { type: 'STRING', optional: true },  // Soft delete
+  deletedBy: { type: 'STRING', optional: true },
+  version: { type: 'INT32', optional: false },   // Optimistic concurrency
+  $data: { type: 'STRING', optional: true },     // Base64-encoded Variant (flexible data)
+}
+```
+
+**Entity Serialization:**
+```typescript
+// Convert entity to Parquet row
+const row = entityToRow(entity)
+// Core fields extracted, remaining data encoded as base64 Variant in $data
+
+// Convert row back to entity
+const entity = rowToEntity<MyType>(row)
+// $data decoded and merged with core fields
 ```
 
 ## Relationship Index Layer
@@ -326,22 +435,63 @@ const schema = {
 }
 ```
 
+## Factory Functions and Usage
+
+```typescript
+import {
+  // Iceberg
+  IcebergBackend,
+  createIcebergBackend,
+  createR2IcebergBackend,
+  // Delta
+  DeltaBackend,
+  createDeltaBackend,
+  // Generic factory
+  createBackend,
+  // Types
+  BackendConfig,
+  IcebergBackendConfig,
+  DeltaBackendConfig,
+} from 'parquedb/backends'
+
+// Generic factory (auto-detects backend type)
+const backend = await createBackend({
+  type: 'iceberg',  // or 'delta'
+  storage: storageBackend,
+  warehouse: 'warehouse',
+})
+
+// Backend is initialized and ready to use
+await backend.create('users', { $type: 'User', name: 'Alice' })
+const users = await backend.find('users', { name: 'Alice' })
+
+// Time travel
+const snapshot = await backend.snapshot?.('users', new Date('2024-01-01'))
+const historicalUsers = await snapshot?.find('users', {})
+
+// Cleanup
+await backend.close()
+```
+
 ## R2 Data Catalog Integration
 
 When using Iceberg backend with R2 Data Catalog:
 
 ```typescript
-const db = new ParqueDB({
-  backend: {
-    type: 'iceberg',
-    catalog: {
-      type: 'r2-data-catalog',
-      accountId: env.CF_ACCOUNT_ID,
-      apiToken: env.CF_API_TOKEN,
-    },
-  },
-  storage: env.R2_BUCKET,
+import { createR2IcebergBackend } from 'parquedb/backends'
+import { R2StorageBackend } from 'parquedb/storage'
+
+const storage = new R2StorageBackend(env.R2_BUCKET)
+
+const backend = createR2IcebergBackend(storage, {
+  accountId: env.CF_ACCOUNT_ID,
+  apiToken: env.R2_DATA_CATALOG_TOKEN,
+  bucketName: 'my-bucket',
+  warehouse: 'warehouse',
+  database: 'default',
 })
+
+await backend.initialize()
 ```
 
 **Write Flow:**
@@ -362,50 +512,44 @@ const db = new ParqueDB({
 - Standard Iceberg = queryable by any engine
 - Graph capabilities via ParqueDB's relationship layer
 
-## Configuration
+## Configuration Types
 
 ```typescript
-// Full configuration options
-interface ParqueDBConfig {
-  // Backend selection
-  backend:
-    | { type: 'native' }
-    | {
-        type: 'iceberg'
-        catalog:
-          | { type: 'r2-data-catalog', accountId: string, apiToken: string }
-          | { type: 'rest', uri: string, credential?: string }
-          | { type: 'filesystem' }
-      }
-    | { type: 'delta' }
-
-  // Storage
-  storage: StorageBackend | R2Bucket
-
-  // Warehouse location (for Iceberg/Delta)
-  warehouse?: string
-
-  // Relationship index options
-  relationships?: {
-    // Storage location for relationship indexes
-    location?: string  // Default: '_parquedb/rels'
-
-    // Super-node threshold
-    superNodeThreshold?: number  // Default: 1000
-
-    // Compaction settings
-    compaction?: {
-      enabled?: boolean
-      targetFileSize?: number  // Default: 128MB
-      maxFilesPerCompaction?: number
-    }
-  }
+// Base configuration for all backends
+interface BaseBackendConfig {
+  storage: StorageBackend  // Required: file I/O backend
+  location?: string        // Base path for data
+  readOnly?: boolean       // Read-only mode
 }
+
+// Native backend (planned)
+interface NativeBackendConfig extends BaseBackendConfig {
+  type: 'native'
+}
+
+// Iceberg backend
+interface IcebergBackendConfig extends BaseBackendConfig {
+  type: 'iceberg'
+  catalog?: IcebergCatalogConfig  // Catalog type
+  warehouse?: string              // Warehouse location
+  database?: string               // Database/namespace
+}
+
+// Delta backend
+interface DeltaBackendConfig extends BaseBackendConfig {
+  type: 'delta'
+}
+
+// Union type
+type BackendConfig =
+  | NativeBackendConfig
+  | IcebergBackendConfig
+  | DeltaBackendConfig
 ```
 
 ## Migration Paths
 
-### Native → Iceberg
+### Native to Iceberg
 
 ```typescript
 // Export native data to Iceberg format
@@ -451,7 +595,8 @@ const events = await db.external.events.find({
 
 ## Future Enhancements
 
-1. **Relationship replication to Iceberg** - Optionally write relationships as an Iceberg table for analytics queries
-2. **Fuzzy relationships** - Vector similarity index for `~>` and `<~` operators
-3. **Cross-backend joins** - Query relationships across different backends
-4. **Incremental materialized views** - Cached graph patterns updated on change
+1. **Native backend implementation** - Complete the simple Parquet backend
+2. **Relationship replication to Iceberg** - Optionally write relationships as an Iceberg table for analytics queries
+3. **Fuzzy relationships** - Vector similarity index for `~>` and `<~>` operators
+4. **Cross-backend joins** - Query relationships across different backends
+5. **Incremental materialized views** - Cached graph patterns updated on change

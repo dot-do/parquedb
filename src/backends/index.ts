@@ -73,6 +73,15 @@ export {
 } from './iceberg'
 
 // =============================================================================
+// Delta Lake Backend
+// =============================================================================
+
+export {
+  DeltaBackend,
+  createDeltaBackend,
+} from './delta'
+
+// =============================================================================
 // Shared Parquet Utilities
 // =============================================================================
 
@@ -98,6 +107,7 @@ export {
 
 import type { BackendConfig, EntityBackend } from './types'
 import { IcebergBackend } from './iceberg'
+import { DeltaBackend } from './delta'
 
 /**
  * Create an entity backend from configuration
@@ -110,13 +120,13 @@ export async function createBackend(config: BackendConfig): Promise<EntityBacken
       backend = new IcebergBackend(config)
       break
 
+    case 'delta':
+      backend = new DeltaBackend(config)
+      break
+
     case 'native':
       // TODO: Implement NativeBackend
       throw new Error('Native backend not yet implemented')
-
-    case 'delta':
-      // TODO: Implement DeltaLakeBackend
-      throw new Error('Delta Lake backend not yet implemented')
 
     default:
       throw new Error(`Unknown backend type: ${(config as BackendConfig).type}`)
