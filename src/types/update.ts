@@ -661,3 +661,133 @@ export function getUpdateOperatorTypes(update: UpdateInput): string[] {
  * ```
  */
 export type Update<T extends EntityData = EntityData> = UpdateInput<T>
+
+// =============================================================================
+// Type Guard Functions
+// =============================================================================
+
+/**
+ * Type guard for $set operator
+ */
+export function is$Set(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$set'>> {
+  return '$set' in update && update.$set !== undefined
+}
+
+/**
+ * Type guard for $unset operator
+ */
+export function is$Unset(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$unset'>> {
+  return '$unset' in update && update.$unset !== undefined
+}
+
+/**
+ * Type guard for $rename operator
+ */
+export function is$Rename(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$rename'>> {
+  return '$rename' in update && update.$rename !== undefined
+}
+
+/**
+ * Type guard for $setOnInsert operator
+ */
+export function is$SetOnInsert(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$setOnInsert'>> {
+  return '$setOnInsert' in update && update.$setOnInsert !== undefined
+}
+
+/**
+ * Type guard for $inc operator
+ */
+export function is$Inc(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$inc'>> {
+  return '$inc' in update && update.$inc !== undefined
+}
+
+/**
+ * Type guard for $mul operator
+ */
+export function is$Mul(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$mul'>> {
+  return '$mul' in update && update.$mul !== undefined
+}
+
+/**
+ * Type guard for $min operator
+ */
+export function is$Min(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$min'>> {
+  return '$min' in update && update.$min !== undefined
+}
+
+/**
+ * Type guard for $max operator
+ */
+export function is$Max(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$max'>> {
+  return '$max' in update && update.$max !== undefined
+}
+
+/**
+ * Type guard for $push operator
+ */
+export function is$Push(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$push'>> {
+  return '$push' in update && update.$push !== undefined
+}
+
+/**
+ * Type guard for $pull operator
+ */
+export function is$Pull(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$pull'>> {
+  return '$pull' in update && update.$pull !== undefined
+}
+
+/**
+ * Type guard for $pullAll operator
+ */
+export function is$PullAll(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$pullAll'>> {
+  return '$pullAll' in update && update.$pullAll !== undefined
+}
+
+/**
+ * Type guard for $addToSet operator
+ */
+export function is$AddToSet(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$addToSet'>> {
+  return '$addToSet' in update && update.$addToSet !== undefined
+}
+
+/**
+ * Type guard for $pop operator
+ */
+export function is$Pop(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$pop'>> {
+  return '$pop' in update && update.$pop !== undefined
+}
+
+/**
+ * Type guard for $currentDate operator
+ */
+export function is$CurrentDate(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$currentDate'>> {
+  return '$currentDate' in update && update.$currentDate !== undefined
+}
+
+/**
+ * Type guard for $link operator
+ */
+export function is$Link(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$link'>> {
+  return '$link' in update && update.$link !== undefined
+}
+
+/**
+ * Type guard for $unlink operator
+ */
+export function is$Unlink(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$unlink'>> {
+  return '$unlink' in update && update.$unlink !== undefined
+}
+
+/**
+ * Type guard for $bit operator
+ */
+export function is$Bit(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$bit'>> {
+  return '$bit' in update && update.$bit !== undefined
+}
+
+/**
+ * Type guard for $embed operator
+ */
+export function is$Embed(update: UpdateInput): update is UpdateInput & Required<Pick<UpdateInput, '$embed'>> {
+  return '$embed' in update && update.$embed !== undefined
+}
