@@ -16,32 +16,70 @@ export interface ParsedCommand {
   readonly flags: Readonly<Record<string, boolean>>
 }
 
+export interface RepoIdentifier {
+  readonly owner: string
+  readonly repo: string
+}
+
+export interface CommandConfig {
+  readonly show_samples?: boolean
+  readonly max_entities?: number
+}
+
 export interface CommandContext {
-  issueNumber: number
-  repo: { owner: string; repo: string }
-  commentId: number
-  prBranch?: string
-  baseBranch?: string
-  headBranch?: string
-  checkRunId?: number
-  commentAuthor?: string
-  config?: {
-    show_samples?: boolean
-    max_entities?: number
-  }
+  readonly issueNumber: number
+  readonly repo: RepoIdentifier
+  readonly commentId: number
+  readonly prBranch?: string
+  readonly baseBranch?: string
+  readonly headBranch?: string
+  readonly checkRunId?: number
+  readonly commentAuthor?: string
+  readonly config?: CommandConfig
+}
+
+export interface BranchCreateOpts {
+  readonly name: string
+  readonly from: string
+  readonly overwrite?: boolean
+}
+
+export interface BranchCreateResult {
+  readonly name: string
+  readonly url: string
+}
+
+export interface DiffOpts {
+  readonly base: string
+  readonly head: string
+  readonly collection?: string
+}
+
+export interface ResolveOpts {
+  readonly entities: readonly string[]
+  readonly strategy: string
+}
+
+export interface SchemaDiffOpts {
+  readonly base: string
+  readonly head: string
+}
+
+export interface BranchClient {
+  readonly create: (opts: BranchCreateOpts) => Promise<BranchCreateResult>
+  readonly exists: (name: string) => Promise<boolean>
+}
+
+export interface SchemaClient {
+  readonly diff: (opts: SchemaDiffOpts) => Promise<SchemaDiffResult>
 }
 
 export interface ParqueDBClient {
-  branch: {
-    create: (opts: { name: string; from: string; overwrite?: boolean }) => Promise<{ name: string; url: string }>
-    exists: (name: string) => Promise<boolean>
-  }
-  diff: (opts: { base: string; head: string; collection?: string }) => Promise<DiffResult>
-  merge: (opts: unknown) => Promise<unknown>
-  resolve: (opts: { entities: string[]; strategy: string }) => Promise<ResolveResult>
-  schema: {
-    diff: (opts: { base: string; head: string }) => Promise<SchemaDiffResult>
-  }
+  readonly branch: BranchClient
+  readonly diff: (opts: DiffOpts) => Promise<DiffResult>
+  readonly merge: (opts: unknown) => Promise<unknown>
+  readonly resolve: (opts: ResolveOpts) => Promise<ResolveResult>
+  readonly schema: SchemaClient
 }
 
 export interface DiffResult {
