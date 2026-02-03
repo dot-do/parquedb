@@ -99,8 +99,8 @@ function createMockStorage(options?: {
 
     async write(path: string, data: Uint8Array): Promise<WriteResult> {
       if (options?.writeDelay) {
-        // Use fake timer advancement when available
-        await vi.advanceTimersByTimeAsync(options.writeDelay)
+        // Use real delay for backpressure tests
+        await new Promise((resolve) => setTimeout(resolve, options.writeDelay))
       }
 
       if (options?.failOnWrite && failuresRemaining > 0) {
@@ -490,103 +490,80 @@ describe('StreamProcessor', () => {
 
   describe('Error Handling', () => {
     test('retries failed writes', async () => {
-      vi.useFakeTimers()
-      try {
-        const errorHandler = vi.fn()
-        processor = createStreamProcessor({
-          name: 'test',
-          storage: createMockStorage({ failOnWrite: true, failCount: 2 }),
-          outputPath: '_test/output',
-          schema: TEST_SCHEMA,
-          batchSize: 1,
-          retry: {
-            maxAttempts: 3,
-            initialDelayMs: 10,
-            maxDelayMs: 50,
-          },
-          onError: errorHandler,
-        })
+      // Use real timers with very short delays for retry tests
+      const errorHandler = vi.fn()
+      processor = createStreamProcessor({
+        name: 'test',
+        storage: createMockStorage({ failOnWrite: true, failCount: 2 }),
+        outputPath: '_test/output',
+        schema: TEST_SCHEMA,
+        batchSize: 1,
+        retry: {
+          maxAttempts: 3,
+          initialDelayMs: 1, // Very short delay for tests
+          maxDelayMs: 5,
+        },
+        onError: errorHandler,
+      })
 
-        await processor.start()
-        await processor.push(createRecord(1))
-        await processor.flush()
+      await processor.start()
+      await processor.push(createRecord(1))
+      await processor.flush()
 
-        // Advance timers to allow retries to complete
-        await vi.advanceTimersByTimeAsync(200)
-
-        const stats = processor.getStats()
-        // Should succeed after retries
-        expect(stats.recordsWritten).toBe(1)
-      } finally {
-        vi.useRealTimers()
-      }
+      const stats = processor.getStats()
+      // Should succeed after retries
+      expect(stats.recordsWritten).toBe(1)
     })
 
     test('reports failures after max retries', async () => {
-      vi.useFakeTimers()
-      try {
-        const errorHandler = vi.fn()
-        processor = createStreamProcessor({
-          name: 'test',
-          storage: createMockStorage({ failOnWrite: true, failCount: 10 }),
-          outputPath: '_test/output',
-          schema: TEST_SCHEMA,
-          batchSize: 1,
-          retry: {
-            maxAttempts: 2,
-            initialDelayMs: 5,
-            maxDelayMs: 10,
-          },
-          onError: errorHandler,
-        })
+      const errorHandler = vi.fn()
+      processor = createStreamProcessor({
+        name: 'test',
+        storage: createMockStorage({ failOnWrite: true, failCount: 10 }),
+        outputPath: '_test/output',
+        schema: TEST_SCHEMA,
+        batchSize: 1,
+        retry: {
+          maxAttempts: 2,
+          initialDelayMs: 1,
+          maxDelayMs: 5,
+        },
+        onError: errorHandler,
+      })
 
-        await processor.start()
-        await processor.push(createRecord(1))
-        await processor.flush()
+      await processor.start()
+      await processor.push(createRecord(1))
+      await processor.flush()
 
-        // Advance timers to allow retries to complete
-        await vi.advanceTimersByTimeAsync(100)
-
-        const stats = processor.getStats()
-        expect(stats.failedBatches).toBeGreaterThan(0)
-        expect(errorHandler).toHaveBeenCalled()
-      } finally {
-        vi.useRealTimers()
-      }
+      const stats = processor.getStats()
+      expect(stats.failedBatches).toBeGreaterThan(0)
+      expect(errorHandler).toHaveBeenCalled()
     })
 
     test('emits error events with context', async () => {
-      vi.useFakeTimers()
-      try {
-        const errorHandler = vi.fn()
-        processor = createStreamProcessor({
-          name: 'test',
-          storage: createMockStorage({ failOnWrite: true, failCount: 10 }),
-          outputPath: '_test/output',
-          schema: TEST_SCHEMA,
-          batchSize: 1,
-          retry: {
-            maxAttempts: 1,
-            initialDelayMs: 1,
-          },
-          onError: errorHandler,
-        })
+      const errorHandler = vi.fn()
+      processor = createStreamProcessor({
+        name: 'test',
+        storage: createMockStorage({ failOnWrite: true, failCount: 10 }),
+        outputPath: '_test/output',
+        schema: TEST_SCHEMA,
+        batchSize: 1,
+        retry: {
+          maxAttempts: 1,
+          initialDelayMs: 1,
+        },
+        onError: errorHandler,
+      })
 
-        await processor.start()
-        await processor.push(createRecord(1))
-        await processor.flush()
+      await processor.start()
+      await processor.push(createRecord(1))
+      await processor.flush()
 
-        // Advance timers to allow error handling
-        await vi.advanceTimersByTimeAsync(50)
-
-        expect(errorHandler).toHaveBeenCalled()
-        const [error, context] = errorHandler.mock.calls[0]!
-        expect(error).toBeInstanceOf(Error)
-        expect(context.phase).toBe('write')
-        expect(context.records).toHaveLength(1)
-      } finally {
-        vi.useRealTimers()
-      }
+      expect(errorHandler).toHaveBeenCalled()
+      const [error, context] = errorHandler.mock.calls[0]!
+      expect(error).toBeInstanceOf(Error)
+      expect(context.phase).toBe('write')
+      expect(context.records).toHaveLength(1)
     })
 
     test('queues failed batches in dead-letter queue by default', async () => {
@@ -936,35 +913,28 @@ describe('StreamProcessor', () => {
     })
 
     test('calculates average batch duration', async () => {
-      vi.useFakeTimers()
-      try {
-        // Use a storage with slight delay to ensure measurable duration
-        processor = createStreamProcessor({
-          name: 'test',
-          storage: createMockStorage({ writeDelay: 5 }),
-          outputPath: '_test/output',
-          schema: TEST_SCHEMA,
-          batchSize: 1,
-          flushIntervalMs: 10000,
-        })
+      // Use a storage with slight delay to ensure measurable duration
+      processor = createStreamProcessor({
+        name: 'test',
+        storage: createMockStorage({ writeDelay: 5 }),
+        outputPath: '_test/output',
+        schema: TEST_SCHEMA,
+        batchSize: 1,
+        flushIntervalMs: 10000,
+      })
 
-        await processor.start()
+      await processor.start()
 
-        for (let i = 0; i < 5; i++) {
-          await processor.push(createRecord(i))
-          // Wait for the batch to complete using fake timers
-          await vi.advanceTimersByTimeAsync(20)
-        }
-
-        await processor.stop()
-
-        const stats = processor.getStats()
-        // With write delay, average should be measurable
-        expect(stats.avgBatchDurationMs).toBeGreaterThanOrEqual(0)
-        expect(stats.batchesWritten).toBe(5)
-      } finally {
-        vi.useRealTimers()
+      for (let i = 0; i < 5; i++) {
+        await processor.push(createRecord(i))
       }
+
+      await processor.stop()
+
+      const stats = processor.getStats()
+      // With write delay, average should be measurable
+      expect(stats.avgBatchDurationMs).toBeGreaterThanOrEqual(0)
+      expect(stats.batchesWritten).toBe(5)
     })
   })
 
