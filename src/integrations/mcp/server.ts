@@ -28,6 +28,21 @@ import type {
   ToolResult,
   CollectionInfo,
 } from './types'
+import {
+  ValidationError,
+  validateCollectionName,
+  validateEntityId,
+  validateFilter,
+  validateUpdate,
+  validateEntityData,
+  validatePipeline,
+  validateLimit,
+  validateSkip,
+  validateSort,
+  validateProject,
+  validateBoolean,
+  validateSearchQuery,
+} from './validation'
 
 // Default version from package.json context
 const DEFAULT_VERSION = '0.1.0'
@@ -145,12 +160,20 @@ export function createParqueDBMCPServer(
       },
       async (args) => {
         try {
-          const collection = db.collection(args.collection)
-          const result = await collection.find(args.filter, {
-            limit: args.limit,
-            skip: args.skip,
-            sort: args.sort as Record<string, 1 | -1>,
-            project: args.project as Record<string, 0 | 1>,
+          // Validate inputs
+          const collectionName = validateCollectionName(args.collection)
+          const filter = validateFilter(args.filter)
+          const limit = validateLimit(args.limit) ?? 20
+          const skip = validateSkip(args.skip)
+          const sort = validateSort(args.sort)
+          const project = validateProject(args.project)
+
+          const collection = db.collection(collectionName)
+          const result = await collection.find(filter, {
+            limit,
+            skip,
+            sort,
+            project,
           }) as PaginatedResult<Entity>
 
           return {
@@ -167,6 +190,7 @@ export function createParqueDBMCPServer(
             }],
           }
         } catch (error) {
+          const isValidationError = error instanceof ValidationError
           return {
             content: [{
               type: 'text',
@@ -196,9 +220,14 @@ export function createParqueDBMCPServer(
       },
       async (args) => {
         try {
-          const collection = db.collection(args.collection)
-          const entity = await collection.get(args.id, {
-            project: args.project as Record<string, 0 | 1>,
+          // Validate inputs
+          const collectionName = validateCollectionName(args.collection)
+          const entityId = validateEntityId(args.id)
+          const project = validateProject(args.project)
+
+          const collection = db.collection(collectionName)
+          const entity = await collection.get(entityId, {
+            project,
           })
 
           return {
@@ -239,12 +268,16 @@ export function createParqueDBMCPServer(
       },
       async (args) => {
         try {
-          const collection = db.collection(args.collection)
+          // Validate inputs
+          const collectionName = validateCollectionName(args.collection)
+          const entityData = validateEntityData(args.data)
+
+          const collection = db.collection(collectionName)
 
           // Ensure $type is set based on collection if not provided
           const data = {
-            ...args.data,
-            $type: args.data.$type ?? capitalizeFirst(singularize(args.collection)),
+            ...entityData,
+            $type: entityData.$type ?? capitalizeFirst(singularize(collectionName)),
           }
 
           const entity = await collection.create(data as Parameters<typeof collection.create>[0])
@@ -288,8 +321,13 @@ export function createParqueDBMCPServer(
       },
       async (args) => {
         try {
-          const collection = db.collection(args.collection)
-          const result = await collection.update(args.id, args.update)
+          // Validate inputs
+          const collectionName = validateCollectionName(args.collection)
+          const entityId = validateEntityId(args.id)
+          const update = validateUpdate(args.update)
+
+          const collection = db.collection(collectionName)
+          const result = await collection.update(entityId, update)
 
           return {
             content: [{
@@ -330,8 +368,13 @@ export function createParqueDBMCPServer(
       },
       async (args) => {
         try {
-          const collection = db.collection(args.collection)
-          const result = await collection.delete(args.id, { hard: args.hard })
+          // Validate inputs
+          const collectionName = validateCollectionName(args.collection)
+          const entityId = validateEntityId(args.id)
+          const hard = validateBoolean(args.hard, 'hard', false)
+
+          const collection = db.collection(collectionName)
+          const result = await collection.delete(entityId, { hard })
 
           return {
             content: [{
@@ -371,9 +414,13 @@ export function createParqueDBMCPServer(
       },
       async (args) => {
         try {
-          // Use find with limit 0 to get total count from PaginatedResult
-          const collection = db.collection(args.collection)
-          const result = await collection.find(args.filter, { limit: 1 }) as PaginatedResult<Entity>
+          // Validate inputs
+          const collectionName = validateCollectionName(args.collection)
+          const filter = validateFilter(args.filter)
+
+          // Use find with limit 1 to get total count from PaginatedResult
+          const collection = db.collection(collectionName)
+          const result = await collection.find(filter, { limit: 1 }) as PaginatedResult<Entity>
           const count = result.total ?? result.items.length
 
           return {
@@ -416,25 +463,30 @@ export function createParqueDBMCPServer(
       },
       async (args) => {
         try {
+          // Validate inputs
+          const collectionName = validateCollectionName(args.collection)
+          const pipeline = validatePipeline(args.pipeline)
+
           // Parse pipeline stages and convert to find options
           let filter: Record<string, unknown> | undefined
           let project: Record<string, 0 | 1> | undefined
           let limit: number | undefined
           let skip: number | undefined
 
-          for (const stage of args.pipeline) {
+          for (const stage of pipeline) {
             if ('$match' in stage && typeof stage.$match === 'object') {
+              // Filter already validated by validatePipeline
               filter = stage.$match as Record<string, unknown>
             } else if ('$project' in stage && typeof stage.$project === 'object') {
-              project = stage.$project as Record<string, 0 | 1>
+              project = validateProject(stage.$project)
             } else if ('$limit' in stage && typeof stage.$limit === 'number') {
-              limit = stage.$limit
+              limit = validateLimit(stage.$limit)
             } else if ('$skip' in stage && typeof stage.$skip === 'number') {
-              skip = stage.$skip
+              skip = validateSkip(stage.$skip)
             }
           }
 
-          const collection = db.collection(args.collection)
+          const collection = db.collection(collectionName)
           const result = await collection.find(filter, {
             limit,
             skip,
@@ -532,7 +584,13 @@ export function createParqueDBMCPServer(
       },
       async (args) => {
         try {
-          const collection = db.collection(args.collection)
+          // Validate inputs
+          const collectionName = validateCollectionName(args.collection)
+          const query = validateSearchQuery(args.query)
+          const limit = validateLimit(args.limit) ?? 10
+          const filter = validateFilter(args.filter)
+
+          const collection = db.collection(collectionName)
 
           // Check if semantic search is available
           if (typeof (collection as unknown as { semanticSearch?: unknown }).semanticSearch !== 'function') {
@@ -550,9 +608,9 @@ export function createParqueDBMCPServer(
 
           // Call semantic search if available
           const semanticSearchFn = (collection as unknown as { semanticSearch: (query: string, options?: { limit?: number; filter?: unknown }) => Promise<unknown[]> }).semanticSearch
-          const results = await semanticSearchFn(args.query, {
-            limit: args.limit,
-            filter: args.filter,
+          const results = await semanticSearchFn(query, {
+            limit,
+            filter,
           })
 
           return {

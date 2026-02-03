@@ -27,6 +27,112 @@ export function parseEntityId(entityId: EntityId): { ns: Namespace; id: Id } {
 }
 
 // =============================================================================
+// Type Guards and Validation
+// =============================================================================
+
+/**
+ * Check if a string is a valid EntityId format (contains at least one '/')
+ */
+export function isValidEntityId(value: unknown): value is EntityId {
+  return typeof value === 'string' && value.includes('/') && value.indexOf('/') > 0
+}
+
+/**
+ * Check if a string is a valid Namespace (non-empty string without '/')
+ */
+export function isValidNamespace(value: unknown): value is Namespace {
+  return typeof value === 'string' && value.length > 0 && !value.includes('/')
+}
+
+/**
+ * Check if a string is a valid Id (non-empty string)
+ */
+export function isValidId(value: unknown): value is Id {
+  return typeof value === 'string' && value.length > 0
+}
+
+// =============================================================================
+// Type-Safe Cast Functions
+// =============================================================================
+
+/**
+ * Cast a string to EntityId with validation.
+ * Use when the string format is unknown and needs validation.
+ *
+ * @throws Error if the value is not a valid EntityId format
+ */
+export function toEntityId(value: string): EntityId {
+  if (!isValidEntityId(value)) {
+    throw new Error(`Invalid EntityId: "${value}" (must be in "ns/id" format)`)
+  }
+  return value
+}
+
+/**
+ * Cast a string to EntityId without throwing.
+ * Returns null if the value is not a valid EntityId format.
+ */
+export function toEntityIdOrNull(value: unknown): EntityId | null {
+  return isValidEntityId(value) ? value : null
+}
+
+/**
+ * Cast a string to Namespace with validation.
+ *
+ * @throws Error if the value is not a valid Namespace
+ */
+export function toNamespace(value: string): Namespace {
+  if (!isValidNamespace(value)) {
+    throw new Error(`Invalid Namespace: "${value}" (must be non-empty without '/')`)
+  }
+  return value as Namespace
+}
+
+/**
+ * Cast a string to Id with validation.
+ *
+ * @throws Error if the value is not a valid Id
+ */
+export function toId(value: string): Id {
+  if (!isValidId(value)) {
+    throw new Error(`Invalid Id: "${value}" (must be non-empty)`)
+  }
+  return value as Id
+}
+
+/**
+ * Cast a string to EntityId, assuming it's already validated.
+ * Use when the value comes from a trusted source (database, validated input).
+ *
+ * IMPORTANT: Only use this when you're certain the value is valid.
+ * Prefer toEntityId() for user input or untrusted sources.
+ */
+export function asEntityId(value: string): EntityId {
+  return value as EntityId
+}
+
+/**
+ * Cast a string to Namespace, assuming it's already validated.
+ * Use when the value comes from a trusted source.
+ */
+export function asNamespace(value: string): Namespace {
+  return value as Namespace
+}
+
+/**
+ * Cast a string to Id, assuming it's already validated.
+ * Use when the value comes from a trusted source.
+ */
+export function asId(value: string): Id {
+  return value as Id
+}
+
+/**
+ * Default system actor EntityId for automated operations.
+ */
+export const SYSTEM_ACTOR: EntityId = 'system/parquedb' as EntityId
+
+// =============================================================================
 // Audit Fields
 // =============================================================================
 
@@ -65,6 +171,14 @@ export interface RelSet extends RelLink {
   $next?: string
 }
 
+/**
+ * Match mode for relationship matching
+ *
+ * - 'exact': Precise match (e.g., user explicitly linked entities)
+ * - 'fuzzy': Approximate match (e.g., found via text similarity, entity resolution)
+ */
+export type MatchMode = 'exact' | 'fuzzy'
+
 /** Relationship definition in rels.parquet */
 export interface Relationship {
   /** Source namespace */
@@ -90,6 +204,29 @@ export interface Relationship {
   /** Target entity display name */
   toName: string
 
+  // ===========================================================================
+  // Shredded Fields (top-level columns for efficient querying)
+  // ===========================================================================
+
+  /**
+   * How the relationship was matched
+   *
+   * SHREDDED: Stored as top-level Parquet column for predicate pushdown.
+   */
+  matchMode?: MatchMode
+
+  /**
+   * Similarity score for fuzzy matches (0.0 to 1.0)
+   *
+   * SHREDDED: Stored as top-level Parquet column for predicate pushdown.
+   * Only meaningful when matchMode is 'fuzzy'.
+   */
+  similarity?: number
+
+  // ===========================================================================
+  // Audit Fields
+  // ===========================================================================
+
   /** When the relationship was created */
   createdAt: Date
   /** Who created the relationship */
@@ -101,7 +238,7 @@ export interface Relationship {
   /** Optimistic concurrency version */
   version: number
 
-  /** Optional edge properties (Variant) */
+  /** Optional edge properties (Variant) - remaining metadata after shredding */
   data?: Record<string, unknown>
 }
 

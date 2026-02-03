@@ -9,7 +9,7 @@
 
 import type { ParqueDB, Collection } from '../../ParqueDB'
 import type { Entity, EntityId, Filter, UpdateInput } from '../../types'
-import { RelationshipBatchLoader, type BatchLoaderOptions } from '../../relationships/batch-loader'
+import { RelationshipBatchLoader, type BatchLoaderOptions, type BatchLoaderDB } from '../../relationships/batch-loader'
 
 // =============================================================================
 // Types from ai-database (replicated to avoid circular dependency)
@@ -404,7 +404,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
     // Initialize batch loader if enabled (default: true)
     const enableBatchLoader = options?.enableBatchLoader ?? true
     if (enableBatchLoader) {
-      this.batchLoader = new RelationshipBatchLoader(db as any, options?.batchLoaderOptions)
+      this.batchLoader = new RelationshipBatchLoader(db as BatchLoaderDB, options?.batchLoaderOptions)
     }
   }
 
@@ -958,12 +958,11 @@ export class ParqueDBAdapter implements DBProviderExtended {
   ): Promise<DBAction> {
     const actionsNamespace = 'sysactions'
 
-    let actionData: DBAction
+    let actionFields: Omit<DBAction, 'id'>
 
     if ('type' in options) {
       // Legacy format
-      actionData = {
-        id: generateId(),
+      actionFields = {
         actor: 'system',
         action: options.type,
         act: this.conjugateVerb(options.type).act,
@@ -976,8 +975,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
     } else {
       // New format
       const verb = this.conjugateVerb(options.action)
-      actionData = {
-        id: generateId(),
+      actionFields = {
         actor: options.actor,
         action: options.action,
         act: verb.act,
@@ -991,13 +989,14 @@ export class ParqueDBAdapter implements DBProviderExtended {
       }
     }
 
-    await this.db.create(actionsNamespace, {
+    const entity = await this.db.create(actionsNamespace, {
       $type: 'Action',
-      name: actionData.action,
-      ...actionData,
+      name: actionFields.action,
+      ...actionFields,
     })
 
-    return actionData
+    // Return the action with the entity's $id
+    return this.entityToAction(entity)
   }
 
   /**
@@ -1005,7 +1004,9 @@ export class ParqueDBAdapter implements DBProviderExtended {
    */
   async getAction(id: string): Promise<DBAction | null> {
     const actionsNamespace = 'sysactions'
-    const entity = await this.db.get(actionsNamespace, id)
+    // ID might be full (sysactions/xxx) or just the local part
+    const localId = stripNamespace(id)
+    const entity = await this.db.get(actionsNamespace, localId)
 
     if (!entity) return null
 
@@ -1020,6 +1021,8 @@ export class ParqueDBAdapter implements DBProviderExtended {
     updates: Partial<Pick<DBAction, 'status' | 'progress' | 'result' | 'error'>>
   ): Promise<DBAction> {
     const actionsNamespace = 'sysactions'
+    // ID might be full (sysactions/xxx) or just the local part
+    const localId = stripNamespace(id)
 
     const updateData: Record<string, unknown> = { ...updates }
 
@@ -1031,7 +1034,7 @@ export class ParqueDBAdapter implements DBProviderExtended {
       updateData.completedAt = new Date()
     }
 
-    const entity = await this.db.update(actionsNamespace, id, { $set: updateData })
+    const entity = await this.db.update(actionsNamespace, localId, { $set: updateData })
 
     if (!entity) {
       throw new Error(`Action not found: ${id}`)

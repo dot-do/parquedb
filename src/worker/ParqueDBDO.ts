@@ -133,7 +133,19 @@ export interface DODeleteOptions {
 export interface DOLinkOptions {
   /** Actor performing the operation */
   actor?: string
-  /** Edge data */
+  /**
+   * How the relationship was matched (SHREDDED)
+   * - 'exact': Precise match (user explicitly linked)
+   * - 'fuzzy': Approximate match (entity resolution, text similarity)
+   */
+  matchMode?: 'exact' | 'fuzzy'
+  /**
+   * Similarity score for fuzzy matches (SHREDDED)
+   * Range: 0.0 to 1.0
+   * Only meaningful when matchMode is 'fuzzy'
+   */
+  similarity?: number
+  /** Edge data (remaining metadata in Variant) */
   data?: Record<string, unknown>
 }
 
@@ -168,6 +180,10 @@ interface StoredRelationship {
   created_by: string
   deleted_at: string | null
   deleted_by: string | null
+  // Shredded fields (top-level columns for efficient querying)
+  match_mode: string | null  // 'exact' | 'fuzzy'
+  similarity: number | null  // 0.0 to 1.0
+  // Remaining metadata in Variant
   data: string | null
 }
 
@@ -293,9 +309,24 @@ export class ParqueDBDO extends DurableObject<Env> {
         created_by TEXT NOT NULL,
         deleted_at TEXT,
         deleted_by TEXT,
+        -- Shredded fields (top-level columns for efficient querying)
+        match_mode TEXT,           -- 'exact' or 'fuzzy'
+        similarity REAL,           -- 0.0 to 1.0 for fuzzy matches
+        -- Remaining metadata in Variant
         data TEXT,
         PRIMARY KEY (from_ns, from_id, predicate, to_ns, to_id)
       )
+    `)
+
+    // Add indexes for shredded fields to enable efficient filtering
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_relationships_match_mode
+      ON relationships(match_mode) WHERE match_mode IS NOT NULL
+    `)
+
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_relationships_similarity
+      ON relationships(similarity) WHERE similarity IS NOT NULL
     `)
 
     // NEW: events_wal table for WAL batching with namespace-based counters
@@ -1091,32 +1122,52 @@ export class ParqueDBDO extends DurableObject<Env> {
     }
 
     const dataJson = options.data ? JSON.stringify(options.data) : null
+    const matchMode = options.matchMode ?? null
+    const similarity = options.similarity ?? null
+
+    // Validate similarity range
+    if (similarity !== null && (similarity < 0 || similarity > 1)) {
+      throw new Error(`Similarity must be between 0 and 1, got ${similarity}`)
+    }
+
+    // Validate matchMode/similarity consistency
+    if (matchMode === 'exact' && similarity !== null && similarity !== 1.0) {
+      throw new Error(`Exact match mode should have similarity of 1.0 or null, got ${similarity}`)
+    }
 
     if (existing.length > 0) {
       // Undelete and update
       this.sql.exec(
         `UPDATE relationships
-         SET deleted_at = NULL, deleted_by = NULL, version = version + 1, data = ?
+         SET deleted_at = NULL, deleted_by = NULL, version = version + 1,
+             match_mode = ?, similarity = ?, data = ?
          WHERE from_ns = ? AND from_id = ? AND predicate = ? AND to_ns = ? AND to_id = ?`,
-        dataJson, fromNs, fromEntityId, predicate, toNs, toEntityId
+        matchMode, similarity, dataJson, fromNs, fromEntityId, predicate, toNs, toEntityId
       )
     } else {
       // Insert new relationship
       this.sql.exec(
         `INSERT INTO relationships
-         (from_ns, from_id, predicate, to_ns, to_id, reverse, version, created_at, created_by, data)
-         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
-        fromNs, fromEntityId, predicate, toNs, toEntityId, reverse, now, actor, dataJson
+         (from_ns, from_id, predicate, to_ns, to_id, reverse, version, created_at, created_by, match_mode, similarity, data)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+        fromNs, fromEntityId, predicate, toNs, toEntityId, reverse, now, actor, matchMode, similarity, dataJson
       )
     }
 
     // Phase 4: Append relationship event to rels_wal for batching
+    // Include shredded fields in the event for full reconstruction
     await this.appendRelEvent(fromNs, {
       ts: Date.now(),
       op: 'CREATE',
       target: relTarget(entityTarget(fromNs, fromEntityId), predicate, entityTarget(toNs, toEntityId)),
       before: undefined,
-      after: { predicate, to: toId, data: options.data } as Variant,
+      after: {
+        predicate,
+        to: toId,
+        matchMode: options.matchMode,
+        similarity: options.similarity,
+        data: options.data,
+      } as Variant,
       actor: actor as string,
     })
 
@@ -2303,6 +2354,10 @@ export class ParqueDBDO extends DurableObject<Env> {
       toId: stored.to_id as Id,
       toType: '', // Would need to look up from entity
       toName: '', // Would need to look up from entity
+      // Shredded fields
+      matchMode: stored.match_mode as Relationship['matchMode'],
+      similarity: stored.similarity ?? undefined,
+      // Audit fields
       createdAt: new Date(stored.created_at),
       createdBy: stored.created_by as EntityId,
       deletedAt: stored.deleted_at ? new Date(stored.deleted_at) : undefined,

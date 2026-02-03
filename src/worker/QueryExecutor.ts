@@ -1056,7 +1056,12 @@ export class QueryExecutor {
   async getRelationships(
     dataset: string,
     fromId: string,
-    predicate?: string
+    predicate?: string,
+    options?: {
+      matchMode?: 'exact' | 'fuzzy'
+      minSimilarity?: number
+      maxSimilarity?: number
+    }
   ): Promise<Array<{
     to_ns: string
     to_id: string
@@ -1065,14 +1070,21 @@ export class QueryExecutor {
     predicate: string
     importance: number | null
     level: number | null
+    // Shredded fields for efficient querying
+    matchMode: 'exact' | 'fuzzy' | null
+    similarity: number | null
   }>> {
     if (!this.parquetReader || !this.storageAdapter) {
       return []
     }
 
-    // Optimized format: from_id (string) + data (JSON)
+    // Optimized format with shredded fields as top-level columns
     type RelRow = {
       from_id: string
+      // Shredded fields (top-level columns for efficient predicate pushdown)
+      match_mode?: string | null   // 'exact' | 'fuzzy'
+      similarity?: number | null   // 0.0 to 1.0
+      // Remaining data in Variant/JSON
       data: {
         to: string      // Target $id
         ns: string      // Target namespace
@@ -1092,7 +1104,12 @@ export class QueryExecutor {
       let allRels = this.dataCache.get(path) as RelRow[] | undefined
       if (!allRels) {
         // Read raw rows and parse JSON data column
-        type RawRelRow = { from_id: string; data: string | RelRow['data'] }
+        type RawRelRow = {
+          from_id: string
+          match_mode?: string | null
+          similarity?: number | null
+          data: string | RelRow['data']
+        }
         const rawRels = await this.parquetReader.read<RawRelRow>(path)
 
         // Parse JSON data column if needed
@@ -1101,6 +1118,8 @@ export class QueryExecutor {
             const parsed = tryParseJson<RelRow['data']>(row.data)
             return {
               from_id: row.from_id,
+              match_mode: row.match_mode,
+              similarity: row.similarity,
               data: parsed ?? { to: '', ns: '', name: '', pred: '', rev: '' },
             }
           }
@@ -1110,12 +1129,26 @@ export class QueryExecutor {
         this.dataCache.set(path, allRels as unknown[])
       }
 
-      // Filter by from_id and optionally predicate, then map to expected format
+      // Filter by from_id, predicate, and shredded field options
       return allRels!
-        .filter(rel =>
-          rel.from_id === fromId &&
-          (!predicate || rel.data.pred === predicate)
-        )
+        .filter(rel => {
+          // Basic filters
+          if (rel.from_id !== fromId) return false
+          if (predicate && rel.data.pred !== predicate) return false
+
+          // Shredded field filters (support predicate pushdown in future)
+          if (options?.matchMode && rel.match_mode !== options.matchMode) return false
+          if (options?.minSimilarity !== undefined) {
+            const sim = rel.similarity ?? 0
+            if (sim < options.minSimilarity) return false
+          }
+          if (options?.maxSimilarity !== undefined) {
+            const sim = rel.similarity ?? 1
+            if (sim > options.maxSimilarity) return false
+          }
+
+          return true
+        })
         .map(rel => ({
           to_ns: rel.data.ns,
           to_id: rel.data.to.split('/').pop() || rel.data.to,
@@ -1124,6 +1157,9 @@ export class QueryExecutor {
           predicate: rel.data.pred,
           importance: rel.data.importance ?? null,
           level: rel.data.level ?? null,
+          // Shredded fields
+          matchMode: (rel.match_mode as 'exact' | 'fuzzy') ?? null,
+          similarity: rel.similarity ?? null,
         }))
     } catch (error: unknown) {
       // Relationship data may not exist or may be malformed - return empty gracefully

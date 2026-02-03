@@ -38,6 +38,7 @@
  */
 
 export { createParqueDBMCPServer } from './server'
+export { ValidationError } from './validation'
 
 export type {
   ParqueDBMCPOptions,

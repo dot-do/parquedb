@@ -309,17 +309,21 @@ export class RelationshipBatchLoader {
       this.timer = null
     }
 
-    // Get all pending batches
-    const batches = Array.from(this.pending.entries())
-    this.pending.clear()
+    // Atomically swap out the pending collections to prevent race conditions.
+    // New requests added during flush processing will go into the new collections
+    // and be batched in a subsequent flush.
+    const batches = this.pending
+    this.pending = new Map()
     this.pendingCount = 0
 
-    // Clear promise cache
-    this.promises.clear()
+    // Clear promise cache so new requests get fresh promises
+    this.promises = new Map()
 
     // Process all batches in parallel
     await Promise.all(
-      batches.map(([bucketKey, requests]) => this.processBatch(bucketKey, requests))
+      Array.from(batches.entries()).map(([bucketKey, requests]) =>
+        this.processBatch(bucketKey, requests)
+      )
     )
   }
 

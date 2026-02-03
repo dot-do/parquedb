@@ -215,11 +215,21 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
   /**
    * Get relationships from rels.parquet
+   *
+   * @param dataset - Dataset prefix
+   * @param fromId - Source entity ID
+   * @param predicate - Optional predicate filter
+   * @param options - Optional filters for shredded fields (matchMode, similarity)
    */
   async getRelationships(
     dataset: string,
     fromId: string,
-    predicate?: string
+    predicate?: string,
+    options?: {
+      matchMode?: 'exact' | 'fuzzy'
+      minSimilarity?: number
+      maxSimilarity?: number
+    }
   ): Promise<Array<{
     to_ns: string
     to_id: string
@@ -228,9 +238,12 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     predicate: string
     importance: number | null
     level: number | null
+    // Shredded fields for efficient querying
+    matchMode: 'exact' | 'fuzzy' | null
+    similarity: number | null
   }>> {
     await this.ensureInitialized()
-    return this.queryExecutor.getRelationships(dataset, fromId, predicate)
+    return this.queryExecutor.getRelationships(dataset, fromId, predicate, options)
   }
 
   // ===========================================================================

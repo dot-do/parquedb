@@ -26,11 +26,26 @@ export async function handleRelationshipTraversal(
   const { request, url, baseUrl, worker, startTime } = context
   const timing = createTimingContext()
 
-  // Read relationships from rels.parquet
+  // Parse optional shredded field filters from query params
+  const matchModeParam = url.searchParams.get('matchMode')
+  const minSimilarityParam = url.searchParams.get('minSimilarity')
+  const maxSimilarityParam = url.searchParams.get('maxSimilarity')
+
+  // Validate and parse matchMode (must be 'exact' or 'fuzzy')
+  const matchMode: 'exact' | 'fuzzy' | undefined =
+    matchModeParam === 'exact' || matchModeParam === 'fuzzy' ? matchModeParam : undefined
+
+  const filterOptions = {
+    matchMode,
+    minSimilarity: minSimilarityParam ? parseFloat(minSimilarityParam) : undefined,
+    maxSimilarity: maxSimilarityParam ? parseFloat(maxSimilarityParam) : undefined,
+  }
+
+  // Read relationships from rels.parquet with optional shredded field filters
   markTiming(timing, 'rels_start')
   let rels
   try {
-    rels = await worker.getRelationships(datasetId, entityId, predicate)
+    rels = await worker.getRelationships(datasetId, entityId, predicate, filterOptions)
   } catch (error) {
     // Handle "File not found" errors with 404 instead of 500
     const notFoundResponse = handleFileNotFoundError(error, request, startTime, `${datasetId}/rels.parquet`)
@@ -40,13 +55,16 @@ export async function handleRelationshipTraversal(
   }
   measureTiming(timing, 'rels', 'rels_start')
 
-  // Convert to display format
+  // Convert to display format, including shredded fields
   const items = rels.map(rel => ({
     $id: `${baseUrl}/datasets/${datasetId}/${rel.to_ns}/${encodeURIComponent(rel.to_id)}`,
     name: rel.to_name,
     type: rel.to_type,
     ...(rel.importance ? { importance: rel.importance } : {}),
     ...(rel.level ? { level: rel.level } : {}),
+    // Shredded metadata fields (included when present)
+    ...(rel.matchMode ? { matchMode: rel.matchMode } : {}),
+    ...(rel.similarity !== null ? { similarity: rel.similarity } : {}),
   }))
 
   // Sort by importance

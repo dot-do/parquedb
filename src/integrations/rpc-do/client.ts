@@ -320,9 +320,21 @@ function withBatching(
     },
 
     close() {
-      if (pendingRequests.length > 0) {
-        void flushBatch()
+      // Clear the batch timer first
+      if (batchTimer !== null) {
+        clearTimeout(batchTimer)
+        batchTimer = null
       }
+
+      // Reject all pending requests to prevent memory leaks
+      const pendingToReject = pendingRequests
+      pendingRequests = []
+
+      const closeError = new Error('Transport closed')
+      for (const request of pendingToReject) {
+        request.reject(closeError)
+      }
+
       transport.close?.()
     }
   }
@@ -500,13 +512,13 @@ export function createParqueDBRPCClient(options: ParqueDBRPCClientOptions): Parq
     ? withBatching(baseTransport, options.batchingOptions)
     : baseTransport
 
-  // Collection cache
-  const collections = new Map<string, RPCCollection>()
+  // Collection cache - use unknown to avoid generic type constraints
+  const collections = new Map<string, RPCCollection<unknown>>()
 
   return {
     collection<T = Record<string, unknown>>(name: string): RPCCollection<T> {
       if (!collections.has(name)) {
-        collections.set(name, createCollection<T>(transport, name))
+        collections.set(name, createCollection(transport, name) as RPCCollection<unknown>)
       }
       return collections.get(name) as RPCCollection<T>
     },
@@ -594,16 +606,21 @@ export function createBatchLoaderDB(client: ParqueDBRPCClient): RPCBatchLoaderDB
       namespace: string,
       id: string,
       relationField: string,
-      options?: Record<string, unknown>
+      _options?: Record<string, unknown>
     ): Promise<{ items: Entity<T>[]; total?: number; hasMore?: boolean }> {
-      return client.collection<T>(namespace).getRelated(id, relationField)
+      const result = await client.collection(namespace).getRelated(id, relationField)
+      return {
+        items: result.items as Entity<T>[],
+        total: result.total,
+        hasMore: result.hasMore,
+      }
     },
 
     async getByIds<T = Record<string, unknown>>(
       namespace: string,
       ids: string[]
     ): Promise<Entity<T>[]> {
-      const results = await client.batchGet<T>(namespace, ids)
+      const results = await client.batchGet(namespace, ids)
       return results.filter((r): r is Entity<T> => r !== null)
     },
   }
