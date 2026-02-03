@@ -250,7 +250,13 @@ describe('Relationship Traversal', () => {
   })
 
   afterEach(async () => {
-    await rm(tempDir, { recursive: true, force: true })
+    // Small delay to allow any pending file operations to complete
+    await new Promise(resolve => setTimeout(resolve, 50))
+    try {
+      await rm(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    } catch {
+      // Ignore cleanup errors - temp directory will be cleaned up by OS
+    }
   })
 
   // =============================================================================
