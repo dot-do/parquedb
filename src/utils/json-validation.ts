@@ -353,6 +353,52 @@ export function tryParseJson<T = unknown>(json: string): T | undefined {
   return result.ok ? (result.value as T) : undefined
 }
 
+// =============================================================================
+// Response Validation Functions
+// =============================================================================
+
+/**
+ * Validate that a response contains required fields
+ *
+ * @param data - Response data to validate
+ * @param fields - Required field names
+ * @param context - Context name for error messages
+ * @throws Error if any required field is missing
+ */
+export function validateResponseFields(
+  data: unknown,
+  fields: string[],
+  context: string
+): void {
+  if (!isRecord(data)) {
+    throw new Error(`${context}: Expected object response, got ${typeof data}`)
+  }
+
+  for (const field of fields) {
+    if (!(field in data) || data[field] === undefined || data[field] === null) {
+      throw new Error(`${context}: Missing required field '${field}'`)
+    }
+  }
+}
+
+/**
+ * Validate that a response is an array
+ *
+ * @param data - Response data to validate
+ * @param context - Context name for error messages
+ * @returns The validated array
+ * @throws Error if data is not an array
+ */
+export function validateResponseArray(
+  data: unknown,
+  context: string
+): unknown[] {
+  if (!isArray(data)) {
+    throw new Error(`${context}: Expected array response, got ${typeof data}`)
+  }
+  return data
+}
+
 /**
  * Parse JSON with a type guard validation
  *

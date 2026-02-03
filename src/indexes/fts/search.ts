@@ -7,16 +7,24 @@
 
 import type { StorageBackend } from '../../types/storage'
 import type { IndexDefinition, FTSSearchOptions, FTSSearchResult, IndexStats } from '../types'
-import type { TokenizerOptions, CorpusStats } from './types'
+import type { TokenizerOptions, CorpusStats, Posting } from './types'
 import { tokenize, tokenizeQuery } from './tokenizer'
 import { InvertedIndex } from './inverted-index'
 import { BM25Scorer } from './scoring'
 import { parseBooleanQuery, isBooleanQuery, parseQuery, isAdvancedQuery, type BooleanQuery, type BooleanClause } from './query-parser'
 import {
+  normalizeFuzzyOptions,
+  expandQueryTerms,
+  fuzzyScorePenalty,
+  type NormalizedFuzzyOptions,
+  type FuzzyMatch,
+} from './fuzzy'
+import {
   DEFAULT_FTS_MIN_WORD_LENGTH,
   DEFAULT_FTS_MAX_WORD_LENGTH,
   DEFAULT_FTS_SEARCH_LIMIT,
 } from '../../constants'
+import { generateHighlights } from './highlight'
 
 // =============================================================================
 // FTS Index
@@ -86,7 +94,7 @@ export class FTSIndex {
    * @returns Ranked search results
    */
   search(query: string, options: FTSSearchOptions = {}): FTSSearchResult[] {
-    const { limit = DEFAULT_FTS_SEARCH_LIMIT, minScore = 0 } = options
+    const { limit = DEFAULT_FTS_SEARCH_LIMIT, minScore = 0, fuzzy } = options
 
     // Check if query contains boolean operators (AND, OR, NOT, parentheses)
     if (isBooleanQuery(query)) {
@@ -110,6 +118,13 @@ export class FTSIndex {
 
     if (corpusStats.documentCount === 0) {
       return []
+    }
+
+    // Check if fuzzy matching is enabled
+    const fuzzyOptions = normalizeFuzzyOptions(fuzzy)
+
+    if (fuzzyOptions.enabled) {
+      return this.searchFuzzy(queryTerms, fuzzyOptions, options)
     }
 
     // Score documents
@@ -137,6 +152,108 @@ export class FTSIndex {
   }
 
   /**
+   * Execute a fuzzy search with typo tolerance
+   *
+   * @param queryTerms - Tokenized query terms
+   * @param fuzzyOptions - Fuzzy matching options
+   * @param searchOptions - Search options
+   * @returns Ranked search results with fuzzy matches
+   */
+  private searchFuzzy(
+    queryTerms: string[],
+    fuzzyOptions: NormalizedFuzzyOptions,
+    searchOptions: FTSSearchOptions = {}
+  ): FTSSearchResult[] {
+    const { limit = DEFAULT_FTS_SEARCH_LIMIT, minScore = 0 } = searchOptions
+    const corpusStats = this.invertedIndex.getCorpusStats()
+
+    // Get vocabulary for fuzzy expansion
+    const vocabulary = corpusStats.documentFrequency.keys()
+
+    // Expand query terms with fuzzy matches
+    const termExpansions = expandQueryTerms(queryTerms, vocabulary, fuzzyOptions)
+
+    // Collect all documents that match any expanded term
+    // Track which terms matched each document and with what penalty
+    const docTermMatches = new Map<string, Map<string, { freq: number; penalty: number }>>()
+
+    for (const [originalTerm, matches] of termExpansions) {
+      for (const match of matches) {
+        const postings = this.invertedIndex.getPostings(match.term)
+        const penalty = fuzzyScorePenalty(match.distance, fuzzyOptions.maxDistance)
+
+        for (const posting of postings) {
+          let termMap = docTermMatches.get(posting.docId)
+          if (!termMap) {
+            termMap = new Map()
+            docTermMatches.set(posting.docId, termMap)
+          }
+
+          // Track the best match for this original term in this document
+          const existing = termMap.get(originalTerm)
+          if (!existing || existing.penalty < penalty) {
+            termMap.set(originalTerm, { freq: posting.frequency, penalty })
+          }
+        }
+      }
+    }
+
+    if (docTermMatches.size === 0) {
+      return []
+    }
+
+    // Score documents with fuzzy penalties applied
+    const results: FTSSearchResult[] = []
+
+    for (const [docId, termMap] of docTermMatches) {
+      const docStats = this.invertedIndex.getDocumentStats(docId)
+      const docLength = docStats?.totalLength ?? 0
+
+      // Calculate BM25 score with fuzzy penalties
+      let score = 0
+      const matchedTokens: string[] = []
+
+      for (const [originalTerm, { freq, penalty }] of termMap) {
+        const df = corpusStats.documentFrequency.get(originalTerm) ?? 0
+        const idf = this.scorer.idf(df, corpusStats.documentCount)
+
+        // BM25 term score with fuzzy penalty
+        const k1 = 1.2
+        const b = 0.75
+        const avgDl = corpusStats.avgDocLength
+        const tfNorm = (freq * (k1 + 1)) / (freq + k1 * (1 - b + b * (docLength / avgDl)))
+        const termScore = idf * tfNorm * penalty
+
+        score += termScore
+        matchedTokens.push(originalTerm)
+      }
+
+      results.push({
+        docId,
+        score,
+        matchedTokens,
+      })
+    }
+
+    // Sort by score
+    results.sort((a, b) => b.score - a.score)
+
+    // Filter by minimum score and limit
+    return results
+      .filter(r => r.score >= minScore)
+      .slice(0, limit)
+  }
+
+  /**
+   * Get the vocabulary (all indexed terms)
+   *
+   * @returns Iterable of all terms in the index
+   */
+  getVocabulary(): Iterable<string> {
+    return this.invertedIndex.getCorpusStats().documentFrequency.keys()
+  }
+
+  /**
    * Execute an advanced search with phrases, required/excluded terms
    *
    * @param query - Search query string with phrases and/or modifiers
@@ -159,8 +276,10 @@ export class FTSIndex {
       return stemmed.length > 0 ? stemmed[0]! : term.toLowerCase()
     }
 
-    // Collect all phrase matches
+    // Collect all phrase matches with occurrence counts
+    // Map: phrase key -> docId -> occurrence count
     const phraseMatchDocs: Map<string, Set<string>> = new Map()
+    const phraseMatchCounts: Map<string, Map<string, number>> = new Map()
 
     // Process all phrases (regular, required, excluded)
     const allPhrases = [
@@ -170,9 +289,11 @@ export class FTSIndex {
     ]
 
     for (const { phrase, type } of allPhrases) {
-      const phraseResults = this.searchPhrase(phrase, { limit: 10000 })
-      const docIds = new Set(phraseResults.map(r => r.docId))
-      phraseMatchDocs.set(`${type}:${phrase}`, docIds)
+      const key = `${type}:${phrase}`
+      // Get phrase occurrence counts for this phrase
+      const phraseCounts = this.getPhraseOccurrenceCounts(phrase)
+      phraseMatchDocs.set(key, new Set(phraseCounts.keys()))
+      phraseMatchCounts.set(key, phraseCounts)
     }
 
     // Find candidate documents
@@ -270,9 +391,8 @@ export class FTSIndex {
     }
 
     // Score remaining candidates
-    // Phrase matches get a boost
+    // Phrase matches get a boost scaled by occurrence count
     const results: FTSSearchResult[] = []
-    const phraseBoost = 1.5
 
     // Collect all stemmed terms for scoring
     const allTerms: string[] = []
@@ -314,14 +434,21 @@ export class FTSIndex {
       )
 
       // Apply phrase boost for documents that match phrases
-      let matchedPhrases: string[] = []
+      // Boost is scaled by total phrase occurrence count
+      let totalPhraseCount = 0
       for (const phrase of [...parsed.phrases, ...parsed.requiredPhrases]) {
         const key = parsed.requiredPhrases.includes(phrase) ? `required:${phrase}` : `normal:${phrase}`
-        const matchingDocs = phraseMatchDocs.get(key) ?? new Set()
-        if (matchingDocs.has(docId)) {
-          score *= phraseBoost
-          matchedPhrases.push(phrase)
-        }
+        const counts = phraseMatchCounts.get(key)
+        const phraseCount = counts?.get(docId) ?? 0
+        totalPhraseCount += phraseCount
+      }
+
+      // Apply phrase boost scaled by occurrence count
+      // Formula: 1 + 0.5 * log2(1 + phraseCount) gives boost that scales with count
+      // e.g., 1 occurrence = 1.5x, 2 = 1.79x, 4 = 2.16x, 8 = 2.5x
+      if (totalPhraseCount > 0) {
+        const phraseBoost = 1 + 0.5 * Math.log2(1 + totalPhraseCount)
+        score *= phraseBoost
       }
 
       results.push({
@@ -372,13 +499,17 @@ export class FTSIndex {
     const includeClauses = parsed.clauses.filter(c => !c.excluded)
     const excludeClauses = parsed.clauses.filter(c => c.excluded)
 
+    // Check if all include clauses are required (have + modifier)
+    // If so, use AND semantics even if parsed.type is 'or'
+    const allRequired = includeClauses.length > 0 && includeClauses.every(c => c.required)
+
     // Find matching documents based on include clauses
     let candidateDocs: Set<string>
 
     if (includeClauses.length === 0) {
       // Only exclusion clauses - start with all documents
       candidateDocs = new Set(allDocIds)
-    } else if (parsed.type === 'and') {
+    } else if (parsed.type === 'and' || allRequired) {
       // AND: documents must match ALL include clauses
       candidateDocs = this.findDocsMatchingAllClauses(includeClauses)
     } else {
@@ -504,8 +635,10 @@ export class FTSIndex {
         }
       }
 
-      // Check for consecutive positions within the same field
-      if (this.hasConsecutivePositionsInAnyField(queryTerms, fieldTermPositions)) {
+      // Count phrase occurrences across all fields
+      const phraseCount = this.countConsecutivePositionsInAllFields(queryTerms, fieldTermPositions)
+
+      if (phraseCount > 0) {
         // Calculate score
         const docStats = this.invertedIndex.getDocumentStats(docId)
         const termFreqs = new Map<string, number>()
@@ -530,9 +663,15 @@ export class FTSIndex {
           termIdfs
         )
 
+        // Apply phrase boost scaled by occurrence count
+        // Base boost is 1.5, with diminishing returns for additional occurrences
+        // Formula: 1 + 0.5 * log2(1 + phraseCount) gives boost that scales with count
+        // e.g., 1 occurrence = 1.5x, 2 = 1.79x, 4 = 2.16x, 8 = 2.5x
+        const phraseBoost = 1 + 0.5 * Math.log2(1 + phraseCount)
+
         results.push({
           docId,
-          score: score * 1.5, // Boost phrase matches
+          score: score * phraseBoost,
           matchedTokens: queryTerms,
         })
       }
@@ -549,6 +688,112 @@ export class FTSIndex {
    */
   getDocumentFrequency(term: string): number {
     return this.invertedIndex.getDocumentFrequency(term)
+  }
+
+  // ===========================================================================
+  // Highlight Operations
+  // ===========================================================================
+
+  /**
+   * Add highlights to search results
+   *
+   * This method enriches search results with highlighted snippets from the
+   * original documents. It requires the documents to be provided since
+   * the FTS index only stores postings, not original content.
+   *
+   * @param results - Search results from search()
+   * @param documents - Map of docId to document content
+   * @param query - Original search query (for term extraction)
+   * @param options - Highlight options
+   * @returns Search results with highlights field populated
+   */
+  addHighlights(
+    results: FTSSearchResult[],
+    documents: Map<string, Record<string, unknown>>,
+    query: string,
+    options: {
+      preTag?: string
+      postTag?: string
+      maxSnippets?: number
+      maxSnippetLength?: number
+    } = {}
+  ): FTSSearchResult[] {
+    // Get field paths from index definition
+    const fields = this.definition.fields.map(f => f.path)
+
+    // Extract query terms (stemmed) for matching
+    const queryTerms = tokenizeQuery(query, this.tokenizerOptions)
+
+    return results.map(result => {
+      const doc = documents.get(result.docId)
+      if (!doc) {
+        return result
+      }
+
+      const highlights = generateHighlights(doc, fields, queryTerms, {
+        preTag: options.preTag,
+        postTag: options.postTag,
+        maxSnippets: options.maxSnippets,
+        maxSnippetLength: options.maxSnippetLength,
+        matchStemmed: true,
+      })
+
+      return {
+        ...result,
+        highlights: Object.keys(highlights).length > 0 ? highlights : undefined,
+      }
+    })
+  }
+
+  /**
+   * Search with automatic highlight generation
+   *
+   * Convenience method that combines search() with addHighlights().
+   * Requires a document lookup function to retrieve document content.
+   *
+   * @param query - Search query
+   * @param getDocuments - Function to retrieve documents by IDs
+   * @param options - Search and highlight options
+   * @returns Search results with highlights
+   */
+  async searchWithHighlights(
+    query: string,
+    getDocuments: (docIds: string[]) => Promise<Map<string, Record<string, unknown>>>,
+    options: FTSSearchOptions & {
+      highlightOptions?: {
+        preTag?: string
+        postTag?: string
+        maxSnippets?: number
+        maxSnippetLength?: number
+      }
+    } = {}
+  ): Promise<FTSSearchResult[]> {
+    // Perform the search
+    const results = this.search(query, options)
+
+    // If no highlight option or no results, return as-is
+    if (!options.highlight || results.length === 0) {
+      return results
+    }
+
+    // Fetch documents
+    const docIds = results.map(r => r.docId)
+    const documents = await getDocuments(docIds)
+
+    // Extract highlight options
+    const highlightOptions = typeof options.highlight === 'object'
+      ? options.highlight
+      : options.highlightOptions ?? {}
+
+    // Add highlights
+    return this.addHighlights(results, documents, query, highlightOptions)
+  }
+
+  /**
+   * Get the indexed field paths
+   */
+  getIndexedFields(): string[] {
+    return this.definition.fields.map(f => f.path)
   }
 
   // ===========================================================================
@@ -630,6 +875,82 @@ export class FTSIndex {
   // Private Helpers
   // ===========================================================================
 
+  /**
+   * Get phrase occurrence counts for all documents matching a phrase
+   *
+   * @param phrase - Phrase to search for
+   * @returns Map of docId -> occurrence count
+   */
+  private getPhraseOccurrenceCounts(phrase: string): Map<string, number> {
+    const queryTerms = tokenizeQuery(phrase, this.tokenizerOptions)
+    const counts = new Map<string, number>()
+
+    if (queryTerms.length <= 1) {
+      // Single word - count is term frequency
+      const term = queryTerms[0]
+      if (!term) return counts
+      const postings = this.invertedIndex.getPostings(term)
+      for (const posting of postings) {
+        const current = counts.get(posting.docId) ?? 0
+        counts.set(posting.docId, current + posting.frequency)
+      }
+      return counts
+    }
+
+    // Check if position indexing is enabled
+    const positionsIndexed = this.definition.ftsOptions?.indexPositions ?? false
+
+    // Get candidate documents (must contain all terms)
+    const termPostings = queryTerms.map(term => ({
+      term,
+      postings: this.invertedIndex.getPostings(term),
+    }))
+
+    // Find documents that contain all terms
+    const candidateDocs = this.findDocumentsWithAllTerms(
+      termPostings.map(tp => new Set(tp.postings.map(p => p.docId)))
+    )
+
+    if (!positionsIndexed) {
+      // Without positions, we can only say the doc matches (count = 1)
+      // This is approximate but maintains backward compatibility
+      for (const docId of candidateDocs) {
+        counts.set(docId, 1)
+      }
+      return counts
+    }
+
+    // Count phrase occurrences in each candidate document
+    for (const docId of candidateDocs) {
+      // Track positions per field
+      const fieldTermPositions: Map<string, Map<string, number[]>> = new Map()
+
+      for (const { term, postings } of termPostings) {
+        const docPostings = postings.filter(p => p.docId === docId)
+        for (const posting of docPostings) {
+          if (posting.positions.length > 0) {
+            let fieldMap = fieldTermPositions.get(posting.field)
+            if (!fieldMap) {
+              fieldMap = new Map()
+              fieldTermPositions.set(posting.field, fieldMap)
+            }
+            const existing = fieldMap.get(term) ?? []
+            existing.push(...posting.positions)
+            fieldMap.set(term, existing)
+          }
+        }
+      }
+
+      // Count phrase occurrences across all fields
+      const phraseCount = this.countConsecutivePositionsInAllFields(queryTerms, fieldTermPositions)
+      if (phraseCount > 0) {
+        counts.set(docId, phraseCount)
+      }
+    }
+
+    return counts
+  }
+
   private findDocumentsWithAllTerms(docIdSets: Set<string>[]): string[] {
     if (docIdSets.length === 0) return []
     if (docIdSets.length === 1) return Array.from(docIdSets[0]!)
@@ -673,15 +994,30 @@ export class FTSIndex {
     terms: string[],
     termPositions: Map<string, number[]>
   ): boolean {
+    return this.countConsecutivePositions(terms, termPositions) > 0
+  }
+
+  /**
+   * Count how many times terms appear consecutively
+   *
+   * @param terms - Array of terms to check
+   * @param termPositions - Map of term -> positions
+   * @returns Number of times the phrase appears consecutively
+   */
+  private countConsecutivePositions(
+    terms: string[],
+    termPositions: Map<string, number[]>
+  ): number {
     // Get positions for first term
     const firstTerm = terms[0]
-    if (!firstTerm) return false
+    if (!firstTerm) return 0
     const firstPositions = termPositions.get(firstTerm)
     if (!firstPositions || firstPositions.length === 0) {
-      return false
+      return 0
     }
 
-    // Check if subsequent terms appear at consecutive positions
+    // Count how many times subsequent terms appear at consecutive positions
+    let count = 0
     for (const startPos of firstPositions) {
       let found = true
       for (let i = 1; i < terms.length; i++) {
@@ -694,11 +1030,29 @@ export class FTSIndex {
         }
       }
       if (found) {
-        return true
+        count++
       }
     }
 
-    return false
+    return count
+  }
+
+  /**
+   * Count phrase occurrences across all fields
+   *
+   * @param terms - Array of terms to check
+   * @param fieldTermPositions - Map of field -> term -> positions
+   * @returns Total count of phrase occurrences across all fields
+   */
+  private countConsecutivePositionsInAllFields(
+    terms: string[],
+    fieldTermPositions: Map<string, Map<string, number[]>>
+  ): number {
+    let totalCount = 0
+    for (const [_field, termPositions] of fieldTermPositions) {
+      totalCount += this.countConsecutivePositions(terms, termPositions)
+    }
+    return totalCount
   }
 
   // ===========================================================================

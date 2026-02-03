@@ -348,7 +348,8 @@ describe('QueryEmbeddingGenerator', () => {
 
     it('passes through when query is already a vector', async () => {
       const generator = new QueryEmbeddingGenerator(mockProvider)
-      const existingVector = [0.1, 0.2, 0.3]
+      // Use correct dimension (128) to pass validation
+      const existingVector = Array.from({ length: 128 }, (_, i) => i / 128)
 
       const result = await generator.embedOrPassthrough(existingVector)
 

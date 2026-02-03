@@ -76,8 +76,8 @@ describe('Transaction Commit - Comprehensive', () => {
       for (let i = 0; i < 100; i++) {
         tx.recordOperation({
           type: i % 3 === 0 ? 'create' : i % 3 === 1 ? 'update' : 'delete',
-          target: \`namespace-\${i % 5}\`,
-          id: \`entity-\${i}\`,
+          target: `namespace-\${i % 5}`,
+          id: `entity-\${i}`,
         })
       }
 
@@ -355,7 +355,7 @@ describe('Concurrent Transactions', () => {
       const transactions: Transaction<string>[] = []
 
       for (let i = 0; i < 10; i++) {
-        transactions.push(manager.begin(\`context-\${i}\`))
+        transactions.push(manager.begin(`context-\${i}`))
       }
 
       expect(manager.getActiveCount()).toBe(10)
@@ -388,8 +388,8 @@ describe('Concurrent Transactions', () => {
 
     it('concurrent commits do not interfere', async () => {
       const transactions = Array.from({ length: 5 }, (_, i) => {
-        const tx = manager.begin(\`ctx-\${i}\`)
-        tx.recordOperation({ type: 'create', target: 'items', id: \`item-\${i}\` })
+        const tx = manager.begin(`ctx-\${i}`)
+        tx.recordOperation({ type: 'create', target: 'items', id: `item-\${i}` })
         return tx
       })
 
@@ -402,8 +402,8 @@ describe('Concurrent Transactions', () => {
 
     it('concurrent rollbacks do not interfere', async () => {
       const transactions = Array.from({ length: 5 }, (_, i) => {
-        const tx = manager.begin(\`ctx-\${i}\`)
-        tx.recordOperation({ type: 'create', target: 'items', id: \`item-\${i}\` })
+        const tx = manager.begin(`ctx-\${i}`)
+        tx.recordOperation({ type: 'create', target: 'items', id: `item-\${i}` })
         return tx
       })
 
@@ -416,8 +416,8 @@ describe('Concurrent Transactions', () => {
 
     it('mixed concurrent commits and rollbacks', async () => {
       const transactions = Array.from({ length: 10 }, (_, i) => {
-        const tx = manager.begin(\`ctx-\${i}\`)
-        tx.recordOperation({ type: 'create', target: 'items', id: \`item-\${i}\` })
+        const tx = manager.begin(`ctx-\${i}`)
+        tx.recordOperation({ type: 'create', target: 'items', id: `item-\${i}` })
         return { tx, shouldCommit: i % 2 === 0 }
       })
 
@@ -442,8 +442,8 @@ describe('Concurrent Transactions', () => {
       const transactions: Transaction<string>[] = []
 
       for (let i = 0; i < count; i++) {
-        const tx = manager.begin(\`ctx-\${i}\`)
-        tx.recordOperation({ type: 'create', target: 'items', id: \`\${i}\` })
+        const tx = manager.begin(`ctx-\${i}`)
+        tx.recordOperation({ type: 'create', target: 'items', id: `\${i}` })
         transactions.push(tx)
       }
 
@@ -462,8 +462,8 @@ describe('Concurrent Transactions', () => {
       const iterations = 50
 
       for (let i = 0; i < iterations; i++) {
-        const tx = manager.begin(\`rapid-\${i}\`)
-        tx.recordOperation({ type: 'create', target: 'items', id: \`\${i}\` })
+        const tx = manager.begin(`rapid-\${i}`)
+        tx.recordOperation({ type: 'create', target: 'items', id: `\${i}` })
 
         if (i % 2 === 0) {
           await tx.commit()
@@ -482,9 +482,9 @@ describe('Concurrent Transactions', () => {
 
       // Interleave operations
       for (let i = 0; i < 10; i++) {
-        tx1.recordOperation({ type: 'create', target: 'A', id: \`a\${i}\` })
-        tx2.recordOperation({ type: 'update', target: 'B', id: \`b\${i}\` })
-        tx3.recordOperation({ type: 'delete', target: 'C', id: \`c\${i}\` })
+        tx1.recordOperation({ type: 'create', target: 'A', id: `a\${i}` })
+        tx2.recordOperation({ type: 'update', target: 'B', id: `b\${i}` })
+        tx3.recordOperation({ type: 'delete', target: 'C', id: `c\${i}` })
       }
 
       expect(tx1.getOperations()).toHaveLength(10)
@@ -505,7 +505,7 @@ describe('Concurrent Transactions', () => {
       const ids = new Set<string>()
 
       for (let i = 0; i < count; i++) {
-        const tx = manager.begin(\`ctx-\${i}\`)
+        const tx = manager.begin(`ctx-\${i}`)
         ids.add(tx.id)
       }
 
@@ -768,8 +768,8 @@ describe('Error Handling and Recovery', () => {
     it('manager recovers from multiple failed transactions', async () => {
       // Create and fail multiple transactions
       for (let i = 0; i < 5; i++) {
-        const tx = manager.begin(\`ctx-\${i}\`)
-        tx.recordOperation({ type: 'create', target: 'items', id: \`\${i}\` })
+        const tx = manager.begin(`ctx-\${i}`)
+        tx.recordOperation({ type: 'create', target: 'items', id: `\${i}` })
         await tx.rollback()
       }
 
@@ -1374,7 +1374,7 @@ describe('Edge Cases', () => {
 
     const count = 1000
     for (let i = 0; i < count; i++) {
-      tx.recordOperation({ type: 'create', target: 'items', id: \`item-\${i}\` })
+      tx.recordOperation({ type: 'create', target: 'items', id: `item-\${i}` })
     }
 
     expect(tx.getOperations()).toHaveLength(count)

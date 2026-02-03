@@ -80,9 +80,10 @@ function createMockParqueDBDO(): ParqueDBDOInterface & { mockData: Map<string, E
       return updated
     }),
 
-    delete: vi.fn(async (ns: string, id: string): Promise<boolean> => {
+    delete: vi.fn(async (ns: string, id: string): Promise<{ deletedCount: number }> => {
       const key = `${ns}/${id}`
-      return mockData.delete(key)
+      const wasDeleted = mockData.delete(key)
+      return { deletedCount: wasDeleted ? 1 : 0 }
     }),
 
     link: vi.fn(async (_fromId: string, _predicate: string, _toId: string): Promise<void> => {
@@ -258,7 +259,7 @@ describe('ParqueDBRPCWrapper', () => {
 
       const result = await wrapper.delete('posts', '123')
 
-      expect(result).toBe(true)
+      expect(result.deletedCount).toBe(1)
       expect(mockDO.delete).toHaveBeenCalledWith(
         'posts',
         '123',
@@ -462,7 +463,7 @@ describe('ParqueDBRPCWrapper', () => {
       const collection = wrapper.collection('posts')
       const result = await collection.delete('123')
 
-      expect(result.deleted).toBe(true)
+      expect(result.deletedCount).toBe(1)
     })
 
     it('should check entity existence via collection', async () => {
