@@ -402,6 +402,46 @@ export {
 } from './constants'
 
 // =============================================================================
+// SQL Integration
+// =============================================================================
+
+export {
+  // SQL Template Tag
+  createSQL,
+  buildQuery,
+  escapeIdentifier,
+  escapeString,
+  // Drizzle ORM
+  createDrizzleProxy,
+  // Prisma ORM
+  createPrismaAdapter,
+  PrismaParqueDBAdapter,
+  // Parser & Translator
+  parseSQL,
+  translateStatement,
+  translateSelect,
+  translateInsert,
+  translateUpdate,
+  translateDelete,
+  translateWhere,
+  whereToFilter,
+  // Types
+  type SQLExecutor,
+  type CreateSQLOptions,
+  type DrizzleProxyOptions,
+  type DrizzleProxyCallback,
+  type PrismaAdapterOptions,
+  type SQLStatement,
+  type SQLSelect,
+  type SQLInsert,
+  type SQLUpdate,
+  type SQLDelete,
+  type SQLQueryResult,
+  type TranslatedQuery,
+  type TranslatedMutation,
+} from './integrations/sql'
+
+// =============================================================================
 // Integrations (Iceberg, etc.)
 // =============================================================================
 
