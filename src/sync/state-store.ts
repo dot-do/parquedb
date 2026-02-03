@@ -331,15 +331,19 @@ export async function reconstructState(
     }
   } catch (error) {
     // Rollback - restore from backups with comprehensive error tracking
+    // IMPORTANT: We first restore ALL files, then delete backups only if ALL restorations succeed
+    // This ensures backups are preserved for manual recovery if ANY restoration fails
     const rollbackErrors: Array<{ path: string; error: string }> = []
     const rollbackSuccesses: string[] = []
+    const successfullyRestoredBackups: string[] = []
 
+    // Phase 1: Restore all files from backups (do NOT delete backups yet)
     for (const [originalPath, backupPath] of Array.from(backupPaths.entries())) {
       try {
         if (await storage.exists(backupPath)) {
           await storage.copy(backupPath, originalPath)
-          await storage.delete(backupPath)
           rollbackSuccesses.push(originalPath)
+          successfullyRestoredBackups.push(backupPath)
         }
       } catch (rollbackError) {
         rollbackErrors.push({
@@ -353,8 +357,9 @@ export async function reconstructState(
 
     if (rollbackErrors.length > 0) {
       // Critical: rollback failed, database may be in inconsistent state
+      // DO NOT delete any backups - they are needed for manual recovery
       const failedPaths = rollbackErrors.map(e => `  - ${e.path}: ${e.error}`).join('\n')
-      const restoredPaths = rollbackSuccesses.length > 0
+      const restoredPathsMsg = rollbackSuccesses.length > 0
         ? `\nSuccessfully restored:\n${rollbackSuccesses.map(p => `  - ${p}`).join('\n')}`
         : ''
 
@@ -362,10 +367,19 @@ export async function reconstructState(
         `CRITICAL: State reconstruction failed and rollback was incomplete.\n` +
         `Original error: ${originalError}\n` +
         `\nFailed to restore the following files:\n${failedPaths}` +
-        restoredPaths +
+        restoredPathsMsg +
         `\n\nThe database may be in an inconsistent state. ` +
         `Manual intervention may be required to restore from backups (suffix: ${backupSuffix}).`
       )
+    }
+
+    // Phase 2: All restorations succeeded, now safe to delete backups
+    for (const backupPath of successfullyRestoredBackups) {
+      try {
+        await storage.delete(backupPath)
+      } catch {
+        // Ignore cleanup errors - the data has been restored successfully
+      }
     }
 
     // Rollback succeeded

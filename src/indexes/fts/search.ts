@@ -7,10 +7,11 @@
 
 import type { StorageBackend } from '../../types/storage'
 import type { IndexDefinition, FTSSearchOptions, FTSSearchResult, IndexStats } from '../types'
-import type { TokenizerOptions } from './types'
-import { tokenizeQuery } from './tokenizer'
+import type { TokenizerOptions, CorpusStats } from './types'
+import { tokenize, tokenizeQuery } from './tokenizer'
 import { InvertedIndex } from './inverted-index'
 import { BM25Scorer } from './scoring'
+import { parseBooleanQuery, isBooleanQuery, type BooleanQuery, type BooleanClause } from './query-parser'
 import {
   DEFAULT_FTS_MIN_WORD_LENGTH,
   DEFAULT_FTS_MAX_WORD_LENGTH,
@@ -123,6 +124,75 @@ export class FTSIndex {
       score: r.score,
       matchedTokens: r.matchedTerms,
     }))
+  }
+
+  /**
+   * Execute a boolean search with AND, OR, NOT operators
+   *
+   * @param query - Boolean query string (e.g., "word1 AND word2 OR word3")
+   * @param options - Search options
+   * @returns Ranked search results
+   */
+  searchBoolean(query: string, options: FTSSearchOptions = {}): FTSSearchResult[] {
+    const { limit = DEFAULT_FTS_SEARCH_LIMIT, minScore = 0 } = options
+
+    if (!query || query.trim().length === 0) {
+      return []
+    }
+
+    const parsed = parseBooleanQuery(query)
+
+    if (parsed.clauses.length === 0) {
+      return []
+    }
+
+    const corpusStats = this.invertedIndex.getCorpusStats()
+    if (corpusStats.documentCount === 0) {
+      return []
+    }
+
+    // Get all document IDs for edge cases (e.g., only NOT clauses)
+    const allDocIds = this.getAllDocumentIds()
+
+    // Separate clauses by type
+    const includeClauses = parsed.clauses.filter(c => !c.excluded)
+    const excludeClauses = parsed.clauses.filter(c => c.excluded)
+
+    // Find matching documents based on include clauses
+    let candidateDocs: Set<string>
+
+    if (includeClauses.length === 0) {
+      // Only exclusion clauses - start with all documents
+      candidateDocs = new Set(allDocIds)
+    } else if (parsed.type === 'and') {
+      // AND: documents must match ALL include clauses
+      candidateDocs = this.findDocsMatchingAllClauses(includeClauses)
+    } else {
+      // OR: documents match ANY include clause
+      candidateDocs = this.findDocsMatchingAnyClauses(includeClauses)
+    }
+
+    // Apply exclusions
+    for (const excludeClause of excludeClauses) {
+      const excludedDocs = this.findDocsMatchingClause(excludeClause)
+      for (const docId of excludedDocs) {
+        candidateDocs.delete(docId)
+      }
+    }
+
+    if (candidateDocs.size === 0) {
+      return []
+    }
+
+    // Score the remaining candidates
+    const results = this.scoreDocuments(Array.from(candidateDocs), includeClauses, corpusStats)
+
+    // Filter by minimum score and limit
+    const filtered = results
+      .filter(r => r.score >= minScore)
+      .slice(0, limit)
+
+    return filtered
   }
 
   /**
@@ -344,6 +414,161 @@ export class FTSIndex {
     }
 
     return false
+  }
+
+  // ===========================================================================
+  // Boolean Search Helpers
+  // ===========================================================================
+
+  /**
+   * Get all document IDs in the index
+   */
+  private getAllDocumentIds(): string[] {
+    const corpusStats = this.invertedIndex.getCorpusStats()
+    // Collect unique doc IDs from all postings
+    const docIds = new Set<string>()
+    // Iterate through all terms to collect doc IDs
+    // Since we don't have direct access to all docs, we collect from posting lists
+    for (const term of corpusStats.documentFrequency.keys()) {
+      const postings = this.invertedIndex.getPostings(term)
+      for (const posting of postings) {
+        docIds.add(posting.docId)
+      }
+    }
+    return Array.from(docIds)
+  }
+
+  /**
+   * Find documents matching a single clause (either by terms or phrase)
+   */
+  private findDocsMatchingClause(clause: BooleanClause): Set<string> {
+    const docIds = new Set<string>()
+
+    if (clause.phrase) {
+      // Phrase search - use searchPhrase internally
+      const phraseResults = this.searchPhrase(clause.phrase, { limit: 10000 })
+      for (const result of phraseResults) {
+        docIds.add(result.docId)
+      }
+    } else if (clause.terms.length > 0) {
+      // Term search - check termCombination to determine AND vs OR semantics
+      if (clause.terms.length === 1) {
+        const postings = this.invertedIndex.getPostings(clause.terms[0]!)
+        for (const posting of postings) {
+          docIds.add(posting.docId)
+        }
+      } else if (clause.termCombination === 'or') {
+        // OR semantics: match docs with ANY of the terms
+        for (const term of clause.terms) {
+          const postings = this.invertedIndex.getPostings(term)
+          for (const posting of postings) {
+            docIds.add(posting.docId)
+          }
+        }
+      } else {
+        // Default AND semantics: find docs with ALL terms
+        const termDocSets = clause.terms.map(term => {
+          const postings = this.invertedIndex.getPostings(term)
+          return new Set(postings.map(p => p.docId))
+        })
+        const matchingDocs = this.findDocumentsWithAllTerms(termDocSets)
+        for (const docId of matchingDocs) {
+          docIds.add(docId)
+        }
+      }
+    }
+
+    return docIds
+  }
+
+  /**
+   * Find documents matching ALL clauses (AND semantics)
+   */
+  private findDocsMatchingAllClauses(clauses: BooleanClause[]): Set<string> {
+    if (clauses.length === 0) return new Set()
+
+    // Get doc sets for each clause
+    const clauseDocSets = clauses.map(clause => this.findDocsMatchingClause(clause))
+
+    // Return intersection
+    const result = new Set<string>(clauseDocSets[0])
+    for (let i = 1; i < clauseDocSets.length; i++) {
+      const clauseSet = clauseDocSets[i]!
+      for (const docId of result) {
+        if (!clauseSet.has(docId)) {
+          result.delete(docId)
+        }
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * Find documents matching ANY clause (OR semantics)
+   */
+  private findDocsMatchingAnyClauses(clauses: BooleanClause[]): Set<string> {
+    const result = new Set<string>()
+
+    for (const clause of clauses) {
+      const clauseDocs = this.findDocsMatchingClause(clause)
+      for (const docId of clauseDocs) {
+        result.add(docId)
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * Score documents based on matching clauses
+   */
+  private scoreDocuments(
+    docIds: string[],
+    clauses: BooleanClause[],
+    corpusStats: CorpusStats
+  ): FTSSearchResult[] {
+    // Collect all terms from clauses for scoring
+    const allTerms: string[] = []
+    for (const clause of clauses) {
+      if (clause.terms.length > 0) {
+        allTerms.push(...clause.terms)
+      } else if (clause.phrase) {
+        // Tokenize phrase for scoring
+        const phraseTerms = tokenize(clause.phrase, this.tokenizerOptions)
+        allTerms.push(...phraseTerms.map(t => t.term))
+      }
+    }
+
+    if (allTerms.length === 0) {
+      // No terms to score - return with default score
+      return docIds.map(docId => ({
+        docId,
+        score: 1.0,
+        matchedTokens: [],
+      }))
+    }
+
+    // Use BM25 scorer
+    const scored = this.scorer.scoreQuery(
+      allTerms,
+      term => this.invertedIndex.getPostings(term),
+      docId => {
+        const stats = this.invertedIndex.getDocumentStats(docId)
+        return stats?.totalLength ?? 0
+      },
+      corpusStats
+    )
+
+    // Filter to only include our candidate documents
+    const docIdSet = new Set(docIds)
+    return scored
+      .filter(r => docIdSet.has(r.docId))
+      .map(r => ({
+        docId: r.docId,
+        score: r.score,
+        matchedTokens: r.matchedTerms,
+      }))
   }
 }
 

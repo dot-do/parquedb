@@ -373,16 +373,87 @@ export class StreamingRefreshEngine {
 
   /**
    * Register an error handler
+   * @returns Unsubscribe function to remove this specific listener
    */
-  onError(handler: ErrorHandler): void {
+  onError(handler: ErrorHandler): () => void {
     this.errorHandlers.push(handler)
+    let unsubscribed = false
+    return () => {
+      if (unsubscribed) return // Idempotent
+      unsubscribed = true
+      const index = this.errorHandlers.indexOf(handler)
+      if (index !== -1) {
+        this.errorHandlers.splice(index, 1)
+      }
+    }
   }
 
   /**
    * Register a warning handler for capacity/eviction warnings
+   * @returns Unsubscribe function to remove this specific listener
    */
-  onWarning(handler: WarningHandler): void {
+  onWarning(handler: WarningHandler): () => void {
     this.warningHandlers.push(handler)
+    let unsubscribed = false
+    return () => {
+      if (unsubscribed) return // Idempotent
+      unsubscribed = true
+      const index = this.warningHandlers.indexOf(handler)
+      if (index !== -1) {
+        this.warningHandlers.splice(index, 1)
+      }
+    }
+  }
+
+  /**
+   * Remove all error listeners
+   */
+  removeAllErrorListeners(): void {
+    this.errorHandlers = []
+  }
+
+  /**
+   * Remove all warning listeners
+   */
+  removeAllWarningListeners(): void {
+    this.warningHandlers = []
+  }
+
+  /**
+   * Dispose the engine and release all resources
+   *
+   * Clears all:
+   * - Registered MVs
+   * - Error listeners
+   * - Warning listeners
+   * - Buffers
+   * - Statistics
+   *
+   * Can be called multiple times safely.
+   * Engine can be re-used after dispose by registering new MVs and calling start().
+   */
+  async dispose(): Promise<void> {
+    // Stop the engine if running
+    await this.stop()
+
+    // Clear all MVs
+    this.mvHandlers.clear()
+    this.namespaceToMVs.clear()
+    this.bufferByMV.clear()
+
+    // Clear listeners
+    this.errorHandlers = []
+    this.warningHandlers = []
+
+    // Clear buffers (already done by stop() -> flush(), but be explicit)
+    this.buffer = []
+
+    // Reset statistics
+    this.stats = this.createEmptyStats()
+    this.batchProcessingTimes = []
+
+    // Reset warning flag
+    this._warningEmitted80 = false
   }
 
   /**

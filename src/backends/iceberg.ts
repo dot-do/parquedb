@@ -69,6 +69,12 @@ import {
   // Snapshot building
   SnapshotBuilder,
   generateUUID,
+  // Delete operations
+  EqualityDeleteBuilder,
+  DeleteManifestGenerator,
+  parseEqualityDeleteFile,
+  CONTENT_EQUALITY_DELETES,
+  MANIFEST_CONTENT_DELETES,
   // Types
   type TableMetadata,
   type IcebergSchema,
@@ -302,7 +308,10 @@ export class IcebergBackend implements EntityBackend {
       throw new ReadOnlyError('delete', 'IcebergBackend')
     }
 
-    const entity = await this.get(ns, id)
+    // For hard delete, we need to include soft-deleted entities
+    // For soft delete, we only look at non-deleted entities
+    const includeDeleted = options?.hard ?? false
+    const entity = await this.get(ns, id, { includeDeleted })
     if (!entity) {
       return { deletedCount: 0 }
     }
@@ -1110,13 +1119,229 @@ export class IcebergBackend implements EntityBackend {
   }
 
   /**
-   * Hard delete entities using Iceberg delete files
+   * Hard delete entities using Iceberg equality delete files.
+   *
+   * Creates an equality delete file that marks entities for deletion by $id.
+   * The delete file is tracked in a delete manifest within a new snapshot.
    */
-  private async hardDeleteEntities(_ns: string, _ids: (string | EntityId)[]): Promise<void> {
-    // TODO: Create position delete or equality delete file
-    // TODO: Update manifest with delete file
-    // TODO: Create new snapshot
-    // TODO: Commit metadata
+  private async hardDeleteEntities(ns: string, ids: (string | EntityId)[]): Promise<void> {
+    if (ids.length === 0) return
+
+    // Acquire write lock for this namespace to prevent concurrent writes within same instance
+    const releaseLock = await this.acquireWriteLock(ns)
+
+    try {
+      const location = this.getTableLocation(ns)
+      const versionHintPath = `${location}/metadata/version-hint.text`
+
+      for (let attempt = 0; attempt < this.maxOccRetries; attempt++) {
+        // Invalidate cache to get fresh metadata
+        this.tableCache.delete(ns)
+
+        // Get current version hint ETag for OCC
+        let expectedVersionHintEtag = await this.getVersionHintEtag(versionHintPath)
+
+        // Ensure table exists
+        let metadata = await this.getTableMetadata(ns)
+        if (!metadata) {
+          // No table means nothing to delete
+          return
+        }
+
+        // Re-read the version hint ETag after getting metadata
+        expectedVersionHintEtag = await this.getVersionHintEtag(versionHintPath)
+
+        // Prepare delete commit
+        const commitResult = await this.prepareDeleteCommit(location, metadata, ids)
+
+        // Try to commit atomically
+        const committed = await this.tryCommit(
+          ns,
+          versionHintPath,
+          expectedVersionHintEtag,
+          commitResult.newMetadata,
+          commitResult.metadataPath
+        )
+
+        if (committed) {
+          return
+        }
+        // Conflict detected, retry with fresh metadata
+      }
+
+      throw new CommitConflictError(
+        `Delete commit failed after ${this.maxOccRetries} retries due to concurrent modifications.`,
+        ns,
+        -1,
+        this.maxOccRetries
+      )
+    } finally {
+      releaseLock()
+    }
+  }
+
+  /**
+   * Prepare a delete commit by creating equality delete file, manifests, and building metadata.
+   */
+  private async prepareDeleteCommit(
+    location: string,
+    metadata: TableMetadata,
+    ids: (string | EntityId)[]
+  ): Promise<{
+    newMetadata: TableMetadata
+    metadataPath: string
+  }> {
+    const sequenceNumber = (metadata['last-sequence-number'] ?? 0) + 1
+    const snapshotId = this.generateSnapshotId()
+
+    // Get the current schema
+    const currentSchema = metadata.schemas.find(s => s['schema-id'] === metadata['current-schema-id'])
+    if (!currentSchema) {
+      throw new Error('Current schema not found')
+    }
+
+    // Find the $id field ID in the schema (it's field 1 in our default schema)
+    const idField = currentSchema.fields.find(f => f.name === '$id')
+    const idFieldId = idField?.id ?? 1
+
+    // Step 1: Create equality delete file using EqualityDeleteBuilder
+    const deleteBuilder = new EqualityDeleteBuilder({
+      schema: currentSchema,
+      equalityFieldIds: [idFieldId],
+      sequenceNumber,
+      snapshotId,
+      outputPrefix: `${location}/data/`,
+    })
+
+    // Add each ID to the delete file
+    for (const id of ids) {
+      deleteBuilder.addDelete({ $id: id })
+    }
+
+    const deleteResult = deleteBuilder.build()
+    const deleteFileId = generateUUID()
+    const deleteFilePath = `${location}/data/${deleteFileId}-delete.parquet`
+
+    // Write the delete file
+    await this.storage.write(deleteFilePath, deleteResult.data)
+
+    // Step 2: Create delete manifest using DeleteManifestGenerator
+    const deleteManifestGenerator = new DeleteManifestGenerator({
+      sequenceNumber,
+      snapshotId,
+    })
+
+    deleteManifestGenerator.addEqualityDeleteFile({
+      'file-path': deleteFilePath,
+      'file-format': 'parquet',
+      partition: {},
+      'record-count': ids.length,
+      'file-size-in-bytes': deleteResult.data.byteLength,
+      'equality-ids': [idFieldId],
+    })
+
+    const deleteManifestResult = deleteManifestGenerator.generate()
+
+    // Write delete manifest
+    const deleteManifestId = generateUUID()
+    const deleteManifestPath = `${location}/metadata/${deleteManifestId}-m0.avro`
+    const deleteManifestContent = this.encodeDeleteManifestToAvro(
+      deleteManifestResult.entries,
+      sequenceNumber,
+      snapshotId
+    )
+    await this.storage.write(deleteManifestPath, deleteManifestContent)
+
+    // Step 3: Create manifest list that includes both data manifests and delete manifest
+    const manifestListGenerator = new ManifestListGenerator({ snapshotId, sequenceNumber })
+
+    // Get manifest content size for stats
+    const manifestStat = await this.storage.stat(deleteManifestPath)
+    const manifestSize = manifestStat?.size ?? 0
+
+    // Add the new delete manifest
+    manifestListGenerator.addManifestWithStats(
+      deleteManifestPath,
+      manifestSize,
+      0, // partition spec ID
+      { addedFiles: 1, existingFiles: 0, deletedFiles: 0, addedRows: ids.length, existingRows: 0, deletedRows: 0 },
+      true // is delete manifest
+    )
+
+    // Include manifests from parent snapshot
+    await this.addParentManifests(manifestListGenerator, metadata)
+
+    const manifestListId = generateUUID()
+    const manifestListPath = `${location}/metadata/snap-${snapshotId}-${manifestListId}.avro`
+    const manifestListContent = encodeManifestListToAvro(manifestListGenerator.getManifests())
+    await this.storage.write(manifestListPath, manifestListContent)
+
+    // Step 4: Build new snapshot with 'delete' operation
+    const newSnapshot = this.buildDeleteSnapshot(metadata, sequenceNumber, snapshotId, manifestListPath, ids.length)
+
+    // Step 5: Build new metadata
+    const newMetadata = this.buildNewMetadata(metadata, sequenceNumber, snapshotId, newSnapshot)
+
+    // Step 6: Write metadata file
+    const metadataPath = await this.writeMetadataFile(location, sequenceNumber, newMetadata)
+
+    return { newMetadata, metadataPath }
+  }
+
+  /**
+   * Build a delete snapshot with summary stats
+   */
+  private buildDeleteSnapshot(
+    metadata: TableMetadata,
+    sequenceNumber: number,
+    snapshotId: number,
+    manifestListPath: string,
+    deletedRecords: number
+  ): Snapshot {
+    const currentSnapshotId = metadata['current-snapshot-id']
+    const existingSnapshot = currentSnapshotId ? getSnapshotById(metadata, currentSnapshotId) : undefined
+    const existingSummary = existingSnapshot?.summary as Record<string, string> | undefined
+    const prevTotalRecords = existingSummary?.['total-records'] ? parseInt(existingSummary['total-records']) : 0
+    const prevTotalSize = existingSummary?.['total-files-size'] ? parseInt(existingSummary['total-files-size']) : 0
+    const prevTotalFiles = existingSummary?.['total-data-files'] ? parseInt(existingSummary['total-data-files']) : 0
+
+    const snapshotBuilder = new SnapshotBuilder({
+      sequenceNumber,
+      snapshotId,
+      parentSnapshotId: currentSnapshotId ?? undefined,
+      manifestListPath,
+      operation: 'delete', // Use delete operation
+      schemaId: metadata['current-schema-id'],
+    })
+
+    snapshotBuilder.setSummary(
+      0, // added files
+      0, // deleted files (we're not removing data files, just adding delete file)
+      0, // added records
+      deletedRecords, // deleted records
+      0, // added size
+      0, // removed size
+      Math.max(0, prevTotalRecords - deletedRecords), // total records (approximate)
+      prevTotalSize,
+      prevTotalFiles
+    )
+
+    return snapshotBuilder.build()
+  }
+
+  /**
+   * Encode delete manifest entries to Avro format.
+   * Delete manifests use content type 1 (MANIFEST_CONTENT_DELETES).
+   */
+  private encodeDeleteManifestToAvro(
+    entries: _ManifestEntry[],
+    sequenceNumber: number,
+    _snapshotId: number
+  ): Uint8Array {
+    // For delete manifests, we need to encode with content type indicating deletes
+    // The entries already have the correct content field (CONTENT_EQUALITY_DELETES = 2)
+    // We use the same Avro encoding but the manifest list entry will have content = 1
+    return encodeManifestToAvro(entries, sequenceNumber)
   }
 
   /**
@@ -1143,25 +1368,59 @@ export class IcebergBackend implements EntityBackend {
       return [] // Manifest list doesn't exist or is invalid
     }
 
-    // Step 2: Read manifest entries from each manifest file
+    // Step 2: Collect data file paths and deleted entity IDs
     const dataFilePaths: string[] = []
+    const deletedIds = new Set<string>()
+
     for (const manifestFile of manifestFiles) {
-      if (manifestFile.content === 1) {
-        continue // Skip delete manifests for now
-      }
+      if (manifestFile.content === MANIFEST_CONTENT_DELETES) {
+        // Process delete manifests to collect deleted entity IDs
+        try {
+          const manifestData = await this.storage.read(manifestFile['manifest-path'])
+          const entries = decodeManifestFromAvroOrJson(manifestData)
 
-      try {
-        const manifestData = await this.storage.read(manifestFile['manifest-path'])
-        const entries = decodeManifestFromAvroOrJson(manifestData)
-
-        for (const entry of entries) {
-          // Only include ADDED (1) and EXISTING (0) entries, not DELETED (2)
-          if (entry.status !== 2) {
-            dataFilePaths.push(entry['data-file']['file-path'])
+          for (const entry of entries) {
+            // Only process ADDED (1) and EXISTING (0) delete entries, not DELETED (2)
+            if (entry.status !== 2) {
+              const deleteFilePath = entry['data-file']['file-path']
+              // Check if this is an equality delete file (content type 2)
+              const content = entry['data-file'].content
+              if (content === CONTENT_EQUALITY_DELETES) {
+                // Read and parse the equality delete file
+                try {
+                  const deleteFileData = await this.storage.read(deleteFilePath)
+                  const deleteInfo = parseEqualityDeleteFile(deleteFileData)
+                  // Collect all deleted IDs
+                  for (const deleteEntry of deleteInfo.entries) {
+                    const deletedId = deleteEntry['$id'] as string
+                    if (deletedId) {
+                      deletedIds.add(deletedId)
+                    }
+                  }
+                } catch {
+                  // Skip unreadable delete files
+                }
+              }
+            }
           }
+        } catch {
+          // Skip invalid manifest files
         }
-      } catch {
-        // Skip invalid manifest files
+      } else {
+        // Process data manifests
+        try {
+          const manifestData = await this.storage.read(manifestFile['manifest-path'])
+          const entries = decodeManifestFromAvroOrJson(manifestData)
+
+          for (const entry of entries) {
+            // Only include ADDED (1) and EXISTING (0) entries, not DELETED (2)
+            if (entry.status !== 2) {
+              dataFilePaths.push(entry['data-file']['file-path'])
+            }
+          }
+        } catch {
+          // Skip invalid manifest files
+        }
       }
     }
 
@@ -1174,6 +1433,12 @@ export class IcebergBackend implements EntityBackend {
 
         for (const row of rows) {
           const entity = rowToEntity<T>(row)
+
+          // Skip entities that have been hard deleted
+          if (deletedIds.has(entity.$id)) {
+            continue
+          }
+
           const existingEntity = entityMap.get(entity.$id)
 
           // Keep the entity with the highest version number

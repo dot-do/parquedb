@@ -577,4 +577,281 @@ describe('TransactionalBackend', () => {
       expect(decodeData(data2)).toBe('Original')
     })
   })
+
+  // ===========================================================================
+  // Commit Atomicity
+  // ===========================================================================
+
+  describe('Commit atomicity', () => {
+    it('should rollback all changes when a write fails mid-commit', async () => {
+      // Create a backend that fails on specific writes
+      const failingBackend = new FailingBackend(memoryBackend, {
+        failOnWrite: ['fail-this.txt'],
+      })
+      const txBackend = new TransactionalBackend(failingBackend)
+
+      // Set up some existing files
+      await memoryBackend.write('existing1.txt', createTestData('Original 1'))
+      await memoryBackend.write('existing2.txt', createTestData('Original 2'))
+
+      // Start transaction
+      const tx = await txBackend.beginTransaction()
+      await tx.write('new-file.txt', createTestData('New file'))
+      await tx.write('existing1.txt', createTestData('Updated 1'))
+      await tx.write('fail-this.txt', createTestData('This will fail'))
+      await tx.write('existing2.txt', createTestData('Updated 2'))
+
+      // Commit should fail
+      await expect(tx.commit()).rejects.toThrow(TransactionCommitError)
+
+      // Verify rollback: all files should be in their original state
+      expect(await memoryBackend.exists('new-file.txt')).toBe(false)
+      expect(decodeData(await memoryBackend.read('existing1.txt'))).toBe('Original 1')
+      expect(decodeData(await memoryBackend.read('existing2.txt'))).toBe('Original 2')
+      expect(await memoryBackend.exists('fail-this.txt')).toBe(false)
+    })
+
+    it('should rollback deletes when a later write fails', async () => {
+      const failingBackend = new FailingBackend(memoryBackend, {
+        failOnWrite: ['fail-this.txt'],
+      })
+      const txBackend = new TransactionalBackend(failingBackend)
+
+      // Set up existing files
+      await memoryBackend.write('to-delete.txt', createTestData('Delete me'))
+      await memoryBackend.write('keep-me.txt', createTestData('Keep me'))
+
+      // Start transaction with delete and write
+      const tx = await txBackend.beginTransaction()
+      await tx.delete('to-delete.txt')
+      await tx.write('fail-this.txt', createTestData('This will fail'))
+
+      // Commit should fail
+      await expect(tx.commit()).rejects.toThrow(TransactionCommitError)
+
+      // Verify rollback: deleted file should be restored
+      expect(await memoryBackend.exists('to-delete.txt')).toBe(true)
+      expect(decodeData(await memoryBackend.read('to-delete.txt'))).toBe('Delete me')
+      expect(decodeData(await memoryBackend.read('keep-me.txt'))).toBe('Keep me')
+    })
+
+    it('should handle failure on first operation', async () => {
+      const failingBackend = new FailingBackend(memoryBackend, {
+        failOnDelete: ['fail-delete.txt'],
+      })
+      const txBackend = new TransactionalBackend(failingBackend)
+
+      // Set up existing file
+      await memoryBackend.write('fail-delete.txt', createTestData('Original'))
+      await memoryBackend.write('other.txt', createTestData('Other'))
+
+      // Start transaction
+      const tx = await txBackend.beginTransaction()
+      await tx.delete('fail-delete.txt')
+      await tx.write('other.txt', createTestData('Updated'))
+
+      // Commit should fail on delete
+      await expect(tx.commit()).rejects.toThrow(TransactionCommitError)
+
+      // Verify: file should still exist (delete failed, no rollback needed)
+      expect(await memoryBackend.exists('fail-delete.txt')).toBe(true)
+      expect(decodeData(await memoryBackend.read('fail-delete.txt'))).toBe('Original')
+      // The write should not have been applied
+      expect(decodeData(await memoryBackend.read('other.txt'))).toBe('Other')
+    })
+
+    it('should include commit error in TransactionCommitError', async () => {
+      const failingBackend = new FailingBackend(memoryBackend, {
+        failOnWrite: ['fail.txt'],
+        errorMessage: 'Simulated disk full',
+      })
+      const txBackend = new TransactionalBackend(failingBackend)
+
+      const tx = await txBackend.beginTransaction()
+      await tx.write('fail.txt', createTestData('Will fail'))
+
+      try {
+        await tx.commit()
+        expect.fail('Should have thrown')
+      } catch (error) {
+        expect(error).toBeInstanceOf(TransactionCommitError)
+        const commitError = error as TransactionCommitError
+        expect(commitError.errors.length).toBeGreaterThanOrEqual(1)
+        expect(commitError.errors[0].message).toContain('Simulated disk full')
+      }
+    })
+
+    it('should maintain atomicity with mixed deletes and writes', async () => {
+      const failingBackend = new FailingBackend(memoryBackend, {
+        failOnWrite: ['fail.txt'],
+      })
+      const txBackend = new TransactionalBackend(failingBackend)
+
+      // Setup: 3 existing files
+      await memoryBackend.write('file1.txt', createTestData('File 1'))
+      await memoryBackend.write('file2.txt', createTestData('File 2'))
+      await memoryBackend.write('file3.txt', createTestData('File 3'))
+
+      const tx = await txBackend.beginTransaction()
+      // Order: delete file1, write new file, delete file2, update file3, then fail
+      await tx.delete('file1.txt')
+      await tx.write('new.txt', createTestData('New'))
+      await tx.delete('file2.txt')
+      await tx.write('file3.txt', createTestData('Updated 3'))
+      await tx.write('fail.txt', createTestData('This fails'))
+
+      await expect(tx.commit()).rejects.toThrow(TransactionCommitError)
+
+      // All original files should be restored
+      expect(await memoryBackend.exists('file1.txt')).toBe(true)
+      expect(decodeData(await memoryBackend.read('file1.txt'))).toBe('File 1')
+      expect(await memoryBackend.exists('file2.txt')).toBe(true)
+      expect(decodeData(await memoryBackend.read('file2.txt'))).toBe('File 2')
+      expect(decodeData(await memoryBackend.read('file3.txt'))).toBe('File 3')
+      // New files should not exist
+      expect(await memoryBackend.exists('new.txt')).toBe(false)
+      expect(await memoryBackend.exists('fail.txt')).toBe(false)
+    })
+
+    it('should succeed when all operations complete', async () => {
+      // No failures configured
+      const failingBackend = new FailingBackend(memoryBackend, {})
+      const txBackend = new TransactionalBackend(failingBackend)
+
+      await memoryBackend.write('existing.txt', createTestData('Original'))
+
+      const tx = await txBackend.beginTransaction()
+      await tx.write('new.txt', createTestData('New'))
+      await tx.write('existing.txt', createTestData('Updated'))
+      await tx.delete('nonexistent.txt') // Should not fail
+
+      await tx.commit()
+
+      expect(decodeData(await memoryBackend.read('new.txt'))).toBe('New')
+      expect(decodeData(await memoryBackend.read('existing.txt'))).toBe('Updated')
+    })
+  })
 })
+
+// =============================================================================
+// Test Helpers
+// =============================================================================
+
+/**
+ * A wrapper backend that can simulate failures on specific operations
+ */
+class FailingBackend implements MemoryBackend {
+  readonly type = 'failing'
+
+  constructor(
+    private readonly inner: MemoryBackend,
+    private readonly config: {
+      failOnWrite?: string[]
+      failOnDelete?: string[]
+      failOnRead?: string[]
+      errorMessage?: string
+    }
+  ) {}
+
+  private shouldFail(path: string, operation: 'write' | 'delete' | 'read'): boolean {
+    const list =
+      operation === 'write'
+        ? this.config.failOnWrite
+        : operation === 'delete'
+          ? this.config.failOnDelete
+          : this.config.failOnRead
+    return list?.includes(path) ?? false
+  }
+
+  private throwError(path: string, operation: string): never {
+    throw new Error(this.config.errorMessage || `Simulated ${operation} failure on ${path}`)
+  }
+
+  async read(path: string): Promise<Uint8Array> {
+    if (this.shouldFail(path, 'read')) {
+      this.throwError(path, 'read')
+    }
+    return this.inner.read(path)
+  }
+
+  async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    return this.inner.readRange(path, start, end)
+  }
+
+  async exists(path: string): Promise<boolean> {
+    return this.inner.exists(path)
+  }
+
+  async stat(path: string): Promise<import('../../../src/types/storage').FileStat | null> {
+    return this.inner.stat(path)
+  }
+
+  async list(
+    prefix: string,
+    options?: import('../../../src/types/storage').ListOptions
+  ): Promise<import('../../../src/types/storage').ListResult> {
+    return this.inner.list(prefix, options)
+  }
+
+  async write(
+    path: string,
+    data: Uint8Array,
+    options?: import('../../../src/types/storage').WriteOptions
+  ): Promise<import('../../../src/types/storage').WriteResult> {
+    if (this.shouldFail(path, 'write')) {
+      this.throwError(path, 'write')
+    }
+    return this.inner.write(path, data, options)
+  }
+
+  async writeAtomic(
+    path: string,
+    data: Uint8Array,
+    options?: import('../../../src/types/storage').WriteOptions
+  ): Promise<import('../../../src/types/storage').WriteResult> {
+    return this.inner.writeAtomic(path, data, options)
+  }
+
+  async append(path: string, data: Uint8Array): Promise<void> {
+    return this.inner.append(path, data)
+  }
+
+  async delete(path: string): Promise<boolean> {
+    if (this.shouldFail(path, 'delete')) {
+      this.throwError(path, 'delete')
+    }
+    return this.inner.delete(path)
+  }
+
+  async deletePrefix(prefix: string): Promise<number> {
+    return this.inner.deletePrefix(prefix)
+  }
+
+  async mkdir(path: string): Promise<void> {
+    return this.inner.mkdir(path)
+  }
+
+  async rmdir(
+    path: string,
+    options?: import('../../../src/types/storage').RmdirOptions
+  ): Promise<void> {
+    return this.inner.rmdir(path, options)
+  }
+
+  async writeConditional(
+    path: string,
+    data: Uint8Array,
+    expectedVersion: string | null,
+    options?: import('../../../src/types/storage').WriteOptions
+  ): Promise<import('../../../src/types/storage').WriteResult> {
+    return this.inner.writeConditional(path, data, expectedVersion, options)
+  }
+
+  async copy(source: string, dest: string): Promise<void> {
+    return this.inner.copy(source, dest)
+  }
+
+  async move(source: string, dest: string): Promise<void> {
+    return this.inner.move(source, dest)
+  }
+}

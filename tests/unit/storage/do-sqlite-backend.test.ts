@@ -195,6 +195,34 @@ function createMockSqlStorage(): SqlStorage {
       run(): { changes: number } {
         const normalized = query.trim().replace(/\s+/g, ' ')
 
+        // INSERT OR IGNORE INTO parquet_blocks (for atomic conditional write when file should not exist)
+        if (normalized.includes('INSERT OR IGNORE INTO parquet_blocks')) {
+          const path = boundParams[0] as string
+          const data = boundParams[1] as Uint8Array
+          const size = boundParams[2] as number
+          const etag = boundParams[3] as string
+          const createdAt = boundParams[4] as string
+          const updatedAt = boundParams[5] as string
+
+          // Only insert if file doesn't already exist
+          if (rows.has(path)) {
+            return { changes: 0 }
+          }
+
+          // Convert Uint8Array to ArrayBuffer for storage
+          const buffer = data instanceof Uint8Array ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) : data as ArrayBuffer
+
+          rows.set(path, {
+            path,
+            data: buffer,
+            size,
+            etag,
+            created_at: createdAt,
+            updated_at: updatedAt,
+          })
+          return { changes: 1 }
+        }
+
         // INSERT OR REPLACE INTO parquet_blocks
         if (normalized.includes('INSERT OR REPLACE INTO parquet_blocks')) {
           const path = boundParams[0] as string
@@ -213,6 +241,35 @@ function createMockSqlStorage(): SqlStorage {
             size,
             etag,
             created_at: createdAt,
+            updated_at: updatedAt,
+          })
+          return { changes: 1 }
+        }
+
+        // UPDATE parquet_blocks SET ... WHERE path = ? AND etag = ? (atomic conditional update)
+        if (normalized.includes('UPDATE parquet_blocks') && normalized.includes('WHERE path = ?') && normalized.includes('AND etag = ?')) {
+          // Params: data, size, etag, updated_at, path, expectedEtag
+          const data = boundParams[0] as Uint8Array
+          const size = boundParams[1] as number
+          const etag = boundParams[2] as string
+          const updatedAt = boundParams[3] as string
+          const path = boundParams[4] as string
+          const expectedEtag = boundParams[5] as string
+
+          const existing = rows.get(path)
+          if (!existing || existing.etag !== expectedEtag) {
+            return { changes: 0 }
+          }
+
+          // Convert Uint8Array to ArrayBuffer for storage
+          const buffer = data instanceof Uint8Array ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) : data as ArrayBuffer
+
+          rows.set(path, {
+            path,
+            data: buffer,
+            size,
+            etag,
+            created_at: existing.created_at,
             updated_at: updatedAt,
           })
           return { changes: 1 }

@@ -488,3 +488,35 @@ export const AI_REQUESTS_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
  * A popular non-cryptographic hash function
  */
 export const DJB2_INITIAL = 5381
+
+// =============================================================================
+// Byte Size Constants
+// =============================================================================
+
+/**
+ * Bytes per kilobyte (1024)
+ * Used for human-readable byte formatting
+ */
+export const BYTES_PER_KB = 1024
+
+// =============================================================================
+// Time Constants
+// =============================================================================
+
+/**
+ * Milliseconds per second (1000)
+ * Used for human-readable duration formatting
+ */
+export const MS_PER_SECOND = 1000
+
+/**
+ * Milliseconds per minute (60,000)
+ * Used for human-readable duration formatting
+ */
+export const MS_PER_MINUTE = 60 * 1000
+
+/**
+ * Milliseconds per hour (3,600,000)
+ * Used for human-readable duration formatting
+ */
+export const MS_PER_HOUR = 60 * 60 * 1000

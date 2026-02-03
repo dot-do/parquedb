@@ -204,6 +204,8 @@ export interface BooleanClause {
   required: boolean
   /** Whether this clause is excluded (NOT semantics) */
   excluded: boolean
+  /** How to combine multiple terms within this clause (default: 'and') */
+  termCombination?: 'and' | 'or'
 }
 
 /**
@@ -682,6 +684,7 @@ function parseTokenGroupAsClauses(tokens: BooleanToken[]): ParsedClauses {
   const terms: string[] = []
   let phrase: string | undefined
   let required = false
+  let termCombination: 'and' | 'or' | undefined
   const excludedClauses: BooleanClause[] = []
 
   let i = 0
@@ -726,6 +729,10 @@ function parseTokenGroupAsClauses(tokens: BooleanToken[]): ParsedClauses {
     } else if (token.type === 'lparen') {
       const parenGroup = extractParenGroup(tokens, i)
       const subQuery = parseTokenGroup(parenGroup.tokens)
+      // Preserve OR semantics from parenthesized groups
+      if (subQuery.type === 'or' && subQuery.clauses.length > 1) {
+        termCombination = 'or'
+      }
       for (const clause of subQuery.clauses) {
         if (clause.excluded) {
           excludedClauses.push(clause)
@@ -733,6 +740,10 @@ function parseTokenGroupAsClauses(tokens: BooleanToken[]): ParsedClauses {
           terms.push(...clause.terms)
           if (clause.phrase) phrase = clause.phrase
           if (clause.required) required = true
+          // Preserve nested termCombination
+          if (clause.termCombination === 'or') {
+            termCombination = 'or'
+          }
         }
       }
       i = parenGroup.endIndex
@@ -742,7 +753,7 @@ function parseTokenGroupAsClauses(tokens: BooleanToken[]): ParsedClauses {
   }
 
   const mainClause: BooleanClause | null = (terms.length > 0 || phrase)
-    ? { terms, phrase, required, excluded: false }
+    ? { terms, phrase, required, excluded: false, termCombination }
     : null
 
   return { mainClause, excludedClauses }

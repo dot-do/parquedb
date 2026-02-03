@@ -15,15 +15,41 @@ import { encodeVariant, decodeVariant } from '../parquet/variant'
 // =============================================================================
 
 /**
+ * Options for entityToRow conversion
+ */
+export interface EntityToRowOptions {
+  /**
+   * Fields to extract into separate Parquet columns (shredding)
+   * for predicate pushdown support
+   */
+  shredFields?: string[]
+}
+
+/**
+ * Options for rowToEntity conversion
+ */
+export interface RowToEntityOptions {
+  /**
+   * Fields that were shredded into separate columns
+   * These take precedence over values in $data
+   */
+  shredFields?: string[]
+}
+
+/**
  * Convert an entity to a Parquet row
  *
  * Extracts core fields ($id, $type, name, audit fields) into separate columns
  * and encodes remaining data fields as a base64-encoded Variant in $data.
  *
+ * If shredFields is provided, those fields will be extracted into separate
+ * top-level columns for predicate pushdown support.
+ *
  * @param entity - The entity to convert
+ * @param options - Optional configuration for shredding
  * @returns A row object suitable for Parquet writing
  */
-export function entityToRow<T>(entity: Entity<T>): Record<string, unknown> {
+export function entityToRow<T>(entity: Entity<T>, options?: EntityToRowOptions): Record<string, unknown> {
   // Extract core fields
   const {
     $id,
@@ -47,8 +73,30 @@ export function entityToRow<T>(entity: Entity<T>): Record<string, unknown> {
     }
   }
 
+  // Extract shredded fields into separate columns
+  const shredFields = options?.shredFields ?? []
+  const shreddedColumns: Record<string, unknown> = {}
+  const remainingDataFields: Record<string, unknown> = {}
+
+  for (const [key, value] of Object.entries(filteredDataFields)) {
+    if (shredFields.includes(key)) {
+      // Extract to shredded column (preserve null values)
+      shreddedColumns[key] = value
+    } else {
+      remainingDataFields[key] = value
+    }
+  }
+
+  // Also check for null values explicitly set on shredded fields
+  // (they may have been filtered above but we want to preserve nulls)
+  for (const field of shredFields) {
+    if (field in dataFields && dataFields[field] === null) {
+      shreddedColumns[field] = null
+    }
+  }
+
   // Encode remaining fields as Variant $data, then base64 encode to avoid binary issues
-  const variantBytes = encodeVariant(filteredDataFields)
+  const variantBytes = encodeVariant(remainingDataFields)
   const $data = bytesToBase64(variantBytes)
 
   return {
@@ -63,6 +111,7 @@ export function entityToRow<T>(entity: Entity<T>): Record<string, unknown> {
     deletedBy: deletedBy ?? null,
     version,
     $data,
+    ...shreddedColumns,
   }
 }
 
@@ -70,11 +119,13 @@ export function entityToRow<T>(entity: Entity<T>): Record<string, unknown> {
  * Convert a Parquet row back to an Entity
  *
  * Decodes the $data Variant column and merges with core fields.
+ * If shredFields is provided, those columns take precedence over $data values.
  *
  * @param row - The row from Parquet reader
+ * @param options - Optional configuration for shredding
  * @returns Reconstructed Entity
  */
-export function rowToEntity<T>(row: Record<string, unknown>): Entity<T> {
+export function rowToEntity<T>(row: Record<string, unknown>, options?: RowToEntityOptions): Entity<T> {
   const {
     $id,
     $type,
@@ -87,6 +138,7 @@ export function rowToEntity<T>(row: Record<string, unknown>): Entity<T> {
     deletedBy,
     version,
     $data,
+    ...otherColumns
   } = row
 
   // Decode Variant $data (stored as base64-encoded string)
@@ -101,6 +153,21 @@ export function rowToEntity<T>(row: Record<string, unknown>): Entity<T> {
   } else if ($data && typeof $data === 'object') {
     // If $data came back as an object (some parquet readers might do this)
     dataFields = $data as Record<string, unknown>
+  }
+
+  // Merge shredded columns - they take precedence over $data values
+  const shredFields = options?.shredFields ?? []
+  for (const field of shredFields) {
+    if (field in otherColumns) {
+      const value = otherColumns[field]
+      // Null values in shredded columns are treated as missing (undefined)
+      if (value !== null) {
+        dataFields[field] = value
+      } else {
+        // Remove from dataFields if shredded column is null
+        delete dataFields[field]
+      }
+    }
   }
 
   return {

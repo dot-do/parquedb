@@ -210,6 +210,13 @@ export interface FsxWriteOptions {
    * Only write if file doesn't exist
    */
   exclusive?: boolean
+
+  /**
+   * Only write if current file's etag matches this value (conditional write).
+   * This enables atomic compare-and-swap operations.
+   * If the etag doesn't match, the write fails with ECONFLICT error.
+   */
+  ifMatch?: string
 }
 
 /**
@@ -566,6 +573,7 @@ export const FsxErrorCodes = {
   ENOSPC: 'ENOSPC', // No space left
   EIO: 'EIO', // I/O error
   ETIMEDOUT: 'ETIMEDOUT', // Operation timed out
+  ECONFLICT: 'ECONFLICT', // Conditional write conflict (etag mismatch)
 } as const
 
 export type FsxErrorCode = (typeof FsxErrorCodes)[keyof typeof FsxErrorCodes]

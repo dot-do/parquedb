@@ -21,7 +21,7 @@ import type {
   BackendStats,
   SchemaFieldType,
 } from './types'
-import { CommitConflictError } from './types'
+import { CommitConflictError, ReadOnlyError } from './types'
 import { AlreadyExistsError, isNotFoundError } from '../storage/errors'
 import type { Entity, EntityId, EntityData, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
 import type { Filter } from '../types/filter'
@@ -247,7 +247,7 @@ export class DeltaBackend implements EntityBackend {
     options?: CreateOptions
   ): Promise<Entity<T>> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('create', 'DeltaBackend')
     }
 
     const now = new Date()
@@ -278,7 +278,7 @@ export class DeltaBackend implements EntityBackend {
     options?: UpdateOptions
   ): Promise<Entity<T>> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('update', 'DeltaBackend')
     }
 
     // Get existing entity
@@ -309,7 +309,7 @@ export class DeltaBackend implements EntityBackend {
 
   async delete(ns: string, id: string, options?: DeleteOptions): Promise<DeleteResult> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('delete', 'DeltaBackend')
     }
 
     const entity = await this.get(ns, id)
@@ -348,7 +348,7 @@ export class DeltaBackend implements EntityBackend {
     options?: CreateOptions
   ): Promise<Entity<T>[]> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('bulkCreate', 'DeltaBackend')
     }
 
     const now = new Date()
@@ -380,7 +380,7 @@ export class DeltaBackend implements EntityBackend {
     options?: UpdateOptions
   ): Promise<UpdateResult> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('bulkUpdate', 'DeltaBackend')
     }
 
     const entities = await this.find(ns, filter)
@@ -411,7 +411,7 @@ export class DeltaBackend implements EntityBackend {
 
   async bulkDelete(ns: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('bulkDelete', 'DeltaBackend')
     }
 
     const entities = await this.find(ns, filter)
@@ -559,7 +559,7 @@ export class DeltaBackend implements EntityBackend {
 
   async setSchema(ns: string, schema: EntitySchema): Promise<void> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('setSchema', 'DeltaBackend')
     }
 
     // Schema is set when creating the table
@@ -594,7 +594,7 @@ export class DeltaBackend implements EntityBackend {
 
   async compact(ns: string, options?: CompactOptions): Promise<CompactResult> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('compact', 'DeltaBackend')
     }
 
     const startTime = Date.now()
@@ -859,7 +859,7 @@ export class DeltaBackend implements EntityBackend {
 
   async vacuum(ns: string, options?: VacuumOptions): Promise<VacuumResult> {
     if (this.readOnly) {
-      throw new Error('Backend is read-only')
+      throw new ReadOnlyError('vacuum', 'DeltaBackend')
     }
 
     const retentionMs = options?.retentionMs ?? 7 * 24 * 60 * 60 * 1000 // 7 days default

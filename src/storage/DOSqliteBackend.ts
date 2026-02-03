@@ -394,34 +394,54 @@ export class DOSqliteBackend implements StorageBackend {
     const etag = generateEtag(data)
     const size = data.length
 
-    // Handle ifNoneMatch: '*' (only write if doesn't exist)
+    // Handle ifNoneMatch: '*' (only write if doesn't exist) - use atomic INSERT OR IGNORE
     if (options?.ifNoneMatch === '*') {
-      const exists = this.sql
-        .prepare('SELECT 1 FROM parquet_blocks WHERE path = ?')
-        .bind(key)
-        .first()
-      if (exists) {
+      const insertResult = this.sql
+        .prepare(`
+          INSERT OR IGNORE INTO parquet_blocks (path, data, size, etag, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .bind(key, data, size, etag, now, now)
+        .run()
+
+      if (insertResult.changes === 0) {
+        // File already exists - atomic detection of conflict
         throw new DOSqliteFileExistsError(path)
       }
+
+      return { etag, size }
     }
 
-    // Handle ifMatch (only write if etag matches)
+    // Handle ifMatch (only write if etag matches) - use atomic UPDATE with WHERE clause
     if (options?.ifMatch) {
-      const existing = this.sql
-        .prepare('SELECT etag FROM parquet_blocks WHERE path = ?')
-        .bind(key)
-        .first<Pick<ParquetBlockRow, 'etag'>>()
+      const updateResult = this.sql
+        .prepare(`
+          UPDATE parquet_blocks
+          SET data = ?, size = ?, etag = ?, updated_at = ?
+          WHERE path = ? AND etag = ?
+        `)
+        .bind(data, size, etag, now, key, options.ifMatch)
+        .run()
 
-      if (!existing || existing.etag !== options.ifMatch) {
+      if (updateResult.changes === 0) {
+        // Either file doesn't exist or etag mismatch - check which for error message
+        const existing = this.sql
+          .prepare('SELECT etag FROM parquet_blocks WHERE path = ?')
+          .bind(key)
+          .first<Pick<ParquetBlockRow, 'etag'>>()
+
         throw new DOSqliteETagMismatchError(
           path,
           options.ifMatch,
           existing?.etag || null
         )
       }
+
+      return { etag, size }
     }
 
-    // Check if row exists for created_at handling
+    // Standard write: preserve created_at if file exists
+    // First try to get existing created_at, then do atomic INSERT OR REPLACE
     const existing = this.sql
       .prepare('SELECT created_at FROM parquet_blocks WHERE path = ?')
       .bind(key)
@@ -524,52 +544,86 @@ export class DOSqliteBackend implements StorageBackend {
     const etag = generateEtag(data)
     const size = data.length
 
-    // Use a single atomic block to check and write
-    // In DO SQLite, synchronous operations without intervening awaits are atomic
+    // Use atomic SQL operations to prevent TOCTOU race conditions.
+    // The check and write are combined in a single SQL statement.
 
-    // Get current state
-    const existing = this.sql
-      .prepare('SELECT etag, created_at FROM parquet_blocks WHERE path = ?')
-      .bind(key)
-      .first<Pick<ParquetBlockRow, 'etag' | 'created_at'>>()
-
-    const currentEtag = existing?.etag || null
-
-    // Validate expected version
     if (expectedVersion === null) {
-      // Expecting file to not exist
-      if (existing) {
+      // Expecting file to NOT exist - use INSERT with conflict detection
+      // Handle additional write options atomically
+      if (options?.ifMatch) {
+        // ifMatch requires file to exist, but expectedVersion=null requires it NOT to exist
+        // This is a contradictory request, but we follow expectedVersion semantics
+        throw new DOSqliteETagMismatchError(path, options.ifMatch, null)
+      }
+
+      // Try to insert - if file exists, this will fail due to PRIMARY KEY constraint
+      // We use INSERT without OR REPLACE to detect conflicts
+      const insertResult = this.sql
+        .prepare(`
+          INSERT OR IGNORE INTO parquet_blocks (path, data, size, etag, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .bind(key, data, size, etag, now, now)
+        .run()
+
+      if (insertResult.changes === 0) {
+        // File already exists - get current etag for error message
+        const existing = this.sql
+          .prepare('SELECT etag FROM parquet_blocks WHERE path = ?')
+          .bind(key)
+          .first<Pick<ParquetBlockRow, 'etag'>>()
+        const currentEtag = existing?.etag || null
+
+        // Check if this is an ifNoneMatch: '*' case
+        if (options?.ifNoneMatch === '*') {
+          throw new DOSqliteFileExistsError(path)
+        }
         throw new DOSqliteETagMismatchError(path, expectedVersion, currentEtag)
       }
     } else {
-      // Expecting file to exist with specific version
-      if (!existing) {
+      // Expecting file to exist with specific version - use atomic UPDATE with WHERE clause
+      // Handle ifNoneMatch: '*' - it's contradictory with expectedVersion !== null
+      if (options?.ifNoneMatch === '*') {
+        // ifNoneMatch: '*' requires file NOT to exist, but expectedVersion requires it to exist
+        // Check if file exists and throw appropriate error
+        const existing = this.sql
+          .prepare('SELECT etag FROM parquet_blocks WHERE path = ?')
+          .bind(key)
+          .first<Pick<ParquetBlockRow, 'etag'>>()
+        if (existing) {
+          throw new DOSqliteFileExistsError(path)
+        }
         throw new DOSqliteETagMismatchError(path, expectedVersion, null)
       }
-      if (currentEtag !== expectedVersion) {
-        throw new DOSqliteETagMismatchError(path, expectedVersion, currentEtag)
+
+      // Determine which etag to check - prefer ifMatch if provided
+      const etagToCheck = options?.ifMatch || expectedVersion
+
+      // Atomic UPDATE that checks etag in WHERE clause
+      const updateResult = this.sql
+        .prepare(`
+          UPDATE parquet_blocks
+          SET data = ?, size = ?, etag = ?, updated_at = ?
+          WHERE path = ? AND etag = ?
+        `)
+        .bind(data, size, etag, now, key, etagToCheck)
+        .run()
+
+      if (updateResult.changes === 0) {
+        // Either file doesn't exist or etag mismatch - check which
+        const existing = this.sql
+          .prepare('SELECT etag FROM parquet_blocks WHERE path = ?')
+          .bind(key)
+          .first<Pick<ParquetBlockRow, 'etag'>>()
+
+        if (!existing) {
+          // File doesn't exist
+          throw new DOSqliteETagMismatchError(path, expectedVersion, null)
+        }
+        // File exists but etag doesn't match
+        throw new DOSqliteETagMismatchError(path, etagToCheck, existing.etag)
       }
     }
-
-    // Write the data in the same synchronous block
-    // Use existing created_at if available, otherwise use now
-    const createdAt = existing?.created_at || now
-
-    // Apply any additional write options
-    if (options?.ifNoneMatch === '*' && existing) {
-      throw new DOSqliteFileExistsError(path)
-    }
-    if (options?.ifMatch && (!existing || existing.etag !== options.ifMatch)) {
-      throw new DOSqliteETagMismatchError(path, options.ifMatch, currentEtag)
-    }
-
-    this.sql
-      .prepare(`
-        INSERT OR REPLACE INTO parquet_blocks (path, data, size, etag, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      .bind(key, data, size, etag, createdAt, now)
-      .run()
 
     return {
       etag,

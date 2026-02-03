@@ -296,7 +296,12 @@ export class RelationshipBatchLoader {
     if (this.timer) return
 
     this.timer = setTimeout(() => {
-      this.flush()
+      // Call flush and catch any errors to prevent unhandled rejections.
+      // Individual request errors are handled in processBatch, so this catch
+      // is only for unexpected errors in the flush logic itself.
+      this.flush().catch(() => {
+        // Errors are handled by rejecting individual promises in processBatch
+      })
     }, this.options.windowMs)
   }
 

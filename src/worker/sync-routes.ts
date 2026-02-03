@@ -15,6 +15,17 @@ import { DEFAULT_VISIBILITY } from '../types/visibility'
 import type { Visibility } from '../types/visibility'
 import type { SyncManifest } from '../sync/manifest'
 import { MissingBucketError, handleBucketError } from './r2-errors'
+import { extractBearerToken, verifyJWT } from './jwt-utils'
+import {
+  signUploadToken,
+  signDownloadToken,
+  verifyUploadToken,
+  verifyDownloadToken,
+  type TokenPayload,
+} from './sync-token'
+
+// Re-export token functions for backwards compatibility and testing
+export { signUploadToken, signDownloadToken, verifyUploadToken, verifyDownloadToken, type TokenPayload }
 
 // =============================================================================
 // Types
@@ -86,7 +97,7 @@ export async function handleSyncRoutes(
   }
 
   // All sync routes require authentication
-  const token = extractToken(request)
+  const token = extractBearerToken(request)
   if (!token) {
     return addCorsHeaders(Response.json(
       { error: 'Authentication required' },
@@ -94,13 +105,17 @@ export async function handleSyncRoutes(
     ))
   }
 
-  // Decode user from token
-  const user = await decodeAndValidateToken(token)
-  if (!user) {
+  // Verify token with JWKS and extract user info
+  const verifyResult = await verifyJWT(token, env)
+  if (!verifyResult.valid || !verifyResult.user) {
     return addCorsHeaders(Response.json(
-      { error: 'Invalid token' },
+      { error: verifyResult.error ?? 'Invalid token' },
       { status: 401 }
     ))
+  }
+  const user: UserInfo = {
+    id: verifyResult.user.id,
+    username: verifyResult.user.username,
   }
 
   // POST /api/sync/register - Register a database
@@ -299,24 +314,32 @@ async function handleDownloadUrls(
       )
     }
 
+    // Validate SYNC_SECRET is configured
+    if (!env.SYNC_SECRET) {
+      return Response.json(
+        { error: 'SYNC_SECRET is not configured. Contact administrator.' },
+        { status: 500 }
+      )
+    }
+
     // Generate download URLs
     const baseUrl = new URL(request.url).origin
     const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString() // 1 hour
 
-    const urls = body.paths.map(path => {
-      const downloadToken = signDownloadToken({
+    const urls = await Promise.all(body.paths.map(async path => {
+      const downloadToken = await signDownloadToken({
         databaseId: body.databaseId,
         path,
         userId: user.id,
         expiresAt,
-      })
+      }, env)
 
       return {
         path,
         url: `${baseUrl}/api/sync/download/${body.databaseId}/${encodeURIComponent(path)}?token=${downloadToken}`,
         expiresAt,
       }
-    })
+    }))
 
     return Response.json({ urls })
   } catch (error) {
@@ -451,7 +474,15 @@ export async function handleUpload(
       ))
     }
 
-    const tokenData = verifyUploadToken(uploadToken)
+    // Validate SYNC_SECRET is configured for token verification
+    if (!env.SYNC_SECRET) {
+      return addCorsHeaders(Response.json(
+        { error: 'SYNC_SECRET is not configured. Contact administrator.' },
+        { status: 500 }
+      ))
+    }
+
+    const tokenData = await verifyUploadToken(uploadToken, env)
     if (!tokenData || tokenData.databaseId !== databaseId || tokenData.path !== filePath) {
       return addCorsHeaders(Response.json(
         { error: 'Invalid or expired upload token' },
@@ -520,7 +551,15 @@ export async function handleDownload(
       ))
     }
 
-    const tokenData = verifyDownloadToken(downloadToken)
+    // Validate SYNC_SECRET is configured for token verification
+    if (!env.SYNC_SECRET) {
+      return addCorsHeaders(Response.json(
+        { error: 'SYNC_SECRET is not configured. Contact administrator.' },
+        { status: 500 }
+      ))
+    }
+
+    const tokenData = await verifyDownloadToken(downloadToken, env)
     if (!tokenData || tokenData.databaseId !== databaseId || tokenData.path !== filePath) {
       return addCorsHeaders(Response.json(
         { error: 'Invalid or expired download token' },
@@ -581,49 +620,6 @@ interface UserInfo {
 }
 
 /**
- * Extract Bearer token from Authorization header
- */
-function extractToken(request: Request): string | null {
-  const auth = request.headers.get('Authorization')
-  if (!auth?.startsWith('Bearer ')) {
-    return null
-  }
-  return auth.slice(7)
-}
-
-/**
- * Decode and validate JWT token
- */
-async function decodeAndValidateToken(token: string): Promise<UserInfo | null> {
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 3) {
-      return null
-    }
-
-    const payload = parts[1]!
-    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
-    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
-    const decoded = atob(padded)
-    const data = JSON.parse(decoded) as Record<string, unknown>
-
-    // Check expiration
-    if (data.exp && typeof data.exp === 'number') {
-      if (Date.now() > data.exp * 1000) {
-        return null
-      }
-    }
-
-    return {
-      id: (data.sub as string) ?? (data.id as string),
-      username: data.username as string | undefined,
-    }
-  } catch {
-    return null
-  }
-}
-
-/**
  * Verify user owns the database
  */
 async function verifyDatabaseOwnership(
@@ -657,187 +653,13 @@ async function verifyDatabaseAccess(
 // Token Signing (HMAC-SHA256 based tokens)
 // =============================================================================
 
-interface TokenPayload {
+/**
+ * Token payload for upload/download signed URLs
+ * @internal Exported for testing purposes
+ */
+export interface TokenPayload {
   databaseId: string
   path: string
   userId: string
   expiresAt: string
-}
-
-/**
- * Get the HMAC key from the environment
- * @throws Error if SYNC_SECRET is not configured
- */
-async function getHmacKey(env: Env): Promise<CryptoKey> {
-  if (!env.SYNC_SECRET) {
-    throw new Error('SYNC_SECRET environment variable is required for token signing')
-  }
-
-  const encoder = new TextEncoder()
-  const keyData = encoder.encode(env.SYNC_SECRET)
-
-  return crypto.subtle.importKey(
-    'raw',
-    keyData,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign', 'verify']
-  )
-}
-
-/**
- * Sign data with HMAC-SHA256 and return base64url-encoded signature
- */
-async function hmacSign(data: string, key: CryptoKey): Promise<string> {
-  const encoder = new TextEncoder()
-  const dataBuffer = encoder.encode(data)
-
-  const signature = await crypto.subtle.sign('HMAC', key, dataBuffer)
-  const signatureArray = new Uint8Array(signature)
-
-  // Convert to base64url
-  let binary = ''
-  for (const byte of signatureArray) {
-    binary += String.fromCharCode(byte)
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-/**
- * Verify HMAC-SHA256 signature
- */
-async function hmacVerify(data: string, signature: string, key: CryptoKey): Promise<boolean> {
-  try {
-    const encoder = new TextEncoder()
-    const dataBuffer = encoder.encode(data)
-
-    // Convert base64url signature back to ArrayBuffer
-    const base64 = signature.replace(/-/g, '+').replace(/_/g, '/')
-    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
-    const binary = atob(padded)
-    const signatureBuffer = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i++) {
-      signatureBuffer[i] = binary.charCodeAt(i)
-    }
-
-    return crypto.subtle.verify('HMAC', key, signatureBuffer, dataBuffer)
-  } catch {
-    return false
-  }
-}
-
-/**
- * Sign an upload token using HMAC-SHA256
- * Token format: base64url(payload).base64url(signature)
- */
-async function signUploadToken(payload: TokenPayload, env: Env): Promise<string> {
-  const data = JSON.stringify({
-    ...payload,
-    type: 'upload',
-  })
-
-  const key = await getHmacKey(env)
-  const payloadEncoded = btoa(data).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-  const signature = await hmacSign(data, key)
-
-  return `${payloadEncoded}.${signature}`
-}
-
-/**
- * Sign a download token using HMAC-SHA256
- * Token format: base64url(payload).base64url(signature)
- */
-async function signDownloadToken(payload: TokenPayload, env: Env): Promise<string> {
-  const data = JSON.stringify({
-    ...payload,
-    type: 'download',
-  })
-
-  const key = await getHmacKey(env)
-  const payloadEncoded = btoa(data).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-  const signature = await hmacSign(data, key)
-
-  return `${payloadEncoded}.${signature}`
-}
-
-/**
- * Verify an upload token
- */
-async function verifyUploadToken(token: string, env: Env): Promise<TokenPayload | null> {
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 2) {
-      return null
-    }
-
-    const [payloadEncoded, signature] = parts as [string, string]
-
-    // Decode payload
-    const base64 = payloadEncoded.replace(/-/g, '+').replace(/_/g, '/')
-    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
-    const jsonStr = atob(padded)
-    const data = JSON.parse(jsonStr) as TokenPayload & { type: string }
-
-    // Verify type
-    if (data.type !== 'upload') {
-      return null
-    }
-
-    // Check expiration
-    if (new Date(data.expiresAt) < new Date()) {
-      return null
-    }
-
-    // Verify HMAC signature
-    const key = await getHmacKey(env)
-    const isValid = await hmacVerify(jsonStr, signature, key)
-    if (!isValid) {
-      return null
-    }
-
-    return data
-  } catch {
-    return null
-  }
-}
-
-/**
- * Verify a download token
- */
-async function verifyDownloadToken(token: string, env: Env): Promise<TokenPayload | null> {
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 2) {
-      return null
-    }
-
-    const [payloadEncoded, signature] = parts as [string, string]
-
-    // Decode payload
-    const base64 = payloadEncoded.replace(/-/g, '+').replace(/_/g, '/')
-    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
-    const jsonStr = atob(padded)
-    const data = JSON.parse(jsonStr) as TokenPayload & { type: string }
-
-    // Verify type
-    if (data.type !== 'download') {
-      return null
-    }
-
-    // Check expiration
-    if (new Date(data.expiresAt) < new Date()) {
-      return null
-    }
-
-    // Verify HMAC signature
-    const key = await getHmacKey(env)
-    const isValid = await hmacVerify(jsonStr, signature, key)
-    if (!isValid) {
-      return null
-    }
-
-    return data
-  } catch {
-    return null
-  }
 }

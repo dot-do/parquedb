@@ -25,10 +25,88 @@ export class EventWalManager {
   /** Event buffers per namespace for WAL batching with sequence tracking */
   private nsEventBuffers: Map<string, EventBuffer> = new Map()
 
+  /**
+   * Legacy event buffer for events with pre-assigned IDs.
+   * Used by ParqueDBDO.getEntityFromEvents and transaction snapshots.
+   * Events stored here use the "ns:id" target format (e.g., "users:u1").
+   */
+  private eventBuffer: Event[] = []
+
+  /** Size tracking for the legacy event buffer */
+  private eventBufferSize: number = 0
+
   constructor(
     private sql: SqlStorage,
     private counters: Map<string, number>
   ) {}
+
+  // ===========================================================================
+  // Legacy Event Buffer (for events with pre-assigned IDs)
+  // ===========================================================================
+
+  /**
+   * Append an event with a pre-assigned ID to the legacy buffer.
+   *
+   * This is used by ParqueDBDO operations that need to store events with
+   * specific IDs (e.g., ULIDs). The event target must use the correct
+   * "ns:id" format (e.g., "users:u1") created by entityTarget().
+   *
+   * @param event - Complete event including ID and target in "ns:id" format
+   */
+  async appendEvent(event: Event): Promise<void> {
+    // Validate that the target uses the correct format (ns:id, not ns/id)
+    // Entity targets should contain a colon, not a slash
+    if (event.target.includes('/') && !event.target.includes(':')) {
+      throw new Error(
+        `Invalid event target format: "${event.target}". ` +
+          'Expected "ns:id" format (e.g., "users:u1"). ' +
+          'Use entityTarget(ns, id) to create the correct format.'
+      )
+    }
+
+    this.eventBuffer.push(event)
+    this.eventBufferSize += JSON.stringify(event).length
+  }
+
+  /**
+   * Get the legacy event buffer.
+   *
+   * Returns a shallow copy to prevent external mutation.
+   * Events in this buffer have targets in "ns:id" format.
+   */
+  getEventBuffer(): Event[] {
+    return [...this.eventBuffer]
+  }
+
+  /**
+   * Get the size of the legacy event buffer in bytes.
+   */
+  getEventBufferSize(): number {
+    return this.eventBufferSize
+  }
+
+  /**
+   * Set the legacy event buffer (for transaction rollback).
+   *
+   * This restores the event buffer to a previous state captured
+   * in a transaction snapshot. All events must have targets in
+   * the correct "ns:id" format.
+   *
+   * @param events - Events to restore (should use "ns:id" target format)
+   * @param size - Size in bytes to restore
+   */
+  setEventBuffer(events: Event[], size: number): void {
+    this.eventBuffer = events
+    this.eventBufferSize = size
+  }
+
+  /**
+   * Clear the legacy event buffer.
+   */
+  clearEventBuffer(): void {
+    this.eventBuffer = []
+    this.eventBufferSize = 0
+  }
 
   // ===========================================================================
   // Namespace-based Event Buffering

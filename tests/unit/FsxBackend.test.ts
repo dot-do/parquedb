@@ -519,4 +519,280 @@ describe('FsxBackend', () => {
       expect(result.hasMore).toBe(false)
     })
   })
+
+  // ===========================================================================
+  // Test: writeConditional with mock fsx (TOCTOU race condition fix)
+  // ===========================================================================
+
+  describe('writeConditional() with ifMatch (atomic conditional writes)', () => {
+    /**
+     * Helper to create test data
+     */
+    function textToBytes(text: string): Uint8Array {
+      return new TextEncoder().encode(text)
+    }
+
+    it('should use exclusive flag when expectedVersion is null (file should not exist)', async () => {
+      let writeOptions: { exclusive?: boolean } | undefined
+
+      const mockFsx = {
+        writeFile: async (_path: string, _data: Uint8Array, options?: { exclusive?: boolean }) => {
+          writeOptions = options
+          return { etag: 'new-etag', size: 10, tier: 'hot' as const }
+        },
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+      await backend.writeConditional('new-file.txt', textToBytes('content'), null)
+
+      // Should use exclusive: true for atomic "create if not exists"
+      expect(writeOptions?.exclusive).toBe(true)
+    })
+
+    it('should use ifMatch option when expectedVersion is provided', async () => {
+      let writeOptions: { ifMatch?: string } | undefined
+
+      const mockFsx = {
+        writeFile: async (_path: string, _data: Uint8Array, options?: { ifMatch?: string }) => {
+          writeOptions = options
+          return { etag: 'new-etag', size: 10, tier: 'hot' as const }
+        },
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+      await backend.writeConditional('existing.txt', textToBytes('updated'), 'expected-etag-v1')
+
+      // Should pass ifMatch option for atomic compare-and-swap
+      expect(writeOptions?.ifMatch).toBe('expected-etag-v1')
+    })
+
+    it('should throw ETagMismatchError when fsx returns ECONFLICT', async () => {
+      const mockFsx = {
+        writeFile: async () => {
+          const err = new Error('Precondition failed') as Error & { code: string }
+          err.code = 'ECONFLICT'
+          throw err
+        },
+        stat: async () => ({
+          size: 100,
+          etag: 'actual-etag-v2',
+          atime: new Date(),
+          mtime: new Date(),
+          birthtime: new Date(),
+          ctime: new Date(),
+          mode: 0o644,
+          uid: 1000,
+          gid: 1000,
+          isFile: () => true,
+          isDirectory: () => false,
+          isSymbolicLink: () => false,
+        }),
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+
+      await expect(
+        backend.writeConditional('file.txt', textToBytes('data'), 'expected-etag-v1')
+      ).rejects.toMatchObject({
+        name: 'ETagMismatchError',
+        expectedEtag: 'expected-etag-v1',
+        actualEtag: 'actual-etag-v2',
+      })
+    })
+
+    it('should throw ETagMismatchError when file does not exist but version expected', async () => {
+      const mockFsx = {
+        writeFile: async () => {
+          const err = new Error('File not found') as Error & { code: string }
+          err.code = 'ENOENT'
+          throw err
+        },
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+
+      await expect(
+        backend.writeConditional('nonexistent.txt', textToBytes('data'), 'some-etag')
+      ).rejects.toMatchObject({
+        name: 'ETagMismatchError',
+        expectedEtag: 'some-etag',
+        actualEtag: null,
+      })
+    })
+
+    it('should throw ETagMismatchError when file exists but null version expected', async () => {
+      const mockFsx = {
+        writeFile: async () => {
+          const err = new Error('File exists') as Error & { code: string }
+          err.code = 'EEXIST'
+          throw err
+        },
+        stat: async () => ({
+          size: 100,
+          etag: 'existing-etag',
+          atime: new Date(),
+          mtime: new Date(),
+          birthtime: new Date(),
+          ctime: new Date(),
+          mode: 0o644,
+          uid: 1000,
+          gid: 1000,
+          isFile: () => true,
+          isDirectory: () => false,
+          isSymbolicLink: () => false,
+        }),
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+
+      await expect(
+        backend.writeConditional('existing.txt', textToBytes('data'), null)
+      ).rejects.toMatchObject({
+        name: 'ETagMismatchError',
+        expectedEtag: null,
+        actualEtag: 'existing-etag',
+      })
+    })
+
+    it('should return new etag on successful conditional write', async () => {
+      const mockFsx = {
+        writeFile: async () => ({
+          etag: 'new-etag-v2',
+          size: 15,
+          tier: 'hot' as const,
+        }),
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+      const result = await backend.writeConditional(
+        'file.txt',
+        textToBytes('updated content'),
+        'old-etag-v1'
+      )
+
+      expect(result.etag).toBe('new-etag-v2')
+      expect(result.size).toBe(15)
+    })
+
+    it('should use ifNoneMatch for exclusive create', async () => {
+      let writeOptions: { exclusive?: boolean } | undefined
+
+      const mockFsx = {
+        writeFile: async (_path: string, _data: Uint8Array, options?: { exclusive?: boolean }) => {
+          writeOptions = options
+          return { etag: 'created-etag', size: 10, tier: 'hot' as const }
+        },
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+      await backend.writeConditional('new.txt', textToBytes('content'), null, { ifNoneMatch: '*' })
+
+      expect(writeOptions?.exclusive).toBe(true)
+    })
+
+    it('should throw AlreadyExistsError when ifNoneMatch fails', async () => {
+      const mockFsx = {
+        writeFile: async () => {
+          const err = new Error('File exists') as Error & { code: string }
+          err.code = 'EEXIST'
+          throw err
+        },
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+
+      await expect(
+        backend.writeConditional('existing.txt', textToBytes('data'), null, { ifNoneMatch: '*' })
+      ).rejects.toMatchObject({
+        name: 'AlreadyExistsError',
+      })
+    })
+
+    it('should wrap generic errors in OperationError', async () => {
+      const mockFsx = {
+        writeFile: async () => {
+          const err = new Error('Network timeout') as Error & { code: string }
+          err.code = 'ETIMEDOUT'
+          throw err
+        },
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+
+      await expect(
+        backend.writeConditional('file.txt', textToBytes('data'), 'etag')
+      ).rejects.toMatchObject({
+        name: 'OperationError',
+        operation: 'writeConditional',
+      })
+    })
+
+    it('should handle stat failure gracefully when getting current etag after conflict', async () => {
+      const mockFsx = {
+        writeFile: async () => {
+          const err = new Error('Precondition failed') as Error & { code: string }
+          err.code = 'ECONFLICT'
+          throw err
+        },
+        stat: async () => {
+          // File was deleted between conflict and stat
+          const err = new Error('File not found') as Error & { code: string }
+          err.code = 'ENOENT'
+          throw err
+        },
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+
+      // Should still throw ETagMismatchError with null actual etag
+      await expect(
+        backend.writeConditional('file.txt', textToBytes('data'), 'expected-etag')
+      ).rejects.toMatchObject({
+        name: 'ETagMismatchError',
+        expectedEtag: 'expected-etag',
+        actualEtag: null,
+      })
+    })
+
+    it('should apply root path prefix to conditional writes', async () => {
+      let writtenPath: string | undefined
+
+      const mockFsx = {
+        writeFile: async (path: string) => {
+          writtenPath = path
+          return { etag: 'etag', size: 10, tier: 'hot' as const }
+        },
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx, { root: '/data/parquedb' })
+      await backend.writeConditional('entities/users.parquet', textToBytes('data'), null)
+
+      expect(writtenPath).toBe('/data/parquedb/entities/users.parquet')
+    })
+
+    it('should pass through contentType and metadata options', async () => {
+      let writeOptions: { contentType?: string; metadata?: Record<string, string> } | undefined
+
+      const mockFsx = {
+        writeFile: async (_path: string, _data: Uint8Array, options?: { contentType?: string; metadata?: Record<string, string> }) => {
+          writeOptions = options
+          return { etag: 'etag', size: 10, tier: 'hot' as const }
+        },
+      } as unknown as Fsx
+
+      const backend = new FsxBackend(mockFsx)
+      await backend.writeConditional(
+        'file.parquet',
+        textToBytes('data'),
+        'etag',
+        {
+          contentType: 'application/vnd.apache.parquet',
+          metadata: { 'x-custom': 'value' },
+        }
+      )
+
+      expect(writeOptions?.contentType).toBe('application/vnd.apache.parquet')
+      expect(writeOptions?.metadata).toEqual({ 'x-custom': 'value' })
+    })
+  })
 })

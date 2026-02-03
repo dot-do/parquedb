@@ -12,9 +12,9 @@
  * - Commit applies all changes atomically with automatic rollback on failure
  *
  * Atomicity guarantee:
- * - Before applying changes, original file states are captured
+ * - Before applying changes, original file states are captured (snapshot)
  * - If any operation fails during commit, all successfully applied changes are rolled back
- * - The storage is left in its original state on commit failure
+ * - The storage is restored to its original pre-commit state on failure
  *
  * Limitations:
  * - No multi-transaction isolation (reads see globally committed state)
@@ -54,6 +54,14 @@ interface PendingDelete {
 
 /** Union of pending operations */
 type PendingOperation = PendingWrite | PendingDelete
+
+/** Snapshot of original file state before commit */
+interface OriginalState {
+  /** Path to the file */
+  path: string
+  /** Original data (null if file didn't exist) */
+  data: Uint8Array | null
+}
 
 /** Transaction state */
 interface TransactionState {
@@ -147,15 +155,18 @@ class TransactionImpl implements Transaction {
   }
 
   /**
-   * Commit all pending operations
+   * Commit all pending operations atomically
    *
    * Applies all writes and deletes to the underlying backend.
    * Order: deletes first, then writes (to handle overwrite semantics).
+   *
+   * ATOMICITY GUARANTEE:
+   * - Before applying any changes, captures original state of all affected files
+   * - If any operation fails, rolls back all successfully applied changes
+   * - On rollback failure, throws with both original and rollback errors
    */
   async commit(): Promise<void> {
     this.ensureActive()
-
-    const errors: Error[] = []
 
     // Collect deletes and writes
     const deletes: string[] = []
@@ -169,36 +180,114 @@ class TransactionImpl implements Transaction {
       }
     })
 
-    // Apply deletes first
-    for (const path of deletes) {
+    // Phase 1: Capture original state of all affected files
+    const originalStates: OriginalState[] = []
+    const allPaths = new Set([...deletes, ...writes.map((w) => w.path)])
+
+    for (const path of allPaths) {
       try {
-        await this.backend.delete(path)
+        const data = await this.backend.read(path)
+        originalStates.push({ path, data })
       } catch (error) {
-        // Ignore not found errors on delete
-        if (!(error instanceof NotFoundError)) {
-          errors.push(error instanceof Error ? error : new Error(String(error)))
+        // File doesn't exist - record that it was absent
+        if (error instanceof NotFoundError) {
+          originalStates.push({ path, data: null })
+        } else {
+          // Unexpected error reading file - cannot guarantee atomicity
+          this.state.active = false
+          this.state.pending.clear()
+          this.onComplete(this.id)
+          throw new TransactionCommitError(this.id, [
+            error instanceof Error ? error : new Error(String(error)),
+          ])
         }
       }
     }
 
-    // Apply writes
-    for (const { path, data, options } of writes) {
+    // Phase 2: Apply all operations, tracking what was successfully applied
+    const appliedOperations: Array<{ type: 'write' | 'delete'; path: string }> = []
+    let commitError: Error | null = null
+
+    // Apply deletes first
+    for (const path of deletes) {
       try {
-        await this.backend.write(path, data, options)
+        await this.backend.delete(path)
+        appliedOperations.push({ type: 'delete', path })
       } catch (error) {
-        errors.push(error instanceof Error ? error : new Error(String(error)))
+        // Ignore not found errors on delete (file already doesn't exist)
+        if (!(error instanceof NotFoundError)) {
+          commitError = error instanceof Error ? error : new Error(String(error))
+          break
+        }
+        // Still track it as applied since the goal (file not existing) is achieved
+        appliedOperations.push({ type: 'delete', path })
       }
     }
 
-    // Mark transaction as complete
+    // Apply writes (if no error yet)
+    if (!commitError) {
+      for (const { path, data, options } of writes) {
+        try {
+          await this.backend.write(path, data, options)
+          appliedOperations.push({ type: 'write', path })
+        } catch (error) {
+          commitError = error instanceof Error ? error : new Error(String(error))
+          break
+        }
+      }
+    }
+
+    // Phase 3: If there was an error, rollback all applied changes
+    if (commitError) {
+      const rollbackErrors: Error[] = []
+
+      // Rollback in reverse order
+      for (let i = appliedOperations.length - 1; i >= 0; i--) {
+        const op = appliedOperations[i]
+        const original = originalStates.find((s) => s.path === op.path)
+
+        if (!original) {
+          // This shouldn't happen, but handle gracefully
+          continue
+        }
+
+        try {
+          if (original.data === null) {
+            // File didn't exist before - delete it
+            await this.backend.delete(op.path)
+          } else {
+            // File existed - restore original content
+            await this.backend.write(op.path, original.data)
+          }
+        } catch (rollbackError) {
+          // Track rollback errors but continue trying to rollback other files
+          rollbackErrors.push(
+            rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError))
+          )
+        }
+      }
+
+      // Mark transaction as complete (even on failure)
+      this.state.active = false
+      this.state.pending.clear()
+      this.onComplete(this.id)
+
+      // Throw with all errors
+      if (rollbackErrors.length > 0) {
+        throw new TransactionCommitError(this.id, [
+          commitError,
+          new Error(
+            `Rollback also failed with ${rollbackErrors.length} error(s): ${rollbackErrors.map((e) => e.message).join('; ')}`
+          ),
+        ])
+      }
+      throw new TransactionCommitError(this.id, [commitError])
+    }
+
+    // Phase 4: Success - mark transaction as complete
     this.state.active = false
     this.state.pending.clear()
     this.onComplete(this.id)
-
-    // If any errors occurred, throw them
-    if (errors.length > 0) {
-      throw new TransactionCommitError(this.id, errors)
-    }
   }
 
   /**
