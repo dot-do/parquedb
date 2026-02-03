@@ -618,8 +618,17 @@ export class QueryExecutor {
           return (row.data ?? row) as T
         })
 
-        // Cache the unpacked data for subsequent requests (only for full reads)
-        if (!pushdownFilter) {
+        // Merge pending files (DO WAL Phase 2 - Bulk Bypass)
+        // Pending files contain bulk writes that bypassed SQLite buffering
+        const datasetId = ns.includes('/') ? ns.split('/')[0] : ns
+        const pendingRows = await this.readPendingFiles<T>(datasetId)
+        if (pendingRows.length > 0) {
+          results = [...results, ...pendingRows]
+          stats.rowsScanned += pendingRows.length
+        }
+
+        // Cache the unpacked data for subsequent requests (only for full reads without pending)
+        if (!pushdownFilter && pendingRows.length === 0) {
           this.dataCache.set(path, results as unknown[])
         }
 
@@ -1920,6 +1929,108 @@ export class QueryExecutor {
       falsePositiveRate: 0.01,
       numBits: 0,
       numHashFunctions: 0,
+    }
+  }
+
+  // ===========================================================================
+  // Pending Files (DO WAL Phase 2 - Bulk Bypass)
+  // ===========================================================================
+
+  /**
+   * Read pending Parquet files for a namespace
+   *
+   * Pending files are created by bulk writes that bypass SQLite buffering.
+   * They are stored in data/{ns}/pending/*.parquet and need to be merged
+   * with committed data during reads.
+   *
+   * @param ns - Namespace to read pending files for
+   * @returns Array of rows from pending files
+   */
+  async readPendingFiles<T>(ns: string): Promise<T[]> {
+    if (!this.storageAdapter || !this._bucket) {
+      return []
+    }
+
+    // List pending files
+    const pendingPrefix = ns.includes('/') ? `${ns}/pending/` : `data/${ns}/pending/`
+
+    try {
+      const listResult = await this._bucket.list({ prefix: pendingPrefix, limit: 100 })
+      if (!listResult.objects || listResult.objects.length === 0) {
+        return []
+      }
+
+      const allRows: T[] = []
+
+      // Read each pending file
+      for (const obj of listResult.objects) {
+        const path = obj.key
+
+        try {
+          if (path.endsWith('.parquet') && this.parquetReader) {
+            // Read Parquet file
+            type DataRow = { $id: string; data: T | string }
+            const rows = await this.parquetReader.read<DataRow>(path)
+
+            // Unpack data column
+            for (const row of rows) {
+              if (typeof row.data === 'string') {
+                const parsed = tryParseJson<T>(row.data)
+                if (parsed) {
+                  allRows.push(parsed)
+                }
+              } else if (row.data) {
+                allRows.push(row.data)
+              }
+            }
+          } else if (path.endsWith('.json')) {
+            // Fallback: Read JSON file (for when hyparquet-writer is not available)
+            const objData = await this._bucket.get(path)
+            if (objData) {
+              const text = await objData.text()
+              const rows = tryParseJson<Array<{ $id: string; data: string }>>(text)
+              if (rows) {
+                for (const row of rows) {
+                  const parsed = tryParseJson<T>(row.data)
+                  if (parsed) {
+                    allRows.push(parsed)
+                  }
+                }
+              }
+            }
+          }
+        } catch (error: unknown) {
+          // Skip files that fail to read - they may be corrupted or in-progress
+          logger.debug(`Failed to read pending file ${path}`, error)
+        }
+      }
+
+      return allRows
+    } catch (error: unknown) {
+      // Listing may fail if prefix doesn't exist - that's fine
+      logger.debug(`Failed to list pending files for ${ns}`, error)
+      return []
+    }
+  }
+
+  /**
+   * Check if namespace has pending files
+   *
+   * @param ns - Namespace to check
+   * @returns true if pending files exist
+   */
+  async hasPendingFiles(ns: string): Promise<boolean> {
+    if (!this._bucket) {
+      return false
+    }
+
+    const pendingPrefix = ns.includes('/') ? `${ns}/pending/` : `data/${ns}/pending/`
+
+    try {
+      const listResult = await this._bucket.list({ prefix: pendingPrefix, limit: 1 })
+      return (listResult.objects?.length ?? 0) > 0
+    } catch (error: unknown) {
+      return false
     }
   }
 }
