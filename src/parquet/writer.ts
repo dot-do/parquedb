@@ -28,6 +28,8 @@ import { writeCompressors, compressors } from './compression'
 import {
   DEFAULT_ROW_GROUP_SIZE,
   DEFAULT_PARQUET_PAGE_SIZE,
+  DEFAULT_ENABLE_COLUMN_INDEX,
+  DEFAULT_ENABLE_OFFSET_INDEX,
 } from '../constants'
 
 // =============================================================================
@@ -77,6 +79,10 @@ export class ParquetWriter {
   public _pageSize: number
   private enableStatistics: boolean
   private defaultMetadata: Record<string, string>
+  /** Enable column indexes for page-level predicate pushdown */
+  private enableColumnIndex: boolean
+  /** Enable offset indexes for efficient page location lookup */
+  private enableOffsetIndex: boolean
 
   /**
    * Create a new ParquetWriter
@@ -95,6 +101,8 @@ export class ParquetWriter {
     this._pageSize = options.pageSize ?? DEFAULT_PARQUET_PAGE_SIZE
     this.enableStatistics = options.statistics ?? true
     this.defaultMetadata = options.metadata ?? {}
+    this.enableColumnIndex = options.columnIndex ?? DEFAULT_ENABLE_COLUMN_INDEX
+    this.enableOffsetIndex = options.offsetIndex ?? DEFAULT_ENABLE_OFFSET_INDEX
   }
 
   /**
@@ -135,6 +143,8 @@ export class ParquetWriter {
       dictionary: options.dictionary ?? this.useDictionary,
       statistics: options.statistics ?? this.enableStatistics,
       metadata,
+      columnIndex: options.columnIndex ?? this.enableColumnIndex,
+      offsetIndex: options.offsetIndex ?? this.enableOffsetIndex,
     })
 
     // Write to storage
@@ -275,6 +285,8 @@ export class ParquetWriter {
       dictionary: boolean
       statistics: boolean
       metadata: Record<string, string>
+      columnIndex: boolean
+      offsetIndex: boolean
     }
   ): Promise<Uint8Array> {
     // For now, we'll use a JSON-based approach as a placeholder
@@ -284,7 +296,10 @@ export class ParquetWriter {
       // Try to use hyparquet-writer if available
       const { parquetWriteBuffer } = await import('hyparquet-writer')
       // hyparquet-writer expects columnData as array of { name, data } objects
-      const columnData = this.convertToColumnData(columns, schema)
+      const columnData = this.convertToColumnData(columns, schema, {
+        columnIndex: options.columnIndex,
+        offsetIndex: options.offsetIndex,
+      })
       // Convert metadata to KeyValue array format
       const kvMetadata = Object.entries(options.metadata).map(([key, value]) => ({
         key,
@@ -317,15 +332,24 @@ export class ParquetWriter {
 
   /**
    * Convert columns to hyparquet-writer columnData format
-   * hyparquet-writer expects an array of { name, data } objects
+   * hyparquet-writer expects an array of { name, data, columnIndex?, offsetIndex? } objects
+   *
+   * @param columns - Column data keyed by column name
+   * @param schema - Parquet schema for type information
+   * @param options - Page index options
    */
   private convertToColumnData(
     columns: Record<string, unknown[]>,
-    schema: ParquetSchema
-  ): Array<{ name: string; data: unknown[] }> {
+    schema: ParquetSchema,
+    options: { columnIndex: boolean; offsetIndex: boolean }
+  ): Array<{ name: string; data: unknown[]; columnIndex?: boolean; offsetIndex?: boolean }> {
     return Object.entries(columns).map(([name, data]) => ({
       name,
       data,
+      // Enable page indexes for all columns, especially $id and $index_* columns
+      // which benefit most from predicate pushdown
+      columnIndex: options.columnIndex,
+      offsetIndex: options.offsetIndex,
     }))
   }
 
@@ -344,6 +368,8 @@ export class ParquetWriter {
       dictionary: boolean
       statistics: boolean
       metadata: Record<string, string>
+      columnIndex: boolean
+      offsetIndex: boolean
     }
   ): Uint8Array {
     // Encode data as JSON and wrap with Parquet magic bytes
@@ -393,6 +419,8 @@ export class ParquetWriter {
       dictionary: this.useDictionary,
       statistics: this.enableStatistics,
       metadata: this.defaultMetadata,
+      columnIndex: this.enableColumnIndex,
+      offsetIndex: this.enableOffsetIndex,
     })
 
     const writeResult = await this.storage.writeAtomic(path, buffer, {

@@ -101,6 +101,32 @@ describe('ParquetWriter', () => {
       })
       expect(writer).toBeInstanceOf(ParquetWriter)
     })
+
+    it('should accept columnIndex option', () => {
+      const writer = new ParquetWriter(storage, { columnIndex: true })
+      expect(writer).toBeInstanceOf(ParquetWriter)
+    })
+
+    it('should accept offsetIndex option', () => {
+      const writer = new ParquetWriter(storage, { offsetIndex: true })
+      expect(writer).toBeInstanceOf(ParquetWriter)
+    })
+
+    it('should accept columnIndex and offsetIndex options together', () => {
+      const writer = new ParquetWriter(storage, {
+        columnIndex: true,
+        offsetIndex: true,
+      })
+      expect(writer).toBeInstanceOf(ParquetWriter)
+    })
+
+    it('should allow disabling page indexes', () => {
+      const writer = new ParquetWriter(storage, {
+        columnIndex: false,
+        offsetIndex: false,
+      })
+      expect(writer).toBeInstanceOf(ParquetWriter)
+    })
   })
 
   // ===========================================================================
@@ -406,6 +432,94 @@ describe('ParquetWriter', () => {
         expect(authorMeta?.value).toBe('default-author')
         expect(versionMeta?.value).toBe('2.0.0')
       }
+    })
+  })
+
+  // ===========================================================================
+  // Page Index Tests
+  // ===========================================================================
+
+  describe('page indexes', () => {
+    it('should write files with page indexes enabled by default', async () => {
+      // Write with default options (page indexes enabled)
+      await writer.write('data/with-indexes.parquet', TEST_DATA, TEST_SCHEMA)
+
+      // Verify file was written
+      expect(await storage.exists('data/with-indexes.parquet')).toBe(true)
+
+      // Read back the data to verify integrity
+      const readData = await reader.read<typeof TEST_DATA[0]>('data/with-indexes.parquet')
+      expect(readData).toHaveLength(TEST_DATA.length)
+    })
+
+    it('should write files with explicit columnIndex and offsetIndex options', async () => {
+      const writer = new ParquetWriter(storage, {
+        columnIndex: true,
+        offsetIndex: true,
+      })
+
+      const result = await writer.write('data/explicit-indexes.parquet', TEST_DATA, TEST_SCHEMA)
+
+      expect(result.rowCount).toBe(TEST_DATA.length)
+      expect(await storage.exists('data/explicit-indexes.parquet')).toBe(true)
+    })
+
+    it('should write files without page indexes when disabled', async () => {
+      const writer = new ParquetWriter(storage, {
+        columnIndex: false,
+        offsetIndex: false,
+      })
+
+      const result = await writer.write('data/no-indexes.parquet', TEST_DATA, TEST_SCHEMA)
+
+      expect(result.rowCount).toBe(TEST_DATA.length)
+
+      // Verify data can still be read back
+      const readData = await reader.read<typeof TEST_DATA[0]>('data/no-indexes.parquet')
+      expect(readData).toHaveLength(TEST_DATA.length)
+    })
+
+    it('should allow per-write override of page index options', async () => {
+      // Create writer with indexes disabled
+      const writer = new ParquetWriter(storage, {
+        columnIndex: false,
+        offsetIndex: false,
+      })
+
+      // Override to enable indexes for this write
+      const result = await writer.write('data/override-indexes.parquet', TEST_DATA, TEST_SCHEMA, {
+        columnIndex: true,
+        offsetIndex: true,
+      })
+
+      expect(result.rowCount).toBe(TEST_DATA.length)
+      expect(await storage.exists('data/override-indexes.parquet')).toBe(true)
+    })
+
+    it('should write page indexes for larger datasets with multiple pages', async () => {
+      // Create a larger dataset that will span multiple pages
+      const largeData = Array.from({ length: 500 }, (_, i) => ({
+        id: `${i + 1}`,
+        name: `User ${i + 1}`,
+        age: 20 + (i % 60),
+        active: i % 2 === 0,
+        score: 50 + (i % 50),
+      }))
+
+      const writer = new ParquetWriter(storage, {
+        rowGroupSize: 100,  // Multiple row groups
+        columnIndex: true,
+        offsetIndex: true,
+      })
+
+      const result = await writer.write('data/large-with-indexes.parquet', largeData, TEST_SCHEMA)
+
+      expect(result.rowCount).toBe(500)
+      expect(result.rowGroupCount).toBe(5)  // 500 / 100 = 5 row groups
+
+      // Verify data can be read back
+      const readData = await reader.read<typeof TEST_DATA[0]>('data/large-with-indexes.parquet')
+      expect(readData).toHaveLength(500)
     })
   })
 

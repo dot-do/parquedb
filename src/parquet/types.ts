@@ -249,6 +249,16 @@ export interface ParquetWriterOptions {
   statistics?: boolean
   /** Key-value metadata to include */
   metadata?: Record<string, string>
+  /**
+   * Enable column indexes (ColumnIndex) for page-level predicate pushdown
+   * Default: true - enables hyparquet's parquetQuery() to skip pages based on min/max values
+   */
+  columnIndex?: boolean
+  /**
+   * Enable offset indexes (OffsetIndex) for efficient page location lookup
+   * Default: true - required when columnIndex is enabled per Parquet spec
+   */
+  offsetIndex?: boolean
 }
 
 /** Result of write operation */

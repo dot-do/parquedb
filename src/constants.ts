@@ -95,6 +95,20 @@ export const DEFAULT_ROW_GROUP_SIZE = 10000
  */
 export const DEFAULT_PARQUET_PAGE_SIZE = 1024 * 1024
 
+/**
+ * Enable column indexes (ColumnIndex) by default
+ * Column indexes store min/max values per page for predicate pushdown
+ * This enables page-level filtering in hyparquet's parquetQuery()
+ */
+export const DEFAULT_ENABLE_COLUMN_INDEX = true
+
+/**
+ * Enable offset indexes (OffsetIndex) by default
+ * Offset indexes store page locations for efficient page skipping
+ * Required when ColumnIndex is present per Parquet spec
+ */
+export const DEFAULT_ENABLE_OFFSET_INDEX = true
+
 // =============================================================================
 // FNV-1a Hash Constants
 // =============================================================================
