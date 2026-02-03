@@ -10,9 +10,13 @@
  */
 
 import { promises as fs } from 'node:fs'
-import { resolve, basename } from 'node:path'
+import { resolve, basename, isAbsolute } from 'node:path'
 import type { ParsedArgs } from '../types'
 import { print, printError, printSuccess } from '../types'
+import {
+  validateFilePathWithAllowedDirs,
+  PathValidationError,
+} from '../../utils/fs-path-safety'
 
 /**
  * Print warning message (yellow)
@@ -141,8 +145,22 @@ async function deploySnippets(
     snippetName = normalized
   }
 
+  // Validate file path for security (path traversal, dangerous characters)
+  const cwd = process.cwd()
+  const allowedDirs = [cwd, resolve(parsed.options.directory)]
+
+  try {
+    validateFilePathWithAllowedDirs(cwd, file, allowedDirs)
+  } catch (error) {
+    if (error instanceof PathValidationError) {
+      printError(`Invalid file path: ${error.message}`)
+      return 1
+    }
+    throw error
+  }
+
   // Read the file
-  const filePath = resolve(parsed.options.directory, file)
+  const filePath = isAbsolute(file) ? file : resolve(parsed.options.directory, file)
   let code: string
   try {
     code = await fs.readFile(filePath, 'utf-8')

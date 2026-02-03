@@ -13,6 +13,10 @@ import * as path from 'path'
 import { print, printError, printSuccess, type ParsedArgs } from '../types'
 import { loadConfig } from '../../config'
 import type { DBSchema, CollectionSchemaWithLayout } from '../../db'
+import {
+  validateFilePathWithAllowedDirs,
+  PathValidationError,
+} from '../../utils/fs-path-safety'
 
 // =============================================================================
 // Command Implementation
@@ -63,21 +67,38 @@ export async function generateCommand(args: ParsedArgs): Promise<number> {
       return 1
     }
 
+    // Validate output path for security (path traversal, dangerous characters)
+    const cwd = process.cwd()
+    const allowedDirs = [cwd]
+
+    try {
+      validateFilePathWithAllowedDirs(cwd, outputPath, allowedDirs)
+    } catch (error) {
+      if (error instanceof PathValidationError) {
+        printError(`Invalid output path: ${error.message}`)
+        return 1
+      }
+      throw error
+    }
+
+    // Resolve to absolute path
+    const resolvedOutputPath = path.isAbsolute(outputPath) ? outputPath : path.resolve(cwd, outputPath)
+
     // Generate the types file
-    const code = generateTypedExports(config.schema, outputPath)
+    const code = generateTypedExports(config.schema, resolvedOutputPath)
 
     // Write the output
-    const outputDir = path.dirname(outputPath)
+    const outputDir = path.dirname(resolvedOutputPath)
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true })
     }
 
-    fs.writeFileSync(outputPath, code, 'utf-8')
-    printSuccess(`Generated typed exports at ${outputPath}`)
+    fs.writeFileSync(resolvedOutputPath, code, 'utf-8')
+    printSuccess(`Generated typed exports at ${resolvedOutputPath}`)
 
     print('')
     print('Usage:')
-    print(`  import { db, sql } from './${path.relative(process.cwd(), outputPath).replace(/\.ts$/, '')}'`)
+    print(`  import { db, sql } from './${path.relative(process.cwd(), resolvedOutputPath).replace(/\.ts$/, '')}'`)
     print('')
     print('  // Fully typed!')
     print('  await db.User.create({ email: "alice@example.com", name: "Alice" })')

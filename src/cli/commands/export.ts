@@ -12,7 +12,7 @@
  *   parquedb export <namespace> <file>
  */
 
-import { join, extname } from 'node:path'
+import { join, extname, isAbsolute, resolve } from 'node:path'
 import { promises as fs } from 'node:fs'
 import { createWriteStream } from 'node:fs'
 import type { ParsedArgs } from '../types'
@@ -20,6 +20,10 @@ import { print, printError, printSuccess } from '../types'
 import { ParqueDB } from '../../ParqueDB'
 import { FsBackend } from '../../storage/FsBackend'
 import type { FindOptions, Entity } from '../../types'
+import {
+  validateFilePathWithAllowedDirs,
+  PathValidationError,
+} from '../../utils/fs-path-safety'
 
 // =============================================================================
 // Constants
@@ -46,8 +50,26 @@ export async function exportCommand(parsed: ParsedArgs): Promise<number> {
   }
 
   const namespace = parsed.args[0]!
-  const filePath = parsed.args[1]!
+  const rawFilePath = parsed.args[1]!
   const directory = parsed.options.directory
+
+  // Validate file path for security (path traversal, dangerous characters)
+  // Allow files in: current working directory or data directory
+  const cwd = process.cwd()
+  const allowedDirs = [cwd, resolve(directory)]
+
+  try {
+    validateFilePathWithAllowedDirs(cwd, rawFilePath, allowedDirs)
+  } catch (error) {
+    if (error instanceof PathValidationError) {
+      printError(`Invalid file path: ${error.message}`)
+      return 1
+    }
+    throw error
+  }
+
+  // Resolve to absolute path for consistent handling
+  const filePath = isAbsolute(rawFilePath) ? rawFilePath : resolve(cwd, rawFilePath)
 
   // Check if database is initialized
   const configPath = join(directory, CONFIG_FILENAME)
