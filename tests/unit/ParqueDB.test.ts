@@ -1193,16 +1193,14 @@ describe('ParqueDB', () => {
       ).rejects.toThrow()
     })
 
-    it('should throw error when creating entity without required $type', async () => {
-      await expect(
-        db.create('posts', { name: 'Post' } as any)
-      ).rejects.toThrow()
+    it('should auto-derive $type from namespace when not provided', async () => {
+      const entity = await db.create('posts', { title: 'Hello' } as any)
+      expect(entity.$type).toBe('Post')  // derived from 'posts'
     })
 
-    it('should throw error when creating entity without required name', async () => {
-      await expect(
-        db.create('posts', { $type: 'Post' } as any)
-      ).rejects.toThrow()
+    it('should auto-derive name from title when not provided', async () => {
+      const entity = await db.create('posts', { title: 'Hello World' } as any)
+      expect(entity.name).toBe('Hello World')  // derived from title
     })
   })
 

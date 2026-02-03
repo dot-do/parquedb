@@ -38,6 +38,17 @@ import { getNestedValue, compareValues, generateId, deepClone } from '../utils'
 import { matchesFilter as canonicalMatchesFilter } from '../query/filter'
 import { isUnsafePath } from '../mutation/operators'
 import { DEFAULT_MAX_INBOUND } from '../constants'
+import pluralize from 'pluralize'
+
+/**
+ * Derive entity type from namespace/collection name
+ * e.g., 'posts' -> 'Post', 'users' -> 'User', 'categories' -> 'Category'
+ */
+function deriveTypeFromNamespace(namespace: string): string {
+  // Singularize and capitalize
+  const singular = pluralize.singular(namespace)
+  return singular.charAt(0).toUpperCase() + singular.slice(1)
+}
 
 import type {
   ParqueDBConfig,
@@ -624,36 +635,34 @@ export class ParqueDBImpl {
   ): Promise<Entity<T>> {
     validateNamespace(namespace)
 
-    // Determine if validation should run
-    const shouldValidate = !options?.skipValidation && options?.validateOnWrite !== false
-
-    // Validate required fields unless skipValidation is true
-    if (shouldValidate) {
-      if (!data.$type) {
-        throw new Error('Entity must have a $type field')
-      }
-      if (!data.name) {
-        throw new Error('Entity must have a name field')
-      }
-
-      // Validate against schema if registered
-      // Pass the validateOnWrite option to control validation mode
-      this.validateAgainstSchema(namespace, data, options?.validateOnWrite)
-    }
-
     const now = new Date()
     const id = generateId()
     const fullId = `${namespace}/${id}` as EntityId
     const actor = options?.actor || ('system/anonymous' as EntityId)
 
+    // Auto-derive $type from namespace if not provided
+    // e.g., 'posts' -> 'Post', 'users' -> 'User'
+    const derivedType = data.$type || deriveTypeFromNamespace(namespace)
+
+    // Auto-derive name from common fields or use id
+    const derivedName = data.name || (data as Record<string, unknown>).title || (data as Record<string, unknown>).label || id
+
     // Apply defaults from schema
     const dataWithDefaults = this.applySchemaDefaults(data)
+
+    // Determine if validation should run
+    const shouldValidate = !options?.skipValidation && options?.validateOnWrite !== false
+
+    // Validate against schema if registered (using derived type)
+    if (shouldValidate) {
+      this.validateAgainstSchema(namespace, { ...dataWithDefaults, $type: derivedType }, options?.validateOnWrite)
+    }
 
     const entity: Entity<T> = {
       ...dataWithDefaults,
       $id: fullId,
-      $type: dataWithDefaults.$type,
-      name: dataWithDefaults.name,
+      $type: derivedType,
+      name: derivedName,
       createdAt: now,
       createdBy: actor,
       updatedAt: now,

@@ -20,13 +20,14 @@ describe('DB factory', () => {
     it('allows creating entities without schema', async () => {
       const database = DB({ schema: 'flexible' })
       const entity = await database.Posts.create({
-        $type: 'Post',
-        name: 'Hello World',
         title: 'Hello World',
         content: 'This is a test post',
         tags: ['test', 'hello'],
       })
       expect(entity.$id).toBeDefined()
+      expect(entity.$id).toMatch(/^posts\//)
+      expect(entity.$type).toBe('Post')  // auto-derived from 'posts' collection
+      expect(entity.name).toBe('Hello World')  // auto-derived from title
       expect(entity.title).toBe('Hello World')
     })
 
@@ -56,15 +57,15 @@ describe('DB factory', () => {
       })
 
       const user = await database.User.create({
-        $type: 'User',
-        name: 'Alice',
         email: 'alice@example.com',
+        label: 'Alice',  // will be used as name
         age: 30,
       })
 
       expect(user.$id).toBeDefined()
+      expect(user.$type).toBe('User')  // auto-derived
       expect(user.email).toBe('alice@example.com')
-      expect(user.name).toBe('Alice')
+      expect(user.name).toBe('Alice')  // derived from label
       expect(user.age).toBe(30)
     })
 
@@ -83,12 +84,12 @@ describe('DB factory', () => {
       })
 
       const user = await database.User.create({
-        $type: 'User',
-        name: 'Bob',
         email: 'bob@example.com',
+        label: 'Bob',
       })
 
       expect(user.$id).toBeDefined()
+      expect(user.$type).toBe('User')
       expect(user.email).toBe('bob@example.com')
     })
 
@@ -96,19 +97,20 @@ describe('DB factory', () => {
       const database = DB({
         Product: {
           sku: 'string!#',
-          name: 'string!',
+          title: 'string!',
           price: 'float',
         },
       })
 
       const product = await database.Product.create({
-        $type: 'Product',
-        name: 'Widget',
         sku: 'WIDGET-001',
+        title: 'Widget',
         price: 9.99,
       })
 
       expect(product.$id).toBeDefined()
+      expect(product.$type).toBe('Product')
+      expect(product.name).toBe('Widget')  // derived from title
       expect(product.sku).toBe('WIDGET-001')
     })
   })
@@ -125,20 +127,19 @@ describe('DB factory', () => {
 
       // Typed collection
       const user = await database.User.create({
-        $type: 'User',
-        name: 'Charlie',
         email: 'charlie@example.com',
+        label: 'Charlie',
       })
+      expect(user.$type).toBe('User')
       expect(user.email).toBe('charlie@example.com')
 
       // Flexible collection
       const log = await database.Logs.create({
-        $type: 'Log',
-        name: 'User created log',
         level: 'info',
         message: 'User created',
         metadata: { userId: user.$id },
       })
+      expect(log.$type).toBe('Log')  // auto-derived from 'logs' -> 'Log'
       expect(log.level).toBe('info')
     })
   })
@@ -146,12 +147,12 @@ describe('DB factory', () => {
   describe('default instance', () => {
     it('db singleton works in flexible mode', async () => {
       const post = await db.Posts.create({
-        $type: 'Post',
-        name: 'Test Post',
         title: 'Test Post',
         body: 'Test body',
       })
       expect(post.$id).toBeDefined()
+      expect(post.$type).toBe('Post')
+      expect(post.name).toBe('Test Post')  // derived from title
       expect(post.title).toBe('Test Post')
     })
   })
