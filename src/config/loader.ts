@@ -11,6 +11,78 @@ import { detectRuntime } from './runtime'
 import { detectStoragePaths } from './env'
 
 /**
+ * Layout configuration for a collection
+ * Simple arrays of field names for common Payload patterns
+ */
+export interface LayoutConfig {
+  /** Group fields horizontally: [['title', 'slug'], ['content']] */
+  rows?: (string | string[])[]
+  /** Organize into tabs: { Main: ['title', 'content'], Meta: ['status'] } */
+  tabs?: Record<string, string[]>
+  /** Fields to put in sidebar */
+  sidebar?: string[]
+}
+
+/**
+ * Field-level studio/UI configuration
+ */
+export interface FieldStudioConfig {
+  /** Display label */
+  label?: string
+  /** Help text */
+  description?: string
+  /** For select fields - simple string array or label/value pairs */
+  options?: string[] | Array<{ label: string; value: string }>
+  /** Hide from list view */
+  hideInList?: boolean
+  /** Read-only field */
+  readOnly?: boolean
+  /** Validation */
+  min?: number
+  max?: number
+  minLength?: number
+  maxLength?: number
+  /** Relationship target */
+  relationTo?: string | string[]
+}
+
+/**
+ * Collection-level studio configuration
+ */
+export interface CollectionStudioConfig extends LayoutConfig {
+  /** Collection display label */
+  label?: string
+  /** Singular label */
+  labelSingular?: string
+  /** Description */
+  description?: string
+  /** Field to use as title in admin */
+  useAsTitle?: string
+  /** Default columns in list view */
+  defaultColumns?: string[]
+  /** Group in admin nav */
+  group?: string
+  /** Hide from admin nav */
+  hidden?: boolean
+  /** Field-level config */
+  fields?: Record<string, FieldStudioConfig>
+}
+
+/**
+ * Global studio configuration
+ */
+export interface StudioConfig {
+  /** Theme: 'light' | 'dark' | 'auto' */
+  theme?: 'light' | 'dark' | 'auto'
+  /** Default fields to always put in sidebar */
+  defaultSidebar?: string[]
+  /** Port for studio server */
+  port?: number
+  /** Collection-specific studio config (alternative to $studio in schema) */
+  collections?: Record<string, CollectionStudioConfig>
+}
+
+/**
  * ParqueDB configuration options
  */
 export interface ParqueDBConfig {
@@ -23,7 +95,7 @@ export interface ParqueDBConfig {
     | { type: 'r2'; bucket: string }
     | { type: 's3'; bucket: string; region?: string }
 
-  /** Database schema definition */
+  /** Database schema definition (supports $layout, $studio, $rows, $tabs, $sidebar) */
   schema?: DBSchema
 
   /** Default namespace for collections */
@@ -34,6 +106,9 @@ export interface ParqueDBConfig {
 
   /** Default actor for mutations */
   actor?: string
+
+  /** Studio/admin UI configuration */
+  studio?: StudioConfig
 
   /** Environment-specific overrides */
   environments?: {

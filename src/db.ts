@@ -47,10 +47,91 @@ import type { SQLExecutor } from './integrations/sql'
 // =============================================================================
 
 /**
+ * Field-level studio/UI configuration (inline in schema)
+ */
+export interface InlineFieldStudio {
+  /** Display label */
+  label?: string
+  /** Help text */
+  description?: string
+  /** For select fields - simple array or label/value pairs */
+  options?: string[] | Array<{ label: string; value: string }>
+  /** Hide from list */
+  hideInList?: boolean
+  /** Read-only */
+  readOnly?: boolean
+}
+
+/**
+ * Collection-level studio configuration (inline in schema via $studio)
+ */
+export interface InlineStudioConfig {
+  /** Collection label */
+  label?: string
+  /** Field to use as title */
+  useAsTitle?: string
+  /** Default list columns */
+  defaultColumns?: string[]
+  /** Admin nav group */
+  group?: string
+  /** Per-field UI config */
+  [field: string]: string | string[] | InlineFieldStudio | undefined
+}
+
+/**
+ * Layout configuration inline in schema
+ */
+export interface InlineLayoutConfig {
+  rows?: (string | string[])[]
+  tabs?: Record<string, string[]>
+  sidebar?: string[]
+}
+
+/**
+ * Schema definition for a single collection
+ * Supports field definitions plus optional layout/studio config
+ *
+ * @example
+ * ```typescript
+ * {
+ *   title: 'string!',
+ *   slug: 'string!',
+ *   content: 'text',
+ *   status: 'string',
+ *
+ *   // Layout shortcuts
+ *   $rows: [['title', 'slug'], ['content']],
+ *   $tabs: { Main: ['title', 'content'], Meta: ['status'] },
+ *   $sidebar: ['$id', 'status', 'createdAt'],
+ *
+ *   // UI config
+ *   $studio: {
+ *     label: 'Blog Posts',
+ *     status: { options: ['draft', 'published'] }
+ *   }
+ * }
+ * ```
+ */
+export interface CollectionSchemaWithLayout {
+  /** Horizontal field grouping: [['title', 'slug'], ['content']] */
+  $rows?: (string | string[])[]
+  /** Tab organization: { Main: ['title', 'content'], Meta: ['status'] } */
+  $tabs?: Record<string, string[]>
+  /** Sidebar fields */
+  $sidebar?: string[]
+  /** Combined layout config */
+  $layout?: InlineLayoutConfig
+  /** UI/studio configuration */
+  $studio?: InlineStudioConfig
+  /** Field definitions (type strings like 'string!', 'int', '-> User') */
+  [field: string]: string | (string | string[])[] | Record<string, string[]> | string[] | InlineStudioConfig | InlineLayoutConfig | undefined
+}
+
+/**
  * Schema definition for a single collection
  * Either an object with field definitions or 'flexible' for schema-less mode
  */
-export type CollectionSchema = Record<string, string> | 'flexible'
+export type CollectionSchema = CollectionSchemaWithLayout | 'flexible'
 
 /**
  * Schema definition for the entire database
@@ -107,6 +188,7 @@ function isCollectionFlexible(schema: CollectionSchema): schema is 'flexible' {
 
 /**
  * Convert DB schema notation to GraphDL input format
+ * Filters out $-prefixed layout/studio config, keeping only field definitions
  */
 function convertToGraphDLInput(schema: DBSchema): Record<string, Record<string, string>> {
   const result: Record<string, Record<string, string>> = {}
@@ -116,7 +198,15 @@ function convertToGraphDLInput(schema: DBSchema): Record<string, Record<string, 
       // Skip flexible collections - they don't have a schema
       continue
     }
-    result[name] = collectionSchema
+
+    // Filter out $-prefixed keys (layout/studio config)
+    const fields: Record<string, string> = {}
+    for (const [key, value] of Object.entries(collectionSchema)) {
+      if (!key.startsWith('$') && typeof value === 'string') {
+        fields[key] = value
+      }
+    }
+    result[name] = fields
   }
 
   return result

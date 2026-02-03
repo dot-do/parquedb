@@ -38,7 +38,21 @@ export {
   setConfig,
   clearConfig,
   type ParqueDBConfig,
+  type StudioConfig,
+  type CollectionStudioConfig,
+  type FieldStudioConfig,
+  type LayoutConfig,
 } from './loader'
+
+// Studio configuration utilities
+export {
+  extractCollectionStudio,
+  extractSchemaStudio,
+  mergeStudioConfig,
+  getSchemaFields,
+  isFieldDefinition,
+  normalizeOptions,
+} from './studio'
 
 // Auto-configured instances
 export {
