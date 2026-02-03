@@ -5,7 +5,26 @@
 Materialized Views (MVs) in ParqueDB combine:
 1. **IceType Projections** - Schema definition with `$projection`, `$from`, `$expand`, `$flatten`
 2. **ClickHouse-style Refresh Modes** - Streaming (CDC-triggered) and Scheduled (cron-based)
-3. **Iceberg Storage** - MVs stored as Iceberg tables with snapshot-based staleness detection
+3. **Backend-Agnostic Storage** - MVs work on Native, Iceberg, and Delta Lake backends
+
+## Backend Support
+
+MVs are **backend-agnostic** - the same MV definition works across all storage backends:
+
+| Backend | Streaming MVs | Scheduled MVs | Staleness Detection |
+|---------|--------------|---------------|---------------------|
+| **Native** | CDC event log | DO Alarms | Event sequence IDs |
+| **Iceberg** | CDC event log | DO Alarms | Snapshot IDs |
+| **Delta Lake** | CDC event log | DO Alarms | Transaction log version |
+
+The MV storage table uses the **same backend** as the source tables by default, or can be configured explicitly:
+
+```typescript
+$refresh: {
+  mode: 'streaming',
+  backend: 'iceberg',  // Override: store MV in Iceberg even if source is Native
+}
+```
 
 ## Architecture
 
@@ -528,6 +547,257 @@ async alarm() {
 | Streaming refresh (incremental) | 10-50ms | Per event batch |
 | Streaming refresh (full) | 100ms-10s | Depends on data size |
 | Scheduled refresh | 1s-60s | Background, non-blocking |
+
+## Event Stream MVs (External Sources)
+
+MVs can also be populated from **external event streams** rather than ParqueDB collections.
+This is useful for ingesting data from Cloudflare tail workers, webhooks, queues, etc.
+
+### Event Stream Definition
+
+```typescript
+import { defineStreamView } from 'parquedb'
+
+// MV populated from an external event stream (not a ParqueDB collection)
+const WorkerLogs = defineStreamView({
+  $type: 'WorkerLog',
+  $stream: 'tail',  // External stream source
+
+  // Schema for the materialized data
+  $schema: {
+    scriptName: 'string!',
+    level: 'string!',       // debug, info, log, warn, error
+    message: 'string!',
+    timestamp: 'timestamp!',
+    requestId: 'string?',
+    colo: 'string?',
+  },
+
+  // Transform incoming events to the schema
+  $transform: (event: TailItem) => event.logs.map(log => ({
+    scriptName: event.scriptName,
+    level: log.level,
+    message: JSON.stringify(log.message),
+    timestamp: new Date(log.timestamp),
+    requestId: event.event?.request?.headers?.['cf-ray'],
+    colo: event.event?.request?.cf?.colo,
+  })),
+
+  // Storage options
+  $refresh: {
+    mode: 'streaming',
+    backend: 'native',  // Use simple Parquet files (no Iceberg overhead)
+  },
+})
+```
+
+## Example: Tail Worker Analytics
+
+A concrete example: ingesting Cloudflare tail events into three MVs for observability.
+
+### Architecture
+
+```
+┌─────────────────────┐    ┌──────────────────────────────────────────────┐
+│  Application        │    │  Tail Worker (src/tail/index.ts)             │
+│  Workers            │───▶│                                              │
+│  (producers)        │    │  ┌────────────────────────────────────────┐  │
+└─────────────────────┘    │  │  TailEvent[] batch                     │  │
+                           │  └────────────────────────────────────────┘  │
+                           │              │                                │
+                           │    ┌─────────┼─────────┐                     │
+                           │    ▼         ▼         ▼                     │
+                           │ ┌──────┐ ┌──────┐ ┌──────────┐               │
+                           │ │ Logs │ │Errors│ │ Requests │               │
+                           │ │  MV  │ │  MV  │ │    MV    │               │
+                           │ └──────┘ └──────┘ └──────────┘               │
+                           │    │         │         │                     │
+                           │    └─────────┼─────────┘                     │
+                           │              ▼                                │
+                           │  ┌────────────────────────────────────────┐  │
+                           │  │  ParqueDB (R2 Parquet files)           │  │
+                           │  └────────────────────────────────────────┘  │
+                           └──────────────────────────────────────────────┘
+```
+
+### MV Definitions
+
+```typescript
+// src/tail/views.ts
+import { defineStreamView } from 'parquedb'
+
+// ============================================================================
+// 1. Worker Logs MV - All console.log messages
+// ============================================================================
+export const WorkerLogs = defineStreamView({
+  $type: 'WorkerLog',
+  $stream: 'tail',
+  $schema: {
+    $id: 'string!',
+    scriptName: 'string!',
+    level: 'string!',
+    message: 'string!',
+    timestamp: 'timestamp!',
+    colo: 'string?',
+    url: 'string?',
+  },
+  $transform: (event: TailItem) => event.logs.map(log => ({
+    $id: `${event.eventTimestamp}-${log.timestamp}`,
+    scriptName: event.scriptName,
+    level: log.level,
+    message: Array.isArray(log.message) ? log.message.join(' ') : String(log.message),
+    timestamp: new Date(log.timestamp),
+    colo: event.event?.request?.cf?.colo,
+    url: event.event?.request?.url,
+  })),
+  $refresh: { mode: 'streaming', backend: 'native' },
+})
+
+// ============================================================================
+// 2. Errors MV - Exceptions and error outcomes
+// ============================================================================
+export const WorkerErrors = defineStreamView({
+  $type: 'WorkerError',
+  $stream: 'tail',
+  $schema: {
+    $id: 'string!',
+    scriptName: 'string!',
+    outcome: 'string!',
+    exceptionName: 'string?',
+    exceptionMessage: 'string?',
+    timestamp: 'timestamp!',
+    url: 'string?',
+    status: 'int?',
+    colo: 'string?',
+  },
+  $filter: (event: TailItem) =>
+    event.outcome !== 'ok' || event.exceptions.length > 0,
+  $transform: (event: TailItem) => ({
+    $id: `${event.scriptName}-${event.eventTimestamp}`,
+    scriptName: event.scriptName,
+    outcome: event.outcome,
+    exceptionName: event.exceptions[0]?.name,
+    exceptionMessage: event.exceptions[0]?.message,
+    timestamp: new Date(event.eventTimestamp),
+    url: event.event?.request?.url,
+    status: event.event?.response?.status,
+    colo: event.event?.request?.cf?.colo,
+  }),
+  $refresh: { mode: 'streaming', backend: 'native' },
+})
+
+// ============================================================================
+// 3. Requests MV - Web analytics (all requests)
+// ============================================================================
+export const WorkerRequests = defineStreamView({
+  $type: 'WorkerRequest',
+  $stream: 'tail',
+  $schema: {
+    $id: 'string!',
+    scriptName: 'string!',
+    method: 'string!',
+    url: 'string!',
+    pathname: 'string!',
+    status: 'int!',
+    outcome: 'string!',
+    colo: 'string!',
+    country: 'string?',
+    timestamp: 'timestamp!',
+  },
+  $filter: (event: TailItem) => event.event != null,
+  $transform: (event: TailItem) => {
+    const url = new URL(event.event!.request.url)
+    return {
+      $id: `${event.scriptName}-${event.eventTimestamp}`,
+      scriptName: event.scriptName,
+      method: event.event!.request.method,
+      url: event.event!.request.url,
+      pathname: url.pathname,
+      status: event.event!.response?.status ?? 0,
+      outcome: event.outcome,
+      colo: event.event!.request.cf?.colo ?? 'unknown',
+      country: event.event!.request.cf?.country,
+      timestamp: new Date(event.eventTimestamp),
+    }
+  },
+  $refresh: { mode: 'streaming', backend: 'native' },
+})
+```
+
+### Tail Worker Implementation
+
+```typescript
+// src/tail/index.ts
+import { ParqueDB } from 'parquedb'
+import { WorkerLogs, WorkerErrors, WorkerRequests } from './views'
+
+export interface Env {
+  PARQUEDB: R2Bucket
+}
+
+export default {
+  async tail(events: TailItem[], env: Env, ctx: ExecutionContext) {
+    const db = new ParqueDB({
+      storage: { type: 'r2', bucket: env.PARQUEDB },
+      backend: 'native',
+    })
+
+    // Process each MV
+    ctx.waitUntil(Promise.all([
+      db.ingestStream(WorkerLogs, events),
+      db.ingestStream(WorkerErrors, events),
+      db.ingestStream(WorkerRequests, events),
+    ]))
+  },
+}
+```
+
+### Producer Worker Configuration
+
+```toml
+# wrangler.toml of your application worker
+name = "my-app"
+main = "src/index.ts"
+
+[[tail_consumers]]
+service = "parquedb-tail"  # The tail worker above
+```
+
+### Querying the MVs
+
+```typescript
+// Query logs
+const errors = await db.WorkerErrors.find({
+  outcome: 'exception',
+  timestamp: { $gte: new Date(Date.now() - 3600000) }  // Last hour
+})
+
+// Analytics query
+const requestsByStatus = await db.WorkerRequests.aggregate([
+  { $match: { timestamp: { $gte: new Date('2024-01-01') } } },
+  { $group: { _id: '$status', count: { $sum: 1 } } },
+])
+
+// Error rate by worker
+const errorRate = await db.sql`
+  SELECT
+    scriptName,
+    COUNT(*) as total,
+    SUM(CASE WHEN outcome != 'ok' THEN 1 ELSE 0 END) as errors,
+    SUM(CASE WHEN outcome != 'ok' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as error_rate
+  FROM WorkerRequests
+  WHERE timestamp > NOW() - INTERVAL '1 hour'
+  GROUP BY scriptName
+  ORDER BY error_rate DESC
+`
+```
+
+### Why src/tail?
+
+The tail worker lives in `src/tail/` (not `src/worker/`) because:
+1. **Can't log itself** - A worker can't be its own tail consumer (infinite loop)
+2. **Separate deployment** - Deployed independently from main ParqueDB worker
+3. **Different concerns** - Pure ingestion, no query serving
 
 ## Future Enhancements
 
