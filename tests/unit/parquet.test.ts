@@ -13,6 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm, readdir, stat } from 'node:fs/promises'
+import { cleanupTempDir } from '../setup'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -685,7 +686,7 @@ describe('ParquetReader', () => {
   })
 
   afterEach(async () => {
-    await rm(tempDir, { recursive: true, force: true })
+    await cleanupTempDir(tempDir)
   })
 
   describe('constructor', () => {
@@ -765,7 +766,7 @@ describe('ParquetWriter', () => {
   })
 
   afterEach(async () => {
-    await rm(tempDir, { recursive: true, force: true })
+    await cleanupTempDir(tempDir)
   })
 
   describe('constructor', () => {
@@ -897,7 +898,7 @@ describe('Integration Tests', () => {
   })
 
   afterEach(async () => {
-    await rm(tempDir, { recursive: true, force: true })
+    await cleanupTempDir(tempDir)
   })
 
   describe('Variant round-trip with complex data', () => {

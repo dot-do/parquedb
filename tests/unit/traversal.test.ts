@@ -9,7 +9,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
+import { cleanupTempDir } from '../setup'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FsBackend } from '../../src/storage/FsBackend'
@@ -252,11 +253,7 @@ describe('Relationship Traversal', () => {
   afterEach(async () => {
     // Allow pending async operations to settle before cleanup
     await new Promise(resolve => setTimeout(resolve, 100))
-    try {
-      await rm(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
-    } catch {
-      // Ignore cleanup errors - temp directory will be cleaned up by OS
-    }
+    await cleanupTempDir(tempDir)
   })
 
   // =============================================================================

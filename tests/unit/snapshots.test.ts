@@ -11,7 +11,8 @@ import { FsBackend } from '../../src/storage/FsBackend'
 import type {
   EntityId,
 } from '../../src/types'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
+import { cleanupTempDir } from '../setup'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -48,7 +49,7 @@ describe('Snapshots', () => {
     vi.useRealTimers()
     // Clean up the temp directory
     try {
-      await rm(tempDir, { recursive: true, force: true })
+      await cleanupTempDir(tempDir)
     } catch {
       // Ignore cleanup errors
     }

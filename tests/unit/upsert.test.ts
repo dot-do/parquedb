@@ -7,7 +7,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
+import { cleanupTempDir } from '../setup'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ParqueDB } from '../../src/ParqueDB'
@@ -32,7 +33,7 @@ describe('Upsert Operations', () => {
 
   afterEach(async () => {
     // Clean up temp directory after each test
-    await rm(tempDir, { recursive: true, force: true })
+    await cleanupTempDir(tempDir)
   })
 
   // ===========================================================================

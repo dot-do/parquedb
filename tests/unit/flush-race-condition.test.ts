@@ -11,7 +11,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { ParqueDB } from '../../src/ParqueDB'
 import { FsBackend } from '../../src/storage/FsBackend'
 import type { EntityId } from '../../src/types'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
+import { cleanupTempDir } from '../setup'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -39,7 +40,7 @@ describe('Flush Race Condition', () => {
     // Properly dispose of the database, waiting for any pending flushes
     await db.disposeAsync()
     try {
-      await rm(tempDir, { recursive: true, force: true })
+      await cleanupTempDir(tempDir)
     } catch {
       // Ignore cleanup errors
     }

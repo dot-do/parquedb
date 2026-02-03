@@ -9,7 +9,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
+import { cleanupTempDir } from '../setup'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FsBackend } from '../../src/storage/FsBackend'
@@ -94,7 +95,7 @@ describe('Link Operations', () => {
   })
 
   afterEach(async () => {
-    await rm(tempDir, { recursive: true, force: true })
+    await cleanupTempDir(tempDir)
   })
 
   // ===========================================================================

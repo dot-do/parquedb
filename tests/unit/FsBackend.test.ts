@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm, writeFile, mkdir, readFile, stat } from 'node:fs/promises'
+import { cleanupTempDir } from '../setup'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FsBackend, PathTraversalError } from '../../src/storage/FsBackend'
@@ -24,7 +25,7 @@ describe('FsBackend', () => {
 
   afterEach(async () => {
     // Clean up temp directory after each test
-    await rm(tempDir, { recursive: true, force: true })
+    await cleanupTempDir(tempDir)
   })
 
   // ===========================================================================
