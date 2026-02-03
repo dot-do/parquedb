@@ -2194,12 +2194,19 @@ export class ParqueDBImpl {
    * @throws {Error} Propagates storage errors after rollback completes
    */
   private async flushEvents(): Promise<void> {
-    if (this.pendingEvents.length === 0) return
+    if (this.pendingEvents.length === 0) {
+      this.flushPromise = null
+      return
+    }
 
-    // Take all pending events
+    // Take a snapshot of pending events - DON'T clear pendingEvents yet
+    // to avoid losing events added during the async flush
     const eventsToFlush = [...this.pendingEvents]
-    this.pendingEvents = []
-    this.flushPromise = null
+    // NOTE: We intentionally do NOT clear flushPromise here.
+    // If we cleared it before the async writes complete, new events added during
+    // the flush would schedule a NEW flush that could run concurrently with this one,
+    // causing race conditions where the same events get flushed twice or data corruption.
+    // Instead, we clear flushPromise at the END of the flush (success or failure).
 
     // Write events in a transactional manner:
     // 1. Write event log
@@ -2240,6 +2247,19 @@ export class ParqueDBImpl {
         await this.storage.write(`${ns}/events.json`, new TextEncoder().encode(nsEventData))
       }
 
+      // Only clear the events that were successfully flushed
+      // Handle case where new events were added during flush by using slice
+      this.pendingEvents = this.pendingEvents.slice(eventsToFlush.length)
+
+      // Clear flushPromise AFTER successful flush, but check if there are more
+      // pending events that arrived during the flush - if so, schedule another flush
+      if (this.pendingEvents.length > 0) {
+        // More events arrived during the flush, schedule another one
+        this.flushPromise = Promise.resolve().then(() => this.flushEvents())
+      } else {
+        this.flushPromise = null
+      }
+
     } catch (error: unknown) {
       // On write failure, rollback the in-memory changes
       for (const event of eventsToFlush) {
@@ -2263,6 +2283,17 @@ export class ParqueDBImpl {
           this.entities.set(fullId, variantAsEntity(event.before))
         }
 
+      }
+
+      // Remove the failed events from pendingEvents too
+      // Keep any new events that arrived during the failed flush
+      this.pendingEvents = this.pendingEvents.filter(e => !eventsToFlush.includes(e))
+
+      // Clear flushPromise, but schedule another flush if new events arrived
+      if (this.pendingEvents.length > 0) {
+        this.flushPromise = Promise.resolve().then(() => this.flushEvents())
+      } else {
+        this.flushPromise = null
       }
 
       throw error
@@ -2806,7 +2837,11 @@ export class ParqueDBImpl {
             continue // Skip if we can't determine the ID
           }
 
-          const expectedTarget = fullId.replace('/', ':')
+          // Use entityTarget for consistency with how events are recorded
+          // Extract namespace and id from fullId, then use entityTarget to ensure
+          // the target format matches how events are recorded (ns:id format)
+          const [targetNs, ...targetIdParts] = fullId.split('/')
+          const expectedTarget = entityTarget(targetNs ?? '', targetIdParts.join('/'))
 
           if (op.type === 'create' && op.entity) {
             // Remove created entity from entity store
