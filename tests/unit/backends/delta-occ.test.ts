@@ -373,74 +373,111 @@ describe('DeltaBackend OCC', () => {
 
   describe('Error recovery', () => {
     it('should clean up partial writes on failure', async () => {
-      await backend.create('users', { $type: 'User', name: 'Alice' })
-
-      // Make parquet write succeed but commit fail
-      const originalWrite = storage.write.bind(storage)
-      let parquetPath: string | null = null
-
-      vi.spyOn(storage, 'write').mockImplementation(async (path, data, options) => {
-        if (path.endsWith('.parquet')) {
-          parquetPath = path
-          return originalWrite(path, data, options)
-        }
-        if (path.includes('_delta_log/') && path.endsWith('.json')) {
-          // Always fail commit
-          const { AlreadyExistsError } = await import('../../../src/storage/errors')
-          throw new AlreadyExistsError(path)
-        }
-        return originalWrite(path, data, options)
+      // Use a backend with low maxRetries to avoid timeout
+      const lowRetryBackend = createDeltaBackend({
+        type: 'delta',
+        storage,
+        location: 'warehouse',
+        maxRetries: 2,
+        baseBackoffMs: 10,
       })
+      await lowRetryBackend.initialize()
 
       try {
-        await backend.create('users', { $type: 'User', name: 'Bob' })
-      } catch {
-        // Expected to fail
-      }
+        await lowRetryBackend.create('users', { $type: 'User', name: 'Alice' })
 
-      // Orphaned parquet file should be cleaned up
-      if (parquetPath) {
-        const orphanExists = await storage.exists(parquetPath)
-        expect(orphanExists).toBe(false)
+        // Make parquet write succeed but commit fail
+        const originalWrite = storage.write.bind(storage)
+        let parquetPath: string | null = null
+
+        vi.spyOn(storage, 'write').mockImplementation(async (path, data, options) => {
+          if (path.endsWith('.parquet')) {
+            parquetPath = path
+            return originalWrite(path, data, options)
+          }
+          if (path.includes('_delta_log/') && path.endsWith('.json')) {
+            // Always fail commit
+            const { AlreadyExistsError } = await import('../../../src/storage/errors')
+            throw new AlreadyExistsError(path)
+          }
+          return originalWrite(path, data, options)
+        })
+
+        try {
+          await lowRetryBackend.create('users', { $type: 'User', name: 'Bob' })
+        } catch {
+          // Expected to fail
+        }
+
+        // Orphaned parquet file should be cleaned up
+        if (parquetPath) {
+          const orphanExists = await storage.exists(parquetPath)
+          expect(orphanExists).toBe(false)
+        }
+      } finally {
+        await lowRetryBackend.close()
       }
     })
 
     it('should not corrupt table state on failed commit', async () => {
-      await backend.create('users', { $type: 'User', name: 'Alice' })
-
-      // Count entities before failed attempt
-      const countBefore = await backend.count('users', {})
-
-      // Make commit fail
-      const originalWrite = storage.write.bind(storage)
-      vi.spyOn(storage, 'write').mockImplementation(async (path, data, options) => {
-        if (path.includes('_delta_log/') && path.endsWith('.json')) {
-          const { AlreadyExistsError } = await import('../../../src/storage/errors')
-          throw new AlreadyExistsError(path)
-        }
-        return originalWrite(path, data, options)
-      })
-
-      try {
-        await backend.create('users', { $type: 'User', name: 'Bob' })
-      } catch {
-        // Expected
-      }
-
-      vi.restoreAllMocks()
-
-      // Reset and re-read
-      await backend.close()
-      backend = createDeltaBackend({
+      // Use a backend with low maxRetries to avoid timeout
+      const lowRetryBackend = createDeltaBackend({
         type: 'delta',
         storage,
         location: 'warehouse',
+        maxRetries: 2,
+        baseBackoffMs: 10,
       })
-      await backend.initialize()
+      await lowRetryBackend.initialize()
 
-      // Table should still be valid with original count
-      const countAfter = await backend.count('users', {})
-      expect(countAfter).toBe(countBefore)
+      try {
+        await lowRetryBackend.create('users', { $type: 'User', name: 'Alice' })
+
+        // Count entities before failed attempt
+        const countBefore = await lowRetryBackend.count('users', {})
+
+        // Make commit fail
+        const originalWrite = storage.write.bind(storage)
+        vi.spyOn(storage, 'write').mockImplementation(async (path, data, options) => {
+          if (path.includes('_delta_log/') && path.endsWith('.json')) {
+            const { AlreadyExistsError } = await import('../../../src/storage/errors')
+            throw new AlreadyExistsError(path)
+          }
+          return originalWrite(path, data, options)
+        })
+
+        try {
+          await lowRetryBackend.create('users', { $type: 'User', name: 'Bob' })
+        } catch {
+          // Expected
+        }
+
+        vi.restoreAllMocks()
+
+        // Reset and re-read
+        await lowRetryBackend.close()
+        const freshBackend = createDeltaBackend({
+          type: 'delta',
+          storage,
+          location: 'warehouse',
+        })
+        await freshBackend.initialize()
+
+        try {
+          // Table should still be valid with original count
+          const countAfter = await freshBackend.count('users', {})
+          expect(countAfter).toBe(countBefore)
+        } finally {
+          await freshBackend.close()
+        }
+      } finally {
+        // Ensure lowRetryBackend is closed even if test fails early
+        try {
+          await lowRetryBackend.close()
+        } catch {
+          // Ignore
+        }
+      }
     })
   })
 

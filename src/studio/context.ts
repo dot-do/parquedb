@@ -349,7 +349,7 @@ function capitalize(str: string): string {
  * ```
  */
 export function getDatabaseContext(c: Context): DatabaseContextData | null {
-  return (c.var as DatabaseContextVariables).databaseContext ?? null
+  return (c.var as unknown as DatabaseContextVariables).databaseContext ?? null
 }
 
 /**
@@ -378,7 +378,7 @@ export function getCookieDatabaseId(
   cookieName: string = PAYLOAD_DATABASE_COOKIE
 ): string | null {
   // Check if already parsed by middleware
-  const fromVar = (c.var as DatabaseContextVariables).cookieDatabaseId
+  const fromVar = (c.var as unknown as DatabaseContextVariables).cookieDatabaseId
   if (fromVar !== undefined) {
     return fromVar
   }
