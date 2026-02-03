@@ -53,7 +53,7 @@ export default defineConfig({
       },
     },
     fileParallelism: true, // Run test files in parallel across forks
-    maxConcurrency: 5, // Allow some parallelism within files for independent tests
+    maxConcurrency: 1, // Run tests within a file sequentially to avoid temp dir races
     sequence: {
       shuffle: false, // Keep deterministic order for debugging
     },

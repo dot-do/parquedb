@@ -484,6 +484,10 @@ export class VectorIndex {
     const path = this.getIndexPath()
     const data = this.serialize()
     await this.storage.write(path, data)
+    // Clear evictedNodeIds after successful persistence to prevent memory leak
+    // The evicted nodes are now tracked in the serialized data, so we don't need
+    // to keep them in memory anymore
+    this.evictedNodeIds.clear()
   }
 
   /**

@@ -631,15 +631,14 @@ export async function deleteEntity(
     }
   }
 
+  // DELETE events always have after: null to signify the entity is deleted
+  // (regardless of soft or hard delete - the entity is "gone" from normal queries)
   const [eventNs, ...eventIdParts] = fullId.split('/')
-  // For soft delete, after state is the soft-deleted entity
-  // For hard delete, after state is null
-  const afterState = options?.hard ? null : ctx.entities.get(fullId)
   await ctx.recordEvent(
     'DELETE',
     entityTarget(eventNs ?? '', eventIdParts.join('/')),
     beforeEntityForEvent,
-    afterState ?? null,
+    null,
     actor
   )
 

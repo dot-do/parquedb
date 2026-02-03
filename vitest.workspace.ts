@@ -62,7 +62,7 @@ export default defineWorkspace([
         },
       },
       fileParallelism: true, // Run test files in parallel across forks
-      maxConcurrency: 5, // Allow some parallelism within files for independent tests
+      maxConcurrency: 1, // Run tests within a file sequentially to avoid temp dir races
       sequence: {
         shuffle: false, // Keep deterministic order for debugging
       },
@@ -89,7 +89,7 @@ export default defineWorkspace([
         },
       },
       fileParallelism: true,
-      maxConcurrency: 3, // More conservative for integration tests
+      maxConcurrency: 1, // Run tests sequentially within files
       sequence: {
         shuffle: false,
       },
@@ -116,7 +116,7 @@ export default defineWorkspace([
         },
       },
       fileParallelism: true,
-      maxConcurrency: 2, // Conservative for e2e tests
+      maxConcurrency: 1, // Run tests sequentially within files
       sequence: {
         shuffle: false,
       },
