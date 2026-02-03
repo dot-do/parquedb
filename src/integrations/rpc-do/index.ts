@@ -39,3 +39,20 @@ export {
   type Transport,
   type RPCBatchLoaderDB,
 } from './client'
+
+export {
+  ParqueDBRPCWrapper,
+  createParqueDBRPCWrapper,
+  type ParqueDBDOInterface,
+  type ParqueDBRPCSchema,
+  type ParqueDBAPI,
+  type RPCCollectionAPI,
+  type CollectionSchema,
+  type MethodSchema,
+  type CreateOptions,
+  type UpdateOptions,
+  type DeleteOptions,
+  type LinkOptions,
+  type ParqueDBRPCConfig,
+  type ParqueDBRPCEnv,
+} from './server'

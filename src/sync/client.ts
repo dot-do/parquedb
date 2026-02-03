@@ -9,6 +9,13 @@ import type { SyncManifest } from './manifest'
 import type { Visibility } from '../types/visibility'
 import { asBodyInit } from '../types/cast'
 import { DEFAULT_REMOTE_TIMEOUT } from '../constants'
+import {
+  validateResponseFields,
+  validateResponseArray,
+  isRecord,
+  isString,
+  isArray,
+} from '../utils/json-validation'
 
 // =============================================================================
 // Types
@@ -156,17 +163,15 @@ export class SyncClient {
         return { success: false, error }
       }
 
-      const data = await response.json() as {
-        id: string
-        bucket: string
-        prefix?: string
-      }
+      const data = await response.json()
+      validateResponseFields(data, ['id', 'bucket'], 'registerDatabase')
+      const record = data as Record<string, unknown>
 
       return {
         success: true,
-        databaseId: data.id,
-        bucket: data.bucket,
-        prefix: data.prefix,
+        databaseId: String(record.id),
+        bucket: String(record.bucket),
+        prefix: typeof record.prefix === 'string' ? record.prefix : undefined,
       }
     } catch (error) {
       return {
@@ -187,7 +192,9 @@ export class SyncClient {
         return null
       }
 
-      return await response.json() as DatabaseInfo
+      const data = await response.json()
+      validateResponseFields(data, ['id', 'name', 'owner', 'slug', 'visibility', 'bucket'], 'lookupDatabase')
+      return data as DatabaseInfo
     } catch {
       return null
     }
@@ -220,8 +227,11 @@ export class SyncClient {
       throw new Error(`Failed to get upload URLs: ${error}`)
     }
 
-    const data = await response.json() as { urls: PresignedUploadUrl[] }
-    return data.urls
+    const data = await response.json()
+    validateResponseFields(data, ['urls'], 'getUploadUrls')
+    const record = data as Record<string, unknown>
+    validateResponseArray(record.urls, 'getUploadUrls.urls')
+    return record.urls as PresignedUploadUrl[]
   }
 
   /**
@@ -247,8 +257,11 @@ export class SyncClient {
       throw new Error(`Failed to get download URLs: ${error}`)
     }
 
-    const data = await response.json() as { urls: PresignedDownloadUrl[] }
-    return data.urls
+    const data = await response.json()
+    validateResponseFields(data, ['urls'], 'getDownloadUrls')
+    const record = data as Record<string, unknown>
+    validateResponseArray(record.urls, 'getDownloadUrls.urls')
+    return record.urls as PresignedDownloadUrl[]
   }
 
   // ===========================================================================
@@ -270,7 +283,9 @@ export class SyncClient {
         throw new Error(`Failed to get manifest: ${response.statusText}`)
       }
 
-      return await response.json() as SyncManifest
+      const data = await response.json()
+      validateResponseFields(data, ['version', 'files'], 'getManifest')
+      return data as SyncManifest
     } catch (error) {
       if (error instanceof Error && error.message.includes('404')) {
         return null

@@ -21,6 +21,8 @@ const sharedResolve = {
   alias: {
     '@': resolve(__dirname, './src'),
     '@tests': resolve(__dirname, './tests'),
+    // Mock cloudflare:workers for Node.js environment (workers projects use the real module)
+    'cloudflare:workers': resolve(__dirname, './tests/__mocks__/cloudflare-workers.ts'),
   },
 }
 

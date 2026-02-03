@@ -20,6 +20,7 @@
  */
 
 import { registry } from './registry'
+import { parseArgs, print, printError } from './types'
 import { initCommand } from './commands/init'
 import { queryCommand } from './commands/query'
 import { importCommand } from './commands/import'
@@ -39,6 +40,7 @@ import { resolveCommand } from './commands/resolve'
 import { typesCommand } from './commands/types'
 import { schemaCommand } from './commands/schema'
 import { ciCommand } from './commands/ci'
+import { compactionCommand } from './commands/compaction'
 
 // =============================================================================
 // Register Built-in Commands
@@ -257,6 +259,18 @@ registry.register({
 })
 
 // =============================================================================
+// Compaction Commands
+// =============================================================================
+
+registry.register({
+  name: 'compaction',
+  description: 'Compaction operations (status, retry, cleanup, trigger)',
+  usage: 'parquedb compaction <command> [options]',
+  category: 'Maintenance',
+  execute: compactionCommand,
+})
+
+// =============================================================================
 // Constants
 // =============================================================================
 
@@ -292,6 +306,7 @@ COMMANDS:
   logout                        Clear authentication tokens
   whoami                        Show current user info
   auth                          Check authentication status
+  compaction <command>          Compaction operations (status, retry, cleanup, trigger)
 
 OPTIONS:
   -h, --help                    Show this help message
