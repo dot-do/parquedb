@@ -19,6 +19,7 @@ import {
   createTestData,
   decodeData,
   createRandomData,
+  generateTestDirName,
 } from '../factories'
 import { BINARY_DATA } from '../fixtures'
 
@@ -27,8 +28,8 @@ describe('FsBackend Integration', () => {
   let testDir: string
 
   beforeEach(async () => {
-    // Create a unique temp directory for each test
-    testDir = join(tmpdir(), `parquedb-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    // Create a unique temp directory for each test using deterministic naming
+    testDir = join(tmpdir(), generateTestDirName())
     await mkdir(testDir, { recursive: true })
     backend = new FsBackend(testDir)
   })
@@ -321,7 +322,7 @@ describe('Storage Backend Cross-Environment', () => {
   let testDir: string
 
   beforeEach(async () => {
-    testDir = join(tmpdir(), `parquedb-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    testDir = join(tmpdir(), generateTestDirName())
     await mkdir(testDir, { recursive: true })
     backend = new FsBackend(testDir)
   })

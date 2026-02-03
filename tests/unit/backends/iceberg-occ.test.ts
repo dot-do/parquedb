@@ -9,8 +9,9 @@
  * TDD RED phase: These tests should fail until OCC is implemented
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { IcebergBackend, createIcebergBackend } from '../../../src/backends/iceberg'
+import { WriteLockTimeoutError } from '../../../src/backends/types'
 import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import { ETagMismatchError } from '../../../src/storage/errors'
 
@@ -458,6 +459,187 @@ describe('IcebergBackend Optimistic Concurrency Control', () => {
         const items = await backend.find(`namespace-${ns}`, {})
         expect(items.length).toBe(5)
       }
+    })
+  })
+
+  describe('Write Lock Timeout', () => {
+    it('should use default 30 second timeout', async () => {
+      // The default timeout is 30000ms (30 seconds)
+      // We can verify the backend was created with the default by checking
+      // it doesn't immediately timeout
+      const entity = await backend.create('timeout-test', {
+        $type: 'Test',
+        name: 'Quick write',
+      })
+
+      expect(entity.name).toBe('Quick write')
+    })
+
+    it('should accept configurable timeout', async () => {
+      const customBackend = createIcebergBackend({
+        type: 'iceberg',
+        storage,
+        warehouse: 'warehouse',
+        database: 'testdb',
+        writeLockTimeoutMs: 5000, // 5 seconds
+      })
+      await customBackend.initialize()
+
+      const entity = await customBackend.create('custom-timeout', {
+        $type: 'Test',
+        name: 'Custom timeout',
+      })
+
+      expect(entity.name).toBe('Custom timeout')
+      await customBackend.close()
+    })
+
+    it('should throw WriteLockTimeoutError when lock acquisition times out', async () => {
+      // Use a very short real timeout for this test
+      const shortTimeoutBackend = createIcebergBackend({
+        type: 'iceberg',
+        storage,
+        warehouse: 'warehouse',
+        database: 'testdb',
+        writeLockTimeoutMs: 50, // 50ms timeout
+      })
+      await shortTimeoutBackend.initialize()
+
+      // Create initial entity to establish the namespace
+      await shortTimeoutBackend.create('stall-test', {
+        $type: 'Test',
+        name: 'Initial',
+      })
+
+      // Access the private writeLocks map to simulate a stalled lock
+      // We'll create a promise that never resolves to simulate a hung operation
+      const backendAny = shortTimeoutBackend as any
+      const neverResolves = new Promise<void>(() => {
+        // This promise intentionally never resolves
+      })
+      backendAny.writeLocks.set('stall-test', neverResolves)
+
+      // Try to acquire the lock - it should timeout
+      await expect(
+        shortTimeoutBackend.create('stall-test', {
+          $type: 'Test',
+          name: 'Should timeout',
+        })
+      ).rejects.toThrow(WriteLockTimeoutError)
+
+      await shortTimeoutBackend.close()
+    })
+
+    it('should clean up stale locks on timeout to unblock subsequent operations', async () => {
+      const shortTimeoutBackend = createIcebergBackend({
+        type: 'iceberg',
+        storage,
+        warehouse: 'warehouse',
+        database: 'testdb',
+        writeLockTimeoutMs: 50, // 50ms timeout
+      })
+      await shortTimeoutBackend.initialize()
+
+      // Create initial entity
+      await shortTimeoutBackend.create('cleanup-test', {
+        $type: 'Test',
+        name: 'Initial',
+      })
+
+      // Simulate a stalled lock
+      const backendAny = shortTimeoutBackend as any
+      const neverResolves = new Promise<void>(() => {})
+      backendAny.writeLocks.set('cleanup-test', neverResolves)
+
+      // First write will timeout
+      await expect(
+        shortTimeoutBackend.create('cleanup-test', {
+          $type: 'Test',
+          name: 'Will timeout',
+        })
+      ).rejects.toThrow(WriteLockTimeoutError)
+
+      // After timeout, the lock should be cleaned up
+      // A new write should succeed
+      const successEntity = await shortTimeoutBackend.create('cleanup-test', {
+        $type: 'Test',
+        name: 'After cleanup',
+      })
+
+      expect(successEntity.name).toBe('After cleanup')
+      await shortTimeoutBackend.close()
+    })
+
+    it('should not affect independent namespaces when one namespace times out', async () => {
+      const shortTimeoutBackend = createIcebergBackend({
+        type: 'iceberg',
+        storage,
+        warehouse: 'warehouse',
+        database: 'testdb',
+        writeLockTimeoutMs: 50, // 50ms timeout
+      })
+      await shortTimeoutBackend.initialize()
+
+      // Create entities in two namespaces
+      await shortTimeoutBackend.create('ns-blocked', { $type: 'Test', name: 'Initial A' })
+      await shortTimeoutBackend.create('ns-free', { $type: 'Test', name: 'Initial B' })
+
+      // Block only one namespace
+      const backendAny = shortTimeoutBackend as any
+      backendAny.writeLocks.set('ns-blocked', new Promise<void>(() => {}))
+
+      // Start a write to blocked namespace (will timeout eventually)
+      const blockedPromise = shortTimeoutBackend.create('ns-blocked', {
+        $type: 'Test',
+        name: 'Blocked',
+      })
+
+      // Write to free namespace should succeed immediately (before timeout)
+      const freeEntity = await shortTimeoutBackend.create('ns-free', {
+        $type: 'Test',
+        name: 'Free write',
+      })
+
+      expect(freeEntity.name).toBe('Free write')
+
+      // Now wait for the blocked one to timeout
+      await expect(blockedPromise).rejects.toThrow(WriteLockTimeoutError)
+
+      await shortTimeoutBackend.close()
+    })
+
+    it('should include namespace and timeout in error message', async () => {
+      const timeoutMs = 50
+      const shortTimeoutBackend = createIcebergBackend({
+        type: 'iceberg',
+        storage,
+        warehouse: 'warehouse',
+        database: 'testdb',
+        writeLockTimeoutMs: timeoutMs,
+      })
+      await shortTimeoutBackend.initialize()
+
+      await shortTimeoutBackend.create('error-msg-test', { $type: 'Test', name: 'Init' })
+
+      const backendAny = shortTimeoutBackend as any
+      backendAny.writeLocks.set('error-msg-test', new Promise<void>(() => {}))
+
+      try {
+        await shortTimeoutBackend.create('error-msg-test', {
+          $type: 'Test',
+          name: 'Test',
+        })
+        expect.fail('Should have thrown')
+      } catch (error) {
+        expect(error).toBeInstanceOf(WriteLockTimeoutError)
+        const timeoutError = error as WriteLockTimeoutError
+        expect(timeoutError.ns).toBe('error-msg-test')
+        expect(timeoutError.timeoutMs).toBe(timeoutMs)
+        expect(timeoutError.message).toContain('error-msg-test')
+        expect(timeoutError.message).toContain('50ms')
+      }
+
+      await shortTimeoutBackend.close()
     })
   })
 })

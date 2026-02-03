@@ -1015,7 +1015,9 @@ describe('ParqueDB', () => {
     })
 
     it('should return deletedCount of 1 when entity exists', async () => {
-      const result = await db.delete('posts', 'posts/123')
+      // Create entity first
+      const created = await db.create('posts', { $type: 'Post', title: 'Test' })
+      const result = await db.delete('posts', created.$id as string)
       expect(result.deletedCount).toBe(1)
     })
 

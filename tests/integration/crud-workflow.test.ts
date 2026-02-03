@@ -5,7 +5,7 @@
  * These tests use real ParqueDB with MemoryBackend for fast, isolated testing.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { ParqueDB, MemoryBackend } from '../../src'
 import {
   createUserInput,
@@ -18,22 +18,17 @@ describe('CRUD Workflow E2E', () => {
   let db: ParqueDB
   let backend: MemoryBackend
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    // Create a fresh, isolated instance for each test
     backend = new MemoryBackend()
     db = new ParqueDB({ storage: backend })
   })
 
-  afterAll(async () => {
-    // Dispose of ParqueDB instance
+  afterEach(async () => {
+    // Dispose of ParqueDB instance after each test
     if (db && typeof (db as unknown as { dispose?: () => void }).dispose === 'function') {
       (db as unknown as { dispose: () => void }).dispose()
     }
-  })
-
-  beforeEach(async () => {
-    // Create a fresh instance for each test
-    backend = new MemoryBackend()
-    db = new ParqueDB({ storage: backend })
   })
 
   describe('User Management Workflow', () => {
@@ -297,22 +292,17 @@ describe('Data Integrity E2E', () => {
   let db: ParqueDB
   let backend: MemoryBackend
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    // Create a fresh, isolated instance for each test
     backend = new MemoryBackend()
     db = new ParqueDB({ storage: backend })
   })
 
-  afterAll(async () => {
-    // Dispose of ParqueDB instance
+  afterEach(async () => {
+    // Dispose of ParqueDB instance after each test
     if (db && typeof (db as unknown as { dispose?: () => void }).dispose === 'function') {
       (db as unknown as { dispose: () => void }).dispose()
     }
-  })
-
-  beforeEach(async () => {
-    // Create a fresh instance for each test
-    backend = new MemoryBackend()
-    db = new ParqueDB({ storage: backend })
   })
 
   it('should maintain version consistency', async () => {

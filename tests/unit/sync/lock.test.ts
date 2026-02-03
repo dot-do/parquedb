@@ -29,6 +29,18 @@ import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import type { StorageBackend } from '../../../src/types/storage'
 
 // =============================================================================
+// Test Utilities
+// =============================================================================
+
+/**
+ * Advance fake timers by specified milliseconds (use only with vi.useFakeTimers())
+ * Uses async version to allow pending promises to resolve
+ */
+async function advanceTime(ms: number): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ms)
+}
+
+// =============================================================================
 // Test Setup
 // =============================================================================
 
@@ -37,6 +49,8 @@ describe('Distributed Locking', () => {
   let lockManager: LockManager
 
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
     storage = new MemoryBackend()
     lockManager = createLockManager(storage)
   })
@@ -46,6 +60,7 @@ describe('Distributed Locking', () => {
     await lockManager.forceRelease('merge')
     await lockManager.forceRelease('commit')
     await lockManager.forceRelease('sync')
+    vi.useRealTimers()
   })
 
   // ===========================================================================
@@ -162,8 +177,8 @@ describe('Distributed Locking', () => {
       })
       expect(result.acquired).toBe(true)
 
-      // Wait for expiry
-      await new Promise(resolve => setTimeout(resolve, 100))
+      // Wait for expiry using fake timers
+      await advanceTime(100)
 
       // Should now be acquirable by another process
       const second = await lockManager.tryAcquire('merge')
@@ -177,7 +192,7 @@ describe('Distributed Locking', () => {
       })
       expect(result.lock!.isValid()).toBe(true)
 
-      await new Promise(resolve => setTimeout(resolve, 100))
+      await advanceTime(100)
 
       expect(result.lock!.isValid()).toBe(false)
     })
@@ -186,7 +201,7 @@ describe('Distributed Locking', () => {
       // Acquire with short timeout
       await lockManager.tryAcquire('merge', { timeout: 50 })
 
-      await new Promise(resolve => setTimeout(resolve, 100))
+      await advanceTime(100)
 
       // isLocked should return null for expired lock
       const state = await lockManager.isLocked('merge')
@@ -262,11 +277,16 @@ describe('Distributed Locking', () => {
       })
       expect(first.acquired).toBe(true)
 
-      // Second holder waits
-      const second = await lockManager.acquire('merge', {
+      // Start second holder waiting for lock
+      const secondPromise = lockManager.acquire('merge', {
         waitTimeout: 500,
         retryInterval: 50,
       })
+
+      // Advance time to expire first lock and allow second to acquire
+      await advanceTime(150)
+
+      const second = await secondPromise
       expect(second.acquired).toBe(true)
 
       await second.lock!.release()
@@ -279,11 +299,16 @@ describe('Distributed Locking', () => {
       })
       expect(first.acquired).toBe(true)
 
-      // Second holder tries to wait (short wait timeout)
-      const second = await lockManager.acquire('merge', {
+      // Start second holder waiting for lock
+      const secondPromise = lockManager.acquire('merge', {
         waitTimeout: 100,
         retryInterval: 20,
       })
+
+      // Advance time past wait timeout
+      await advanceTime(150)
+
+      const second = await secondPromise
       expect(second.acquired).toBe(false)
       expect(second.currentHolder).toBeDefined()
 
@@ -343,7 +368,7 @@ describe('Distributed Locking', () => {
       await lockManager.tryAcquire('merge', { timeout: 50 })
       await lockManager.tryAcquire('commit', { timeout: 1000 })
 
-      await new Promise(resolve => setTimeout(resolve, 100))
+      await advanceTime(100)
 
       const locks = await lockManager.listLocks()
       expect(locks.length).toBe(1)
@@ -416,14 +441,27 @@ describe('Distributed Locking', () => {
       // Hold the lock
       const first = await lockManager.tryAcquire('merge', { timeout: 10000 })
 
-      await expect(
-        withLock(
-          lockManager,
-          'merge',
-          async () => 'should not execute',
-          { waitTimeout: 100 }
-        )
-      ).rejects.toThrow(LockAcquisitionError)
+      // Create the promise and attach the rejection handler immediately
+      // to prevent unhandled rejection
+      const lockPromise = withLock(
+        lockManager,
+        'merge',
+        async () => 'should not execute',
+        { waitTimeout: 100 }
+      )
+
+      // Attach error handler first to avoid unhandled rejection
+      const resultPromise = lockPromise.then(
+        () => { throw new Error('Expected rejection but got resolution') },
+        (error) => error
+      )
+
+      // Advance time to trigger the timeout
+      await advanceTime(150)
+
+      // Now get the error
+      const error = await resultPromise
+      expect(error).toBeInstanceOf(LockAcquisitionError)
 
       await first.lock!.release()
     })
@@ -460,13 +498,19 @@ describe('Distributed Locking', () => {
       const operations = 5
       const order: number[] = []
 
+      // Start all operations - they will queue up waiting for the lock
       const promises = Array.from({ length: operations }, (_, i) =>
         withLock(lockManager, 'merge', async () => {
-          // Small delay to ensure ordering matters
-          await new Promise(resolve => setTimeout(resolve, 10))
+          // Record which operation ran
           order.push(i)
-        }, { waitTimeout: 5000 })
+        }, { waitTimeout: 5000, retryInterval: 50 })
       )
+
+      // Advance time incrementally to allow each operation to complete
+      // Each operation needs time to acquire the lock and complete
+      for (let i = 0; i < operations * 2; i++) {
+        await advanceTime(100)
+      }
 
       await Promise.all(promises)
 

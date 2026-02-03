@@ -13,7 +13,7 @@
  * 6. Data integrity and concurrent operations
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { IcebergBackend, createIcebergBackend } from '../../../src/backends/iceberg'
 import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import type { Entity, EntityId } from '../../../src/types/entity'
@@ -197,32 +197,40 @@ describe('IcebergBackend Integration', () => {
     })
 
     it('should query data at specific timestamp', async () => {
-      // Create initial entity
-      await backend.create('items', {
-        $type: 'Item',
-        name: 'Time Travel Item',
-        value: 10,
-      })
+      // Use fake timers for deterministic timing
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
 
-      // Record timestamp after first operation
-      const timestampAfterCreate = new Date()
+      try {
+        // Create initial entity
+        await backend.create('items', {
+          $type: 'Item',
+          name: 'Time Travel Item',
+          value: 10,
+        })
 
-      // Wait a bit and update
-      await new Promise(resolve => setTimeout(resolve, 10))
+        // Record timestamp after first operation
+        const timestampAfterCreate = new Date()
 
-      const entities = await backend.find('items', {})
-      const entity = entities[0]!
+        // Advance time deterministically
+        vi.advanceTimersByTime(100)
 
-      await backend.update('items', entity.$id.split('/')[1]!, {
-        $set: { value: 20 },
-      })
+        const entities = await backend.find('items', {})
+        const entity = entities[0]!
 
-      // Query at timestamp should return original value
-      const historicalBackend = await backend.snapshot('items', timestampAfterCreate)
-      const historical = await historicalBackend.find('items', {})
+        await backend.update('items', entity.$id.split('/')[1]!, {
+          $set: { value: 20 },
+        })
 
-      expect(historical).toHaveLength(1)
-      expect(historical[0]!.value).toBe(10)
+        // Query at timestamp should return original value
+        const historicalBackend = await backend.snapshot('items', timestampAfterCreate)
+        const historical = await historicalBackend.find('items', {})
+
+        expect(historical).toHaveLength(1)
+        expect(historical[0]!.value).toBe(10)
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('should not find entities that did not exist at historical snapshot', async () => {
@@ -319,21 +327,29 @@ describe('IcebergBackend Integration', () => {
     })
 
     it('should preserve snapshot timestamps in chronological order', async () => {
-      await backend.create('items', { $type: 'Item', name: 'Item 1' })
-      await new Promise(resolve => setTimeout(resolve, 5))
-      await backend.create('items', { $type: 'Item', name: 'Item 2' })
-      await new Promise(resolve => setTimeout(resolve, 5))
-      await backend.create('items', { $type: 'Item', name: 'Item 3' })
+      // Use fake timers for deterministic timing
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
 
-      const snapshots = await backend.listSnapshots('items')
+      try {
+        await backend.create('items', { $type: 'Item', name: 'Item 1' })
+        vi.advanceTimersByTime(10)
+        await backend.create('items', { $type: 'Item', name: 'Item 2' })
+        vi.advanceTimersByTime(10)
+        await backend.create('items', { $type: 'Item', name: 'Item 3' })
 
-      expect(snapshots.length).toBe(3)
+        const snapshots = await backend.listSnapshots('items')
 
-      // Verify chronological order
-      for (let i = 1; i < snapshots.length; i++) {
-        expect(snapshots[i]!.timestamp.getTime()).toBeGreaterThanOrEqual(
-          snapshots[i - 1]!.timestamp.getTime()
-        )
+        expect(snapshots.length).toBe(3)
+
+        // Verify chronological order
+        for (let i = 1; i < snapshots.length; i++) {
+          expect(snapshots[i]!.timestamp.getTime()).toBeGreaterThanOrEqual(
+            snapshots[i - 1]!.timestamp.getTime()
+          )
+        }
+      } finally {
+        vi.useRealTimers()
       }
     })
 

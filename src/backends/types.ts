@@ -406,6 +406,9 @@ export interface IcebergBackendConfig extends BaseBackendConfig {
 
   /** Default database/namespace */
   database?: string
+
+  /** Timeout for acquiring write locks in milliseconds (default: 30000) */
+  writeLockTimeoutMs?: number
 }
 
 /** Iceberg catalog configuration */
@@ -743,5 +746,21 @@ export class SchemaNotFoundError extends Error {
   ) {
     super(message ?? `Schema not found for table: ${ns}`)
     Object.setPrototypeOf(this, SchemaNotFoundError.prototype)
+  }
+}
+
+/**
+ * Error thrown when write lock acquisition times out
+ * This prevents indefinite blocking when an earlier operation in the lock chain fails or hangs
+ */
+export class WriteLockTimeoutError extends Error {
+  override readonly name = 'WriteLockTimeoutError'
+
+  constructor(
+    public readonly ns: string,
+    public readonly timeoutMs: number
+  ) {
+    super(`Write lock acquisition timed out for namespace '${ns}' after ${timeoutMs}ms. This may indicate a stalled or failed operation in the write queue.`)
+    Object.setPrototypeOf(this, WriteLockTimeoutError.prototype)
   }
 }

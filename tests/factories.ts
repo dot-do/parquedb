@@ -351,3 +351,28 @@ export function createPastDate(days = 7): Date {
 export function createFutureDate(days = 7): Date {
   return createRelativeDate(days, 'd')
 }
+
+// =============================================================================
+// Test Directory Helpers
+// =============================================================================
+
+let testDirCounter = 0
+
+/**
+ * Generate a unique test directory name that's safe for parallel test execution.
+ * Uses a combination of process ID, counter, and timestamp to ensure uniqueness.
+ */
+export function generateTestDirName(prefix = 'parquedb-test'): string {
+  testDirCounter++
+  const pid = typeof process !== 'undefined' ? process.pid : 0
+  const timestamp = Date.now()
+  const random = Math.random().toString(36).slice(2, 8)
+  return `${prefix}-${pid}-${timestamp}-${testDirCounter}-${random}`
+}
+
+/**
+ * Reset test directory counter (call in global test setup if needed)
+ */
+export function resetTestDirCounter(): void {
+  testDirCounter = 0
+}

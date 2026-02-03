@@ -2,7 +2,7 @@
  * Integration tests for schema validation in ParqueDB
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ParqueDB } from '../../src/ParqueDB'
 import { MemoryBackend } from '../../src/storage/MemoryBackend'
 import { SchemaValidationError } from '../../src/schema/validator'
@@ -36,6 +36,13 @@ describe('ParqueDB Schema Validation Integration', () => {
       storage: new MemoryBackend(),
       schema,
     })
+  })
+
+  afterEach(() => {
+    // Cleanup to prevent resource leaks
+    if (db && typeof (db as any).dispose === 'function') {
+      (db as any).dispose()
+    }
   })
 
   describe('Create with validation', () => {

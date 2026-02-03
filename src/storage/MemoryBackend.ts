@@ -275,11 +275,12 @@ export class MemoryBackend implements StorageBackend {
 
     const etag = generateEtag(data)
     const now = new Date()
+    const mtime = options.mtime ?? now
 
     const metadata: FileStat = {
       path,
       size: data.length,
-      mtime: now,
+      mtime,
       ctime: this.files.get(path)?.metadata.ctime || now,
       isDirectory: false,
       etag,

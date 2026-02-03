@@ -26,6 +26,8 @@ import type { FileMetaData, RowGroup as HyparquetRowGroup, ColumnChunk as Hyparq
 import { compressors } from '../parquet/compressors'
 // Index cache for secondary index lookups
 import { IndexCache, createR2IndexStorageAdapter } from './IndexCache'
+// Bloom filter deserialization
+import { IndexBloomFilter } from '../indexes/bloom/bloom-filter'
 // Centralized constants
 import { MAX_CACHE_SIZE as _MAX_CACHE_SIZE, DEFAULT_CACHE_TTL } from '../constants'
 // Logger
@@ -640,44 +642,12 @@ export class QueryExecutor {
         }
       }
 
-      // Legacy path: use metadata-based approach (placeholder implementation)
-      // 1. Load Parquet metadata (cached)
-      const metadata = await this.loadMetadata(ns)
-
-      // 2. Determine which row groups to read based on filter
-      const selectedRowGroups = this.selectRowGroups(metadata, filter)
-      stats.rowGroupsSkipped = metadata.rowGroups.length - selectedRowGroups.length
-      stats.rowGroupsScanned = selectedRowGroups.length
-
-      // 3. Read only necessary row groups (parallel)
-      const rowGroupData = await Promise.all(
-        selectedRowGroups.map((rg) => this.readRowGroup(ns, rg, metadata))
-      )
-
-      // Track bytes read
-      stats.bytesRead = rowGroupData.reduce((sum, rg) => sum + (rg?.bytesRead ?? 0), 0)
-
-      // 4. Parse and combine results
-      let results: T[] = rowGroupData
-        .filter((rg) => rg !== null)
-        .flatMap((rg) => rg!.records as T[])
-
-      stats.rowsScanned = results.length
-
-      // 5. Apply remaining filters (for complex filters not pushed down)
-      results = this.applyFilter(results, filter)
-
-      // 6. Post-process: sort, skip, limit, project
-      const processed = this.postProcess(results, options)
-
-      stats.rowsReturned = processed.items.length
+      // No ParquetReader available - return empty result
+      // This path is only reached in testing environments without R2
       stats.executionTimeMs = performance.now() - startTime
-
       return {
-        items: processed.items,
-        total: processed.total,
-        nextCursor: processed.nextCursor,
-        hasMore: processed.hasMore,
+        items: [],
+        hasMore: false,
         stats,
       }
     } catch (error: unknown) {
@@ -1446,44 +1416,6 @@ export class QueryExecutor {
   }
 
   // ===========================================================================
-  // Row Group Reading
-  // ===========================================================================
-
-  /**
-   * Read and parse a row group
-   *
-   * @param ns - Namespace
-   * @param rowGroup - Row group metadata
-   * @param metadata - File metadata
-   * @returns Parsed records and bytes read
-   */
-  private async readRowGroup(
-    ns: string,
-    rowGroup: RowGroupMetadata,
-    metadata: ParquetMetadata
-  ): Promise<{ records: EntityRecord[]; bytesRead: number } | null> {
-    // Supports both {dataset} and {dataset}/{collection} paths
-    const _datasetId = ns.includes('/') ? ns.split('/')[0] : ns
-    void _datasetId // Reserved for future use
-    const path = ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`
-
-    // Read row group bytes
-    const data = await this.readPath.readRange(
-      path,
-      rowGroup.offset,
-      rowGroup.offset + rowGroup.compressedSize
-    )
-
-    // Parse row group (placeholder - actual implementation would use Parquet parser)
-    const records = this.parseRowGroup(data, rowGroup, metadata)
-
-    return {
-      records,
-      bytesRead: data.byteLength,
-    }
-  }
-
-  // ===========================================================================
   // Filtering
   // ===========================================================================
 
@@ -1901,7 +1833,7 @@ export class QueryExecutor {
   }
 
   // ===========================================================================
-  // Parsing Methods (Placeholders)
+  // Parsing Methods
   // ===========================================================================
 
   /**
@@ -2015,29 +1947,34 @@ export class QueryExecutor {
   }
 
   /**
-   * Parse row group from bytes
-   * Placeholder - actual implementation would use Parquet decoder
-   */
-  private parseRowGroup(
-    _data: Uint8Array,
-    _rowGroup: RowGroupMetadata,
-    _metadata: ParquetMetadata
-  ): EntityRecord[] {
-    // Placeholder implementation
-    return []
-  }
-
-  /**
    * Parse bloom filter from bytes
-   * Placeholder - actual implementation would deserialize bloom filter
+   *
+   * Deserializes an IndexBloomFilter from the PQBF format and wraps it
+   * to match the BloomFilter interface expected by loadBloomFilter.
+   *
+   * @param data - Raw bytes in PQBF format
+   * @returns BloomFilter interface for fast negative lookups
    */
-  private parseBloomFilter(_data: Uint8Array): BloomFilter {
-    // Placeholder implementation
-    return {
-      mightContain: () => true,
-      falsePositiveRate: 0.01,
-      numBits: 0,
-      numHashFunctions: 0,
+  private parseBloomFilter(data: Uint8Array): BloomFilter {
+    try {
+      const indexBloom = IndexBloomFilter.fromBuffer(data)
+      const stats = indexBloom.getStats()
+
+      return {
+        mightContain: (value: string) => indexBloom.mightContain(value),
+        falsePositiveRate: stats.estimatedFPR,
+        numBits: stats.valueBloomSizeBytes * 8,
+        numHashFunctions: 3, // Default from bloom-filter.ts
+      }
+    } catch (error: unknown) {
+      // If parsing fails, return a filter that always returns true (safe fallback)
+      logger.warn('Failed to parse bloom filter, falling back to pass-through', error)
+      return {
+        mightContain: () => true,
+        falsePositiveRate: 1,
+        numBits: 0,
+        numHashFunctions: 0,
+      }
     }
   }
 

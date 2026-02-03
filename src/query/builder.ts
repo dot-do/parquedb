@@ -44,6 +44,9 @@ export type ComparisonOp =
   | 'in'
   | 'nin'
 
+/** Supported negation operators (for notWhere) */
+export type NegationOp = ComparisonOp | StringOp
+
 /** Supported string operators */
 export type StringOp =
   | 'regex'
@@ -88,6 +91,7 @@ interface Condition {
   field: string
   op: QueryOp
   value: unknown
+  negated?: boolean  // true for notWhere conditions
 }
 
 /** Condition group type - reserved for future query building enhancements */
@@ -166,6 +170,40 @@ export class QueryBuilder<T = Record<string, unknown>> {
    */
   andWhere(field: string, op: QueryOp, value: unknown): this {
     return this.where(field, op, value)
+  }
+
+  /**
+   * Add a negated WHERE condition to the query (field-level $not)
+   *
+   * Uses field-level $not operator to negate the result of the specified operator.
+   * This is different from top-level $not which negates entire sub-filters.
+   *
+   * @param field - The field name (supports dot notation for nested fields)
+   * @param op - The comparison operator to negate
+   * @param value - The value to compare against
+   * @returns this for method chaining
+   *
+   * @example
+   * // Find users whose name doesn't start with 'admin'
+   * builder.notWhere('name', 'regex', '^admin')
+   *
+   * @example
+   * // Find items where score is NOT greater than 100
+   * builder.notWhere('score', 'gt', 100)
+   *
+   * @example
+   * // Combine with regular conditions
+   * builder
+   *   .where('status', 'eq', 'active')
+   *   .notWhere('category', 'in', ['restricted', 'private'])
+   */
+  notWhere(field: string, op: QueryOp, value: unknown): this {
+    if (!validOperators.has(op)) {
+      throw new Error(`Invalid operator: ${op}`)
+    }
+
+    this.state.conditions.push({ field, op, value, negated: true })
+    return this
   }
 
   /**
@@ -329,7 +367,12 @@ export class QueryBuilder<T = Record<string, unknown>> {
       const mongoOp = operatorMap[cond.op]
       if (!mongoOp) continue
 
-      filter[cond.field] = { [mongoOp]: cond.value } as FieldFilter
+      if (cond.negated) {
+        // Use field-level $not: { field: { $not: { $op: value } } }
+        filter[cond.field] = { $not: { [mongoOp]: cond.value } } as FieldFilter
+      } else {
+        filter[cond.field] = { [mongoOp]: cond.value } as FieldFilter
+      }
     }
 
     return filter
@@ -342,6 +385,10 @@ export class QueryBuilder<T = Record<string, unknown>> {
     const mongoOp = operatorMap[cond.op]
     if (!mongoOp) return {}
 
+    if (cond.negated) {
+      // Use field-level $not: { field: { $not: { $op: value } } }
+      return { [cond.field]: { $not: { [mongoOp]: cond.value } } as FieldFilter }
+    }
     return { [cond.field]: { [mongoOp]: cond.value } as FieldFilter }
   }
 

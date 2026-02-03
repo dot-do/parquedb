@@ -43,6 +43,13 @@ import {
   type StorageStats,
 } from './responses'
 
+// Import R2 error handling
+import {
+  MissingBucketError,
+  BucketOperationError,
+  handleBucketError,
+} from './r2-errors'
+
 // Import routing utilities
 import { RoutePatterns, matchRoute } from './routing'
 
@@ -98,6 +105,24 @@ export {
   type ResponseData,
 } from './responses'
 
+// Re-export R2 error handling utilities
+export {
+  MissingBucketError,
+  BucketOperationError,
+  requireBucket,
+  getCdnBucket,
+  hasBucket,
+  hasCdnBucket,
+  handleBucketError,
+  buildMissingBucketResponse,
+  buildBucketOperationErrorResponse,
+  safeGet,
+  safePut,
+  safeHead,
+  safeList,
+  safeDelete,
+} from './r2-errors'
+
 // Re-export routing utilities
 export {
   parseQueryFilter,
@@ -142,6 +167,27 @@ export {
   type RateLimitConfig,
   type RateLimitResult,
 } from './RateLimitDO'
+
+// Re-export TailDO and related types for event-driven compaction
+export {
+  TailDO,
+  type TailDOEnv,
+  type TailWorkerMessage,
+  type TailAckMessage,
+  type TailErrorMessage,
+  type RawEventsFile,
+} from './TailDO'
+
+// Re-export Compaction Consumer for event-driven mode
+export {
+  CompactionConsumer,
+  createCompactionConsumer,
+  type CompactionConsumerEnv,
+  type R2EventNotification,
+  type DownstreamMessage,
+  type ProcessingResult,
+  type BatchResult,
+} from './compaction-consumer'
 
 // =============================================================================
 // Worker Implementation
@@ -740,6 +786,9 @@ export default {
       // Benchmark - Real R2 I/O Performance Tests
       // =======================================================================
       if (path === '/benchmark') {
+        if (!env.BUCKET) {
+          throw new MissingBucketError('BUCKET', 'Required for benchmark operations.')
+        }
         return handleBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleBenchmarkRequest>[1])
       }
 
@@ -747,6 +796,9 @@ export default {
       // Benchmark Datasets - Real Dataset I/O Performance Tests
       // =======================================================================
       if (path === '/benchmark-datasets') {
+        if (!env.BUCKET) {
+          throw new MissingBucketError('BUCKET', 'Required for dataset benchmark operations.')
+        }
         return handleDatasetBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleDatasetBenchmarkRequest>[1])
       }
 
@@ -754,6 +806,9 @@ export default {
       // Benchmark Indexed - Secondary Index Performance Tests
       // =======================================================================
       if (path === '/benchmark-indexed') {
+        if (!env.BUCKET) {
+          throw new MissingBucketError('BUCKET', 'Required for indexed benchmark operations.')
+        }
         return handleIndexedBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleIndexedBenchmarkRequest>[1])
       }
 
@@ -761,6 +816,9 @@ export default {
       // Benchmark Backends - Compare Native/Iceberg/Delta (Synthetic Data)
       // =======================================================================
       if (path === '/benchmark/backends') {
+        if (!env.CDN_BUCKET) {
+          throw new MissingBucketError('CDN_BUCKET', 'Required for backend comparison benchmarks.')
+        }
         return handleBackendsBenchmarkRequest(request, env.CDN_BUCKET)
       }
 
@@ -768,6 +826,9 @@ export default {
       // Benchmark Datasets + Backends - Real Data Across All Formats
       // =======================================================================
       if (path === '/benchmark/datasets/backends') {
+        if (!env.BUCKET) {
+          throw new MissingBucketError('BUCKET', 'Required for dataset backend benchmarks.')
+        }
         return handleDatasetBackendsBenchmarkRequest(request, env.BUCKET)
       }
 
@@ -890,6 +951,12 @@ export default {
       return buildErrorResponse(request, new Error(`Route '${path}' not found`), 404, startTime)
 
     } catch (error: unknown) {
+      // Handle R2 bucket errors with specific error responses
+      const bucketErrorResponse = handleBucketError(error)
+      if (bucketErrorResponse) {
+        return bucketErrorResponse
+      }
+
       logger.error('ParqueDB error', error)
       const err = error instanceof Error ? error : new Error(String(error))
       return buildErrorResponse(request, err, 500, startTime)

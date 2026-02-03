@@ -308,7 +308,14 @@ describe('ParqueDB Workers E2E', () => {
 
       expect(rels).toBeDefined()
       expect(rels.length).toBe(1)
-      expect((rels[0] as Record<string, unknown>).predicate).toBe('author')
+      const rel = rels[0] as Record<string, unknown>
+      expect(rel.predicate).toBe('author')
+
+      // Verify fromType/fromName and toType/toName are populated from entity data
+      expect(rel.fromType).toBe('Post')
+      expect(rel.fromName).toBe('Linked Post')
+      expect(rel.toType).toBe('User')
+      expect(rel.toName).toBe('Test Author')
     })
 
     it('can create inline relationships during entity creation', async () => {

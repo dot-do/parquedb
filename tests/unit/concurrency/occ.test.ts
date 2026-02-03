@@ -10,7 +10,7 @@
  * - Retry: withRetry utility with exponential backoff
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Collection, clearGlobalStorage, clearEventLog } from '../../../src/Collection'
 import type { Entity, EntityId } from '../../../src/types'
 import { VersionConflictError } from '../../../src/mutation/update'
@@ -72,6 +72,7 @@ describe('OCC Under Load', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     clearGlobalStorage()
     clearEventLog()
   })
@@ -390,9 +391,7 @@ describe('OCC Under Load', () => {
       vi.useFakeTimers()
       const controller = new AbortController()
       let attempts = 0
-
-      // Schedule abort after time advances
-      const abortTimeout = setTimeout(() => controller.abort(), 50)
+      let abortErrorCaught = false
 
       const retryPromise = withRetry(
         async () => {
@@ -405,16 +404,25 @@ describe('OCC Under Load', () => {
           signal: controller.signal,
           isRetryable: (err) => err.name === 'ConcurrencyError',
         }
-      )
+      ).catch((err) => {
+        abortErrorCaught = true
+        return err // Return instead of re-throwing to avoid unhandled rejection
+      })
 
-      // Advance time to trigger the abort
-      await vi.advanceTimersByTimeAsync(100)
+      // Advance time to let some retries happen, then abort
+      await vi.advanceTimersByTimeAsync(30) // Let first retry delay pass
+      controller.abort()
 
-      await expect(retryPromise).rejects.toThrow('aborted')
+      // Run all pending timers to ensure the promise settles
+      await vi.runAllTimersAsync()
 
+      const result = await retryPromise
+
+      expect(result).toBeInstanceOf(Error)
+      expect((result as Error).message).toContain('aborted')
+      expect(abortErrorCaught).toBe(true)
       expect(attempts).toBeLessThan(10) // Should abort early
-      clearTimeout(abortTimeout)
-      vi.useRealTimers()
+      // vi.useRealTimers() handled by afterEach
     })
   })
 
@@ -885,6 +893,7 @@ describe('OCC Under Load', () => {
         const final = await documentsCollection.get(localId)
         expect(final.revision).toBe(6) // 1 initial + 5 edits
       } finally {
+        // vi.useRealTimers() also handled by afterEach as backup
         vi.useRealTimers()
       }
     })

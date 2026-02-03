@@ -916,8 +916,9 @@ describe('R2Backend Integration Tests', () => {
 
       await backend.write(path, testData)
 
-      // Read bytes 2-5 (inclusive)
-      const rangeResult = await backend.readRange(path, 2, 5)
+      // Read bytes 2-5 (exclusive end, like Array.slice)
+      // readRange(2, 6) returns bytes at indices 2,3,4,5 (4 bytes)
+      const rangeResult = await backend.readRange(path, 2, 6)
       expect(rangeResult).toEqual(new Uint8Array([2, 3, 4, 5]))
     })
 
@@ -927,7 +928,8 @@ describe('R2Backend Integration Tests', () => {
 
       await backend.write(path, testData)
 
-      const rangeResult = await backend.readRange(path, 0, 2)
+      // readRange(0, 3) returns bytes at indices 0,1,2 (3 bytes, exclusive end)
+      const rangeResult = await backend.readRange(path, 0, 3)
       expect(rangeResult).toEqual(new Uint8Array([10, 20, 30]))
     })
 
@@ -937,7 +939,8 @@ describe('R2Backend Integration Tests', () => {
 
       await backend.write(path, testData)
 
-      const rangeResult = await backend.readRange(path, 2, 2)
+      // readRange(2, 3) returns byte at index 2 only (1 byte, exclusive end)
+      const rangeResult = await backend.readRange(path, 2, 3)
       expect(rangeResult).toEqual(new Uint8Array([30]))
     })
 

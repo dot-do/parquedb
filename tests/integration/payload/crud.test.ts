@@ -2,7 +2,7 @@
  * Tests for Payload CMS adapter CRUD operations
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { PayloadAdapter } from '../../../src/integrations/payload/adapter'
 import { MemoryBackend } from '../../../src/storage'
 
@@ -14,6 +14,13 @@ describe('PayloadAdapter CRUD', () => {
       storage: new MemoryBackend(),
       debug: false,
     })
+  })
+
+  afterEach(async () => {
+    // Cleanup adapter resources
+    if (adapter && typeof adapter.destroy === 'function') {
+      await adapter.destroy()
+    }
   })
 
   describe('create', () => {

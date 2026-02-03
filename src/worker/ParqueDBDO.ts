@@ -41,7 +41,8 @@ import type {
 } from '../types'
 import { entityTarget, relTarget } from '../types'
 import type { Env, FlushConfig } from '../types/worker'
-import { getRandom48Bit, parseStoredData } from '../utils'
+import { parseStoredData } from '../utils'
+import { generateULID } from './do/ulid'
 
 // =============================================================================
 // Cache Invalidation Types
@@ -66,40 +67,6 @@ export interface CacheInvalidationSignal {
 
 // Initialize Sqids for short ID generation
 const sqids = new Sqids()
-
-// =============================================================================
-// ULID Generation (simplified, for event IDs)
-// =============================================================================
-
-const ENCODING = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
-let lastTime = 0
-let lastRandom = 0
-
-function generateULID(): string {
-  let now = Date.now()
-  if (now === lastTime) {
-    lastRandom++
-  } else {
-    lastTime = now
-    // Use cryptographically secure random for ULID random component
-    lastRandom = getRandom48Bit()
-  }
-
-  let time = ''
-  for (let i = 0; i < 10; i++) {
-    time = ENCODING[now % 32] + time
-    now = Math.floor(now / 32)
-  }
-
-  let random = ''
-  let r = lastRandom
-  for (let i = 0; i < 16; i++) {
-    random = ENCODING[r % 32] + random
-    r = Math.floor(r / 32)
-  }
-
-  return time + random
-}
 
 // =============================================================================
 // Types
@@ -1659,7 +1626,57 @@ export class ParqueDBDO extends DurableObject<Env> {
 
     const rows = [...this.sql.exec<StoredRelationship>(query, ...params)]
 
-    return rows.map(row => this.toRelationship(row))
+    if (rows.length === 0) {
+      return []
+    }
+
+    // Collect unique entity keys to look up
+    const entityKeys = new Set<string>()
+    for (const row of rows) {
+      entityKeys.add(`${row.from_ns}/${row.from_id}`)
+      entityKeys.add(`${row.to_ns}/${row.to_id}`)
+    }
+
+    // Batch lookup entity type/name info
+    const entityInfoMap = await this.getEntityInfoBatch([...entityKeys])
+
+    return rows.map(row => this.toRelationship(row, entityInfoMap))
+  }
+
+  /**
+   * Batch lookup entity type and name for multiple entities
+   *
+   * Since this DO uses event sourcing, entities are reconstructed from events.
+   * We use the existing get() method which handles event reconstruction.
+   *
+   * @param entityKeys - Array of entity keys in "ns/id" format
+   * @returns Map of entity key to type/name info
+   */
+  private async getEntityInfoBatch(
+    entityKeys: string[]
+  ): Promise<Map<string, { type: string; name: string }>> {
+    const result = new Map<string, { type: string; name: string }>()
+
+    if (entityKeys.length === 0) {
+      return result
+    }
+
+    // Look up each entity using the event-sourcing aware get() method
+    // This correctly reconstructs entity state from events
+    await Promise.all(
+      entityKeys.map(async key => {
+        const slashIndex = key.indexOf('/')
+        const ns = key.substring(0, slashIndex)
+        const id = key.substring(slashIndex + 1)
+
+        const entity = await this.get(ns, id)
+        if (entity) {
+          result.set(key, { type: entity.$type, name: entity.name })
+        }
+      })
+    )
+
+    return result
   }
 
   // ===========================================================================
@@ -2428,19 +2445,30 @@ export class ParqueDBDO extends DurableObject<Env> {
 
   /**
    * Convert stored relationship to API relationship format
+   *
+   * @param stored - The stored relationship from SQLite
+   * @param entityInfoMap - Optional map of entity keys (ns/id) to type/name info
    */
-  private toRelationship(stored: StoredRelationship): Relationship {
+  private toRelationship(
+    stored: StoredRelationship,
+    entityInfoMap?: Map<string, { type: string; name: string }>
+  ): Relationship {
+    const fromKey = `${stored.from_ns}/${stored.from_id}`
+    const toKey = `${stored.to_ns}/${stored.to_id}`
+    const fromInfo = entityInfoMap?.get(fromKey)
+    const toInfo = entityInfoMap?.get(toKey)
+
     return {
       fromNs: stored.from_ns as Namespace,
       fromId: stored.from_id as Id,
-      fromType: '', // Would need to look up from entity
-      fromName: '', // Would need to look up from entity
+      fromType: fromInfo?.type ?? '',
+      fromName: fromInfo?.name ?? '',
       predicate: stored.predicate,
       reverse: stored.reverse,
       toNs: stored.to_ns as Namespace,
       toId: stored.to_id as Id,
-      toType: '', // Would need to look up from entity
-      toName: '', // Would need to look up from entity
+      toType: toInfo?.type ?? '',
+      toName: toInfo?.name ?? '',
       // Shredded fields
       matchMode: stored.match_mode as Relationship['matchMode'],
       similarity: stored.similarity ?? undefined,

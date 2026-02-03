@@ -4,7 +4,7 @@
  * Contains validation utilities for namespaces, filters, and update operators.
  */
 
-import type { Filter, UpdateInput } from '../types'
+import type { EntityId, Filter, UpdateInput } from '../types'
 import { ValidationError } from './types'
 
 // =============================================================================
@@ -113,4 +113,106 @@ export function validateUpdateOperators(update: UpdateInput): void {
 export function normalizeNamespace(name: string): string {
   // Convert PascalCase/camelCase to lowercase (Posts -> posts, BlogPosts -> blogposts)
   return name.toLowerCase()
+}
+
+// =============================================================================
+// Entity ID Validation
+// =============================================================================
+
+/**
+ * Validate a full EntityId string (format: "namespace/localId")
+ *
+ * @param id - The entity ID to validate
+ * @throws {ValidationError} if the entity ID is invalid
+ *
+ * @example
+ * ```typescript
+ * validateEntityId('users/user-123')  // OK
+ * validateEntityId('invalidid')       // throws ValidationError
+ * ```
+ */
+export function validateEntityId(id: string): void {
+  if (!id || typeof id !== 'string') {
+    throw new ValidationError('entityId', id || '', 'Entity ID is required and must be a non-empty string')
+  }
+
+  const slashIndex = id.indexOf('/')
+
+  if (slashIndex === -1) {
+    throw new ValidationError('entityId', id, 'Entity ID must be in "namespace/id" format')
+  }
+
+  if (slashIndex === 0) {
+    throw new ValidationError('entityId', id, 'Entity ID namespace cannot be empty')
+  }
+
+  const namespace = id.slice(0, slashIndex)
+  const localId = id.slice(slashIndex + 1)
+
+  if (localId.length === 0) {
+    throw new ValidationError('entityId', id, 'Entity ID local part cannot be empty')
+  }
+
+  // Validate namespace constraints
+  if (namespace.startsWith('_')) {
+    throw new ValidationError('entityId', id, 'Entity ID namespace cannot start with underscore')
+  }
+
+  if (namespace.startsWith('$')) {
+    throw new ValidationError('entityId', id, 'Entity ID namespace cannot start with dollar sign')
+  }
+}
+
+/**
+ * Validate a local ID (the part after the namespace)
+ *
+ * @param id - The local ID to validate
+ * @throws {ValidationError} if the local ID is invalid
+ *
+ * @example
+ * ```typescript
+ * validateLocalId('user-123')  // OK
+ * validateLocalId('')          // throws ValidationError
+ * ```
+ */
+export function validateLocalId(id: string): void {
+  if (!id || typeof id !== 'string') {
+    throw new ValidationError('localId', id || '', 'Local ID is required and must be a non-empty string')
+  }
+}
+
+/**
+ * Normalize an entity ID with namespace context
+ *
+ * If the ID already contains a '/', it's treated as a full EntityId and validated.
+ * Otherwise, it's prefixed with the provided namespace.
+ *
+ * @param namespace - The default namespace to use if ID doesn't have one
+ * @param id - The entity ID (can be full "ns/id" or just "id")
+ * @returns The normalized EntityId in "namespace/id" format
+ * @throws {ValidationError} if validation fails
+ *
+ * @example
+ * ```typescript
+ * normalizeEntityId('users', 'user-123')        // 'users/user-123'
+ * normalizeEntityId('posts', 'users/user-123')  // 'users/user-123' (unchanged)
+ * ```
+ */
+export function normalizeEntityId(namespace: string, id: string): EntityId {
+  // Validate namespace first
+  validateNamespace(namespace)
+
+  // If ID contains a slash, treat it as a full EntityId
+  if (id.includes('/')) {
+    validateEntityId(id)
+    return id as EntityId
+  }
+
+  // Otherwise, validate the local ID and combine with namespace
+  validateLocalId(id)
+
+  // Normalize the namespace to lowercase
+  const normalizedNs = normalizeNamespace(namespace)
+
+  return `${normalizedNs}/${id}` as EntityId
 }

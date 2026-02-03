@@ -4,7 +4,7 @@
  * Tests the SQL template tag, parser, translator, and ORM adapters.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ParqueDB } from '../../../src/ParqueDB.js'
 import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import {
@@ -231,6 +231,12 @@ describe('SQL Template Tag', () => {
     db = new ParqueDB({ storage: backend })
   })
 
+  afterEach(() => {
+    if (db && typeof (db as any).dispose === 'function') {
+      (db as any).dispose()
+    }
+  })
+
   it('executes SELECT query', async () => {
     // Create some test data
     const collection = db.collection('users')
@@ -314,6 +320,12 @@ describe('Drizzle Proxy', () => {
     db = new ParqueDB({ storage: backend })
   })
 
+  afterEach(() => {
+    if (db && typeof (db as any).dispose === 'function') {
+      (db as any).dispose()
+    }
+  })
+
   it('creates a proxy callback', () => {
     const proxy = createDrizzleProxy(db)
     expect(typeof proxy).toBe('function')
@@ -350,6 +362,12 @@ describe('Prisma Adapter', () => {
   beforeEach(async () => {
     const backend = new MemoryBackend()
     db = new ParqueDB({ storage: backend })
+  })
+
+  afterEach(() => {
+    if (db && typeof (db as any).dispose === 'function') {
+      (db as any).dispose()
+    }
   })
 
   it('creates adapter with correct properties', () => {

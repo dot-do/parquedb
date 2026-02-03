@@ -228,6 +228,9 @@ export interface WriteOptions {
 
   /** Only write if doesn't exist */
   ifNoneMatch?: '*'
+
+  /** Custom modification time (for testing) */
+  mtime?: Date
 }
 
 /** Result of write operation */

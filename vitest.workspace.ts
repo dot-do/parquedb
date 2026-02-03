@@ -47,7 +47,11 @@ export default defineWorkspace([
         },
       },
       fileParallelism: false,
-      maxConcurrency: 5,
+      maxConcurrency: 1, // Run tests sequentially to prevent shared state issues
+      sequence: {
+        shuffle: false,
+        concurrent: false, // Ensure tests run sequentially within files
+      },
       setupFiles: ['tests/setup.ts'],
       testTimeout: 30000,
     },
@@ -71,7 +75,11 @@ export default defineWorkspace([
         },
       },
       fileParallelism: false,
-      maxConcurrency: 5,
+      maxConcurrency: 1, // Run tests sequentially to prevent shared state issues
+      sequence: {
+        shuffle: false,
+        concurrent: false, // Ensure tests run sequentially within files
+      },
       setupFiles: ['tests/setup.ts'],
       testTimeout: 30000,
     },
@@ -95,7 +103,11 @@ export default defineWorkspace([
         },
       },
       fileParallelism: false,
-      maxConcurrency: 5,
+      maxConcurrency: 1, // Run tests sequentially to prevent shared state issues
+      sequence: {
+        shuffle: false,
+        concurrent: false, // Ensure tests run sequentially within files
+      },
       setupFiles: ['tests/setup.ts'],
       testTimeout: 60000,
     },

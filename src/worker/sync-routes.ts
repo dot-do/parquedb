@@ -14,6 +14,7 @@ import { type DatabaseInfo, getUserDatabaseIndex } from './DatabaseIndexDO'
 import { DEFAULT_VISIBILITY } from '../types/visibility'
 import type { Visibility } from '../types/visibility'
 import type { SyncManifest } from '../sync/manifest'
+import { MissingBucketError, handleBucketError } from './r2-errors'
 
 // =============================================================================
 // Types
@@ -328,6 +329,11 @@ async function handleGetManifest(
   databaseId: string
 ): Promise<Response> {
   try {
+    // Validate R2 bucket is configured
+    if (!env.BUCKET) {
+      throw new MissingBucketError('BUCKET', 'Required for manifest operations.')
+    }
+
     // Verify user has access
     const database = await verifyDatabaseAccess(env, user, databaseId)
     if (!database) {
@@ -370,6 +376,11 @@ async function handleUpdateManifest(
   databaseId: string
 ): Promise<Response> {
   try {
+    // Validate R2 bucket is configured
+    if (!env.BUCKET) {
+      throw new MissingBucketError('BUCKET', 'Required for manifest operations.')
+    }
+
     // Verify user owns the database
     const database = await verifyDatabaseOwnership(env, user, databaseId)
     if (!database) {
@@ -414,6 +425,15 @@ export async function handleUpload(
   filePath: string
 ): Promise<Response> {
   try {
+    // Validate R2 bucket is configured
+    if (!env.BUCKET) {
+      const error = new MissingBucketError('BUCKET', 'Required for file uploads.')
+      const bucketErrorResponse = handleBucketError(error)
+      if (bucketErrorResponse) {
+        return addCorsHeaders(bucketErrorResponse)
+      }
+    }
+
     // Verify upload token
     const uploadToken = request.headers.get('X-Upload-Token')
     if (!uploadToken) {
@@ -449,7 +469,7 @@ export async function handleUpload(
     const contentType = request.headers.get('Content-Type') ?? 'application/octet-stream'
     const body = await request.arrayBuffer()
 
-    await env.BUCKET.put(fullPath, body, {
+    await env.BUCKET!.put(fullPath, body, {
       httpMetadata: { contentType },
     })
 
@@ -473,6 +493,15 @@ export async function handleDownload(
   filePath: string
 ): Promise<Response> {
   try {
+    // Validate R2 bucket is configured
+    if (!env.BUCKET) {
+      const error = new MissingBucketError('BUCKET', 'Required for file downloads.')
+      const bucketErrorResponse = handleBucketError(error)
+      if (bucketErrorResponse) {
+        return addCorsHeaders(bucketErrorResponse)
+      }
+    }
+
     // Verify download token
     const url = new URL(request.url)
     const downloadToken = url.searchParams.get('token')
@@ -506,7 +535,7 @@ export async function handleDownload(
       ? `${database.prefix}/${filePath}`
       : filePath
 
-    const object = await env.BUCKET.get(fullPath)
+    const object = await env.BUCKET!.get(fullPath)
     if (!object) {
       return addCorsHeaders(Response.json(
         { error: 'File not found' },

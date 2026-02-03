@@ -87,7 +87,7 @@ const KNOWN_OPERATORS = new Set([
   '$all', '$elemMatch', '$size',
   // Existence operators
   '$exists', '$type',
-  // Logical operators (top-level)
+  // Logical operators (top-level and field-level)
   '$and', '$or', '$not', '$nor',
   // Special operators (handled elsewhere)
   '$text', '$vector', '$geo',
@@ -295,6 +295,14 @@ function isOperatorObject(value: unknown): boolean {
 function evaluateOperators(value: unknown, operators: Record<string, unknown>, config?: FilterConfig): boolean {
   for (const [op, opValue] of Object.entries(operators)) {
     switch (op) {
+      case '$not': {
+        // Field-level $not: negate the result of evaluating the inner operators
+        if (typeof opValue !== 'object' || opValue === null) return false
+        const innerResult = evaluateOperators(value, opValue as Record<string, unknown>, config)
+        if (innerResult) return false  // If inner matches, $not should NOT match
+        break
+      }
+
       case '$eq':
         if (!deepEqual(value, opValue)) return false
         break

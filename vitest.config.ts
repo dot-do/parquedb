@@ -41,9 +41,10 @@ export default defineConfig({
       },
     },
     fileParallelism: false, // Run test files sequentially
-    maxConcurrency: 5, // Limit concurrent tests within a file
+    maxConcurrency: 1, // Run tests within a file sequentially to prevent shared state issues
     sequence: {
       shuffle: false,
+      concurrent: false, // Ensure tests run sequentially within files
     },
 
     // Test file patterns - exclude browser and workers tests

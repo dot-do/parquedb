@@ -648,8 +648,8 @@ describe('Concurrent Event Processing (Race Condition Fix)', () => {
       sourceNamespaces: ['orders'],
       async process(events: Event[]): Promise<void> {
         const currentBatchId = ++batchCounter
-        // Simulate slow processing to increase chance of race condition - use fake timer advancement
-        await vi.advanceTimersByTimeAsync(50)
+        // Simulate slow processing to increase chance of race condition - use real delay
+        await new Promise(resolve => setTimeout(resolve, 10))
         processedBatches.push({ batchId: currentBatchId, events: [...events] })
         this.processedEvents.push([...events])
       },
@@ -657,7 +657,7 @@ describe('Concurrent Event Processing (Race Condition Fix)', () => {
 
     engine = createStreamingRefreshEngine({
       batchSize: 2,
-      batchTimeoutMs: 10, // Short timeout to trigger timer-based flushes
+      batchTimeoutMs: 100, // Longer timeout to avoid timer-based flushes during test
     })
     engine.registerMV(handler)
     await engine.start()

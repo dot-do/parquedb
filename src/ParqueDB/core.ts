@@ -676,31 +676,23 @@ export class ParqueDBImpl {
         }
       }
     } else if (fieldDef.startsWith('<-')) {
-      // Parse reverse relationship: '<- Post.author[]'
-      const match = fieldDef.match(/<-\s*(\w+)\.(\w+)(\[\])?/)
-      if (!match) {
+      // Parse reverse relationship using consolidated helper
+      const parsed = this.parseReverseRelation(fieldDef)
+      if (!parsed) {
         return { items: [], total: 0, hasMore: false }
       }
 
-      const [, relatedType, relatedField] = match
-      if (!relatedType || !relatedField) {
-        return { items: [], total: 0, hasMore: false }
-      }
-      const relatedTypeDef = this.schema[relatedType]
-      const relatedNs = relatedTypeDef?.$ns as string || relatedType.toLowerCase()
+      // Get related entity IDs using consolidated helper
+      const sourceIds = this.getReverseRelatedIds(fullId, parsed.relatedNs, parsed.relatedField, {
+        includeDeleted: options?.includeDeleted,
+      })
 
-      // Use reverse relationship index for O(1) lookup instead of scanning all entities
-      const sourceIds = getFromReverseRelIndex(this.reverseRelIndex, fullId, relatedNs, relatedField)
-
-      // Batch load all related entities from the index
+      // Load related entities
       for (const sourceId of sourceIds) {
         const relatedEntity = this.entities.get(sourceId)
-        if (!relatedEntity) continue
-
-        // Skip deleted unless includeDeleted is true
-        if (relatedEntity.deletedAt && !options?.includeDeleted) continue
-
-        allRelatedEntities.push(relatedEntity as Entity<T>)
+        if (relatedEntity) {
+          allRelatedEntities.push(relatedEntity as Entity<T>)
+        }
       }
     } else {
       // Not a relationship field
@@ -1021,23 +1013,8 @@ export class ParqueDBImpl {
         })
       }
 
-      // Extract the ID part from fullId
-      const idPart = fullId.split('/')[1] || ''
-
-      // Check if this looks like a valid entity ID (not a "nonexistent" placeholder)
-      // Valid IDs are typically numeric, UUIDs, or generated strings (not "nonexistent")
-      const looksLikeValidId = idPart.length > 0 &&
-        !idPart.toLowerCase().includes('nonexistent') &&
-        !idPart.toLowerCase().includes('invalid') &&
-        !idPart.toLowerCase().includes('missing')
-
-      if (!looksLikeValidId) {
-        return { deletedCount: 0 }
-      }
-
-      // Treat as existing in storage (soft delete behavior)
-      // This handles the case where entity exists in persistent storage but not in memory cache
-      return { deletedCount: 1 }
+      // Entity not found - nothing to delete
+      return { deletedCount: 0 }
     }
 
     // Check version for optimistic concurrency (entity exists)
@@ -1692,6 +1669,61 @@ export class ParqueDBImpl {
   }
 
   /**
+   * Parse a reverse relationship definition string.
+   *
+   * Parses strings like "<- Post.author[]" into their components:
+   * - relatedType: The type name (e.g., "Post")
+   * - relatedField: The field name on that type (e.g., "author")
+   * - relatedNs: The namespace for the related type (from schema or lowercased type)
+   *
+   * @param fieldDef - The relationship definition string (e.g., "<- Post.author[]")
+   * @returns Object with relatedNs and relatedField, or null if parse fails
+   */
+  private parseReverseRelation(fieldDef: string): { relatedNs: string; relatedField: string } | null {
+    const match = fieldDef.match(/<-\s*(\w+)\.(\w+)(\[\])?/)
+    if (!match) return null
+
+    const [, relatedType, relatedField] = match
+    if (!relatedType || !relatedField) return null
+
+    const relatedTypeDef = this.schema[relatedType]
+    const relatedNs = (relatedTypeDef?.$ns as string) || relatedType.toLowerCase()
+
+    return { relatedNs, relatedField }
+  }
+
+  /**
+   * Get source entity IDs from a reverse relationship.
+   *
+   * Uses the reverse relationship index for O(1) lookup to find all entities
+   * that reference the given target entity via the specified relationship.
+   *
+   * @param targetId - The full ID of the target entity (e.g., "users/123")
+   * @param relatedNs - The namespace of the source entities
+   * @param relatedField - The field name on source entities that points to target
+   * @param options - Optional settings for filtering (includeDeleted)
+   * @returns Array of source entity IDs
+   */
+  private getReverseRelatedIds(
+    targetId: string,
+    relatedNs: string,
+    relatedField: string,
+    options?: { includeDeleted?: boolean }
+  ): string[] {
+    const sourceIds = getFromReverseRelIndex(this.reverseRelIndex, targetId, relatedNs, relatedField)
+    const result: string[] = []
+
+    for (const sourceId of sourceIds) {
+      const entity = this.entities.get(sourceId)
+      if (!entity) continue
+      if (entity.deletedAt && !options?.includeDeleted) continue
+      result.push(sourceId)
+    }
+
+    return result
+  }
+
+  /**
    * Hydrate reverse relationship fields for an entity.
    *
    * This method populates relationship fields with actual entity references,
@@ -1729,30 +1761,24 @@ export class ParqueDBImpl {
         const fieldDef = typeDef[fieldName]
         // Check if it's a reverse relationship (<-)
         if (typeof fieldDef === 'string' && fieldDef.startsWith('<-')) {
-          // Parse reverse relationship: '<- Post.author[]'
-          const match = fieldDef.match(/<-\s*(\w+)\.(\w+)(\[\])?/)
-          if (match) {
+          // Parse reverse relationship using consolidated helper
+          const parsed = this.parseReverseRelation(fieldDef)
+          if (parsed) {
             handled = true
-            const [, relatedType, relatedField] = match
-            if (!relatedType || !relatedField) continue
-            // Find the namespace for the related type
-            const relatedTypeDef = this.schema[relatedType]
-            const relatedNs = relatedTypeDef?.$ns as string || relatedType.toLowerCase()
 
-            // Use reverse relationship index for O(1) lookup instead of scanning all entities
-            const sourceIds = getFromReverseRelIndex(this.reverseRelIndex, fullId, relatedNs, relatedField)
+            // Get source IDs using consolidated helper (excludes deleted)
+            const sourceIds = this.getReverseRelatedIds(fullId, parsed.relatedNs, parsed.relatedField)
 
-            // Batch load related entities from the index
+            // Build related entities list with name and id
             const allRelatedEntities: Array<{ name: string; id: EntityId }> = []
             for (const relatedId of sourceIds) {
               const relatedEntity = this.entities.get(relatedId)
-              if (!relatedEntity) continue
-              if (relatedEntity.deletedAt) continue // Skip deleted
-
-              allRelatedEntities.push({
-                name: relatedEntity.name || relatedId,
-                id: relatedId as EntityId,
-              })
+              if (relatedEntity) {
+                allRelatedEntities.push({
+                  name: relatedEntity.name || relatedId,
+                  id: relatedId as EntityId,
+                })
+              }
             }
 
             // Build RelSet with $count and optional $next

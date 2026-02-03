@@ -326,9 +326,12 @@ export class StorageLockManager implements LockManager {
     const timeout = options.timeout ?? DEFAULT_LOCK_TIMEOUT
     const holder = options.holder ?? this.holderId
 
-    // Check for existing lock
+    // First, check if there's an existing lock and clean up if expired
+    // This is purely for cleanup - the actual atomicity comes from writeConditional
     const existing = await this.readLockState(resource)
     if (existing) {
+      // readLockState already cleaned up expired locks, so if we get here
+      // the lock is still valid
       return {
         acquired: false,
         currentHolder: existing,
@@ -346,11 +349,12 @@ export class StorageLockManager implements LockManager {
       metadata: options.metadata,
     }
 
-    // Try to acquire
+    // Try to acquire atomically using conditional write
+    // This is the ONLY place where we check-and-write atomically
     const acquired = await this.writeLockState(state)
 
     if (!acquired) {
-      // Another process grabbed it first
+      // Another process grabbed it first (race condition handled correctly)
       const currentHolder = await this.readLockState(resource)
       return {
         acquired: false,
@@ -499,7 +503,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Check if an error indicates the file already exists
+ * Check if an error indicates the file already exists or a conditional write failed
+ * because the file was created by another process (race condition)
  */
 function isAlreadyExistsError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
@@ -507,10 +512,22 @@ function isAlreadyExistsError(error: unknown): boolean {
   const message = error.message.toLowerCase()
   const name = error.name.toLowerCase()
 
+  // Check for ETagMismatchError - this is what writeConditional throws
+  // when expectedVersion is null but the file already exists
+  if (name === 'etagmismatcherror' || name.includes('etag')) {
+    return true
+  }
+
+  // Check for StorageError with ETAG_MISMATCH code
+  if ('code' in error && (error as { code: string }).code === 'ETAG_MISMATCH') {
+    return true
+  }
+
   return (
     message.includes('already exists') ||
     message.includes('eexist') ||
     message.includes('precondition') ||
+    message.includes('etag mismatch') ||
     name.includes('exist') ||
     (error as NodeJS.ErrnoException).code === 'EEXIST'
   )

@@ -9,7 +9,15 @@
 export * from './types'
 
 // Re-export validation utilities
-export { validateNamespace, validateFilter, validateUpdateOperators, normalizeNamespace } from './validation'
+export {
+  validateNamespace,
+  validateFilter,
+  validateUpdateOperators,
+  normalizeNamespace,
+  validateEntityId,
+  validateLocalId,
+  normalizeEntityId,
+} from './validation'
 
 // Re-export store utilities (for testing)
 export { getEntityStore, getEventStore, getArchivedEventStore, getSnapshotStore, getQueryStatsStore, clearGlobalState } from './store'

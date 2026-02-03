@@ -6,7 +6,7 @@
  * modifications from corrupting data.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import {
   StorageLockManager,
@@ -27,8 +27,12 @@ import {
 // Test Utilities
 // =============================================================================
 
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+/**
+ * Advance fake timers by specified milliseconds (use only with vi.useFakeTimers())
+ * Uses async version to allow pending promises to resolve
+ */
+async function advanceTime(ms: number): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ms)
 }
 
 // =============================================================================
@@ -40,8 +44,14 @@ describe('StorageLockManager', () => {
   let lockManager: LockManager
 
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
     storage = new MemoryBackend()
     lockManager = createLockManager(storage)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   describe('tryAcquire', () => {
@@ -123,7 +133,7 @@ describe('StorageLockManager', () => {
       })
 
       // Wait for first lock to expire
-      await delay(150)
+      await advanceTime(150)
 
       const result2 = await acquirePromise
       expect(result2.acquired).toBe(true)
@@ -138,11 +148,16 @@ describe('StorageLockManager', () => {
         timeout: 10000,
       })
 
-      // Second process times out waiting
-      const result2 = await manager2.acquire('merge', {
+      // Second process times out waiting - need to advance time for this
+      const acquirePromise = manager2.acquire('merge', {
         waitTimeout: 100,
         retryInterval: 20,
       })
+
+      // Advance time past the wait timeout
+      await advanceTime(150)
+
+      const result2 = await acquirePromise
 
       expect(result2.acquired).toBe(false)
       expect(result2.currentHolder).toBeDefined()
@@ -195,7 +210,7 @@ describe('StorageLockManager', () => {
       })
       expect(result.acquired).toBe(true)
 
-      await delay(100) // Wait for expiry
+      await advanceTime(100) // Wait for expiry
 
       expect(result.lock!.isValid()).toBe(false)
     })
@@ -210,7 +225,7 @@ describe('StorageLockManager', () => {
 
       const originalExpiry = new Date(result.lock!.getState().expiresAt).getTime()
 
-      await delay(100)
+      await advanceTime(100)
 
       const extended = await result.lock!.extend(5000)
       expect(extended).toBe(true)
@@ -267,7 +282,7 @@ describe('StorageLockManager', () => {
         timeout: 50,
       })
 
-      await delay(100)
+      await advanceTime(100)
 
       const state = await lockManager.isLocked('merge')
       expect(state).toBeNull()
@@ -320,7 +335,7 @@ describe('StorageLockManager', () => {
       await lockManager.tryAcquire('merge', { timeout: 50 })
       await lockManager.tryAcquire('commit', { timeout: 10000 })
 
-      await delay(100)
+      await advanceTime(100)
 
       const locks = await lockManager.listLocks()
 
@@ -339,8 +354,14 @@ describe('withLock', () => {
   let lockManager: LockManager
 
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
     storage = new MemoryBackend()
     lockManager = createLockManager(storage)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('executes operation with lock held', async () => {
@@ -390,12 +411,24 @@ describe('withLock', () => {
     // Acquire lock with first manager
     await manager1.acquire('merge', { timeout: 10000 })
 
-    // Try withLock with second manager
-    await expect(
-      withLock(manager2, 'merge', async () => {
-        return 'should not reach here'
-      }, { waitTimeout: 50 })
-    ).rejects.toThrow(LockAcquisitionError)
+    // Create the promise and attach the rejection handler immediately
+    // to prevent unhandled rejection
+    const lockPromise = withLock(manager2, 'merge', async () => {
+      return 'should not reach here'
+    }, { waitTimeout: 50 })
+
+    // Attach error handler first to avoid unhandled rejection
+    const resultPromise = lockPromise.then(
+      () => { throw new Error('Expected rejection but got resolution') },
+      (error) => error
+    )
+
+    // Advance time to trigger the timeout
+    await advanceTime(100)
+
+    // Now get the error
+    const error = await resultPromise
+    expect(error).toBeInstanceOf(LockAcquisitionError)
   })
 
   it('prevents concurrent operations on same resource', async () => {
@@ -405,23 +438,26 @@ describe('withLock', () => {
 
     const op1 = withLock(manager1, 'merge', async () => {
       results.push('op1-start')
-      await delay(50)
+      await advanceTime(50)
       results.push('op1-end')
     })
 
     // Small delay to ensure op1 starts first
-    await delay(10)
+    await advanceTime(10)
 
     const op2 = withLock(
       manager2,
       'merge',
       async () => {
         results.push('op2-start')
-        await delay(10)
+        await advanceTime(10)
         results.push('op2-end')
       },
       { waitTimeout: 200, retryInterval: 20 }
     )
+
+    // Advance time to allow operations to complete
+    await advanceTime(300)
 
     await Promise.all([op1, op2])
 
@@ -458,9 +494,17 @@ describe('Lock Constants', () => {
 
 describe('Lock Integration', () => {
   let storage: MemoryBackend
+  let lockManager: LockManager
 
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
     storage = new MemoryBackend()
+    lockManager = createLockManager(storage)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('generates unique holder IDs', async () => {
@@ -499,13 +543,5 @@ describe('Lock Integration', () => {
     expect(parsed.holder).toBeDefined()
     expect(parsed.acquiredAt).toBeDefined()
     expect(parsed.expiresAt).toBeDefined()
-  })
-
-  // Variable reused from outer scope - need to create local
-  let lockManager: LockManager
-
-  beforeEach(() => {
-    storage = new MemoryBackend()
-    lockManager = createLockManager(storage)
   })
 })

@@ -225,10 +225,16 @@ export interface RegexOperator {
  * Matches strings that begin with the specified prefix.
  * More efficient than $regex for prefix matching.
  *
+ * NOTE: ParqueDB Extension - This operator is not available in MongoDB.
+ * For MongoDB compatibility, use $regex with ^ anchor: { field: { $regex: '^prefix' } }
+ *
  * @example
  * ```typescript
  * // Match titles starting with "Hello"
  * { title: { $startsWith: 'Hello' } }
+ *
+ * // MongoDB-compatible equivalent
+ * { title: { $regex: '^Hello' } }
  * ```
  */
 export interface StartsWithOperator {
@@ -240,10 +246,16 @@ export interface StartsWithOperator {
  *
  * Matches strings that end with the specified suffix.
  *
+ * NOTE: ParqueDB Extension - This operator is not available in MongoDB.
+ * For MongoDB compatibility, use $regex with $ anchor: { field: { $regex: 'suffix$' } }
+ *
  * @example
  * ```typescript
  * // Match emails ending with @example.com
  * { email: { $endsWith: '@example.com' } }
+ *
+ * // MongoDB-compatible equivalent
+ * { email: { $regex: '@example\\.com$' } }
  * ```
  */
 export interface EndsWithOperator {
@@ -255,10 +267,16 @@ export interface EndsWithOperator {
  *
  * Matches strings that contain the specified substring anywhere.
  *
+ * NOTE: ParqueDB Extension - This operator is not available in MongoDB.
+ * For MongoDB compatibility, use $regex: { field: { $regex: 'substring' } }
+ *
  * @example
  * ```typescript
  * // Match content containing "database"
  * { content: { $contains: 'database' } }
+ *
+ * // MongoDB-compatible equivalent
+ * { content: { $regex: 'database' } }
  * ```
  */
 export interface ContainsOperator {
@@ -655,6 +673,35 @@ export type LogicalOperator =
   | NorOperator
 
 // =============================================================================
+// Field-Level Not Operator
+// =============================================================================
+
+/**
+ * Field-level NOT operator
+ *
+ * Negates the result of a specific operator applied to a field.
+ * This is different from the top-level $not which negates entire filter documents.
+ *
+ * @example
+ * ```typescript
+ * // Find users whose name doesn't start with 'admin'
+ * { name: { $not: { $regex: '^admin' } } }
+ *
+ * // Find items where score is NOT greater than 100
+ * { score: { $not: { $gt: 100 } } }
+ *
+ * // Find products not in the expensive category
+ * { price: { $not: { $gte: 1000 } } }
+ * ```
+ */
+export interface FieldNotOperator<T = unknown> {
+  /**
+   * The operator expression to negate
+   */
+  $not: Omit<FieldOperator<T>, '$not'> | Record<string, unknown>
+}
+
+// =============================================================================
 // Field Filter
 // =============================================================================
 
@@ -668,6 +715,7 @@ export type FieldOperator<T = unknown> =
   | StringOperator
   | ArrayOperator<T>
   | ExistenceOperator
+  | FieldNotOperator<T>
 
 /**
  * A field filter value
@@ -786,6 +834,18 @@ export function isExistenceOperator(value: unknown): value is ExistenceOperator 
 }
 
 /**
+ * Type guard to check if a value is a field-level $not operator
+ *
+ * @param value - Value to check
+ * @returns True if value is a FieldNotOperator
+ */
+export function isFieldNotOperator(value: unknown): value is FieldNotOperator {
+  if (typeof value !== 'object' || value === null) return false
+  const obj = value as Record<string, unknown>
+  return '$not' in obj && typeof obj.$not === 'object' && obj.$not !== null
+}
+
+/**
  * Type guard to check if a value is any field operator (not a plain value)
  *
  * @param value - Value to check
@@ -796,7 +856,8 @@ export function isFieldOperator(value: unknown): value is FieldOperator {
     isComparisonOperator(value) ||
     isStringOperator(value) ||
     isArrayOperator(value) ||
-    isExistenceOperator(value)
+    isExistenceOperator(value) ||
+    isFieldNotOperator(value)
   )
 }
 

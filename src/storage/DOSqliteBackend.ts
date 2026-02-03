@@ -296,7 +296,9 @@ export class DOSqliteBackend implements StorageBackend {
     const stmt = this.sql.prepare(query)
     const result = stmt.bind(...params).all<Omit<ParquetBlockRow, 'data'>>()
 
-    let files = result.results.map(row => this.withoutPrefix(row.path))
+    // Keep track of rows for metadata (avoids N+1 queries)
+    let rows = result.results
+    let files = rows.map(row => this.withoutPrefix(row.path))
     let hasMore = false
     let cursor: string | undefined
 
@@ -304,6 +306,7 @@ export class DOSqliteBackend implements StorageBackend {
     if (options?.limit !== undefined && files.length > options.limit) {
       hasMore = true
       files = files.slice(0, options.limit)
+      rows = rows.slice(0, options.limit)
       const lastFile = files[files.length - 1]
       cursor = lastFile ? this.withPrefix(lastFile) : undefined
     }
@@ -313,8 +316,10 @@ export class DOSqliteBackend implements StorageBackend {
     if (options?.delimiter) {
       const seen = new Set<string>()
       const filteredFiles: string[] = []
+      const filteredRows: Omit<ParquetBlockRow, 'data'>[] = []
 
-      for (const file of files) {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
         const relativePath = file.startsWith(prefix) ? file.slice(prefix.length) : file
         const delimIndex = relativePath.indexOf(options.delimiter)
 
@@ -327,19 +332,31 @@ export class DOSqliteBackend implements StorageBackend {
           }
         } else {
           filteredFiles.push(file)
+          filteredRows.push(rows[i])
         }
       }
 
       files = filteredFiles
+      rows = filteredRows
     }
 
     // Apply pattern filter if specified
     if (options?.pattern) {
       const regex = globToRegex(options.pattern)
-      files = files.filter(file => {
+      const filteredFiles: string[] = []
+      const filteredRows: Omit<ParquetBlockRow, 'data'>[] = []
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
         const filename = file.split('/').pop() || file
-        return regex.test(filename)
-      })
+        if (regex.test(filename)) {
+          filteredFiles.push(file)
+          filteredRows.push(rows[i])
+        }
+      }
+
+      files = filteredFiles
+      rows = filteredRows
     }
 
     const listResult: ListResult = {
@@ -355,16 +372,16 @@ export class DOSqliteBackend implements StorageBackend {
       listResult.cursor = cursor
     }
 
-    // Include metadata if requested
+    // Include metadata if requested - use already-fetched data (no N+1 queries)
     if (options?.includeMetadata) {
-      const stats: FileStat[] = []
-      for (const file of files) {
-        const stat = await this.stat(file)
-        if (stat) {
-          stats.push(stat)
-        }
-      }
-      listResult.stats = stats
+      listResult.stats = rows.map(row => ({
+        path: this.withoutPrefix(row.path),
+        size: row.size,
+        mtime: new Date(row.updated_at),
+        ctime: new Date(row.created_at),
+        isDirectory: false,
+        etag: row.etag,
+      }))
     }
 
     return listResult

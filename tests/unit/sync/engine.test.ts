@@ -43,13 +43,14 @@ function createTestEngine(options?: Partial<SyncEngineOptions>): {
  */
 async function populateBackend(
   backend: StorageBackend,
-  files: Record<string, string | Uint8Array>
+  files: Record<string, string | Uint8Array>,
+  options?: { mtime?: Date }
 ): Promise<void> {
   for (const [path, content] of Object.entries(files)) {
     const data = typeof content === 'string'
       ? new TextEncoder().encode(content)
       : content
-    await backend.write(path, data)
+    await backend.write(path, data, { mtime: options?.mtime })
   }
 }
 
@@ -578,18 +579,22 @@ describe('SyncEngine', () => {
       const { engine, local, remote } = createTestEngine()
 
       // Set up a conflict scenario where remote is newer
+      // Use explicit mtimes so that file stats match manifest timestamps
+      const localMtime = new Date('2024-01-01T00:00:00Z')
+      const remoteMtime = new Date('2024-01-03T00:00:00Z')
+
       await populateBackend(local, {
         'data/posts/data.parquet': 'local version',
-      })
+      }, { mtime: localMtime })
       await populateBackend(remote, {
         'data/posts/data.parquet': 'remote version',
-      })
+      }, { mtime: remoteMtime })
 
       const localManifest = createTestManifest({
         'data/posts/data.parquet': {
           hash: 'local-hash',
           size: 100,
-          modifiedAt: '2024-01-01T00:00:00Z', // Older
+          modifiedAt: localMtime.toISOString(), // Older
         },
       })
 
@@ -597,7 +602,7 @@ describe('SyncEngine', () => {
         'data/posts/data.parquet': {
           hash: 'remote-hash',
           size: 100,
-          modifiedAt: '2024-01-03T00:00:00Z', // Newer
+          modifiedAt: remoteMtime.toISOString(), // Newer
         },
       })
 

@@ -633,6 +633,42 @@ describe('DOSqliteBackend', () => {
       const result = await backend.list('nonexistent/')
       expect(result.files).toHaveLength(0)
     })
+
+    it('should include metadata when includeMetadata is true', async () => {
+      const result = await backend.list('data/', { includeMetadata: true })
+      expect(result.stats).toBeDefined()
+      expect(result.stats!.length).toBe(result.files.length)
+
+      // Verify stats contain expected properties
+      for (const stat of result.stats!) {
+        expect(stat.path).toBeDefined()
+        expect(stat.size).toBeGreaterThanOrEqual(0)
+        expect(stat.mtime).toBeInstanceOf(Date)
+        expect(stat.ctime).toBeInstanceOf(Date)
+        expect(stat.isDirectory).toBe(false)
+        expect(stat.etag).toBeDefined()
+      }
+
+      // Verify stats correspond to files
+      const statPaths = result.stats!.map(s => s.path)
+      for (const file of result.files) {
+        expect(statPaths).toContain(file)
+      }
+    })
+
+    it('should include metadata efficiently without N+1 queries', async () => {
+      // This test verifies that includeMetadata uses the already-fetched data
+      // We can verify by checking that stats match the written files
+      const result = await backend.list('data/', { includeMetadata: true })
+
+      const aStat = result.stats!.find(s => s.path === 'data/a.txt')
+      expect(aStat).toBeDefined()
+      expect(aStat!.size).toBe(1) // 'a'.length
+
+      const bStat = result.stats!.find(s => s.path === 'data/b.txt')
+      expect(bStat).toBeDefined()
+      expect(bStat!.size).toBe(1) // 'b'.length
+    })
   })
 
   // ===========================================================================

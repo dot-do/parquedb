@@ -10,6 +10,7 @@
 import type { CacheConfig } from './CacheStrategy'
 import { DEFAULT_CACHE_CONFIG } from './CacheStrategy'
 import { asBodyInit } from '../types/cast'
+import { MissingBucketError } from './r2-errors'
 
 // =============================================================================
 // Errors
@@ -122,7 +123,11 @@ export class ReadPath {
     private bucket: R2Bucket,
     private cache: Cache,
     private config: CacheConfig = DEFAULT_CACHE_CONFIG
-  ) {}
+  ) {
+    if (!bucket) {
+      throw new MissingBucketError('BUCKET', 'Required for ReadPath operations.')
+    }
+  }
 
   // ===========================================================================
   // Public Read Methods

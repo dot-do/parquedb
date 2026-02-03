@@ -18,6 +18,7 @@ import {
   InvalidNamespaceError,
   SchemaNotFoundError,
   CommitConflictError,
+  WriteLockTimeoutError,
   type EntityBackend,
   type IcebergBackendConfig,
   type IcebergCatalogConfig,
@@ -128,6 +129,9 @@ export class IcebergBackend implements EntityBackend {
   // Maximum retries for optimistic concurrency control (cross-instance protection)
   private readonly maxOccRetries = 10
 
+  // Timeout for acquiring write locks (default: 30 seconds)
+  private readonly writeLockTimeoutMs: number
+
   // Counter for ensuring unique snapshot IDs within the same millisecond
   private snapshotIdCounter = 0
   private lastSnapshotIdMs = 0
@@ -138,6 +142,7 @@ export class IcebergBackend implements EntityBackend {
     this.database = config.database ?? 'default'
     this.catalogConfig = config.catalog
     this.readOnly = config.readOnly ?? false
+    this.writeLockTimeoutMs = config.writeLockTimeoutMs ?? 30000
   }
 
   // ===========================================================================
@@ -643,6 +648,10 @@ export class IcebergBackend implements EntityBackend {
   /**
    * Acquire a write lock for a namespace
    * Ensures concurrent writes to the same namespace are serialized
+   *
+   * Includes timeout protection to prevent indefinite blocking if an earlier
+   * operation in the chain fails or hangs. On timeout, the stale lock is cleared
+   * to allow subsequent operations to proceed.
    */
   private async acquireWriteLock(ns: string): Promise<() => void> {
     // Get the existing lock (if any) to wait on
@@ -664,9 +673,27 @@ export class IcebergBackend implements EntityBackend {
     // This way other concurrent callers will see this lock in the chain
     this.writeLocks.set(ns, chainedLock)
 
-    // Wait for our turn
+    // Wait for our turn with timeout protection
     if (existingLock) {
-      await existingLock
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new WriteLockTimeoutError(ns, this.writeLockTimeoutMs))
+        }, this.writeLockTimeoutMs)
+      })
+
+      try {
+        await Promise.race([existingLock, timeoutPromise])
+      } catch (error) {
+        // On timeout, clean up the stale lock to unblock subsequent operations
+        // We clear it only if our chainedLock is still the current one
+        // (another operation may have already replaced it)
+        if (this.writeLocks.get(ns) === chainedLock) {
+          this.writeLocks.delete(ns)
+        }
+        // Also release our own lock promise so any waiters can proceed
+        releaseLock!()
+        throw error
+      }
     }
 
     return () => {

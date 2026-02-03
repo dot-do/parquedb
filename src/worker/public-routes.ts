@@ -27,6 +27,7 @@ import {
   buildRateLimitHeaders,
   buildRateLimitResponse,
 } from './RateLimitDO'
+import { MissingBucketError } from './r2-errors'
 
 /**
  * Get the database index stub for a user
@@ -437,6 +438,11 @@ async function handleRawFileAccess(
   filePath: string
 ): Promise<Response> {
   try {
+    // Validate R2 bucket is configured
+    if (!env.BUCKET) {
+      throw new MissingBucketError('BUCKET', 'Required for file access.')
+    }
+
     // Get database info
     const index = getDatabaseIndex(env, owner)
     if (!index) {
