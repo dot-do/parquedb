@@ -350,13 +350,22 @@ export class ParqueDBImpl {
   /**
    * Wait for any pending flush operations to complete.
    * Call this before cleanup to ensure all data is written.
+   * This loops until no more flush promises are pending (handles chained flushes).
    */
   async flush(): Promise<void> {
-    if (this.flushPromise) {
+    // Loop until all pending flushes are complete
+    // (flushEvents can schedule follow-up flushes for events that arrive during a flush)
+    while (this.flushPromise) {
+      const currentPromise = this.flushPromise
       try {
-        await this.flushPromise
+        await currentPromise
       } catch {
         // Ignore flush errors during cleanup
+      }
+      // If flushPromise is still the same (no new flush scheduled), break
+      // If a new flush was scheduled, continue the loop
+      if (this.flushPromise === currentPromise) {
+        break
       }
     }
   }
