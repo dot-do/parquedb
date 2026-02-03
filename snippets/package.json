@@ -9,6 +9,8 @@
     "build:watch": "tsx build.ts --watch",
     "deploy": "tsx deploy.ts",
     "deploy:list": "tsx deploy.ts --list",
+    "sync:r2": "tsx scripts/sync-r2.ts",
+    "sync:r2:dry-run": "tsx scripts/sync-r2.ts --dry-run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
