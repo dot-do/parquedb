@@ -87,14 +87,15 @@ export function applyOperators<T extends Record<string, unknown>>(
     }
   }
 
-  // $inc - Increment numeric fields
+  // $inc - Increment numeric fields (silently skip non-numeric fields)
   if (update.$inc) {
     for (const [key, amount] of Object.entries(update.$inc)) {
-      const current = (getField(result, key) as number) ?? 0
-      if (typeof current !== 'number' && current !== undefined && current !== null) {
-        throw new Error(`Cannot apply $inc to non-numeric field: ${key}`)
+      const current = getField(result, key)
+      // Skip non-numeric fields - only increment numbers or undefined/null (treated as 0)
+      if (current !== undefined && current !== null && typeof current !== 'number') {
+        continue
       }
-      result = setField(result, key, (current || 0) + (amount as number))
+      result = setField(result, key, ((current as number) || 0) + (amount as number))
       modifiedFields.push(key)
     }
   }
