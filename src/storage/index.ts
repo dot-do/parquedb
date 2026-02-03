@@ -86,13 +86,7 @@ export {
 export { MemoryBackend } from './MemoryBackend'
 
 // Shared validation utilities
-export {
-  validateRange,
-  validatePath,
-  validatePartNumber,
-  validateData,
-  InvalidRangeError,
-} from './validation'
+export { validateRange, validatePartNumber, InvalidRangeError } from './validation'
 
 // Shared utility functions
 export {

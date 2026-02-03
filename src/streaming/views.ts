@@ -42,22 +42,10 @@
 
 import type { Filter } from '../types/filter'
 import type { AggregationStage } from '../aggregation/types'
-import type { MVState } from '../materialized-views/types'
+import type { MVState, IngestSource } from '../materialized-views/types'
 
-// =============================================================================
-// Stream Collection Types ($ingest directive)
-// =============================================================================
-
-/**
- * Ingest source types for stream collections
- *
- * Each source type wires up automatic data ingestion:
- * - 'ai-sdk': AI SDK middleware (generateText, generateObject, etc.)
- * - 'tail': Cloudflare tail handler (worker logs, errors)
- * - 'evalite': Evalite evaluation framework
- * - 'custom': User-defined ingestion
- */
-export type IngestSource = 'ai-sdk' | 'tail' | 'evalite' | 'custom'
+// Re-export IngestSource from the canonical source
+export type { IngestSource }
 
 /**
  * Stream collection schema definition

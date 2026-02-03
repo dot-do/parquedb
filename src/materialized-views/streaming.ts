@@ -114,6 +114,11 @@ export interface StreamingStats {
 export type ErrorHandler = (error: Error, context?: { mvName?: string; batch?: Event[] }) => void
 
 /**
+ * Warning handler callback type for capacity/eviction warnings
+ */
+export type WarningHandler = (message: string, context?: Record<string, unknown>) => void
+
+/**
  * Default configuration values
  */
 const DEFAULT_CONFIG: Required<StreamingRefreshConfig> = {
@@ -147,8 +152,11 @@ export class StreamingRefreshEngine {
   private running = false
   private batchTimer: ReturnType<typeof setTimeout> | null = null
   private processingPromise: Promise<void> | null = null
+  private _flushing = false // Mutex flag to prevent concurrent flush operations
+  private _warningEmitted80 = false // Track if 80% warning already emitted
 
   private errorHandlers: ErrorHandler[] = []
+  private warningHandlers: WarningHandler[] = []
 
   // Stats
   private stats: StreamingStats = this.createEmptyStats()
@@ -253,6 +261,13 @@ export class StreamingRefreshEngine {
   }
 
   /**
+   * Check if a flush operation is currently in progress
+   */
+  isFlushing(): boolean {
+    return this._flushing
+  }
+
+  /**
    * Process a single event
    */
   async processEvent(event: Event): Promise<void> {
@@ -294,6 +309,16 @@ export class StreamingRefreshEngine {
     this.buffer.push(event)
     this.stats.currentBufferSize = this.buffer.length
 
+    // Emit warning at 80% buffer capacity (only once until reset)
+    const threshold = Math.floor(this.config.maxBufferSize * 0.8)
+    if (this.buffer.length >= threshold && !this._warningEmitted80) {
+      this._warningEmitted80 = true
+      this.emitWarning('Buffer reached 80% capacity', {
+        bufferSize: this.buffer.length,
+        maxBufferSize: this.config.maxBufferSize,
+      })
+    }
+
     // Check if we should flush (batch size reached)
     await this.maybeFlush()
   }
@@ -309,18 +334,40 @@ export class StreamingRefreshEngine {
 
   /**
    * Flush all buffered events immediately
+   *
+   * Uses the mutex flag to coordinate with maybeFlush() and prevent
+   * concurrent flush operations.
    */
   async flush(): Promise<void> {
-    // Wait for any in-flight processing
-    if (this.processingPromise) {
-      await this.processingPromise
+    // Wait for any in-flight flushing operation to complete
+    while (this._flushing) {
+      if (this.processingPromise) {
+        await this.processingPromise
+      } else {
+        // Brief yield if flushing but no promise yet
+        await new Promise(resolve => setTimeout(resolve, 1))
+      }
     }
 
-    // Process any remaining buffered events
-    if (this.buffer.length > 0) {
-      this.processingPromise = this.processBatches()
-      await this.processingPromise
-      this.processingPromise = null
+    // Acquire flush lock
+    this._flushing = true
+    try {
+      // Wait for any in-flight processing
+      if (this.processingPromise) {
+        await this.processingPromise
+      }
+
+      // Process any remaining buffered events
+      if (this.buffer.length > 0) {
+        this.processingPromise = this.processBatches()
+        await this.processingPromise
+        this.processingPromise = null
+      }
+
+      // Reset the 80% warning flag after successful flush
+      this._warningEmitted80 = false
+    } finally {
+      this._flushing = false
     }
   }
 
@@ -329,6 +376,13 @@ export class StreamingRefreshEngine {
    */
   onError(handler: ErrorHandler): void {
     this.errorHandlers.push(handler)
+  }
+
+  /**
+   * Register a warning handler for capacity/eviction warnings
+   */
+  onWarning(handler: WarningHandler): void {
+    this.warningHandlers.push(handler)
   }
 
   /**
@@ -436,34 +490,80 @@ export class StreamingRefreshEngine {
 
   /**
    * Check if we should flush based on batch size
+   *
+   * Uses a mutex flag (_flushing) to prevent race conditions where multiple
+   * concurrent calls could start duplicate flush operations between the
+   * check and the assignment of processingPromise.
    */
   private async maybeFlush(): Promise<void> {
+    // Early exit if already flushing (mutex check)
+    if (this._flushing) {
+      return
+    }
+
     // Check if any MV buffer has reached batch size
+    let shouldFlush = false
     for (const [_mvName, buffer] of this.bufferByMV) {
       if (buffer.length >= this.config.batchSize) {
-        if (!this.processingPromise) {
-          this.processingPromise = this.processBatches()
-          await this.processingPromise
-          this.processingPromise = null
-        }
-        return
+        shouldFlush = true
+        break
       }
+    }
+
+    if (!shouldFlush) {
+      return
+    }
+
+    // Acquire the flush lock before checking processingPromise
+    // This prevents the TOCTOU race condition
+    this._flushing = true
+    try {
+      // Wait for any existing processing to complete
+      if (this.processingPromise) {
+        await this.processingPromise
+      }
+
+      // Re-check if we still need to flush (buffer may have been cleared)
+      let stillNeedsFlush = false
+      for (const [_mvName, buffer] of this.bufferByMV) {
+        if (buffer.length > 0) {
+          stillNeedsFlush = true
+          break
+        }
+      }
+
+      if (stillNeedsFlush) {
+        this.processingPromise = this.processBatches()
+        await this.processingPromise
+        this.processingPromise = null
+      }
+    } finally {
+      this._flushing = false
     }
   }
 
   /**
    * Start the batch timeout timer
+   *
+   * Uses the same mutex flag (_flushing) to prevent race conditions
+   * with concurrent flush operations from maybeFlush().
    */
   private startBatchTimer(): void {
     if (this.batchTimer) return
 
     this.batchTimer = setInterval(() => {
-      if (this.buffer.length > 0 && !this.processingPromise) {
-        this.processingPromise = this.processBatches()
-        this.processingPromise.finally(() => {
-          this.processingPromise = null
-        })
+      // Skip if already flushing or no events to process
+      if (this._flushing || this.buffer.length === 0 || this.processingPromise) {
+        return
       }
+
+      // Acquire flush lock
+      this._flushing = true
+      this.processingPromise = this.processBatches()
+      this.processingPromise.finally(() => {
+        this.processingPromise = null
+        this._flushing = false
+      })
     }, this.config.batchTimeoutMs)
   }
 
@@ -482,10 +582,10 @@ export class StreamingRefreshEngine {
    */
   private async processBatches(): Promise<void> {
     // Snapshot and clear buffers
-    const buffersToProcss = new Map<string, Event[]>()
+    const buffersToProcess = new Map<string, Event[]>()
     for (const [mvName, buffer] of this.bufferByMV) {
       if (buffer.length > 0) {
-        buffersToProcss.set(mvName, [...buffer])
+        buffersToProcess.set(mvName, [...buffer])
         buffer.length = 0 // Clear the buffer
       }
     }
@@ -494,7 +594,7 @@ export class StreamingRefreshEngine {
 
     // Process each MV's events
     const promises: Promise<void>[] = []
-    for (const [mvName, events] of buffersToProcss) {
+    for (const [mvName, events] of buffersToProcess) {
       const handler = this.mvHandlers.get(mvName)
       if (!handler) continue
 
@@ -554,6 +654,19 @@ export class StreamingRefreshEngine {
         handler(error, context)
       } catch {
         // Ignore errors in error handlers
+      }
+    }
+  }
+
+  /**
+   * Emit a warning to registered handlers
+   */
+  private emitWarning(message: string, context?: Record<string, unknown>): void {
+    for (const handler of this.warningHandlers) {
+      try {
+        handler(message, context)
+      } catch {
+        // Ignore errors in warning handlers
       }
     }
   }

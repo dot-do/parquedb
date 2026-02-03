@@ -9,6 +9,26 @@
  */
 
 import type { Filter } from '../types/filter'
+import type { IngestSource, KnownIngestSource, CustomIngestSource } from './ingest-source'
+import {
+  KNOWN_INGEST_SOURCES,
+  customIngestSource,
+  isKnownIngestSource,
+  isCustomIngestSource,
+  isIngestSource,
+  getCustomSourceHandler,
+} from './ingest-source'
+
+// Re-export IngestSource types from the canonical source
+export type { IngestSource, KnownIngestSource, CustomIngestSource }
+export {
+  KNOWN_INGEST_SOURCES,
+  customIngestSource,
+  isKnownIngestSource,
+  isCustomIngestSource,
+  isIngestSource,
+  getCustomSourceHandler,
+}
 
 // =============================================================================
 // Branded Types
@@ -125,20 +145,6 @@ export interface AggregateExpr {
 export interface ConditionalExpr {
   $cond: [Filter | [string, unknown], number, number]
 }
-
-// =============================================================================
-// Ingest Configuration (for Stream Collections)
-// =============================================================================
-
-/**
- * Known ingest sources
- *
- * - 'ai-sdk': AI SDK middleware (generates AIRequests, Generations)
- * - 'tail': Cloudflare Workers tail events
- * - 'evalite': Evalite evaluation framework
- * - Or a custom string for user-defined ingest handlers
- */
-export type IngestSource = 'ai-sdk' | 'tail' | 'evalite' | string
 
 // =============================================================================
 // Collection Definition (with optional $ingest)

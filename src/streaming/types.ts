@@ -2,9 +2,19 @@
  * Streaming Types for ParqueDB Materialized Views
  *
  * Defines types for streaming MVs that process events in real-time.
+ *
+ * NOTE: Core streaming engine types (MVHandler, StreamingRefreshConfig, StreamingStats, ErrorHandler)
+ * are now re-exported from the canonical implementation in materialized-views/streaming.
  */
 
-import type { Event, EventOp } from '../types/entity'
+// Re-export core streaming types from the canonical implementation
+export type {
+  MVHandler,
+  StreamingRefreshConfig,
+  StreamingStats,
+  ErrorHandler,
+  WarningHandler,
+} from '../materialized-views/streaming'
 
 // =============================================================================
 // Worker Error Types
@@ -82,56 +92,6 @@ export interface WorkerErrorStats {
     start: number
     end: number
   }
-}
-
-// =============================================================================
-// MV Handler Interface
-// =============================================================================
-
-/**
- * Handler for processing events in a materialized view
- */
-export interface MVHandler {
-  /** Unique name of the MV */
-  name: string
-  /** Source namespaces this MV listens to */
-  sourceNamespaces: string[]
-  /** Process a batch of events */
-  process(events: Event[]): Promise<void>
-}
-
-// =============================================================================
-// Streaming Engine Types
-// =============================================================================
-
-/**
- * Configuration for the streaming refresh engine
- */
-export interface StreamingRefreshConfig {
-  /** Number of events to batch before processing (default: 10) */
-  batchSize?: number
-  /** Maximum time to wait before flushing a batch in ms (default: 100) */
-  batchTimeoutMs?: number
-  /** Maximum buffer size before applying backpressure (default: 100) */
-  maxBufferSize?: number
-}
-
-/**
- * Statistics for the streaming engine
- */
-export interface StreamingStats {
-  /** Total events received */
-  eventsReceived: number
-  /** Total events processed successfully */
-  eventsProcessed: number
-  /** Total batches processed */
-  batchesProcessed: number
-  /** Failed batches */
-  failedBatches: number
-  /** Backpressure events (when buffer was full) */
-  backpressureEvents: number
-  /** Events by operation type */
-  eventsByOp: Partial<Record<EventOp, number>>
 }
 
 // =============================================================================

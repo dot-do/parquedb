@@ -255,11 +255,17 @@ export {
   DEFAULT_MODEL_PRICING,
 } from './ai-requests'
 
-// Types
+// Types - Streaming engine types (re-exported from materialized-views/streaming via ./types)
 export type {
   MVHandler,
   StreamingRefreshConfig,
   StreamingStats,
+  ErrorHandler,
+  WarningHandler,
+} from './types'
+
+// Types - Worker error types (defined in ./types)
+export type {
   WorkerError,
   WorkerErrorStats,
   ErrorCategory,
