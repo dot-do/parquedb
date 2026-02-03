@@ -43,6 +43,7 @@ import {
   CoordinateRecord,
 } from './schema.js'
 import { encodeGeohash } from '../../src/indexes/geo/geohash.js'
+import { encodeHilbertHex } from '../../src/indexes/geo/hilbert.js'
 
 const pipelineAsync = promisify(pipeline)
 
@@ -335,7 +336,7 @@ class BatchAccumulator extends Writable {
 
     // Extract coordinates
     if (!this.config.skipCoordinates) {
-      const coords = extractCoordinates(entity, encodeGeohash)
+      const coords = extractCoordinates(entity, encodeGeohash, encodeHilbertHex)
       if (coords) {
         this.buffers.coordinates.push(coords)
         this.stats.coordinatesProcessed++
@@ -577,9 +578,14 @@ class BatchAccumulator extends Writable {
 
   /**
    * Write coordinate records to collection
+   * Sorts by Hilbert value before writing for better spatial locality
    */
   private async writeCoordinates(records: CoordinateRecord[]): Promise<void> {
     const collection = this.db.collection('coordinates')
+
+    // Sort by Hilbert value for spatial locality
+    // This improves compression and query performance
+    records.sort((a, b) => a.hilbert.localeCompare(b.hilbert))
 
     for (const record of records) {
       try {
@@ -599,7 +605,7 @@ class BatchAccumulator extends Writable {
     this.stats.filesWritten++
 
     if (this.config.verbose) {
-      console.log(`  Wrote ${records.length} coordinates to ParqueDB`)
+      console.log(`  Wrote ${records.length} coordinates (Hilbert sorted) to ParqueDB`)
     }
   }
 

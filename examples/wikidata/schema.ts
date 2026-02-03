@@ -654,6 +654,10 @@ export interface IdentifierRecord {
 /**
  * Parquet schema for geographic coordinates
  * Stores P625 coordinate values with geohash for spatial indexing
+ *
+ * GeoParquet-compatible with:
+ * - bbox covering columns for row group statistics
+ * - Hilbert value for spatial sorting (improves compression & query locality)
  */
 export const COORDINATES_PARQUET_SCHEMA = {
   entity_id: { type: 'BYTE_ARRAY', encoding: 'PLAIN' },      // Q-number
@@ -663,8 +667,10 @@ export const COORDINATES_PARQUET_SCHEMA = {
   lng: { type: 'DOUBLE', encoding: 'PLAIN' },
   precision: { type: 'DOUBLE', encoding: 'PLAIN', optional: true },
   globe: { type: 'BYTE_ARRAY', encoding: 'DICT' },           // Q2 = Earth
-  geohash: { type: 'BYTE_ARRAY', encoding: 'PLAIN' },        // For spatial index
+  geohash: { type: 'BYTE_ARRAY', encoding: 'PLAIN' },        // For geohash bucket index
+  hilbert: { type: 'BYTE_ARRAY', encoding: 'PLAIN' },        // Hilbert curve value (hex) for sorting
   // Bounding box components for native Parquet spatial statistics (GeoParquet style)
+  // For point data, min = max. Parquet computes per-row-group min/max automatically.
   bbox_xmin: { type: 'DOUBLE', encoding: 'PLAIN' },
   bbox_xmax: { type: 'DOUBLE', encoding: 'PLAIN' },
   bbox_ymin: { type: 'DOUBLE', encoding: 'PLAIN' },
@@ -681,6 +687,7 @@ export interface CoordinateRecord {
   precision: number | null
   globe: string
   geohash: string
+  hilbert: string // Hilbert curve value (hex) for spatial sorting
   // Bounding box (for point data, min = max)
   bbox_xmin: number
   bbox_xmax: number
@@ -952,7 +959,8 @@ export function extractIdentifiers(entity: WikidataEntity): IdentifierRecord[] {
  */
 export function extractCoordinates(
   entity: WikidataEntity,
-  encodeGeohash: (lat: number, lng: number, precision?: number) => string
+  encodeGeohash: (lat: number, lng: number, precision?: number) => string,
+  encodeHilbertHex: (lat: number, lng: number, order?: number) => string
 ): CoordinateRecord | null {
   const p625Claims = entity.claims?.['P625']
   if (!p625Claims || p625Claims.length === 0) return null
@@ -975,6 +983,9 @@ export function extractCoordinates(
   // Compute geohash with precision 8 (~38m)
   const geohash = encodeGeohash(latitude, longitude, 8)
 
+  // Compute Hilbert curve value for spatial sorting (order 16 = ~5m precision)
+  const hilbert = encodeHilbertHex(latitude, longitude, 16)
+
   // Get entity name and type
   const entityName = getEnglishLabel(entity.labels)
   const entityType = extractPrimaryType(entity.claims)
@@ -988,6 +999,7 @@ export function extractCoordinates(
     precision: precision ?? null,
     globe: globeId,
     geohash,
+    hilbert,
     // For point data, bbox is the same point
     bbox_xmin: longitude,
     bbox_xmax: longitude,
