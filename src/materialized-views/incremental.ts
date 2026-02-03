@@ -925,9 +925,10 @@ export class IncrementalRefresher {
     return {
       lastEventIds,
       sourceSnapshots: new Map([[view.source, generateULID()]]),
-      refreshVersionId: generateULID(),
+      definitionVersionId: generateULID(),
       lastRefreshTime: Date.now(),
       lastEventCount: events.length,
+      sourceVersions: new Map(),
     }
   }
 }

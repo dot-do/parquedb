@@ -59,7 +59,7 @@ export interface MVLineage {
   /**
    * View name
    */
-  viewName: ViewName
+  viewName?: ViewName
 
   /**
    * Source versions at last refresh, keyed by source collection name
@@ -80,17 +80,32 @@ export interface MVLineage {
   /**
    * Duration of last refresh in milliseconds
    */
-  lastRefreshDurationMs: number
+  lastRefreshDurationMs?: number
 
   /**
    * Number of records processed in last refresh
    */
-  lastRefreshRecordCount: number
+  lastRefreshRecordCount?: number
 
   /**
    * Whether last refresh was incremental or full
    */
-  lastRefreshType: 'incremental' | 'full'
+  lastRefreshType?: 'incremental' | 'full'
+
+  /**
+   * Last event IDs per source for incremental tracking
+   */
+  lastEventIds?: Map<string, string>
+
+  /**
+   * Source snapshots per source collection
+   */
+  sourceSnapshots?: Map<string, string>
+
+  /**
+   * Count of events processed in last refresh
+   */
+  lastEventCount?: number
 }
 
 // =============================================================================
@@ -822,11 +837,12 @@ export function createThresholdsFromConfig(config: {
  */
 export function createEmptyLineage(): MVLineage {
   return {
-    refreshVersionId: '',
     definitionVersionId: '',
-    lastRefreshedAt: 0,
+    lastRefreshTime: 0,
     sourceVersions: new Map(),
-    refreshCount: 0,
+    lastEventIds: new Map(),
+    sourceSnapshots: new Map(),
+    lastEventCount: 0,
   }
 }
 
@@ -835,11 +851,16 @@ export function createEmptyLineage(): MVLineage {
  */
 export function serializeLineage(lineage: MVLineage): string {
   return JSON.stringify({
-    refreshVersionId: lineage.refreshVersionId,
+    viewName: lineage.viewName,
     definitionVersionId: lineage.definitionVersionId,
-    lastRefreshedAt: lineage.lastRefreshedAt,
+    lastRefreshTime: lineage.lastRefreshTime,
+    lastRefreshDurationMs: lineage.lastRefreshDurationMs,
+    lastRefreshRecordCount: lineage.lastRefreshRecordCount,
+    lastRefreshType: lineage.lastRefreshType,
     sourceVersions: Array.from(lineage.sourceVersions.entries()),
-    refreshCount: lineage.refreshCount,
+    lastEventIds: lineage.lastEventIds ? Array.from(lineage.lastEventIds.entries()) : [],
+    sourceSnapshots: lineage.sourceSnapshots ? Array.from(lineage.sourceSnapshots.entries()) : [],
+    lastEventCount: lineage.lastEventCount,
   })
 }
 
@@ -849,10 +870,15 @@ export function serializeLineage(lineage: MVLineage): string {
 export function deserializeLineage(data: string): MVLineage {
   const parsed = JSON.parse(data)
   return {
-    refreshVersionId: parsed.refreshVersionId ?? '',
+    viewName: parsed.viewName,
     definitionVersionId: parsed.definitionVersionId ?? '',
-    lastRefreshedAt: parsed.lastRefreshedAt ?? 0,
+    lastRefreshTime: parsed.lastRefreshTime ?? 0,
+    lastRefreshDurationMs: parsed.lastRefreshDurationMs,
+    lastRefreshRecordCount: parsed.lastRefreshRecordCount,
+    lastRefreshType: parsed.lastRefreshType,
     sourceVersions: new Map(parsed.sourceVersions ?? []),
-    refreshCount: parsed.refreshCount ?? 0,
+    lastEventIds: new Map(parsed.lastEventIds ?? []),
+    sourceSnapshots: new Map(parsed.sourceSnapshots ?? []),
+    lastEventCount: parsed.lastEventCount ?? 0,
   }
 }

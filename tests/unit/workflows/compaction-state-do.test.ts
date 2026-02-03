@@ -18,6 +18,7 @@ import {
   createUpdateRequest,
   createUpdate,
   type StoredState,
+  type StoredWindowState,
   type WindowReadyEntry,
 } from './__helpers__/testable-compaction-state-do'
 
@@ -442,7 +443,7 @@ describe('CompactionStateDO - State Persistence', () => {
   })
 
   describe('saving state', () => {
-    it('should persist state after update', async () => {
+    it('should persist state after update using per-window storage', async () => {
       await compactionDO.fetch(new Request('http://internal/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -451,34 +452,39 @@ describe('CompactionStateDO - State Persistence', () => {
         })),
       }))
 
-      const stored = state.getData('compactionState') as StoredState
+      // Check metadata is stored separately
+      const metadata = state.getData('metadata') as { namespace: string; knownWriters: string[] }
+      expect(metadata).toBeDefined()
+      expect(metadata.knownWriters).toContain('writer1')
 
-      expect(stored).toBeDefined()
-      expect(stored.knownWriters).toContain('writer1')
+      // Legacy compactionState key should NOT be written anymore
+      expect(state.getData('compactionState')).toBeUndefined()
     })
 
-    it('should persist windows correctly', async () => {
+    it('should persist windows correctly using per-window keys', async () => {
+      const timestamp = 1700001234000
+      const windowStart = Math.floor(timestamp / 3600000) * 3600000
+
       await compactionDO.fetch(new Request('http://internal/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(createUpdateRequest({
           updates: [
             createUpdate({
-              timestamp: 1700001234000,
+              timestamp,
               file: 'test-file.parquet',
             }),
           ],
         })),
       }))
 
-      const stored = state.getData('compactionState') as StoredState
-
-      expect(Object.keys(stored.windows)).toHaveLength(1)
-      const windowKey = Object.keys(stored.windows)[0]!
-      expect(stored.windows[windowKey].filesByWriter['writer1']).toContain('test-file.parquet')
+      // Check window is stored with its own key
+      const windowData = state.getData(`window:${windowStart}`) as StoredWindowState
+      expect(windowData).toBeDefined()
+      expect(windowData.filesByWriter['writer1']).toContain('test-file.parquet')
     })
 
-    it('should persist namespace', async () => {
+    it('should persist namespace in metadata', async () => {
       await compactionDO.fetch(new Request('http://internal/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -488,15 +494,14 @@ describe('CompactionStateDO - State Persistence', () => {
         })),
       }))
 
-      const stored = state.getData('compactionState') as StoredState
-
-      expect(stored.namespace).toBe('test-namespace')
+      const metadata = state.getData('metadata') as { namespace: string }
+      expect(metadata.namespace).toBe('test-namespace')
     })
   })
 
   describe('loading state', () => {
-    it('should restore state from storage', async () => {
-      // Pre-populate storage
+    it('should restore state from legacy storage and migrate to per-window format', async () => {
+      // Pre-populate storage with legacy format
       const preloadedState: StoredState = {
         namespace: 'preloaded',
         windows: {
@@ -528,10 +533,18 @@ describe('CompactionStateDO - State Persistence', () => {
         knownWriters: string[]
       }
 
+      // Data should be restored correctly
       expect(body.namespace).toBe('preloaded')
       expect(body.activeWindows).toBe(1)
       expect(body.knownWriters).toContain('writer1')
       expect(body.knownWriters).toContain('writer2')
+
+      // Verify migration happened - legacy key should be deleted
+      expect(state.getData('compactionState')).toBeUndefined()
+
+      // New format keys should exist
+      expect(state.getData('metadata')).toBeDefined()
+      expect(state.getData('window:1700000000000')).toBeDefined()
     })
 
     it('should handle missing storage gracefully', async () => {
@@ -1344,7 +1357,7 @@ describe('CompactionStateDO - Per-Window Storage (128KB Limit Fix)', () => {
       expect(body.knownWriters).toContain('writer2')
     })
 
-    it('should handle mixed old and new storage format (migration)', async () => {
+    it('should migrate from legacy format and delete old key', async () => {
       // Pre-populate with old format for backwards compatibility during migration
       const preloadedState: StoredState = {
         namespace: 'legacy',
@@ -1373,9 +1386,14 @@ describe('CompactionStateDO - Per-Window Storage (128KB Limit Fix)', () => {
         activeWindows: number
       }
 
-      // Should still work with old format
+      // Data should be restored correctly
       expect(body.namespace).toBe('legacy')
       expect(body.activeWindows).toBe(1)
+
+      // Migration should have happened - legacy key deleted, new format keys created
+      expect(state.getData('compactionState')).toBeUndefined()
+      expect(state.getData('metadata')).toBeDefined()
+      expect(state.getData('window:1700000000000')).toBeDefined()
     })
   })
 })

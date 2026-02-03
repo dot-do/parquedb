@@ -1343,7 +1343,7 @@ export interface MVStreamProcessorConfig<T> {
   /**
    * Callback when an error occurs
    */
-  onError?: (context: MVErrorContext<T>) => void
+  onError?: (error: Error, context: MVErrorContext<T>) => void
 }
 
 /**
@@ -1376,6 +1376,9 @@ export interface MVStreamProcessorStats {
 
   /** Current MV state */
   state: ViewState
+
+  /** Current MV state (alias) */
+  mvState: ViewState
 }
 
 /**
@@ -1471,6 +1474,7 @@ export class MVStreamProcessor<T extends Record<string, unknown> = Record<string
       batchesWritten: 0,
       errorsEncountered: 0,
       state: 'pending',
+      mvState: 'pending',
     }
   }
 
@@ -1483,6 +1487,7 @@ export class MVStreamProcessor<T extends Record<string, unknown> = Record<string
     this.running = true
     const oldState = this.stats.state
     this.stats.state = 'building'
+    this.stats.mvState = 'building'
     this.onStateChange?.('building', oldState)
 
     try {
@@ -1516,6 +1521,7 @@ export class MVStreamProcessor<T extends Record<string, unknown> = Record<string
     const oldState = this.stats.state
     const finalState: ViewState = this.stats.errorsEncountered > 0 ? 'error' : 'ready'
     this.stats.state = finalState
+    this.stats.mvState = finalState
     this.onStateChange?.(finalState, oldState)
 
     try {
@@ -1579,7 +1585,24 @@ export class MVStreamProcessor<T extends Record<string, unknown> = Record<string
 
       this.batchCount++
       this.stats.batchesWritten++
-      this.stats.totalWritten += records.length
+      this.stats.recordsWritten += records.length
+
+      // Update metadata if configured
+      if (this.updateMetadataOnBatch) {
+        try {
+          const metadata = await this.mvStorage.getViewMetadata(this.viewName)
+          if (metadata) {
+            await this.mvStorage.saveViewMetadata(this.viewName, {
+              ...metadata,
+              documentCount: this.stats.totalMVRecords,
+              version: (metadata.version ?? 0) + 1,
+            })
+          }
+        } catch (metaError) {
+          // Non-fatal - log but continue
+          console.warn?.(`Failed to update MV metadata: ${metaError}`)
+        }
+      }
 
       // Reschedule flush
       this.scheduleFlush()
@@ -1607,7 +1630,7 @@ export class MVStreamProcessor<T extends Record<string, unknown> = Record<string
         error: err,
       }
       this.onBatchWritten?.(result)
-      this.onError?.({
+      this.onError?.(err, {
         viewName: this.viewName,
         records: records as T[],
         error: err,
@@ -1658,13 +1681,16 @@ export class MVStreamProcessor<T extends Record<string, unknown> = Record<string
   resetStats(): void {
     const currentState = this.stats.state
     this.stats = {
+      viewName: this.viewName,
       totalReceived: 0,
       totalPassed: 0,
-      totalWritten: 0,
-      totalFiltered: 0,
+      recordsWritten: 0,
+      recordsFilteredOut: 0,
+      totalMVRecords: 0,
       batchesWritten: 0,
       errorsEncountered: 0,
       state: currentState,
+      mvState: currentState,
     }
     this.totalRecords = 0
   }

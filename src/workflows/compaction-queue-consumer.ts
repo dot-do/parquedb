@@ -1337,6 +1337,16 @@ export class CompactionStateDO {
   /**
    * Load state from storage
    * Supports both new per-window storage format and legacy single-key format
+   *
+   * Migration Strategy:
+   * 1. Try to load from new per-window format ('metadata' + 'window:*' keys)
+   * 2. If not found, load from legacy single-key format ('compactionState')
+   * 3. After loading from legacy format, migrate to new format and delete legacy key
+   *
+   * This ensures:
+   * - Existing DOs with legacy data are automatically migrated
+   * - New DOs start with the per-window format
+   * - The 128KB per-key limit is never exceeded
    */
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return
@@ -1368,6 +1378,11 @@ export class CompactionStateDO {
       // Fall back to legacy single-key format for backwards compatibility
       const stored = await this.state.storage.get<StoredState>('compactionState')
       if (stored) {
+        logger.info('Migrating from legacy compactionState format to per-window storage', {
+          namespace: stored.namespace,
+          windowCount: Object.keys(stored.windows).length,
+        })
+
         // Restore namespace
         this.namespace = stored.namespace ?? ''
         // Restore priority
@@ -1387,6 +1402,18 @@ export class CompactionStateDO {
         // Restore writers
         this.knownWriters = new Set(stored.knownWriters)
         this.writerLastSeen = new Map(Object.entries(stored.writerLastSeen))
+
+        // Migrate to new format by saving with per-window keys
+        // This will create 'metadata' and 'window:*' keys
+        await this.saveState()
+
+        // Delete legacy key to complete migration
+        await this.state.storage.delete('compactionState')
+
+        logger.info('Migration to per-window storage complete', {
+          namespace: this.namespace,
+          windowCount: this.windows.size,
+        })
       }
     }
 
@@ -1397,6 +1424,10 @@ export class CompactionStateDO {
    * Save state to storage using per-window keys to avoid 128KB limit
    * Each window is stored in its own key: `window:{windowStart}`
    * Metadata (namespace, writers, priority) is stored in 'metadata' key
+   *
+   * IMPORTANT: This method no longer writes to the legacy 'compactionState' key.
+   * Migration from legacy format happens in ensureInitialized() - once migrated,
+   * all subsequent writes use only the per-window format.
    */
   private async saveState(): Promise<void> {
     // Save metadata separately (small, fixed size)
@@ -1421,30 +1452,6 @@ export class CompactionStateDO {
       }
       await this.state.storage.put(`window:${key}`, storedWindow)
     }
-
-    // Also maintain legacy format for backwards compatibility during migration
-    // This can be removed after all DOs have been migrated to new format
-    const stored: StoredState = {
-      namespace: this.namespace,
-      windows: {},
-      knownWriters: Array.from(this.knownWriters),
-      writerLastSeen: Object.fromEntries(this.writerLastSeen),
-      priority: this.priority,
-    }
-
-    for (const [key, window] of this.windows) {
-      stored.windows[key] = {
-        windowStart: window.windowStart,
-        windowEnd: window.windowEnd,
-        filesByWriter: Object.fromEntries(window.filesByWriter),
-        writers: Array.from(window.writers),
-        lastActivityAt: window.lastActivityAt,
-        totalSize: window.totalSize,
-        processingStatus: window.processingStatus,
-      }
-    }
-
-    await this.state.storage.put('compactionState', stored)
   }
 
   // ===========================================================================
