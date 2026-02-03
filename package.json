@@ -22,13 +22,25 @@
     "./studio": {
       "import": "./dist/studio/index.js",
       "types": "./dist/studio/index.d.ts"
+    },
+    "./hono": {
+      "import": "./dist/integrations/hono/index.js",
+      "types": "./dist/integrations/hono/index.d.ts"
+    },
+    "./config": {
+      "import": "./dist/config/index.js",
+      "types": "./dist/config/index.d.ts"
     }
   },
   "peerDependencies": {
+    "hono": "^4.0.0",
     "payload": "^3.0.0"
   },
   "peerDependenciesMeta": {
     "payload": {
+      "optional": true
+    },
+    "hono": {
       "optional": true
     }
   },
@@ -78,6 +90,7 @@
     "hyparquet": "github:dot-do/hyparquet#variant-shredding",
     "hyparquet-compressors": "^1.1.1",
     "hyparquet-writer": "github:dot-do/hyparquet-writer#variant-shredding",
+    "oauth.do": "^0.2.6",
     "pluralize": "^8.0.0",
     "snappyjs": "^0.7.0",
     "sqids": "^0.3.0"
@@ -93,6 +106,7 @@
     "@vitest/coverage-v8": "^3.2.4",
     "csv-parse": "^6.1.0",
     "dotenv": "^17.2.3",
+    "hono": "^4.11.7",
     "lz4": "^0.6.5",
     "playwright": "^1.49.1",
     "tsx": "^4.7.0",

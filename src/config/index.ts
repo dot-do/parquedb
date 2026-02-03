@@ -64,3 +64,17 @@ export {
   getDB,
   resetDB,
 } from './auto'
+
+// Authentication integration
+export {
+  setActorResolver,
+  getActorResolver,
+  resolveActor,
+  createOAuthActorResolver,
+  createEnvActorResolver,
+  createStaticActorResolver,
+  createCombinedActorResolver,
+  createAuthContext,
+  type ActorResolver,
+  type AuthContext,
+} from './auth'

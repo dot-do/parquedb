@@ -457,6 +457,36 @@ export {
 } from './integrations/sql'
 
 // =============================================================================
+// Entity Backends (Pluggable Storage Formats)
+// =============================================================================
+
+export {
+  // Factory
+  createBackend,
+  // Iceberg Backend
+  IcebergBackend,
+  createIcebergBackend,
+  createR2IcebergBackend,
+  // Types
+  type EntityBackend,
+  type BackendType,
+  type BackendConfig,
+  type NativeBackendConfig,
+  type IcebergBackendConfig,
+  type IcebergCatalogConfig,
+  type DeltaBackendConfig,
+  type EntitySchema,
+  type SchemaField,
+  type SchemaFieldType,
+  type SnapshotInfo,
+  type CompactOptions,
+  type CompactResult,
+  type VacuumOptions,
+  type VacuumResult,
+  type BackendStats,
+} from './backends'
+
+// =============================================================================
 // Integrations (Iceberg, etc.)
 // =============================================================================
 

@@ -1,0 +1,435 @@
+/**
+ * Pluggable Entity Backend Interface
+ *
+ * Allows ParqueDB to use different table formats for entity storage:
+ * - Native: ParqueDB's simple Parquet format
+ * - Iceberg: Apache Iceberg format (compatible with DuckDB, Spark, Snowflake)
+ * - Delta Lake: Delta Lake format
+ *
+ * Relationships are always stored in ParqueDB's format regardless of entity backend.
+ */
+
+import type { Entity, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
+import type { Filter } from '../types/filter'
+import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions } from '../types/options'
+import type { Update } from '../types/update'
+import type { StorageBackend } from '../types/storage'
+
+// =============================================================================
+// Backend Type Identifiers
+// =============================================================================
+
+/** Supported backend types */
+export type BackendType = 'native' | 'iceberg' | 'delta'
+
+// =============================================================================
+// Entity Backend Interface
+// =============================================================================
+
+/**
+ * Entity storage backend interface
+ *
+ * Implementations handle entity CRUD operations using different table formats.
+ * The relationship index is managed separately by ParqueDB.
+ */
+export interface EntityBackend {
+  // ===========================================================================
+  // Metadata
+  // ===========================================================================
+
+  /** Backend type identifier */
+  readonly type: BackendType
+
+  /** Whether this backend supports time-travel queries */
+  readonly supportsTimeTravel: boolean
+
+  /** Whether this backend supports schema evolution */
+  readonly supportsSchemaEvolution: boolean
+
+  /** Whether this backend is read-only */
+  readonly readOnly: boolean
+
+  // ===========================================================================
+  // Lifecycle
+  // ===========================================================================
+
+  /**
+   * Initialize the backend (create tables, load metadata, etc.)
+   */
+  initialize(): Promise<void>
+
+  /**
+   * Close the backend and release resources
+   */
+  close(): Promise<void>
+
+  // ===========================================================================
+  // Read Operations
+  // ===========================================================================
+
+  /**
+   * Get a single entity by ID
+   */
+  get<T = Record<string, unknown>>(
+    ns: string,
+    id: string,
+    options?: GetOptions
+  ): Promise<Entity<T> | null>
+
+  /**
+   * Find entities matching a filter
+   */
+  find<T = Record<string, unknown>>(
+    ns: string,
+    filter?: Filter,
+    options?: FindOptions
+  ): Promise<Entity<T>[]>
+
+  /**
+   * Count entities matching a filter
+   */
+  count(ns: string, filter?: Filter): Promise<number>
+
+  /**
+   * Check if an entity exists
+   */
+  exists(ns: string, id: string): Promise<boolean>
+
+  // ===========================================================================
+  // Write Operations
+  // ===========================================================================
+
+  /**
+   * Create a new entity
+   */
+  create<T = Record<string, unknown>>(
+    ns: string,
+    input: CreateInput<T>,
+    options?: CreateOptions
+  ): Promise<Entity<T>>
+
+  /**
+   * Update an existing entity
+   */
+  update<T = Record<string, unknown>>(
+    ns: string,
+    id: string,
+    update: Update,
+    options?: UpdateOptions
+  ): Promise<Entity<T>>
+
+  /**
+   * Delete an entity
+   */
+  delete(ns: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
+
+  // ===========================================================================
+  // Batch Operations
+  // ===========================================================================
+
+  /**
+   * Create multiple entities
+   */
+  bulkCreate<T = Record<string, unknown>>(
+    ns: string,
+    inputs: CreateInput<T>[],
+    options?: CreateOptions
+  ): Promise<Entity<T>[]>
+
+  /**
+   * Update multiple entities matching a filter
+   */
+  bulkUpdate(
+    ns: string,
+    filter: Filter,
+    update: Update,
+    options?: UpdateOptions
+  ): Promise<UpdateResult>
+
+  /**
+   * Delete multiple entities matching a filter
+   */
+  bulkDelete(ns: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
+
+  // ===========================================================================
+  // Time Travel (optional)
+  // ===========================================================================
+
+  /**
+   * Get a snapshot of the backend at a specific version/time
+   * Returns a read-only backend that queries historical data
+   */
+  snapshot?(ns: string, version: number | Date): Promise<EntityBackend>
+
+  /**
+   * List available snapshots/versions
+   */
+  listSnapshots?(ns: string): Promise<SnapshotInfo[]>
+
+  // ===========================================================================
+  // Schema
+  // ===========================================================================
+
+  /**
+   * Get the schema for a namespace
+   */
+  getSchema(ns: string): Promise<EntitySchema | null>
+
+  /**
+   * Set/update the schema for a namespace
+   */
+  setSchema?(ns: string, schema: EntitySchema): Promise<void>
+
+  /**
+   * List all namespaces
+   */
+  listNamespaces(): Promise<string[]>
+
+  // ===========================================================================
+  // Maintenance
+  // ===========================================================================
+
+  /**
+   * Compact/optimize storage (implementation-specific)
+   */
+  compact?(ns: string, options?: CompactOptions): Promise<CompactResult>
+
+  /**
+   * Vacuum/clean up old data
+   */
+  vacuum?(ns: string, options?: VacuumOptions): Promise<VacuumResult>
+
+  /**
+   * Get storage statistics
+   */
+  stats?(ns: string): Promise<BackendStats>
+}
+
+// =============================================================================
+// Supporting Types
+// =============================================================================
+
+/** Snapshot/version information */
+export interface SnapshotInfo {
+  /** Snapshot/version identifier */
+  id: string | number
+
+  /** When the snapshot was created */
+  timestamp: Date
+
+  /** Operation that created this snapshot */
+  operation?: string
+
+  /** Number of records in this snapshot */
+  recordCount?: number
+
+  /** Summary of changes */
+  summary?: Record<string, unknown>
+}
+
+/** Entity schema definition */
+export interface EntitySchema {
+  /** Schema name/identifier */
+  name: string
+
+  /** Schema version */
+  version?: number
+
+  /** Field definitions */
+  fields: SchemaField[]
+
+  /** Primary key field(s) */
+  primaryKey?: string[]
+
+  /** Partition key field(s) */
+  partitionBy?: string[]
+
+  /** Sort key field(s) */
+  sortBy?: string[]
+
+  /** Additional properties */
+  properties?: Record<string, string>
+}
+
+/** Schema field definition */
+export interface SchemaField {
+  /** Field name */
+  name: string
+
+  /** Field type */
+  type: SchemaFieldType
+
+  /** Whether the field is required */
+  required?: boolean
+
+  /** Whether the field is nullable */
+  nullable?: boolean
+
+  /** Default value */
+  default?: unknown
+
+  /** Field documentation */
+  doc?: string
+
+  /** Field ID (for Iceberg) */
+  id?: number
+}
+
+/** Supported field types */
+export type SchemaFieldType =
+  | 'string'
+  | 'int'
+  | 'long'
+  | 'float'
+  | 'double'
+  | 'boolean'
+  | 'timestamp'
+  | 'date'
+  | 'time'
+  | 'uuid'
+  | 'binary'
+  | 'decimal'
+  | 'json'
+  | 'variant'
+  | { type: 'list'; element: SchemaFieldType }
+  | { type: 'map'; key: SchemaFieldType; value: SchemaFieldType }
+  | { type: 'struct'; fields: SchemaField[] }
+
+/** Compaction options */
+export interface CompactOptions {
+  /** Target file size in bytes */
+  targetFileSize?: number
+
+  /** Maximum files to compact per run */
+  maxFiles?: number
+
+  /** Only compact files smaller than this size */
+  minFileSize?: number
+
+  /** Dry run (don't actually compact) */
+  dryRun?: boolean
+}
+
+/** Compaction result */
+export interface CompactResult {
+  /** Number of files compacted */
+  filesCompacted: number
+
+  /** Number of new files created */
+  filesCreated: number
+
+  /** Bytes before compaction */
+  bytesBefore: number
+
+  /** Bytes after compaction */
+  bytesAfter: number
+
+  /** Time taken in milliseconds */
+  durationMs: number
+}
+
+/** Vacuum options */
+export interface VacuumOptions {
+  /** Retain snapshots newer than this duration (ms) */
+  retentionMs?: number
+
+  /** Minimum snapshots to keep */
+  minSnapshots?: number
+
+  /** Dry run (don't actually delete) */
+  dryRun?: boolean
+}
+
+/** Vacuum result */
+export interface VacuumResult {
+  /** Number of files deleted */
+  filesDeleted: number
+
+  /** Bytes reclaimed */
+  bytesReclaimed: number
+
+  /** Number of snapshots expired */
+  snapshotsExpired: number
+}
+
+/** Backend statistics */
+export interface BackendStats {
+  /** Total number of records */
+  recordCount: number
+
+  /** Total size in bytes */
+  totalBytes: number
+
+  /** Number of data files */
+  fileCount: number
+
+  /** Number of snapshots/versions */
+  snapshotCount?: number
+
+  /** Last modified time */
+  lastModified?: Date
+
+  /** Backend-specific stats */
+  [key: string]: unknown
+}
+
+// =============================================================================
+// Backend Configuration
+// =============================================================================
+
+/** Base configuration for all backends */
+export interface BaseBackendConfig {
+  /** Underlying storage backend for file I/O */
+  storage: StorageBackend
+
+  /** Base path/location for data */
+  location?: string
+
+  /** Read-only mode */
+  readOnly?: boolean
+}
+
+/** Native backend configuration */
+export interface NativeBackendConfig extends BaseBackendConfig {
+  type: 'native'
+}
+
+/** Iceberg backend configuration */
+export interface IcebergBackendConfig extends BaseBackendConfig {
+  type: 'iceberg'
+
+  /** Iceberg catalog configuration */
+  catalog?: IcebergCatalogConfig
+
+  /** Warehouse location */
+  warehouse?: string
+
+  /** Default database/namespace */
+  database?: string
+}
+
+/** Iceberg catalog configuration */
+export type IcebergCatalogConfig =
+  | { type: 'filesystem' }
+  | { type: 'r2-data-catalog'; accountId: string; apiToken: string; bucketName?: string }
+  | { type: 'rest'; uri: string; credential?: string; warehouse?: string }
+
+/** Delta Lake backend configuration */
+export interface DeltaBackendConfig extends BaseBackendConfig {
+  type: 'delta'
+}
+
+/** Union of all backend configurations */
+export type BackendConfig =
+  | NativeBackendConfig
+  | IcebergBackendConfig
+  | DeltaBackendConfig
+
+// =============================================================================
+// Factory Function Type
+// =============================================================================
+
+/**
+ * Create an entity backend from configuration
+ */
+export type CreateBackendFn = (config: BackendConfig) => Promise<EntityBackend>

@@ -27,6 +27,14 @@ import {
   setWorkersEnv,
 } from './env'
 import { loadConfig, type ParqueDBConfig } from './loader'
+import {
+  setActorResolver,
+  createOAuthActorResolver,
+  createStaticActorResolver,
+  createCombinedActorResolver,
+  createEnvActorResolver,
+} from './auth'
+import type { EntityId } from '../types/entity'
 
 // Module-scoped instance cache
 let _db: DBInstance | null = null
@@ -63,13 +71,16 @@ export async function initializeDB(env?: Env): Promise<DBInstance> {
     }
 
     // 1. Try to load config file (server environments only)
+    let config: ParqueDBConfig | null = null
     if (isServer()) {
-      const config = await loadConfig()
+      config = await loadConfig()
       if (config) {
         storage = await resolveStorage(config)
         if (config.schema) {
           schema = config.schema
         }
+        // Set up actor resolver from config
+        setupActorResolver(config)
       }
     }
 
@@ -111,6 +122,39 @@ export async function initializeDB(env?: Env): Promise<DBInstance> {
  */
 export async function getDB(env?: Env): Promise<DBInstance> {
   return initializeDB(env)
+}
+
+/**
+ * Set up actor resolver from config
+ */
+function setupActorResolver(config: ParqueDBConfig): void {
+  // Priority: resolveActor > useOAuth > actor > env var
+  if (config.resolveActor) {
+    setActorResolver(config.resolveActor)
+    return
+  }
+
+  if (config.useOAuth) {
+    // Use oauth.do for actor resolution
+    setActorResolver(createCombinedActorResolver([
+      createOAuthActorResolver(),
+      createEnvActorResolver('PARQUEDB_ACTOR'),
+      config.actor ? createStaticActorResolver(config.actor as EntityId) : async () => null,
+    ]))
+    return
+  }
+
+  if (config.actor) {
+    // Static actor
+    setActorResolver(createStaticActorResolver(config.actor as EntityId))
+    return
+  }
+
+  // Default: try env var, then oauth.do
+  setActorResolver(createCombinedActorResolver([
+    createEnvActorResolver('PARQUEDB_ACTOR'),
+    createOAuthActorResolver(),
+  ]))
 }
 
 /**

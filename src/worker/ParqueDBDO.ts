@@ -624,6 +624,26 @@ export class ParqueDBDO extends DurableObject<Env> {
       pendingId, ns, pendingPath, items.length, firstSeq, lastSeq, now
     )
 
+    // Phase 3 WAL: Append CREATE events so getEntityFromEvents can find them
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!
+      const seq = firstSeq + i
+      const entityId = sqids.encode([seq])
+      const { $type, name, ...rest } = item
+
+      await this.appendEvent({
+        id: generateULID(),
+        ts: Date.now(),
+        op: 'CREATE',
+        target: entityTarget(ns, entityId),
+        before: undefined,
+        after: { ...rest, $type, name } as Variant,
+        actor: actor as string,
+      })
+    }
+
+    await this.maybeScheduleFlush()
+
     return entities
   }
 

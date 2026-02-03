@@ -6,9 +6,11 @@
  */
 
 import type { StorageBackend } from '../types'
+import type { EntityId } from '../types/entity'
 import type { DBSchema } from '../db'
 import { detectRuntime } from './runtime'
 import { detectStoragePaths } from './env'
+import type { ActorResolver } from './auth'
 
 /**
  * Layout configuration - array for no tabs, object for tabs
@@ -105,8 +107,14 @@ export interface ParqueDBConfig {
   /** Enable debug logging */
   debug?: boolean
 
-  /** Default actor for mutations */
-  actor?: string
+  /** Default actor for mutations (static) */
+  actor?: string | EntityId
+
+  /** Dynamic actor resolver function */
+  resolveActor?: ActorResolver
+
+  /** Use oauth.do for actor resolution (shorthand for resolveActor) */
+  useOAuth?: boolean
 
   /** Studio/admin UI configuration */
   studio?: StudioConfig

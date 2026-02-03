@@ -85,7 +85,7 @@ import type {
 } from './types'
 
 import type { IndexDefinition, IndexMetadata, IndexStats } from './indexes/types'
-import { IndexManager } from './indexes/manager'
+import type { IndexManager } from './indexes/manager'
 
 import type {
   ParqueDBConfig,
@@ -93,15 +93,140 @@ import type {
   HistoryResult,
   ParqueDBTransaction,
   SnapshotManager,
+  EventLog,
   UpsertManyItem,
   UpsertManyOptions,
   UpsertManyResult,
   GetRelatedOptions,
   GetRelatedResult,
+  DiffResult,
+  RevertOptions,
 } from './ParqueDB/types'
 
 import { normalizeNamespace } from './ParqueDB/validation'
 import { ParqueDBImpl } from './ParqueDB/core'
+
+// =============================================================================
+// ParqueDB Interface (Type Declarations)
+// =============================================================================
+
+/**
+ * ParqueDB interface for type declarations.
+ * All methods are implemented via Proxy delegation to ParqueDBImpl.
+ */
+export interface IParqueDB {
+  /** Dynamic collection access via Proxy */
+  [key: string]: Collection | unknown
+
+  // Schema Management
+  registerSchema(schema: Schema): void
+
+  // Collection Access
+  collection<T = Record<string, unknown>>(namespace: string): Collection<T>
+
+  // CRUD Operations
+  find<T = Record<string, unknown>>(
+    namespace: string,
+    filter?: Filter,
+    options?: FindOptions
+  ): Promise<PaginatedResult<Entity<T>>>
+
+  get<T = Record<string, unknown>>(
+    namespace: string,
+    id: string,
+    options?: GetOptions
+  ): Promise<Entity<T> | null>
+
+  create<T = Record<string, unknown>>(
+    namespace: string,
+    data: CreateInput<T>,
+    options?: CreateOptions
+  ): Promise<Entity<T>>
+
+  update<T = Record<string, unknown>>(
+    namespace: string,
+    id: string,
+    update: UpdateInput<T>,
+    options?: UpdateOptions
+  ): Promise<Entity<T> | null>
+
+  delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
+
+  // Bulk Operations
+  upsert<T = Record<string, unknown>>(
+    namespace: string,
+    filter: Filter,
+    update: UpdateInput<T>,
+    options?: { returnDocument?: 'before' | 'after' }
+  ): Promise<Entity<T> | null>
+
+  upsertMany<T = Record<string, unknown>>(
+    namespace: string,
+    items: UpsertManyItem<T>[],
+    options?: UpsertManyOptions
+  ): Promise<UpsertManyResult>
+
+  deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
+
+  restore<T = Record<string, unknown>>(
+    namespace: string,
+    id: string,
+    options?: { actor?: EntityId }
+  ): Promise<Entity<T> | null>
+
+  // History & Time-Travel
+  history(entityId: EntityId, options?: HistoryOptions): Promise<HistoryResult>
+
+  getHistory(namespace: string, id: string, options?: HistoryOptions): Promise<HistoryResult>
+
+  getAtVersion<T = Record<string, unknown>>(
+    namespace: string,
+    id: string,
+    version: number
+  ): Promise<Entity<T> | null>
+
+  diff(namespace: string, id: string, fromVersion: number, toVersion: number): Promise<DiffResult>
+
+  revert<T = Record<string, unknown>>(
+    namespace: string,
+    id: string,
+    toVersion: number,
+    options?: RevertOptions
+  ): Promise<Entity<T> | null>
+
+  // Relationships
+  getRelated<T = Record<string, unknown>>(
+    namespace: string,
+    id: string,
+    relationField: string,
+    options?: GetRelatedOptions
+  ): Promise<GetRelatedResult<T>>
+
+  // Transactions & Snapshots
+  beginTransaction(): ParqueDBTransaction
+
+  getSnapshotManager(): SnapshotManager
+
+  getEventLog(): EventLog
+
+  // Index Management
+  createIndex(ns: string, definition: IndexDefinition): Promise<IndexMetadata>
+
+  dropIndex(ns: string, indexName: string): Promise<void>
+
+  listIndexes(ns: string): Promise<IndexMetadata[]>
+
+  getIndex(ns: string, indexName: string): Promise<IndexMetadata | null>
+
+  rebuildIndex(ns: string, indexName: string): Promise<void>
+
+  getIndexStats(ns: string, indexName: string): Promise<IndexStats>
+
+  getIndexManager(): IndexManager
+
+  // Resource Management
+  dispose(): void
+}
 
 // =============================================================================
 // ParqueDB Class (Public API with Proxy)
@@ -109,6 +234,10 @@ import { ParqueDBImpl } from './ParqueDB/core'
 
 /**
  * ParqueDB - A Parquet-based database with proxy-based collection access
+ *
+ * All methods are implemented via a Proxy that delegates to ParqueDBImpl.
+ * The class itself only defines the constructor; method signatures are
+ * declared via the IParqueDB interface for TypeScript type checking.
  *
  * @example
  * // Explicit collection access
@@ -122,103 +251,59 @@ import { ParqueDBImpl } from './ParqueDB/core'
  * await db.Posts.find({ status: 'published' })
  * await db.Posts.get('posts/123')
  */
-export class ParqueDB {
-  /** Dynamic collection access via Proxy */
-  [key: string]: Collection | unknown
+export interface ParqueDB extends IParqueDB {}
 
+export class ParqueDB {
   constructor(config: ParqueDBConfig) {
     const impl = new ParqueDBImpl(config)
 
     // Return a Proxy for dynamic collection access
+    // All method calls are delegated to impl
     return new Proxy(this, {
       get(_target, prop, _receiver) {
-        // Handle known methods that delegate to impl FIRST
-        // (before checking if property exists on target, since stubs exist there)
-        if (prop === 'registerSchema') {
-          return impl.registerSchema.bind(impl)
+        // Handle known methods that delegate to impl
+        const methodMap: Record<string, unknown> = {
+          // Schema Management
+          registerSchema: impl.registerSchema.bind(impl),
+          // Collection Access
+          collection: impl.collection.bind(impl),
+          // CRUD Operations
+          find: impl.find.bind(impl),
+          get: impl.get.bind(impl),
+          create: impl.create.bind(impl),
+          update: impl.update.bind(impl),
+          delete: impl.delete.bind(impl),
+          // Bulk Operations
+          upsert: impl.upsert.bind(impl),
+          upsertMany: impl.upsertMany.bind(impl),
+          deleteMany: impl.deleteMany.bind(impl),
+          restore: impl.restore.bind(impl),
+          // History & Time-Travel
+          history: impl.history.bind(impl),
+          getHistory: impl.getHistory.bind(impl),
+          getAtVersion: impl.getAtVersion.bind(impl),
+          diff: impl.diff.bind(impl),
+          revert: impl.revert.bind(impl),
+          // Relationships
+          getRelated: impl.getRelated.bind(impl),
+          // Transactions & Snapshots
+          beginTransaction: impl.beginTransaction.bind(impl),
+          getSnapshotManager: impl.getSnapshotManager.bind(impl),
+          getEventLog: impl.getEventLog.bind(impl),
+          // Index Management
+          createIndex: impl.createIndex.bind(impl),
+          dropIndex: impl.dropIndex.bind(impl),
+          listIndexes: impl.listIndexes.bind(impl),
+          getIndex: impl.getIndex.bind(impl),
+          rebuildIndex: impl.rebuildIndex.bind(impl),
+          getIndexStats: impl.getIndexStats.bind(impl),
+          getIndexManager: impl.getIndexManager.bind(impl),
+          // Resource Management
+          dispose: impl.dispose.bind(impl),
         }
-        if (prop === 'collection') {
-          return impl.collection.bind(impl)
-        }
-        if (prop === 'find') {
-          return impl.find.bind(impl)
-        }
-        if (prop === 'get') {
-          return impl.get.bind(impl)
-        }
-        if (prop === 'create') {
-          return impl.create.bind(impl)
-        }
-        if (prop === 'update') {
-          return impl.update.bind(impl)
-        }
-        if (prop === 'delete') {
-          return impl.delete.bind(impl)
-        }
-        if (prop === 'history') {
-          return impl.history.bind(impl)
-        }
-        if (prop === 'getAtVersion') {
-          return impl.getAtVersion.bind(impl)
-        }
-        if (prop === 'beginTransaction') {
-          return impl.beginTransaction.bind(impl)
-        }
-        if (prop === 'getSnapshotManager') {
-          return impl.getSnapshotManager.bind(impl)
-        }
-        if (prop === 'getEventLog') {
-          return impl.getEventLog.bind(impl)
-        }
-        if (prop === 'upsert') {
-          return impl.upsert.bind(impl)
-        }
-        if (prop === 'upsertMany') {
-          return impl.upsertMany.bind(impl)
-        }
-        if (prop === 'deleteMany') {
-          return impl.deleteMany.bind(impl)
-        }
-        if (prop === 'restore') {
-          return impl.restore.bind(impl)
-        }
-        if (prop === 'getHistory') {
-          return impl.getHistory.bind(impl)
-        }
-        if (prop === 'diff') {
-          return impl.diff.bind(impl)
-        }
-        if (prop === 'revert') {
-          return impl.revert.bind(impl)
-        }
-        if (prop === 'getRelated') {
-          return impl.getRelated.bind(impl)
-        }
-        // Index management methods
-        if (prop === 'createIndex') {
-          return impl.createIndex.bind(impl)
-        }
-        if (prop === 'dropIndex') {
-          return impl.dropIndex.bind(impl)
-        }
-        if (prop === 'listIndexes') {
-          return impl.listIndexes.bind(impl)
-        }
-        if (prop === 'getIndex') {
-          return impl.getIndex.bind(impl)
-        }
-        if (prop === 'rebuildIndex') {
-          return impl.rebuildIndex.bind(impl)
-        }
-        if (prop === 'getIndexStats') {
-          return impl.getIndexStats.bind(impl)
-        }
-        if (prop === 'getIndexManager') {
-          return impl.getIndexManager.bind(impl)
-        }
-        // Resource cleanup
-        if (prop === 'dispose') {
-          return impl.dispose.bind(impl)
+
+        if (typeof prop === 'string' && prop in methodMap) {
+          return methodMap[prop]
         }
 
         // Handle Symbol properties
@@ -229,7 +314,7 @@ export class ParqueDB {
         // Check if property was explicitly set (e.g., db.sql = ...)
         // This allows attaching custom properties like SQL executor
         if (prop in _target) {
-          return (_target as any)[prop]
+          return (_target as Record<string | symbol, unknown>)[prop]
         }
 
         // Handle dynamic collection access for any string property
@@ -247,297 +332,6 @@ export class ParqueDB {
         return ParqueDB.prototype
       },
     }) as ParqueDB
-  }
-
-  /**
-   * Register a schema for validation
-   * @param schema - Schema definition
-   */
-  registerSchema(_schema: Schema): void {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Get a collection by namespace
-   * @param namespace - Collection namespace
-   * @returns Collection interface
-   */
-  collection<T = Record<string, unknown>>(_namespace: string): Collection<T> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Find entities in a namespace
-   * @param namespace - Target namespace
-   * @param filter - MongoDB-style filter
-   * @param options - Query options
-   */
-  find<T = Record<string, unknown>>(
-    _namespace: string,
-    _filter?: Filter,
-    _options?: FindOptions
-  ): Promise<PaginatedResult<Entity<T>>> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Get a single entity
-   * @param namespace - Target namespace
-   * @param id - Entity ID
-   * @param options - Get options
-   */
-  get<T = Record<string, unknown>>(
-    _namespace: string,
-    _id: string,
-    _options?: GetOptions
-  ): Promise<Entity<T> | null> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Create a new entity
-   * @param namespace - Target namespace
-   * @param data - Entity data
-   * @param options - Create options
-   */
-  create<T = Record<string, unknown>>(
-    _namespace: string,
-    _data: CreateInput<T>,
-    _options?: CreateOptions
-  ): Promise<Entity<T>> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Update an entity
-   * @param namespace - Target namespace
-   * @param id - Entity ID
-   * @param update - Update operations
-   * @param options - Update options
-   */
-  update<T = Record<string, unknown>>(
-    _namespace: string,
-    _id: string,
-    _update: UpdateInput<T>,
-    _options?: UpdateOptions
-  ): Promise<Entity<T> | null> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Delete an entity
-   * @param namespace - Target namespace
-   * @param id - Entity ID
-   * @param options - Delete options
-   */
-  delete(_namespace: string, _id: string, _options?: DeleteOptions): Promise<DeleteResult> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Get entity history
-   * @param entityId - Entity ID
-   * @param options - History options
-   */
-  history(_entityId: EntityId, _options?: HistoryOptions): Promise<HistoryResult> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Get entity at a specific version
-   * @param namespace - Target namespace
-   * @param id - Entity ID
-   * @param version - Target version
-   */
-  getAtVersion<T = Record<string, unknown>>(
-    _namespace: string,
-    _id: string,
-    _version: number
-  ): Promise<Entity<T> | null> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Begin a transaction
-   */
-  beginTransaction(): ParqueDBTransaction {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Get snapshot manager
-   */
-  getSnapshotManager(): SnapshotManager {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Upsert an entity (filter-based: update if exists, create if not)
-   * @param namespace - Target namespace
-   * @param filter - Filter to find existing entity
-   * @param update - Update operations
-   * @param options - Upsert options
-   */
-  upsert<T = Record<string, unknown>>(
-    _namespace: string,
-    _filter: Filter,
-    _update: UpdateInput<T>,
-    _options?: { returnDocument?: 'before' | 'after' }
-  ): Promise<Entity<T> | null> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Upsert multiple entities in a single operation
-   * @param namespace - Target namespace
-   * @param items - Array of upsert items with filter and update
-   * @param options - UpsertMany options
-   */
-  upsertMany<T = Record<string, unknown>>(
-    _namespace: string,
-    _items: UpsertManyItem<T>[],
-    _options?: UpsertManyOptions
-  ): Promise<UpsertManyResult> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Delete multiple entities matching a filter
-   * @param namespace - Target namespace
-   * @param filter - Filter to match entities
-   * @param options - Delete options
-   */
-  deleteMany(
-    _namespace: string,
-    _filter: Filter,
-    _options?: DeleteOptions
-  ): Promise<DeleteResult> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Restore a soft-deleted entity
-   * @param namespace - Target namespace
-   * @param id - Entity ID
-   * @param options - Restore options
-   */
-  restore<T = Record<string, unknown>>(
-    _namespace: string,
-    _id: string,
-    _options?: { actor?: EntityId }
-  ): Promise<Entity<T> | null> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Get history for an entity
-   * @param namespace - Target namespace
-   * @param id - Entity ID
-   * @param options - History options
-   */
-  getHistory(
-    _namespace: string,
-    _id: string,
-    _options?: HistoryOptions
-  ): Promise<HistoryResult> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Get related entities with pagination support
-   * @param namespace - Target namespace
-   * @param id - Entity ID
-   * @param relationField - Field name of the relationship
-   * @param options - Options for pagination, filtering, sorting
-   */
-  getRelated<T = Record<string, unknown>>(
-    _namespace: string,
-    _id: string,
-    _relationField: string,
-    _options?: GetRelatedOptions
-  ): Promise<GetRelatedResult<T>> {
-    throw new Error('Not implemented')
-  }
-
-  // ===========================================================================
-  // Index Management API
-  // ===========================================================================
-
-  /**
-   * Create a new index on a namespace
-   * @param ns - Namespace
-   * @param definition - Index definition
-   */
-  createIndex(_ns: string, _definition: IndexDefinition): Promise<IndexMetadata> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Drop an index
-   * @param ns - Namespace
-   * @param indexName - Index name
-   */
-  dropIndex(_ns: string, _indexName: string): Promise<void> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * List all indexes for a namespace
-   * @param ns - Namespace
-   */
-  listIndexes(_ns: string): Promise<IndexMetadata[]> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Get metadata for a specific index
-   * @param ns - Namespace
-   * @param indexName - Index name
-   */
-  getIndex(_ns: string, _indexName: string): Promise<IndexMetadata | null> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Rebuild an index
-   * @param ns - Namespace
-   * @param indexName - Index name
-   */
-  rebuildIndex(_ns: string, _indexName: string): Promise<void> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Get statistics for an index
-   * @param ns - Namespace
-   * @param indexName - Index name
-   */
-  getIndexStats(_ns: string, _indexName: string): Promise<IndexStats> {
-    throw new Error('Not implemented')
-  }
-
-  /**
-   * Get the index manager instance
-   */
-  getIndexManager(): IndexManager {
-    throw new Error('Not implemented')
-  }
-
-  // ===========================================================================
-  // Resource Management
-  // ===========================================================================
-
-  /**
-   * Dispose of this ParqueDB instance and clean up associated global state.
-   * Call this when you are done using a ParqueDB instance to prevent memory leaks.
-   *
-   * After calling dispose():
-   * - The global state (entities, events, snapshots, query stats) for this storage backend is cleared
-   * - The instance should not be used anymore
-   * - Other ParqueDB instances using the same storage backend will also lose their shared state
-   */
-  dispose(): void {
-    throw new Error('Not implemented')
   }
 }
 

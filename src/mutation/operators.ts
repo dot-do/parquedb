@@ -166,8 +166,12 @@ export function applyOperators<T extends Record<string, unknown>>(
   // $pull - Remove elements from array
   if (update.$pull) {
     for (const [key, condition] of Object.entries(update.$pull)) {
-      const arr = (getField(result, key) as unknown[]) || []
-      const filtered = arr.filter((item) => {
+      const currentArr = getField(result, key) as unknown[] | undefined
+      // If array doesn't exist, skip (MongoDB behavior)
+      if (!Array.isArray(currentArr)) {
+        continue
+      }
+      const filtered = currentArr.filter((item) => {
         if (isFilterCondition(condition)) {
           return !matchesPullCondition(item, condition as Record<string, unknown>)
         }

@@ -26,6 +26,7 @@ import { importCommand } from './commands/import'
 import { exportCommand } from './commands/export'
 import { statsCommand } from './commands/stats'
 import { studioCommand } from './commands/studio'
+import { loginCommand, logoutCommand, whoamiCommand, authStatusCommand } from './commands/auth'
 
 // =============================================================================
 // Register Built-in Commands
@@ -80,6 +81,42 @@ registry.register({
 })
 
 // =============================================================================
+// Authentication Commands
+// =============================================================================
+
+registry.register({
+  name: 'login',
+  description: 'Authenticate with oauth.do',
+  usage: 'parquedb login',
+  category: 'Auth',
+  execute: loginCommand,
+})
+
+registry.register({
+  name: 'logout',
+  description: 'Clear authentication tokens',
+  usage: 'parquedb logout',
+  category: 'Auth',
+  execute: logoutCommand,
+})
+
+registry.register({
+  name: 'whoami',
+  description: 'Show current user info',
+  usage: 'parquedb whoami',
+  category: 'Auth',
+  execute: whoamiCommand,
+})
+
+registry.register({
+  name: 'auth',
+  description: 'Check authentication status',
+  usage: 'parquedb auth',
+  category: 'Auth',
+  execute: authStatusCommand,
+})
+
+// =============================================================================
 // Constants
 // =============================================================================
 
@@ -100,6 +137,10 @@ COMMANDS:
   export <namespace> <file>     Export data to JSON/NDJSON/CSV file
   stats [namespace]             Show database statistics
   studio [directory]            Launch ParqueDB Studio (admin UI)
+  login                         Authenticate with oauth.do
+  logout                        Clear authentication tokens
+  whoami                        Show current user info
+  auth                          Check authentication status
 
 OPTIONS:
   -h, --help                    Show this help message
@@ -139,6 +180,15 @@ EXAMPLES:
 
   # Studio with specific data directory
   parquedb studio ./my-data --port 8080
+
+  # Login to oauth.do
+  parquedb login
+
+  # Check who you're logged in as
+  parquedb whoami
+
+  # Logout
+  parquedb logout
 `
 
 // =============================================================================

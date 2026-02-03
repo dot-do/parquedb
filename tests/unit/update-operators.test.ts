@@ -661,7 +661,8 @@ describe('$pull Operator', () => {
   it('handles non-existent field', () => {
     const doc = { name: 'John' }
     const result = applyUpdate(doc, { $pull: { tags: 'a' } })
-    expect(result.tags).toEqual([])
+    // MongoDB behavior: $pull on non-existent field is a no-op
+    expect(result.tags).toBeUndefined()
   })
 
   it('pulls with comparison operator', () => {

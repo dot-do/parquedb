@@ -36,7 +36,7 @@ import { IndexManager } from '../indexes/manager'
 import type { IndexDefinition, IndexMetadata, IndexStats } from '../indexes/types'
 import { getNestedValue, compareValues, generateId, deepClone } from '../utils'
 import { matchesFilter as canonicalMatchesFilter } from '../query/filter'
-import { isUnsafePath } from '../mutation/operators'
+import { applyOperators, isUnsafePath } from '../mutation/operators'
 import { DEFAULT_MAX_INBOUND } from '../constants'
 import pluralize from 'pluralize'
 
@@ -749,351 +749,19 @@ export class ParqueDBImpl {
     // Always capture before state for event recording (null for inserts)
     const beforeEntityForEvent = isInsert ? null : { ...entity } as Entity
 
-    // Apply update operators
+    // Apply update operators using the canonical operator implementation
     const now = new Date()
     const actor = options?.actor || entity.updatedBy
 
-    // $set - support dot notation for nested paths
-    if (update.$set) {
-      for (const [key, value] of Object.entries(update.$set)) {
-        // Validate path to prevent prototype pollution
-        if (isUnsafePath(key)) {
-          throw new Error(`Unsafe path detected: "${key}" contains a prototype pollution attempt`)
-        }
-        if (key.includes('.')) {
-          // Handle dot notation path
-          const parts = key.split('.')
-          let current: Record<string, unknown> = entity as Record<string, unknown>
-          for (let i = 0; i < parts.length - 1; i++) {
-            const part = parts[i]!
-            if (current[part] === undefined) {
-              current[part] = {}
-            }
-            current = current[part] as Record<string, unknown>
-          }
-          const lastPart = parts[parts.length - 1]
-          if (lastPart !== undefined) {
-            current[lastPart] = value
-          }
-        } else {
-          (entity as Record<string, unknown>)[key] = value
-        }
-      }
-    }
+    // Apply basic update operators ($set, $unset, $inc, $mul, $min, $max, $push, $pull, $addToSet, $currentDate, etc.)
+    const operatorResult = applyOperators(entity as Record<string, unknown>, update, {
+      isInsert,
+      timestamp: now,
+    })
+    entity = operatorResult.document as Entity
 
-    // $unset
-    if (update.$unset) {
-      for (const key of Object.keys(update.$unset)) {
-        if (isUnsafePath(key)) {
-          throw new Error(`Unsafe path detected: "${key}" contains a prototype pollution attempt`)
-        }
-        delete (entity as Record<string, unknown>)[key]
-      }
-    }
-
-    // $inc - validate numeric fields
-    if (update.$inc) {
-      for (const [key, value] of Object.entries(update.$inc)) {
-        const current = (entity as Record<string, unknown>)[key]
-        if (current !== undefined && typeof current !== 'number') {
-          throw new Error(`Cannot apply $inc to non-numeric field: ${key}`)
-        }
-        ;(entity as Record<string, unknown>)[key] = ((current as number) || 0) + (value as number)
-      }
-    }
-
-    // $mul
-    if (update.$mul) {
-      for (const [key, value] of Object.entries(update.$mul)) {
-        const current = ((entity as Record<string, unknown>)[key] as number) || 0
-        ;(entity as Record<string, unknown>)[key] = current * (value as number)
-      }
-    }
-
-    // $min
-    if (update.$min) {
-      for (const [key, value] of Object.entries(update.$min)) {
-        const current = (entity as Record<string, unknown>)[key]
-        if (current === undefined || (value as number) < (current as number)) {
-          ;(entity as Record<string, unknown>)[key] = value
-        }
-      }
-    }
-
-    // $max
-    if (update.$max) {
-      for (const [key, value] of Object.entries(update.$max)) {
-        const current = (entity as Record<string, unknown>)[key]
-        if (current === undefined || (value as number) > (current as number)) {
-          ;(entity as Record<string, unknown>)[key] = value
-        }
-      }
-    }
-
-    // $push - support $each, $position, $slice, $sort modifiers
-    if (update.$push) {
-      for (const [key, value] of Object.entries(update.$push)) {
-        const entityRec = entity as Record<string, unknown>
-        if (!Array.isArray(entityRec[key])) {
-          entityRec[key] = []
-        }
-        const arr = entityRec[key] as unknown[]
-
-        // Check if value is a modifier object with $each
-        if (value && typeof value === 'object' && !Array.isArray(value) && '$each' in (value as Record<string, unknown>)) {
-          const modifier = value as { $each: unknown[]; $position?: number; $slice?: number; $sort?: 1 | -1 }
-          const items = modifier.$each
-
-          // Handle $position - insert at specific index
-          if (modifier.$position !== undefined) {
-            arr.splice(modifier.$position, 0, ...items)
-          } else {
-            arr.push(...items)
-          }
-
-          // Handle $sort - sort the array after push
-          if (modifier.$sort !== undefined) {
-            arr.sort((a, b) => {
-              if (typeof a === 'number' && typeof b === 'number') {
-                return modifier.$sort === 1 ? a - b : b - a
-              }
-              return 0
-            })
-          }
-
-          // Handle $slice - limit array size
-          if (modifier.$slice !== undefined) {
-            const slice = modifier.$slice
-            if (slice === 0) {
-              arr.length = 0
-            } else if (slice > 0) {
-              if (arr.length > slice) arr.length = slice
-            } else {
-              // Negative slice - keep last N elements
-              const keep = Math.abs(slice)
-              if (arr.length > keep) {
-                arr.splice(0, arr.length - keep)
-              }
-            }
-          }
-        } else {
-          arr.push(value)
-        }
-      }
-    }
-
-    // $pull - support filter conditions
-    if (update.$pull) {
-      for (const [key, condition] of Object.entries(update.$pull)) {
-        const entityRec = entity as Record<string, unknown>
-        if (Array.isArray(entityRec[key])) {
-          entityRec[key] = (entityRec[key] as unknown[]).filter((item: unknown) => {
-            // Check if condition is an operator object (e.g., { $lt: 30 } or { spam: true })
-            if (condition && typeof condition === 'object' && !Array.isArray(condition)) {
-              const condObj = condition as Record<string, unknown>
-              const keys = Object.keys(condObj)
-
-              // Check if it's a comparison operator ($lt, $gt, $lte, $gte, etc.)
-              if (keys.some(k => k.startsWith('$'))) {
-                for (const [op, opValue] of Object.entries(condObj)) {
-                  switch (op) {
-                    case '$lt':
-                      if (typeof item === 'number' && item < (opValue as number)) return false
-                      break
-                    case '$lte':
-                      if (typeof item === 'number' && item <= (opValue as number)) return false
-                      break
-                    case '$gt':
-                      if (typeof item === 'number' && item > (opValue as number)) return false
-                      break
-                    case '$gte':
-                      if (typeof item === 'number' && item >= (opValue as number)) return false
-                      break
-                    case '$eq':
-                      if (item === opValue) return false
-                      break
-                    case '$ne':
-                      if (item !== opValue) return false
-                      break
-                  }
-                }
-                return true
-              }
-
-              // It's a field match condition (e.g., { spam: true })
-              if (item && typeof item === 'object') {
-                const itemObj = item as Record<string, unknown>
-                for (const [field, fieldValue] of Object.entries(condObj)) {
-                  if (itemObj[field] === fieldValue) {
-                    return false // Remove this item
-                  }
-                }
-              }
-              return true
-            }
-
-            // Direct value comparison
-            return item !== condition
-          })
-        }
-      }
-    }
-
-    // $addToSet
-    if (update.$addToSet) {
-      for (const [key, value] of Object.entries(update.$addToSet)) {
-        const entityRec = entity as Record<string, unknown>
-        if (!Array.isArray(entityRec[key])) {
-          entityRec[key] = []
-        }
-        if (!(entityRec[key] as unknown[]).includes(value)) {
-          (entityRec[key] as unknown[]).push(value)
-        }
-      }
-    }
-
-    // $currentDate
-    if (update.$currentDate) {
-      for (const key of Object.keys(update.$currentDate)) {
-        ;(entity as Record<string, unknown>)[key] = now
-      }
-    }
-
-    // $link
-    if (update.$link) {
-      for (const [key, value] of Object.entries(update.$link)) {
-        // Validate relationship is defined in schema
-        const typeName = entity.$type
-        const typeDef = this.schema[typeName]
-        if (typeDef) {
-          const fieldDef = typeDef[key]
-          if (fieldDef === undefined || (typeof fieldDef === 'string' && !isRelationString(fieldDef))) {
-            throw new Error(`Relationship '${key}' is not defined in schema for type '${typeName}'`)
-          }
-        }
-
-        // Check if this is a singular or plural relationship
-        let isPlural = true
-        if (typeDef) {
-          const fieldDef = typeDef[key]
-          if (typeof fieldDef === 'string' && isRelationString(fieldDef)) {
-            const parsed = parseRelation(fieldDef)
-            isPlural = parsed?.isArray ?? true
-          }
-        }
-
-        const values = Array.isArray(value) ? value : [value]
-
-        // Validate all targets exist and are not deleted
-        for (const targetId of values) {
-          const targetEntity = this.entities.get(targetId as string)
-          if (!targetEntity) {
-            throw new Error(`Target entity '${targetId}' does not exist`)
-          }
-          if (targetEntity.deletedAt) {
-            throw new Error(`Cannot link to deleted entity '${targetId}'`)
-          }
-        }
-
-        // Initialize field as object if not already
-        const entityRec = entity as Record<string, unknown>
-        if (typeof entityRec[key] !== 'object' || entityRec[key] === null || Array.isArray(entityRec[key])) {
-          entityRec[key] = {}
-        }
-
-        // For singular relationships, clear existing links first
-        if (!isPlural) {
-          entityRec[key] = {}
-        }
-
-        // Add new links using display name as key
-        for (const targetId of values) {
-          const targetEntity = this.entities.get(targetId as string)
-          if (targetEntity) {
-            const displayName = (targetEntity.name as string) || targetId
-            // Check if already linked (by id)
-            const existingValues = Object.values(entityRec[key] as Record<string, EntityId>)
-            if (!existingValues.includes(targetId as EntityId)) {
-              ;(entityRec[key] as Record<string, unknown>)[displayName] = targetId
-            }
-          }
-        }
-
-        // Update reverse relationships on target entities
-        if (typeDef) {
-          const fieldDef = typeDef[key]
-          if (typeof fieldDef === 'string' && isRelationString(fieldDef)) {
-            const parsed = parseRelation(fieldDef)
-            if (parsed && parsed.direction === 'forward' && parsed.reverse) {
-              for (const targetId of values) {
-                const targetEntity = this.entities.get(targetId as string)
-                if (targetEntity) {
-                  // Initialize reverse relationship field
-                  if (typeof targetEntity[parsed.reverse] !== 'object' || targetEntity[parsed.reverse] === null) {
-                    targetEntity[parsed.reverse] = {}
-                  }
-                  const reverseRel = targetEntity[parsed.reverse] as Record<string, EntityId>
-                  const entityDisplayName = (entity.name as string) || fullId
-                  if (!Object.values(reverseRel).includes(fullId as EntityId)) {
-                    reverseRel[entityDisplayName] = fullId as EntityId
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // $unlink
-    if (update.$unlink) {
-      for (const [key, value] of Object.entries(update.$unlink)) {
-        const entityRec = entity as Record<string, unknown>
-        // Handle $all to remove all links
-        if (value === '$all') {
-          entityRec[key] = {}
-          continue
-        }
-
-        const currentRel = entityRec[key]
-        if (currentRel && typeof currentRel === 'object' && !Array.isArray(currentRel)) {
-          const values = Array.isArray(value) ? value : [value]
-
-          // Find and remove entries by value (EntityId)
-          for (const targetId of values) {
-            for (const [displayName, id] of Object.entries(currentRel as Record<string, EntityId>)) {
-              if (id === targetId) {
-                delete (currentRel as Record<string, EntityId>)[displayName]
-              }
-            }
-          }
-
-          // Update reverse relationships on target entities
-          const typeName = entity.$type
-          const typeDef = this.schema[typeName]
-          if (typeDef) {
-            const fieldDef = typeDef[key]
-            if (typeof fieldDef === 'string' && isRelationString(fieldDef)) {
-              const parsed = parseRelation(fieldDef)
-              if (parsed && parsed.direction === 'forward' && parsed.reverse) {
-                for (const targetId of values) {
-                  const targetEntity = this.entities.get(targetId as string)
-                  if (targetEntity && targetEntity[parsed.reverse]) {
-                    const reverseRel = targetEntity[parsed.reverse] as Record<string, EntityId>
-                    for (const [displayName, id] of Object.entries(reverseRel)) {
-                      if (id === fullId) {
-                        delete reverseRel[displayName]
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
+    // Apply relationship operators ($link, $unlink) - these need entity store access
+    entity = this.applyRelationshipOperators(entity, fullId, update)
 
     // Update metadata
     entity.updatedAt = now
@@ -1526,6 +1194,158 @@ export class ParqueDBImpl {
     }
 
     return result as CreateInput<T>
+  }
+
+  /**
+   * Apply relationship operators ($link, $unlink) to an entity
+   * These operators need entity store access for reverse relationship management.
+   *
+   * @param entity - The entity to modify
+   * @param fullId - The full entity ID (ns/id format)
+   * @param update - The update input containing relationship operators
+   * @returns The modified entity
+   */
+  private applyRelationshipOperators<T = Record<string, unknown>>(
+    entity: Entity,
+    fullId: string,
+    update: UpdateInput<T>
+  ): Entity {
+    // $link - add relationships
+    if (update.$link) {
+      for (const [key, value] of Object.entries(update.$link)) {
+        // Validate relationship is defined in schema
+        const typeName = entity.$type
+        const typeDef = this.schema[typeName]
+        if (typeDef) {
+          const fieldDef = typeDef[key]
+          if (fieldDef === undefined || (typeof fieldDef === 'string' && !isRelationString(fieldDef))) {
+            throw new Error(`Relationship '${key}' is not defined in schema for type '${typeName}'`)
+          }
+        }
+
+        // Check if this is a singular or plural relationship
+        let isPlural = true
+        if (typeDef) {
+          const fieldDef = typeDef[key]
+          if (typeof fieldDef === 'string' && isRelationString(fieldDef)) {
+            const parsed = parseRelation(fieldDef)
+            isPlural = parsed?.isArray ?? true
+          }
+        }
+
+        const values = Array.isArray(value) ? value : [value]
+
+        // Validate all targets exist and are not deleted
+        for (const targetId of values) {
+          const targetEntity = this.entities.get(targetId as string)
+          if (!targetEntity) {
+            throw new Error(`Target entity '${targetId}' does not exist`)
+          }
+          if (targetEntity.deletedAt) {
+            throw new Error(`Cannot link to deleted entity '${targetId}'`)
+          }
+        }
+
+        // Initialize field as object if not already
+        const entityRec = entity as Record<string, unknown>
+        if (typeof entityRec[key] !== 'object' || entityRec[key] === null || Array.isArray(entityRec[key])) {
+          entityRec[key] = {}
+        }
+
+        // For singular relationships, clear existing links first
+        if (!isPlural) {
+          entityRec[key] = {}
+        }
+
+        // Add new links using display name as key
+        for (const targetId of values) {
+          const targetEntity = this.entities.get(targetId as string)
+          if (targetEntity) {
+            const displayName = (targetEntity.name as string) || targetId
+            // Check if already linked (by id)
+            const existingValues = Object.values(entityRec[key] as Record<string, EntityId>)
+            if (!existingValues.includes(targetId as EntityId)) {
+              ;(entityRec[key] as Record<string, unknown>)[displayName] = targetId
+            }
+          }
+        }
+
+        // Update reverse relationships on target entities
+        if (typeDef) {
+          const fieldDef = typeDef[key]
+          if (typeof fieldDef === 'string' && isRelationString(fieldDef)) {
+            const parsed = parseRelation(fieldDef)
+            if (parsed && parsed.direction === 'forward' && parsed.reverse) {
+              for (const targetId of values) {
+                const targetEntity = this.entities.get(targetId as string)
+                if (targetEntity) {
+                  // Initialize reverse relationship field
+                  if (typeof targetEntity[parsed.reverse] !== 'object' || targetEntity[parsed.reverse] === null) {
+                    targetEntity[parsed.reverse] = {}
+                  }
+                  const reverseRel = targetEntity[parsed.reverse] as Record<string, EntityId>
+                  const entityDisplayName = (entity.name as string) || fullId
+                  if (!Object.values(reverseRel).includes(fullId as EntityId)) {
+                    reverseRel[entityDisplayName] = fullId as EntityId
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // $unlink - remove relationships
+    if (update.$unlink) {
+      for (const [key, value] of Object.entries(update.$unlink)) {
+        const entityRec = entity as Record<string, unknown>
+        // Handle $all to remove all links
+        if (value === '$all') {
+          entityRec[key] = {}
+          continue
+        }
+
+        const currentRel = entityRec[key]
+        if (currentRel && typeof currentRel === 'object' && !Array.isArray(currentRel)) {
+          const values = Array.isArray(value) ? value : [value]
+
+          // Find and remove entries by value (EntityId)
+          for (const targetId of values) {
+            for (const [displayName, id] of Object.entries(currentRel as Record<string, EntityId>)) {
+              if (id === targetId) {
+                delete (currentRel as Record<string, EntityId>)[displayName]
+              }
+            }
+          }
+
+          // Update reverse relationships on target entities
+          const typeName = entity.$type
+          const typeDef = this.schema[typeName]
+          if (typeDef) {
+            const fieldDef = typeDef[key]
+            if (typeof fieldDef === 'string' && isRelationString(fieldDef)) {
+              const parsed = parseRelation(fieldDef)
+              if (parsed && parsed.direction === 'forward' && parsed.reverse) {
+                for (const targetId of values) {
+                  const targetEntity = this.entities.get(targetId as string)
+                  if (targetEntity && targetEntity[parsed.reverse]) {
+                    const reverseRel = targetEntity[parsed.reverse] as Record<string, EntityId>
+                    for (const [displayName, id] of Object.entries(reverseRel)) {
+                      if (id === fullId) {
+                        delete reverseRel[displayName]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return entity
   }
 
   /**
