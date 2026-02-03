@@ -7,6 +7,7 @@
 
 import type { StorageBackend } from '../types'
 import type { EntityId } from '../types/entity'
+import type { Visibility } from '../types/visibility'
 import type { DBSchema } from '../db'
 import { detectRuntime } from './runtime'
 import { detectStoragePaths } from './env'
@@ -118,6 +119,16 @@ export interface ParqueDBConfig {
 
   /** Studio/admin UI configuration */
   studio?: StudioConfig
+
+  /**
+   * Default visibility level for the database
+   * - 'public': Discoverable and accessible by anyone
+   * - 'unlisted': Accessible with direct link, not discoverable
+   * - 'private': Requires authentication (default)
+   *
+   * Collections inherit this unless they specify their own $visibility
+   */
+  $visibility?: Visibility
 
   /** Environment-specific overrides */
   environments?: {

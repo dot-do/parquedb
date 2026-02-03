@@ -42,6 +42,9 @@ export interface Env {
   /** Workers AI binding for embedding generation */
   AI?: AIBinding
 
+  /** Durable Object namespace for database index (user's database registry) */
+  DATABASE_INDEX?: DurableObjectNamespace
+
   // Note: Caching uses the free Cloudflare Cache API (caches.default), not KV.
   // Cache API provides 500MB on free accounts, 5GB+ on enterprise.
   // No binding needed - caches.default is globally available in Workers.

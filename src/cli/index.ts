@@ -28,6 +28,7 @@ import { statsCommand } from './commands/stats'
 import { studioCommand } from './commands/studio'
 import { generateCommand } from './commands/generate'
 import { loginCommand, logoutCommand, whoamiCommand, authStatusCommand } from './commands/auth'
+import { pushCommand, pullCommand, syncCommand } from './commands/sync'
 
 // =============================================================================
 // Register Built-in Commands
@@ -126,6 +127,34 @@ registry.register({
 })
 
 // =============================================================================
+// Sync Commands
+// =============================================================================
+
+registry.register({
+  name: 'push',
+  description: 'Push local database to remote',
+  usage: 'parquedb push [--visibility <public|unlisted|private>] [--slug <name>]',
+  category: 'Sync',
+  execute: pushCommand,
+})
+
+registry.register({
+  name: 'pull',
+  description: 'Pull remote database to local',
+  usage: 'parquedb pull <owner/database> [--directory <path>]',
+  category: 'Sync',
+  execute: pullCommand,
+})
+
+registry.register({
+  name: 'sync',
+  description: 'Bidirectional sync with conflict resolution',
+  usage: 'parquedb sync [--strategy <local-wins|remote-wins|newest>]',
+  category: 'Sync',
+  execute: syncCommand,
+})
+
+// =============================================================================
 // Constants
 // =============================================================================
 
@@ -147,6 +176,9 @@ COMMANDS:
   stats [namespace]             Show database statistics
   studio [directory]            Launch ParqueDB Studio (admin UI)
   generate [--output path]      Generate typed exports from config
+  push [options]                Push local database to remote
+  pull <owner/database>         Pull remote database to local
+  sync [options]                Bidirectional sync with remote
   login                         Authenticate with oauth.do
   logout                        Clear authentication tokens
   whoami                        Show current user info
@@ -199,6 +231,15 @@ EXAMPLES:
 
   # Logout
   parquedb logout
+
+  # Push database to remote (public with custom slug)
+  parquedb push --visibility public --slug my-dataset
+
+  # Pull a public database
+  parquedb pull username/my-dataset
+
+  # Sync with remote (newest wins strategy)
+  parquedb sync --strategy newest
 `
 
 // =============================================================================

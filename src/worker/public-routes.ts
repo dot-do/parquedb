@@ -1,0 +1,443 @@
+/**
+ * Public Database Routes
+ *
+ * HTTP routes for accessing public and unlisted databases.
+ * Supports Range requests for efficient Parquet file reading.
+ *
+ * Routes:
+ * - GET /api/public - List public databases
+ * - GET /api/db/:owner/:slug - Database metadata
+ * - GET /api/db/:owner/:slug/:collection - Query collection
+ * - GET /db/:owner/:slug/* - Raw file access with Range support
+ */
+
+import type { Env } from '../types/worker'
+import { type DatabaseIndexDO, type DatabaseInfo } from './DatabaseIndexDO'
+import { allowsAnonymousRead } from '../types/visibility'
+
+/**
+ * Get the database index stub for a user
+ */
+function getDatabaseIndex(env: Env, owner: string) {
+  if (!env.DATABASE_INDEX) return null
+  const indexId = env.DATABASE_INDEX.idFromName(`user:${owner}`)
+  return env.DATABASE_INDEX.get(indexId) as unknown as DatabaseIndexDO
+}
+
+// =============================================================================
+// CORS Headers
+// =============================================================================
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Range, Authorization',
+  'Access-Control-Expose-Headers': 'Content-Range, Content-Length, ETag, Accept-Ranges',
+  'Access-Control-Max-Age': '86400',
+}
+
+/**
+ * Add CORS headers to response
+ */
+function addCorsHeaders(response: Response): Response {
+  const headers = new Headers(response.headers)
+  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+    headers.set(key, value)
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+// =============================================================================
+// Route Handlers
+// =============================================================================
+
+/**
+ * Handle public database routes
+ * Returns null if route doesn't match
+ */
+export async function handlePublicRoutes(
+  request: Request,
+  env: Env,
+  path: string,
+  _baseUrl: string
+): Promise<Response | null> {
+  // Handle CORS preflight for public routes
+  if (request.method === 'OPTIONS') {
+    if (path.startsWith('/api/public') || path.startsWith('/api/db/') || path.startsWith('/db/')) {
+      return new Response(null, {
+        status: 204,
+        headers: CORS_HEADERS,
+      })
+    }
+  }
+
+  // GET /api/public - List public databases
+  if (path === '/api/public' && request.method === 'GET') {
+    return addCorsHeaders(await handleListPublic(request, env))
+  }
+
+  // GET /api/db/:owner/:slug - Database metadata
+  const dbMetaMatch = path.match(/^\/api\/db\/([^/]+)\/([^/]+)$/)
+  if (dbMetaMatch && request.method === 'GET') {
+    const [, owner, slug] = dbMetaMatch
+    return addCorsHeaders(await handleDatabaseMeta(request, env, owner!, slug!))
+  }
+
+  // GET /api/db/:owner/:slug/:collection - Query collection
+  const collectionMatch = path.match(/^\/api\/db\/([^/]+)\/([^/]+)\/([^/]+)$/)
+  if (collectionMatch && request.method === 'GET') {
+    const [, owner, slug, collection] = collectionMatch
+    return addCorsHeaders(await handleCollectionQuery(request, env, owner!, slug!, collection!))
+  }
+
+  // GET /db/:owner/:slug/* - Raw file access
+  const rawFileMatch = path.match(/^\/db\/([^/]+)\/([^/]+)\/(.+)$/)
+  if (rawFileMatch && (request.method === 'GET' || request.method === 'HEAD')) {
+    const [, owner, slug, filePath] = rawFileMatch
+    return addCorsHeaders(await handleRawFileAccess(request, env, owner!, slug!, filePath!))
+  }
+
+  return null
+}
+
+// =============================================================================
+// Handler Implementations
+// =============================================================================
+
+/**
+ * List all public (discoverable) databases
+ */
+async function handleListPublic(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  try {
+    // Get query parameters
+    const url = new URL(request.url)
+    const limit = parseInt(url.searchParams.get('limit') ?? '50', 10)
+    const offset = parseInt(url.searchParams.get('offset') ?? '0', 10)
+
+    // For now, we need a way to aggregate public databases across all users
+    // This would typically require a global index or aggregation service
+    // For MVP, return empty list or use a known list of public database owners
+
+    // TODO: Implement global public database index
+    // For now, return a placeholder response
+    const databases: DatabaseInfo[] = []
+
+    return Response.json({
+      databases: databases.slice(offset, offset + limit),
+      total: databases.length,
+      hasMore: offset + limit < databases.length,
+    })
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : 'Failed to list public databases' },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * Get database metadata by owner/slug
+ */
+async function handleDatabaseMeta(
+  request: Request,
+  env: Env,
+  owner: string,
+  slug: string
+): Promise<Response> {
+  try {
+    // Get the user's database index
+    const index = getDatabaseIndex(env, owner)
+    if (!index) {
+      return Response.json(
+        { error: 'Database index not configured' },
+        { status: 503 }
+      )
+    }
+
+    const database = await index.getBySlug(owner, slug)
+
+    if (!database) {
+      return Response.json({ error: 'Database not found' }, { status: 404 })
+    }
+
+    // Check visibility permissions
+    const token = extractToken(request)
+    const isOwner = await checkOwnership(token, owner)
+
+    if (!allowsAnonymousRead(database.visibility) && !isOwner) {
+      return Response.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      )
+    }
+
+    // Return database info (exclude sensitive fields for non-owners)
+    const publicInfo = {
+      id: database.id,
+      name: database.name,
+      description: database.description,
+      owner: database.owner,
+      slug: database.slug,
+      visibility: database.visibility,
+      collectionCount: database.collectionCount,
+      entityCount: database.entityCount,
+      createdAt: database.createdAt,
+    }
+
+    return Response.json(publicInfo)
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : 'Failed to get database' },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * Query a collection in a public database
+ */
+async function handleCollectionQuery(
+  request: Request,
+  env: Env,
+  owner: string,
+  slug: string,
+  collection: string
+): Promise<Response> {
+  try {
+    // Get database info
+    const index = getDatabaseIndex(env, owner)
+    if (!index) {
+      return Response.json(
+        { error: 'Database index not configured' },
+        { status: 503 }
+      )
+    }
+
+    const database = await index.getBySlug(owner, slug)
+    if (!database) {
+      return Response.json({ error: 'Database not found' }, { status: 404 })
+    }
+
+    // Check visibility
+    const token = extractToken(request)
+    const isOwner = await checkOwnership(token, owner)
+
+    if (!allowsAnonymousRead(database.visibility) && !isOwner) {
+      return Response.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      )
+    }
+
+    // Parse query parameters (for future query implementation)
+    const url = new URL(request.url)
+    const _filter = url.searchParams.get('filter')
+    const _limit = parseInt(url.searchParams.get('limit') ?? '100', 10)
+    const _offset = parseInt(url.searchParams.get('offset') ?? '0', 10)
+    void _filter; void _limit; void _offset // Will be used in future implementation
+
+    // TODO: Execute query against the database's R2 bucket
+    // For now, return placeholder
+    return Response.json({
+      items: [],
+      total: 0,
+      hasMore: false,
+      collection,
+      database: `${owner}/${slug}`,
+    })
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : 'Query failed' },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * Raw file access with Range request support
+ *
+ * Critical for efficient Parquet reading where clients need to:
+ * 1. Read footer (last 8 bytes) to get footer length
+ * 2. Read footer to get metadata
+ * 3. Read specific row groups based on predicate pushdown
+ */
+async function handleRawFileAccess(
+  request: Request,
+  env: Env,
+  owner: string,
+  slug: string,
+  filePath: string
+): Promise<Response> {
+  try {
+    // Get database info
+    const index = getDatabaseIndex(env, owner)
+    if (!index) {
+      return new Response('Service Unavailable', { status: 503 })
+    }
+
+    const database = await index.getBySlug(owner, slug)
+    if (!database) {
+      return new Response('Not Found', { status: 404 })
+    }
+
+    // Check visibility
+    const token = extractToken(request)
+    const isOwner = await checkOwnership(token, owner)
+
+    if (!allowsAnonymousRead(database.visibility) && !isOwner) {
+      return new Response('Unauthorized', { status: 401 })
+    }
+
+    // Build the full path in R2
+    const r2Path = database.prefix
+      ? `${database.prefix}/${filePath}`
+      : filePath
+
+    // Get the R2 object
+    const bucket = env.BUCKET
+
+    // Parse Range header
+    const rangeHeader = request.headers.get('Range')
+
+    // Fetch from R2
+    let object: R2Object | R2ObjectBody | null
+    if (request.method === 'HEAD') {
+      object = await bucket.head(r2Path)
+    } else if (rangeHeader) {
+      const range = parseRangeHeader(rangeHeader)
+      if (range) {
+        // Use the range option for partial reads
+        object = await bucket.get(r2Path, { range } as Parameters<typeof bucket.get>[1])
+      } else {
+        object = await bucket.get(r2Path)
+      }
+    } else {
+      object = await bucket.get(r2Path)
+    }
+
+    if (!object) {
+      return new Response('Not Found', { status: 404 })
+    }
+
+    // Build response headers
+    const headers = new Headers()
+    headers.set('Content-Type', object.httpMetadata?.contentType ?? 'application/octet-stream')
+    headers.set('ETag', object.etag)
+    headers.set('Accept-Ranges', 'bytes')
+
+    if (object.size !== undefined) {
+      headers.set('Content-Length', object.size.toString())
+    }
+
+    // Handle Range response
+    if (rangeHeader && 'body' in object && object.range) {
+      const r2Range = object.range as { offset: number; length: number }
+      const contentLength = r2Range.length
+      const start = r2Range.offset
+      const end = start + contentLength - 1
+      const total = object.size
+
+      headers.set('Content-Length', contentLength.toString())
+      headers.set('Content-Range', `bytes ${start}-${end}/${total}`)
+
+      // Cast body to ReadableStream for Response constructor
+      const body = (object as { body: ReadableStream }).body
+      return new Response(body, {
+        status: 206,
+        headers,
+      })
+    }
+
+    // Full response
+    if (request.method === 'HEAD') {
+      return new Response(null, {
+        status: 200,
+        headers,
+      })
+    }
+
+    // Cast body to ReadableStream for Response constructor
+    const body = 'body' in object ? (object as { body: ReadableStream }).body : null
+    return new Response(body, {
+      status: 200,
+      headers,
+    })
+  } catch (error) {
+    console.error('Raw file access error:', error)
+    return new Response('Internal Server Error', { status: 500 })
+  }
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/**
+ * Extract Bearer token from Authorization header
+ */
+function extractToken(request: Request): string | null {
+  const auth = request.headers.get('Authorization')
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return null
+  }
+  return auth.slice(7)
+}
+
+/**
+ * Check if the token belongs to the specified owner
+ */
+async function checkOwnership(token: string | null, owner: string): Promise<boolean> {
+  if (!token) return false
+
+  // TODO: Validate token and check ownership via oauth.do
+  // For now, return false (require public/unlisted visibility)
+  return false
+}
+
+/**
+ * Parse Range header into R2 range options
+ */
+function parseRangeHeader(header: string): R2Range | null {
+  // Format: bytes=start-end or bytes=-suffix or bytes=start-
+  const match = header.match(/^bytes=(-?\d*)-(-?\d*)$/)
+  if (!match) return null
+
+  const startStr = match[1] ?? ''
+  const endStr = match[2] ?? ''
+
+  // Suffix range: bytes=-500 (last 500 bytes)
+  if (startStr === '' && endStr !== '') {
+    return { suffix: parseInt(endStr, 10) }
+  }
+
+  // Range from start: bytes=100-
+  if (startStr !== '' && endStr === '') {
+    return { offset: parseInt(startStr, 10) }
+  }
+
+  // Full range: bytes=100-200
+  if (startStr !== '' && endStr !== '') {
+    const offset = parseInt(startStr, 10)
+    const end = parseInt(endStr, 10)
+    return { offset, length: end - offset + 1 }
+  }
+
+  return null
+}
+
+// =============================================================================
+// R2 Types (for Range requests)
+// =============================================================================
+
+interface R2Range {
+  offset?: number
+  length?: number
+  suffix?: number
+}

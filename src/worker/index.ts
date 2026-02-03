@@ -42,6 +42,9 @@ import {
 // Import routing utilities
 import { RoutePatterns, matchRoute } from './routing'
 
+// Import public routes handler
+import { handlePublicRoutes } from './public-routes'
+
 // Import handlers
 import {
   handleRoot,
@@ -673,6 +676,14 @@ export default {
 
       if (path === '/debug/cache') {
         return handleDebugCache(context)
+      }
+
+      // =======================================================================
+      // Public Database Access Routes
+      // =======================================================================
+      const publicResponse = await handlePublicRoutes(request, env, path, baseUrl)
+      if (publicResponse) {
+        return publicResponse
       }
 
       // =======================================================================

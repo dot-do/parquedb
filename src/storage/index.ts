@@ -150,6 +150,13 @@ export {
   type CollectionSchema,
 } from './router'
 
+// RemoteBackend - HTTP-based read-only storage for remote databases
+export {
+  RemoteBackend,
+  createRemoteBackend,
+  type RemoteBackendOptions,
+} from './RemoteBackend'
+
 // =============================================================================
 // Test Utilities
 // =============================================================================

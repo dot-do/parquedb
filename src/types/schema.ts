@@ -3,6 +3,8 @@
  * Compatible with graphdl and icetype
  */
 
+import type { Visibility } from './visibility'
+
 // =============================================================================
 // Field Types
 // =============================================================================
@@ -190,8 +192,18 @@ export interface TypeDefinition {
   /** Index definitions */
   $indexes?: IndexDefinition[]
 
+  /**
+   * Visibility level for this collection
+   * - 'public': Discoverable and accessible by anyone
+   * - 'unlisted': Accessible with direct link, not discoverable
+   * - 'private': Requires authentication (default)
+   *
+   * Inherits from database-level $visibility if not specified
+   */
+  $visibility?: Visibility
+
   /** Field definitions */
-  [fieldName: string]: FieldDef | string | string[] | boolean | IndexDefinition[] | undefined
+  [fieldName: string]: FieldDef | string | string[] | boolean | IndexDefinition[] | Visibility | undefined
 }
 
 // =============================================================================

@@ -43,3 +43,14 @@ export {
 
 // Re-export collection client for advanced use cases
 export { CollectionClient, type CollectionCreateInput } from './collection'
+
+// Remote database client for public/unlisted databases
+export {
+  openRemoteDB,
+  checkRemoteDB,
+  listPublicDatabases,
+  type RemoteDB,
+  type RemoteCollection,
+  type RemoteDBInfo,
+  type OpenRemoteDBOptions,
+} from './remote'

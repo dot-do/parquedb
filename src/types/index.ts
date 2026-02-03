@@ -30,3 +30,6 @@ export * from './worker'
 
 // Result type (type-safe error handling)
 export * from './result'
+
+// Visibility types (public, unlisted, private)
+export * from './visibility'

@@ -423,11 +423,140 @@ export class VersionConflictError extends Error {
   override name = 'VersionConflictError'
   expectedVersion: number
   actualVersion: number | undefined
+  namespace?: string
+  entityId?: string
 
-  constructor(expectedVersion: number, actualVersion: number | undefined) {
-    super(`Version mismatch: expected ${expectedVersion}, got ${actualVersion}`)
+  constructor(
+    expectedVersion: number,
+    actualVersion: number | undefined,
+    context?: { namespace?: string; entityId?: string }
+  ) {
+    const baseMsg = `Version conflict: expected ${expectedVersion}, got ${actualVersion}`
+    const contextMsg = context?.namespace && context?.entityId
+      ? ` for ${context.namespace}/${context.entityId}`
+      : context?.entityId
+      ? ` for entity ${context.entityId}`
+      : ''
+    super(baseMsg + contextMsg)
     this.expectedVersion = expectedVersion
     this.actualVersion = actualVersion
+    this.namespace = context?.namespace
+    this.entityId = context?.entityId
+  }
+}
+
+/**
+ * Error thrown when an entity is not found
+ */
+export class EntityNotFoundError extends Error {
+  override name = 'EntityNotFoundError'
+  namespace: string
+  entityId: string
+
+  constructor(namespace: string, entityId: string) {
+    super(`Entity not found: ${namespace}/${entityId}`)
+    this.namespace = namespace
+    this.entityId = entityId
+  }
+}
+
+/**
+ * Error thrown when validation fails
+ */
+export class ValidationError extends Error {
+  override name = 'ValidationError'
+  operation: string
+  namespace: string
+  fieldName?: string
+  expectedType?: string
+  actualType?: string
+
+  constructor(
+    operation: string,
+    namespace: string,
+    message: string,
+    context?: {
+      fieldName?: string
+      expectedType?: string
+      actualType?: string
+    }
+  ) {
+    const contextMsg = context?.fieldName
+      ? ` (field: ${context.fieldName}${context.expectedType ? `, expected: ${context.expectedType}` : ''}${context.actualType ? `, got: ${context.actualType}` : ''})`
+      : ''
+    super(`Validation failed for '${namespace}' ${operation}: ${message}${contextMsg}`)
+    this.operation = operation
+    this.namespace = namespace
+    this.fieldName = context?.fieldName
+    this.expectedType = context?.expectedType
+    this.actualType = context?.actualType
+  }
+}
+
+/**
+ * Error thrown when a relationship operation fails
+ */
+export class RelationshipError extends Error {
+  override name = 'RelationshipError'
+  operation: string
+  namespace: string
+  entityId?: string
+  relationshipName?: string
+  targetId?: string
+
+  constructor(
+    operation: string,
+    namespace: string,
+    message: string,
+    context?: {
+      entityId?: string
+      relationshipName?: string
+      targetId?: string
+    }
+  ) {
+    const entityMsg = context?.entityId ? ` ${namespace}/${context.entityId}` : ` '${namespace}'`
+    const relMsg = context?.relationshipName ? ` relationship '${context.relationshipName}'` : ''
+    const targetMsg = context?.targetId ? ` with target ${context.targetId}` : ''
+    super(`${operation} failed for${entityMsg}${relMsg}${targetMsg}: ${message}`)
+    this.operation = operation
+    this.namespace = namespace
+    this.entityId = context?.entityId
+    this.relationshipName = context?.relationshipName
+    this.targetId = context?.targetId
+  }
+}
+
+/**
+ * Error thrown when an event/snapshot operation fails
+ */
+export class EventError extends Error {
+  override name = 'EventError'
+  operation: string
+  eventId?: string
+  snapshotId?: string
+  entityId?: string
+
+  constructor(
+    operation: string,
+    message: string,
+    context?: {
+      eventId?: string
+      snapshotId?: string
+      entityId?: string
+    }
+  ) {
+    const contextMsg = context?.eventId
+      ? ` event ${context.eventId}`
+      : context?.snapshotId
+      ? ` snapshot ${context.snapshotId}`
+      : context?.entityId
+      ? ` for entity ${context.entityId}`
+      : ''
+    super(`${operation} failed${contextMsg}: ${message}`)
+    this.operation = operation
+    this.eventId = context?.eventId
+    this.snapshotId = context?.snapshotId
+    this.entityId = context?.entityId
   }
 }
 

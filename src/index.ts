@@ -528,6 +528,64 @@ export {
 } from './integrations'
 
 // =============================================================================
+// Sync Module (Push/Pull/Sync)
+// =============================================================================
+
+export {
+  // Manifest types
+  createManifest,
+  diffManifests,
+  resolveConflicts,
+  updateManifestFile,
+  removeManifestFile,
+  // Sync engine
+  SyncEngine,
+  createSyncEngine,
+  // Types
+  type SyncManifest,
+  type SyncFileEntry,
+  type SyncDiff,
+  type SyncConflict,
+  type ConflictStrategy,
+  type SyncOptions,
+  type SyncProgress,
+  type SyncResult,
+  type SyncError,
+  type SyncEngineOptions,
+} from './sync'
+
+// =============================================================================
+// Remote Client (Public Database Access)
+// =============================================================================
+
+export {
+  // Remote database client
+  openRemoteDB,
+  checkRemoteDB,
+  listPublicDatabases,
+  // Types
+  type RemoteDB,
+  type RemoteCollection,
+  type RemoteDBInfo,
+  type OpenRemoteDBOptions,
+} from './client/remote'
+
+// =============================================================================
+// Visibility Types
+// =============================================================================
+
+export {
+  // Visibility types
+  DEFAULT_VISIBILITY,
+  VISIBILITY_VALUES,
+  isValidVisibility,
+  parseVisibility,
+  allowsAnonymousRead,
+  allowsDiscovery,
+  type Visibility,
+} from './types/visibility'
+
+// =============================================================================
 // Version
 // =============================================================================
 
