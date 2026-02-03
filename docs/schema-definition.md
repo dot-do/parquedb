@@ -123,13 +123,19 @@ type[modifiers][array][required/optional]
 | `string` | Short text (supports indexing) | `'name: string'` |
 | `text` | Long text (no column shredding) | `'content: text'` |
 | `markdown` | Markdown content | `'body: markdown'` |
+| `number` | Generic number type | `'count: number'` |
 | `int` | 32-bit integer | `'age: int'` |
 | `float` | Single-precision float | `'rating: float'` |
 | `double` | Double-precision float | `'price: double'` |
-| `bool` or `boolean` | True/false value | `'isActive: bool'` |
+| `boolean` | True/false value | `'isActive: boolean'` |
 | `date` | Date without time | `'birthDate: date'` |
 | `datetime` | Date with time | `'publishedAt: datetime'` |
+| `timestamp` | Unix timestamp | `'createdAt: timestamp'` |
+| `uuid` | UUID identifier | `'id: uuid'` |
+| `email` | Email address | `'email: email'` |
+| `url` | URL string | `'website: url'` |
 | `json` | Arbitrary JSON data | `'metadata: json'` |
+| `binary` | Binary data | `'file: binary'` |
 
 ### Parametric Types
 
@@ -177,8 +183,8 @@ Index fields for fast lookups with the `#` modifier:
 ```typescript
 const db = DB({
   User: {
-    email: 'string!#',     // Required and indexed
-    username: 'string##',  // Unique index
+    email: 'string#!',     // Indexed and required
+    username: 'string##',  // Unique index (optional)
     bio: 'text#fts',       // Full-text search index
     apiKey: 'string#hash', // Hash index (O(1) lookups)
   },
@@ -198,6 +204,8 @@ Index modifiers:
 | `#vec` | Vector similarity index | `'embedding: vector(1536)#vec'` |
 | `#hash` | Hash index for exact lookups | `'apiKey: string#hash'` |
 
+**Note:** When combining with the required modifier (`!`), the index modifier comes first: `string#!` (not `string!#`).
+
 ### Optional Modifier (`?`)
 
 Explicitly mark fields as optional:
@@ -213,12 +221,17 @@ const db = DB({
 
 ### Combining Modifiers
 
-Modifiers can be combined in order: type, index, required/optional:
+Modifiers can be combined. The order matters for parsing:
+
+1. Base type (e.g., `string`, `int`)
+2. Index modifier (e.g., `#`, `##`, `#fts`)
+3. Required/optional modifier (`!` or `?`)
+4. Array modifier (`[]`)
 
 ```typescript
 const db = DB({
   Product: {
-    sku: 'string!#',       // Required, indexed
+    sku: 'string#!',       // Required, indexed
     slug: 'string##!',     // Required, unique index
     name: 'string#fts!',   // Required, full-text search
     tags: 'string[]',      // Optional array
@@ -226,6 +239,8 @@ const db = DB({
   }
 })
 ```
+
+Note: When combining index and required modifiers, the index modifier should come first (e.g., `string#!` not `string!#`).
 
 ### Array Types
 
@@ -267,6 +282,12 @@ const db = DB({
 
 ParqueDB provides first-class support for bidirectional relationships. Relationships are defined using arrow operators that specify both the target type and the reverse field name.
 
+**Key Concepts:**
+- Forward relationships (`->`) define outbound links from this entity to another
+- Reverse relationships (`<-`) document inbound links (automatically populated)
+- The reverse field name creates a bidirectional index for efficient traversal in both directions
+- Use `[]` suffix for to-many relationships (one entity linking to multiple entities)
+
 ### Forward Relationships (`->`)
 
 Forward relationships define outbound references to other entities:
@@ -289,10 +310,11 @@ const db = DB({
 })
 ```
 
-The syntax is: `'-> TargetType.reverseFieldName'`
+The syntax is: `'-> TargetType.reverseFieldName'` or `'-> TargetType.reverseFieldName[]'`
 
 - `TargetType`: The collection being referenced
 - `reverseFieldName`: The field name on the target for reverse traversal
+- `[]`: Optional array suffix for to-many relationships
 
 ### Reverse Relationships (`<-`)
 
@@ -330,13 +352,16 @@ The syntax is: `'<- SourceType.forwardFieldName[]'`
 
 ### Relationship Predicates
 
-When creating relationships, you can specify custom predicates:
+The predicate is the name of the forward relationship field. The reverse name is specified after the dot in the relationship definition:
 
 ```typescript
 // Define the schema
 const db = DB({
   Person: {
     name: 'string!',
+    // Forward relationship: "worksAt" is the predicate
+    worksAt: '-> Person.colleagues[]',
+    // Reverse relationship: "colleagues" is the reverse name
     colleagues: '<- Person.worksAt[]',
   }
 })
@@ -345,14 +370,16 @@ const db = DB({
 const alice = await db.Person.create({ name: 'Alice' })
 const bob = await db.Person.create({ name: 'Bob' })
 
-// Link with custom predicate
+// Link entities using the predicate name
 await db.Person.link(
   alice.$id,
-  'worksAt',  // predicate (forward name)
+  'worksAt',  // predicate (matches forward field name)
   bob.$id,
-  { reverse: 'colleagues' }  // reverse name
+  { reverse: 'colleagues' }  // reverse name (matches the reverse field)
 )
 ```
+
+**Important:** The predicate name should match the forward relationship field name in your schema, and the reverse name should match the reverse field name.
 
 ### To-One Relationships
 
@@ -457,16 +484,23 @@ const db = DB({
     // AI-matched related topics
     relatedTopics: '~> Topic.articles[]',
   },
+  Topic: {
+    name: 'string!',
+    embedding: 'vector(1536)#vec',
+    // Reverse fuzzy relationship
+    articles: '<~ Article.relatedTopics[]',
+  },
   Product: {
     name: 'string!',
     embedding: 'vector(1536)#vec',
-    // AI-matched similar products
+    // AI-matched similar products (self-referential)
     similar: '~> Product.similarTo[]',
+    similarTo: '<~ Product.similar[]',
   }
 })
 ```
 
-Note: Fuzzy relationships require vector embeddings to be configured.
+Note: Fuzzy relationships require vector embeddings to be configured and use cosine similarity or other distance metrics for matching.
 
 ---
 
@@ -869,7 +903,7 @@ const db = DB({
 
     // Fields
     name: 'string!',
-    email: 'email##!',  // Required, unique index
+    email: 'string##!',  // Required, unique index
     bio: 'text#fts',    // Full-text search
     avatar: 'string',
     role: 'enum(admin,editor,author) = "author"',
@@ -901,9 +935,9 @@ const db = DB({
     $options: { includeDataVariant: true },
 
     // Fields
-    title: 'string!#fts',
+    title: 'string#fts!',
     slug: 'string##!',  // Unique index
-    content: 'markdown!#fts',
+    content: 'markdown#fts!',
     excerpt: 'text',
     status: 'enum(draft,published,archived) = "draft"',
     publishedAt: 'datetime',
@@ -1027,7 +1061,7 @@ const db = DB({
     $options: { includeDataVariant: true },
 
     name: 'string!',
-    email: 'email##!',
+    email: 'string##!',
     phone: 'string',
 
     orders: '<- Order.customer[]',
@@ -1048,7 +1082,7 @@ const db = DB({
   Product: {
     $options: { includeDataVariant: true },
 
-    name: 'string!#fts',
+    name: 'string#fts!',
     description: 'markdown#fts',
     sku: 'string##!',
     price: 'float!',
@@ -1186,7 +1220,7 @@ const db = DB({
     name: 'string!',
     slug: 'string##!',
     plan: 'enum(free,pro,enterprise) = "free"',
-    billingEmail: 'email!',
+    billingEmail: 'string!',
 
     teams: '<- Team.organization[]',
     members: '<- Member.organization[]',
@@ -1230,7 +1264,7 @@ const db = DB({
   Member: {
     $options: { includeDataVariant: true },
 
-    email: 'email!#',
+    email: 'string#!',
     name: 'string!',
     role: 'enum(owner,admin,member) = "member"',
 
@@ -1317,6 +1351,76 @@ const db = DB({
         options: ['low', 'medium', 'high']
       }
     }
+  }
+})
+```
+
+---
+
+## Common Pitfalls
+
+### 1. Incorrect Modifier Ordering
+
+**Wrong:**
+```typescript
+const db = DB({
+  User: {
+    email: 'string!#',  // This may not parse correctly
+  }
+})
+```
+
+**Correct:**
+```typescript
+const db = DB({
+  User: {
+    email: 'string#!',  // Index modifier before required modifier
+  }
+})
+```
+
+### 2. Missing Array Suffix on Reverse Relationships
+
+**Wrong:**
+```typescript
+const db = DB({
+  User: {
+    posts: '<- Post.author',  // Missing []
+  }
+})
+```
+
+**Correct:**
+```typescript
+const db = DB({
+  User: {
+    posts: '<- Post.author[]',  // Always use [] for reverse relationships
+  }
+})
+```
+
+### 3. Inconsistent Relationship Names
+
+**Wrong:**
+```typescript
+const db = DB({
+  Post: {
+    author: '-> User.articles',  // Reverse name doesn't match
+  },
+  User: {
+    posts: '<- Post.author[]',   // Expecting 'articles' not 'posts'
+  }
+})
+```
+
+**Correct:**
+```typescript
+const db = DB({
+  Post: {
+    author: '-> User.posts',     // Matches User.posts
+  },
+  User: {
+    posts: '<- Post.author[]',   // Matches Post.author
   }
 })
 ```
