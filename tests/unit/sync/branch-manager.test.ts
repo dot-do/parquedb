@@ -324,7 +324,8 @@ describe('branch-manager', () => {
       await refManager.updateRef('main', commitHash)
       await refManager.updateRef('develop', commitHash)
 
-      await branchManager.checkout('develop')
+      // Use skipStateReconstruction since test commits don't have valid object store data
+      await branchManager.checkout('develop', { skipStateReconstruction: true })
 
       const head = await refManager.getHead()
       expect(head).toEqual({ type: 'branch', ref: 'develop' })
@@ -340,7 +341,8 @@ describe('branch-manager', () => {
       await refManager.setHead('main')
       await refManager.updateRef('main', commitHash)
 
-      await branchManager.checkout('new-branch', { create: true })
+      // Use skipStateReconstruction since test commits don't have valid object store data
+      await branchManager.checkout('new-branch', { create: true, skipStateReconstruction: true })
 
       const head = await refManager.getHead()
       expect(head).toEqual({ type: 'branch', ref: 'new-branch' })

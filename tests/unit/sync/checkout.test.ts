@@ -214,8 +214,8 @@ describe('checkout state reconstruction', () => {
       const featureCommit = await createAndSaveCommit(featureState, 'Feature commit', [mainCommit])
       await refManager.updateRef('feature', featureCommit)
 
-      // Checkout feature branch
-      await branchManager.checkout('feature')
+      // Checkout feature branch (force to bypass uncommitted changes check)
+      await branchManager.checkout('feature', { force: true })
 
       // Verify working state was restored
       const usersData = await storage.read(StoragePaths.data('users'))
@@ -250,8 +250,8 @@ describe('checkout state reconstruction', () => {
       const featureCommit = await createAndSaveCommit(featureState, 'Feature commit', [mainCommit])
       await refManager.updateRef('feature', featureCommit)
 
-      // Checkout feature
-      await branchManager.checkout('feature')
+      // Checkout feature (force to bypass uncommitted changes check)
+      await branchManager.checkout('feature', { force: true })
 
       // Verify relationships were restored
       const forwardData = await storage.read('rels/forward/default.parquet')

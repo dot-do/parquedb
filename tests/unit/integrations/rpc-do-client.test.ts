@@ -526,4 +526,49 @@ describe('createParqueDBRPCClient', () => {
       client.close()
     })
   })
+
+  describe('createBatchLoaderDB', () => {
+    let client: ParqueDBRPCClient
+
+    beforeEach(() => {
+      client = createParqueDBRPCClient({
+        url: 'https://api.example.com/rpc',
+      })
+    })
+
+    afterEach(() => {
+      client.close()
+    })
+
+    it('should create a BatchLoaderDB-compatible interface', () => {
+      const loaderDB = createBatchLoaderDB(client)
+
+      expect(loaderDB).toBeDefined()
+      expect(loaderDB.getRelated).toBeDefined()
+      expect(loaderDB.getByIds).toBeDefined()
+    })
+
+    it('should delegate getRelated to client collection', async () => {
+      const loaderDB = createBatchLoaderDB(client)
+
+      const result = await loaderDB.getRelated('users', 'user-1', 'posts')
+
+      expect(result.items).toHaveLength(1)
+      expect(mockServer.requests).toContainEqual({
+        method: 'db.getRelated',
+        params: ['users', 'user-1', 'posts'],
+      })
+    })
+
+    it('should delegate getByIds to client batchGet', async () => {
+      const loaderDB = createBatchLoaderDB(client)
+
+      const results = await loaderDB.getByIds!('users', ['id-1', 'id-2', 'not-found'])
+
+      // Not-found should be filtered out
+      expect(results).toHaveLength(2)
+      expect(results[0]?.$id).toBe('users/id-1')
+      expect(results[1]?.$id).toBe('users/id-2')
+    })
+  })
 })

@@ -201,15 +201,11 @@ async function performMerge(
     }
 
     // Map CLI strategy names to internal strategy names ('newest' -> 'latest')
-    const strategyMap: Record<string, 'ours' | 'theirs' | 'latest'> = {
-      ours: 'ours',
-      theirs: 'theirs',
-      newest: 'latest',
-    }
+    const internalStrategy = options.strategy === 'newest' ? 'latest' : options.strategy
 
     // Use the shared merge engine for the merge operation
     const mergeResult = await mergeEngine.mergeBranches(source, currentBranch, {
-      strategy: options.strategy,
+      strategy: internalStrategy as 'ours' | 'theirs' | 'latest' | 'manual',
       dryRun: options.dryRun,
       autoMergeCommutative: true,
     })

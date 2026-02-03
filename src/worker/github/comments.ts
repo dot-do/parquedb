@@ -49,54 +49,56 @@ export interface DiffData {
 }
 
 export interface PreviewUrlOptions {
-  owner: string
-  repo: string
-  pr: number
+  readonly owner: string
+  readonly repo: string
+  readonly pr: number
 }
 
 export interface MergeStatusOptions {
-  status: 'clean' | 'conflicts' | 'warnings'
-  conflictCount?: number
+  readonly status: 'clean' | 'conflicts' | 'warnings'
+  readonly conflictCount?: number
 }
 
 export interface Conflict {
-  ns: string
-  entityId: string
-  field: string
-  ours: string
-  theirs: string
+  readonly ns: string
+  readonly entityId: string
+  readonly field: string
+  readonly ours: string
+  readonly theirs: string
 }
 
 export interface SchemaField {
-  name: string
-  type: string
+  readonly name: string
+  readonly type: string
 }
 
 export interface ModifiedField {
-  name: string
-  oldType: string
-  newType: string
+  readonly name: string
+  readonly oldType: string
+  readonly newType: string
+}
+
+export interface CollectionSchemaChanges {
+  readonly added: readonly SchemaField[]
+  readonly removed: readonly SchemaField[]
+  readonly modified: readonly ModifiedField[]
 }
 
 export interface SchemaChanges {
-  [collection: string]: {
-    added: SchemaField[]
-    removed: SchemaField[]
-    modified: ModifiedField[]
-  }
+  readonly [collection: string]: CollectionSchemaChanges
 }
 
 export interface FindCommentOptions {
-  owner: string
-  repo: string
-  pr: number
+  readonly owner: string
+  readonly repo: string
+  readonly pr: number
 }
 
 export interface UpsertCommentOptions {
-  owner: string
-  repo: string
-  pr: number
-  body: string
+  readonly owner: string
+  readonly repo: string
+  readonly pr: number
+  readonly body: string
 }
 
 const BOT_USERNAME = 'parquedb[bot]'

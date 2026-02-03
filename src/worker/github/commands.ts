@@ -11,9 +11,9 @@
 
 // Command parsing types
 export interface ParsedCommand {
-  command: string
-  args: string[]
-  flags: Record<string, boolean>
+  readonly command: string
+  readonly args: readonly string[]
+  readonly flags: Readonly<Record<string, boolean>>
 }
 
 export interface CommandContext {

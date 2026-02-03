@@ -447,13 +447,15 @@ describe('RelationshipBatchLoader', () => {
       await expect(promise).rejects.toThrow('Batch loader cleared')
     })
 
-    it('should reset stats after clear', () => {
+    it('should reset stats after clear', async () => {
       const db = createMockDB(new Map())
       const loader = new RelationshipBatchLoader(db, { windowMs: 1000 })
 
-      // Queue some requests without awaiting
-      loader.load('Post', 'post-1', 'author')
-      loader.load('Post', 'post-2', 'author')
+      // Queue some requests and capture them
+      const promises = [
+        loader.load('Post', 'post-1', 'author'),
+        loader.load('Post', 'post-2', 'author'),
+      ]
 
       let stats = loader.getStats()
       expect(stats.pendingRequests).toBe(2)
@@ -464,6 +466,9 @@ describe('RelationshipBatchLoader', () => {
       expect(stats.pendingRequests).toBe(0)
       expect(stats.pendingBatches).toBe(0)
       expect(stats.cachedPromises).toBe(0)
+
+      // Catch all the rejection errors from clear()
+      await Promise.allSettled(promises)
     })
   })
 

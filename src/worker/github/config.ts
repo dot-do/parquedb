@@ -5,30 +5,55 @@
 import * as yaml from 'yaml'
 
 /**
+ * Database configuration section
+ */
+export interface DatabaseSection {
+  readonly name: string
+}
+
+/**
+ * Branches configuration section
+ */
+export interface BranchesSection {
+  readonly auto_create: readonly string[]
+  readonly ignore: readonly string[]
+}
+
+/**
+ * Preview configuration section
+ */
+export interface PreviewSection {
+  readonly enabled: boolean
+  readonly ttl: string
+  readonly visibility: 'public' | 'unlisted' | 'private'
+}
+
+/**
+ * Merge configuration section
+ */
+export interface MergeSection {
+  readonly required_check: boolean
+  readonly default_strategy: 'ours' | 'theirs' | 'newest' | 'manual'
+}
+
+/**
+ * Diff configuration section
+ */
+export interface DiffSection {
+  readonly auto_comment: boolean
+  readonly max_entities: number
+  readonly show_samples: boolean
+}
+
+/**
  * ParqueDB GitHub config interface
  */
 export interface ParqueDBGitHubConfig {
-  database: {
-    name: string
-  }
-  branches: {
-    auto_create: string[]
-    ignore: string[]
-  }
-  preview: {
-    enabled: boolean
-    ttl: string
-    visibility: 'public' | 'unlisted' | 'private'
-  }
-  merge: {
-    required_check: boolean
-    default_strategy: 'ours' | 'theirs' | 'newest' | 'manual'
-  }
-  diff: {
-    auto_comment: boolean
-    max_entities: number
-    show_samples: boolean
-  }
+  readonly database: DatabaseSection
+  readonly branches: BranchesSection
+  readonly preview: PreviewSection
+  readonly merge: MergeSection
+  readonly diff: DiffSection
 }
 
 /**
