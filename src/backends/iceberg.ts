@@ -943,11 +943,21 @@ class IcebergSnapshotBackend implements EntityBackend {
   readonly supportsSchemaEvolution = false
   readonly readOnly = true
 
+  // Store snapshot for future use in time-travel queries
+  private snapshotData: Snapshot
+
   constructor(
     private parent: IcebergBackend,
     private ns: string,
-    private _snapshotData: Snapshot
-  ) {}
+    snapshotData: Snapshot
+  ) {
+    this.snapshotData = snapshotData
+  }
+
+  /** Get the snapshot ID for debugging/logging */
+  get snapshotId(): number {
+    return this.snapshotData['snapshot-id']
+  }
 
   async initialize(): Promise<void> {}
   async close(): Promise<void> {}

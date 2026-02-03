@@ -36,7 +36,7 @@ import { IndexManager } from '../indexes/manager'
 import type { IndexDefinition, IndexMetadata, IndexStats } from '../indexes/types'
 import { getNestedValue, compareValues, generateId, deepClone } from '../utils'
 import { matchesFilter as canonicalMatchesFilter } from '../query/filter'
-import { applyOperators, isUnsafePath } from '../mutation/operators'
+import { applyOperators } from '../mutation/operators'
 import { DEFAULT_MAX_INBOUND } from '../constants'
 import pluralize from 'pluralize'
 

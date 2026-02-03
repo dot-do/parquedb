@@ -620,7 +620,7 @@ export class QueryExecutor {
 
         // Merge pending files (DO WAL Phase 2 - Bulk Bypass)
         // Pending files contain bulk writes that bypassed SQLite buffering
-        const datasetId = ns.includes('/') ? ns.split('/')[0] : ns
+        const datasetId = ns.includes('/') ? ns.split('/')[0]! : ns
         const pendingRows = await this.readPendingFiles<T>(datasetId)
         if (pendingRows.length > 0) {
           results = [...results, ...pendingRows]
