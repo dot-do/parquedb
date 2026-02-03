@@ -438,11 +438,25 @@ export class SyncEngine {
    * Load manifest from local storage
    */
   async loadLocalManifest(): Promise<SyncManifest | null> {
+    let data: Uint8Array
     try {
-      const data = await this.local.read(SyncEngine.MANIFEST_PATH)
+      data = await this.local.read(SyncEngine.MANIFEST_PATH)
+    } catch (error) {
+      // Check for file not found errors
+      if (this.isNotFoundError(error)) {
+        return null
+      }
+      throw error
+    }
+
+    try {
       return JSON.parse(new TextDecoder().decode(data)) as SyncManifest
-    } catch {
-      return null
+    } catch (parseError) {
+      throw new Error(
+        `Corrupted local manifest at ${SyncEngine.MANIFEST_PATH}: ` +
+        `JSON parse error - ${parseError instanceof Error ? parseError.message : String(parseError)}. ` +
+        `The manifest file may be corrupted. Consider deleting it and re-syncing.`
+      )
     }
   }
 
@@ -450,12 +464,50 @@ export class SyncEngine {
    * Load manifest from remote storage
    */
   async loadRemoteManifest(): Promise<SyncManifest | null> {
+    let data: Uint8Array
     try {
-      const data = await this.remote.read(SyncEngine.MANIFEST_PATH)
-      return JSON.parse(new TextDecoder().decode(data)) as SyncManifest
-    } catch {
-      return null
+      data = await this.remote.read(SyncEngine.MANIFEST_PATH)
+    } catch (error) {
+      // Check for file not found errors
+      if (this.isNotFoundError(error)) {
+        return null
+      }
+      throw error
     }
+
+    try {
+      return JSON.parse(new TextDecoder().decode(data)) as SyncManifest
+    } catch (parseError) {
+      throw new Error(
+        `Corrupted remote manifest at ${SyncEngine.MANIFEST_PATH}: ` +
+        `JSON parse error - ${parseError instanceof Error ? parseError.message : String(parseError)}. ` +
+        `The remote manifest file may be corrupted.`
+      )
+    }
+  }
+
+  /**
+   * Check if an error indicates file not found
+   */
+  private isNotFoundError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false
+
+    const message = error.message.toLowerCase()
+    const name = error.name.toLowerCase()
+
+    // Check common not found error patterns:
+    // - Node.js fs: ENOENT
+    // - R2/S3: NoSuchKey, NotFound
+    // - Generic: "not found", "does not exist"
+    return (
+      message.includes('enoent') ||
+      message.includes('no such file') ||
+      message.includes('not found') ||
+      message.includes('does not exist') ||
+      message.includes('nosuchkey') ||
+      name === 'notfounderror' ||
+      (error as NodeJS.ErrnoException).code === 'ENOENT'
+    )
   }
 
   /**
@@ -505,7 +557,7 @@ export class SyncEngine {
         path: filePath,
         size: stat.size,
         hash,
-        hashAlgorithm: 'md5',
+        hashAlgorithm: 'sha256',
         modifiedAt: stat.mtime?.toISOString() ?? new Date().toISOString(),
         etag: stat.etag,
         contentType: this.guessContentType(filePath),
@@ -533,23 +585,22 @@ export class SyncEngine {
   private async hashFile(path: string, storage: StorageBackend): Promise<string> {
     const data = await storage.read(path)
 
-    // Use crypto.subtle if available (Workers, modern Node.js)
-    if (typeof crypto !== 'undefined' && crypto.subtle) {
-      // Create a fresh ArrayBuffer to avoid SharedArrayBuffer issues
-      const buffer = new ArrayBuffer(data.length)
-      const view = new Uint8Array(buffer)
-      view.set(data)
-      const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
-      const hashArray = Array.from(new Uint8Array(hashBuffer))
-      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+    // Use crypto.subtle (Workers, modern Node.js)
+    if (typeof crypto === 'undefined' || !crypto.subtle) {
+      throw new Error(
+        'crypto.subtle is not available. ' +
+        'ParqueDB requires a modern JavaScript environment with Web Crypto API support. ' +
+        'For Node.js, ensure you are using Node.js 15+ or enable the --experimental-global-webcrypto flag in older versions.'
+      )
     }
 
-    // Fallback: use a simple checksum
-    let hash = 0
-    for (let i = 0; i < data.length; i++) {
-      hash = ((hash << 5) - hash + data[i]!) | 0
-    }
-    return Math.abs(hash).toString(16).padStart(8, '0')
+    // Create a fresh ArrayBuffer to avoid SharedArrayBuffer issues
+    const buffer = new ArrayBuffer(data.length)
+    const view = new Uint8Array(buffer)
+    view.set(data)
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
+    const hashArray = Array.from(new Uint8Array(hashBuffer))
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
   }
 
   /**

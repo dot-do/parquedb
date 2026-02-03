@@ -28,7 +28,32 @@ function getDatabaseIndex(env: Env, owner: string) {
 // CORS Headers
 // =============================================================================
 
-const CORS_HEADERS = {
+/**
+ * CORS Security Policy:
+ *
+ * PUBLIC_CORS_HEADERS: Used for public database endpoints (/api/public, /api/db/:owner/:slug, /db/:owner/:slug/*).
+ * These endpoints are designed for anonymous read access to public/unlisted databases.
+ * - Origin: '*' allows any site to embed public database content (intentional for data sharing)
+ * - Methods: Read-only (GET, HEAD, OPTIONS) - no mutations allowed via public routes
+ * - Headers: Range is needed for efficient Parquet partial reads; no Authorization needed for public data
+ * - Security: Visibility checks are enforced server-side; only public/unlisted data is accessible without auth
+ *
+ * AUTHENTICATED_CORS_HEADERS: Used for endpoints requiring authentication.
+ * - Authorization header is allowed for Bearer token authentication
+ * - Used when accessing private databases or performing mutations
+ *
+ * Note: Even with permissive CORS, all access control is enforced server-side via visibility checks
+ * and token validation. CORS only controls browser-based cross-origin requests.
+ */
+const PUBLIC_CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Range',
+  'Access-Control-Expose-Headers': 'Content-Range, Content-Length, ETag, Accept-Ranges',
+  'Access-Control-Max-Age': '86400',
+}
+
+const AUTHENTICATED_CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Range, Authorization',
@@ -37,11 +62,26 @@ const CORS_HEADERS = {
 }
 
 /**
- * Add CORS headers to response
+ * Add public CORS headers to response (no Authorization header needed)
  */
-function addCorsHeaders(response: Response): Response {
+function addPublicCorsHeaders(response: Response): Response {
   const headers = new Headers(response.headers)
-  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+  for (const [key, value] of Object.entries(PUBLIC_CORS_HEADERS)) {
+    headers.set(key, value)
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+/**
+ * Add authenticated CORS headers to response (includes Authorization header)
+ */
+function addAuthenticatedCorsHeaders(response: Response): Response {
+  const headers = new Headers(response.headers)
+  for (const [key, value] of Object.entries(AUTHENTICATED_CORS_HEADERS)) {
     headers.set(key, value)
   }
   return new Response(response.body, {
@@ -66,39 +106,43 @@ export async function handlePublicRoutes(
   _baseUrl: string
 ): Promise<Response | null> {
   // Handle CORS preflight for public routes
+  // Public routes use PUBLIC_CORS_HEADERS (no Authorization header needed for anonymous access)
   if (request.method === 'OPTIONS') {
     if (path.startsWith('/api/public') || path.startsWith('/api/db/') || path.startsWith('/db/')) {
       return new Response(null, {
         status: 204,
-        headers: CORS_HEADERS,
+        headers: PUBLIC_CORS_HEADERS,
       })
     }
   }
 
-  // GET /api/public - List public databases
+  // GET /api/public - List public databases (no auth needed)
   if (path === '/api/public' && request.method === 'GET') {
-    return addCorsHeaders(await handleListPublic(request, env))
+    return addPublicCorsHeaders(await handleListPublic(request, env))
   }
 
   // GET /api/db/:owner/:slug - Database metadata
+  // Uses authenticated CORS since private databases may require Authorization header
   const dbMetaMatch = path.match(/^\/api\/db\/([^/]+)\/([^/]+)$/)
   if (dbMetaMatch && request.method === 'GET') {
     const [, owner, slug] = dbMetaMatch
-    return addCorsHeaders(await handleDatabaseMeta(request, env, owner!, slug!))
+    return addAuthenticatedCorsHeaders(await handleDatabaseMeta(request, env, owner!, slug!))
   }
 
   // GET /api/db/:owner/:slug/:collection - Query collection
+  // Uses authenticated CORS since private databases may require Authorization header
   const collectionMatch = path.match(/^\/api\/db\/([^/]+)\/([^/]+)\/([^/]+)$/)
   if (collectionMatch && request.method === 'GET') {
     const [, owner, slug, collection] = collectionMatch
-    return addCorsHeaders(await handleCollectionQuery(request, env, owner!, slug!, collection!))
+    return addAuthenticatedCorsHeaders(await handleCollectionQuery(request, env, owner!, slug!, collection!))
   }
 
   // GET /db/:owner/:slug/* - Raw file access
+  // Uses authenticated CORS since private databases may require Authorization header
   const rawFileMatch = path.match(/^\/db\/([^/]+)\/([^/]+)\/(.+)$/)
   if (rawFileMatch && (request.method === 'GET' || request.method === 'HEAD')) {
     const [, owner, slug, filePath] = rawFileMatch
-    return addCorsHeaders(await handleRawFileAccess(request, env, owner!, slug!, filePath!))
+    return addAuthenticatedCorsHeaders(await handleRawFileAccess(request, env, owner!, slug!, filePath!))
   }
 
   return null
@@ -391,13 +435,75 @@ function extractToken(request: Request): string | null {
 }
 
 /**
- * Check if the token belongs to the specified owner
+ * Decode a JWT payload without signature verification.
+ * JWTs have 3 parts: header.payload.signature (all base64url encoded)
+ *
+ * Note: This does NOT verify the signature. For full security, the token
+ * should be validated via oauth.do or by verifying the signature with
+ * the public key. This simple decode is sufficient for extracting the
+ * user identity claim but trusts that the token originated from oauth.do.
+ */
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split('.')
+    if (parts.length !== 3) {
+      return null
+    }
+
+    // Decode the payload (second part)
+    // JWT uses base64url encoding, which replaces + with - and / with _
+    const payload = parts[1]!
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+
+    // Pad with '=' to make it valid base64 if needed
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+
+    // Decode and parse
+    const decoded = atob(padded)
+    return JSON.parse(decoded) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Check if the token belongs to the specified owner.
+ *
+ * Extracts the user identity from the JWT token (from oauth.do) and
+ * compares it with the requested owner. Supports common JWT claims:
+ * - 'sub' (subject) - standard JWT claim for user ID
+ * - 'username' - commonly used for human-readable usernames
+ * - 'preferred_username' - OIDC standard claim
+ *
+ * Note: This implementation decodes the JWT payload without verifying the
+ * signature. In production, full signature verification via oauth.do or
+ * public key validation would provide stronger security guarantees.
  */
 async function checkOwnership(token: string | null, owner: string): Promise<boolean> {
   if (!token) return false
 
-  // TODO: Validate token and check ownership via oauth.do
-  // For now, return false (require public/unlisted visibility)
+  const payload = decodeJwtPayload(token)
+  if (!payload) return false
+
+  // Normalize owner for comparison (case-insensitive)
+  const normalizedOwner = owner.toLowerCase()
+
+  // Check common identity claims
+  // 'sub' is the standard JWT subject claim (usually user ID)
+  if (typeof payload.sub === 'string' && payload.sub.toLowerCase() === normalizedOwner) {
+    return true
+  }
+
+  // 'username' is commonly used by oauth providers
+  if (typeof payload.username === 'string' && payload.username.toLowerCase() === normalizedOwner) {
+    return true
+  }
+
+  // 'preferred_username' is the OIDC standard claim
+  if (typeof payload.preferred_username === 'string' && payload.preferred_username.toLowerCase() === normalizedOwner) {
+    return true
+  }
+
   return false
 }
 

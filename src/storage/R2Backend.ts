@@ -153,7 +153,7 @@ export class R2Backend implements StorageBackend, MultipartBackend {
     }
 
     const key = this.withPrefix(path)
-    const length = end - start + 1 // end is inclusive
+    const length = end - start // end is exclusive per StorageBackend interface
 
     try {
       const obj = await this.bucket.get(key, {
@@ -366,14 +366,17 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
   async append(path: string, data: Uint8Array): Promise<void> {
     const key = this.withPrefix(path)
-    const MAX_RETRIES = 3
+    // Increased retry count to handle high concurrency scenarios
+    // With exponential backoff, this allows for up to ~1.5 seconds of retries
+    const MAX_RETRIES = 10
+    const BASE_DELAY_MS = 10
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         const existing = await this.bucket.get(key, undefined)
 
         let newData: Uint8Array
-        let putOptions: R2PutOptions | undefined
+        let putOptions: R2PutOptions
 
         if (existing) {
           const existingBuffer = await existing.arrayBuffer()
@@ -388,13 +391,23 @@ export class R2Backend implements StorageBackend, MultipartBackend {
           }
         } else {
           newData = data
-          putOptions = {}
+          // Use conditional check to ensure we're actually creating a new file
+          // This prevents race conditions when two concurrent appends try to create the same file
+          // etagDoesNotMatch: '*' means "only succeed if the object doesn't exist"
+          putOptions = {
+            onlyIf: { etagDoesNotMatch: '*' },
+          }
         }
 
         const result = await this.bucket.put(key, newData, putOptions)
-        if (!result && existing) {
-          // ETag mismatch - object was modified between read and write, retry
+        if (!result) {
+          // Conditional write failed - either ETag mismatch (existing file modified)
+          // or file was created by another process (new file case)
+          // In both cases, retry to pick up the current state
           if (attempt < MAX_RETRIES - 1) {
+            // Exponential backoff with jitter to reduce collision probability
+            const delay = BASE_DELAY_MS * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5)
+            await new Promise(resolve => setTimeout(resolve, delay))
             continue
           }
           throw new R2OperationError(
@@ -406,9 +419,19 @@ export class R2Backend implements StorageBackend, MultipartBackend {
 
         return // Success
       } catch (error: unknown) {
+        // Don't wrap R2OperationError again
         if (error instanceof R2OperationError) {
           throw error
         }
+
+        // For transient errors (network issues, etc.), retry if we have attempts left
+        if (attempt < MAX_RETRIES - 1) {
+          // Exponential backoff with jitter
+          const delay = BASE_DELAY_MS * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5)
+          await new Promise(resolve => setTimeout(resolve, delay))
+          continue
+        }
+
         const err = error instanceof Error ? error : new Error(String(error))
         throw new R2OperationError(
           `Failed to append to ${path}: ${err.message}`,

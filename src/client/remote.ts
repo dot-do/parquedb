@@ -22,6 +22,35 @@ import type { Filter, FindOptions, Entity, PaginatedResult } from '../types'
 import type { Visibility } from '../types/visibility'
 
 // =============================================================================
+// Validation Helpers
+// =============================================================================
+
+/**
+ * Validate that an object has all required fields
+ * @throws Error if validation fails
+ */
+function validateRequiredFields(
+  obj: unknown,
+  requiredFields: string[],
+  context: string
+): void {
+  if (obj === null || obj === undefined) {
+    throw new Error(`${context}: Response is null or undefined`)
+  }
+  if (typeof obj !== 'object') {
+    throw new Error(`${context}: Expected object, got ${typeof obj}`)
+  }
+  const record = obj as Record<string, unknown>
+  const missingFields = requiredFields.filter(field => {
+    const value = record[field]
+    return value === null || value === undefined
+  })
+  if (missingFields.length > 0) {
+    throw new Error(`${context}: Missing required fields: ${missingFields.join(', ')}`)
+  }
+}
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -332,7 +361,13 @@ export async function openRemoteDB(
       throw new Error(`Failed to fetch database info: ${response.statusText}`)
     }
 
-    info = await response.json() as RemoteDBInfo
+    const data = await response.json()
+    validateRequiredFields(
+      data,
+      ['id', 'name', 'owner', 'slug', 'visibility'],
+      'openRemoteDB'
+    )
+    info = data as RemoteDBInfo
   } catch (error) {
     // If API is not available, create minimal info from ownerSlug
     if (error instanceof Error && error.message.includes('fetch')) {

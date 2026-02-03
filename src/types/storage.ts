@@ -26,6 +26,19 @@ export interface StorageBackend {
 
   /**
    * Read byte range from file (for Parquet partial reads)
+   *
+   * Uses EXCLUSIVE end position semantics (like Array.slice):
+   * - readRange(path, 0, 5) reads bytes 0,1,2,3,4 (5 bytes)
+   * - readRange(path, 2, 6) reads bytes 2,3,4,5 (4 bytes)
+   * - readRange(path, 5, 5) returns empty array (zero-length range)
+   *
+   * If end exceeds file size, returns bytes up to end of file.
+   * If start >= file size, returns empty array.
+   *
+   * @param path - File path to read from
+   * @param start - Start byte offset (inclusive, 0-indexed)
+   * @param end - End byte offset (EXCLUSIVE - byte at this index is NOT included)
+   * @returns Bytes from start (inclusive) to end (exclusive)
    */
   readRange(path: string, start: number, end: number): Promise<Uint8Array>
 

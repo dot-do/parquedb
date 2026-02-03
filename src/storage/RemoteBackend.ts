@@ -24,7 +24,7 @@ import type {
   WriteResult,
   RmdirOptions,
 } from '../types/storage'
-import { NotFoundError, PermissionDeniedError, NetworkError } from './errors'
+import { NotFoundError, PermissionDeniedError, NetworkError, PathTraversalError } from './errors'
 
 // =============================================================================
 // Types
@@ -100,6 +100,7 @@ export class RemoteBackend implements StorageBackend {
    * Read entire file
    */
   async read(path: string): Promise<Uint8Array> {
+    this.validatePath(path)
     const url = this.buildUrl(path)
     const response = await this.doFetch(url)
 
@@ -114,6 +115,14 @@ export class RemoteBackend implements StorageBackend {
   /**
    * Read byte range from file
    *
+   * Our interface uses EXCLUSIVE end position (like Array.slice):
+   * - readRange(path, 0, 5) reads bytes 0,1,2,3,4 (5 bytes)
+   *
+   * HTTP Range headers use INCLUSIVE end position:
+   * - Range: bytes=0-4 reads bytes 0,1,2,3,4 (5 bytes)
+   *
+   * This method converts from our exclusive end to HTTP's inclusive end.
+   *
    * Supports negative indices for reading from end of file:
    * - readRange(path, -8, -1) reads last 8 bytes
    *
@@ -121,9 +130,16 @@ export class RemoteBackend implements StorageBackend {
    * to read the footer first to understand the file structure.
    */
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    this.validatePath(path)
     const url = this.buildUrl(path)
 
+    // Handle empty range (start == end)
+    if (start >= 0 && end >= 0 && start >= end) {
+      return new Uint8Array(0)
+    }
+
     // Build Range header
+    // Note: HTTP Range uses INCLUSIVE end, our API uses EXCLUSIVE end
     let rangeValue: string
     if (start < 0 && end < 0) {
       // Both negative - read from end
@@ -139,11 +155,15 @@ export class RemoteBackend implements StorageBackend {
       if (!stat) {
         throw new NotFoundError(path)
       }
-      const actualEnd = stat.size + end
+      // Convert exclusive end to inclusive: (size + end) - 1
+      // For size=10, end=-1: actualEnd = 10 + (-1) - 1 = 8 (bytes 0-8 = 9 bytes)
+      const actualEnd = stat.size + end - 1
       rangeValue = `bytes=${start}-${actualEnd}`
     } else {
       // Both positive - standard range
-      rangeValue = `bytes=${start}-${end}`
+      // Convert exclusive end to inclusive: end - 1
+      // readRange(0, 5) -> bytes=0-4 (5 bytes)
+      rangeValue = `bytes=${start}-${end - 1}`
     }
 
     const response = await this.doFetch(url, {
@@ -166,6 +186,7 @@ export class RemoteBackend implements StorageBackend {
    * Check if file exists
    */
   async exists(path: string): Promise<boolean> {
+    this.validatePath(path)
     const stat = await this.stat(path)
     return stat !== null
   }
@@ -174,6 +195,7 @@ export class RemoteBackend implements StorageBackend {
    * Get file metadata using HEAD request
    */
   async stat(path: string): Promise<FileStat | null> {
+    this.validatePath(path)
     // Check cache first
     const cached = this.statCache.get(path)
     if (cached && cached.expiresAt > Date.now()) {
@@ -259,7 +281,8 @@ export class RemoteBackend implements StorageBackend {
   /**
    * Write file - NOT SUPPORTED (read-only backend)
    */
-  async write(_path: string, _data: Uint8Array, _options?: WriteOptions): Promise<WriteResult> {
+  async write(path: string, _data: Uint8Array, _options?: WriteOptions): Promise<WriteResult> {
+    this.validatePath(path)
     throw new Error('RemoteBackend is read-only. Use push/sync commands to upload.')
   }
 
@@ -344,9 +367,37 @@ export class RemoteBackend implements StorageBackend {
   // ==========================================================================
 
   /**
+   * Validate path for security issues
+   *
+   * Checks for:
+   * - Parent directory traversal (..)
+   * - Double slashes (//)
+   * - Absolute paths starting with /
+   *
+   * @throws PathTraversalError if path contains unsafe patterns
+   */
+  private validatePath(path: string): void {
+    // Check for parent directory traversal
+    if (path.includes('..')) {
+      throw new PathTraversalError(path)
+    }
+
+    // Check for double slashes that could bypass filters
+    if (path.includes('//')) {
+      throw new PathTraversalError(path)
+    }
+
+    // Check for absolute paths (starting with /)
+    if (path.startsWith('/')) {
+      throw new PathTraversalError(path)
+    }
+  }
+
+  /**
    * Build full URL for a path
    */
   private buildUrl(path: string): string {
+    this.validatePath(path)
     const normalizedPath = path.startsWith('/') ? path.slice(1) : path
     return `${this.baseUrl}/${normalizedPath}`
   }

@@ -12,6 +12,36 @@ import { isValidVisibility, DEFAULT_VISIBILITY } from '../../types/visibility'
 import type { ConflictStrategy } from '../../sync/manifest'
 
 // =============================================================================
+// Validation Helpers
+// =============================================================================
+
+/**
+ * Validate that an object has all required fields
+ * @returns Error message if validation fails, null if valid
+ */
+function validateRequiredFields(
+  obj: unknown,
+  requiredFields: string[],
+  context: string
+): string | null {
+  if (obj === null || obj === undefined) {
+    return `${context}: Response is null or undefined`
+  }
+  if (typeof obj !== 'object') {
+    return `${context}: Expected object, got ${typeof obj}`
+  }
+  const record = obj as Record<string, unknown>
+  const missingFields = requiredFields.filter(field => {
+    const value = record[field]
+    return value === null || value === undefined
+  })
+  if (missingFields.length > 0) {
+    return `${context}: Missing required fields: ${missingFields.join(', ')}`
+  }
+  return null
+}
+
+// =============================================================================
 // Push Command
 // =============================================================================
 
@@ -444,8 +474,12 @@ async function registerDatabase(options: {
       return { success: false, error }
     }
 
-    const data = await response.json() as { id: string }
-    return { success: true, databaseId: data.id }
+    const data = await response.json()
+    const validationError = validateRequiredFields(data, ['id'], 'registerDatabase')
+    if (validationError) {
+      return { success: false, error: validationError }
+    }
+    return { success: true, databaseId: (data as { id: string }).id }
   } catch {
     // For local development without a remote service
     return {
@@ -481,7 +515,19 @@ async function lookupDatabase(options: {
       return null
     }
 
-    return await response.json()
+    const data = await response.json()
+    const validationError = validateRequiredFields(data, ['id', 'name', 'visibility'], 'lookupDatabase')
+    if (validationError) {
+      return null
+    }
+    return data as {
+      id: string
+      name: string
+      visibility: Visibility
+      collectionCount?: number
+      owner?: string
+      slug?: string
+    }
   } catch {
     // For local development, return null (not found)
     return null

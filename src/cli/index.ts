@@ -29,6 +29,9 @@ import { studioCommand } from './commands/studio'
 import { generateCommand } from './commands/generate'
 import { loginCommand, logoutCommand, whoamiCommand, authStatusCommand } from './commands/auth'
 import { pushCommand, pullCommand, syncCommand } from './commands/sync'
+import { branchCommand } from './commands/branch'
+import { checkoutCommand } from './commands/checkout'
+import { logCommand } from './commands/log'
 
 // =============================================================================
 // Register Built-in Commands
@@ -155,6 +158,34 @@ registry.register({
 })
 
 // =============================================================================
+// Branch Commands
+// =============================================================================
+
+registry.register({
+  name: 'branch',
+  description: 'List, create, or delete branches',
+  usage: 'parquedb branch [name] [base] [-d <branch>] [-m <old> <new>]',
+  category: 'Branching',
+  execute: branchCommand,
+})
+
+registry.register({
+  name: 'checkout',
+  description: 'Switch branches or restore database state',
+  usage: 'parquedb checkout <branch> [-b <branch>] [--from-git]',
+  category: 'Branching',
+  execute: checkoutCommand,
+})
+
+registry.register({
+  name: 'log',
+  description: 'Show commit history',
+  usage: 'parquedb log [branch] [--oneline] [-n <count>]',
+  category: 'Branching',
+  execute: logCommand,
+})
+
+// =============================================================================
 // Constants
 // =============================================================================
 
@@ -176,6 +207,9 @@ COMMANDS:
   stats [namespace]             Show database statistics
   studio [directory]            Launch ParqueDB Studio (admin UI)
   generate [--output path]      Generate typed exports from config
+  branch [name] [base]          List, create, or delete branches
+  checkout <branch>             Switch branches or restore state
+  log [branch]                  Show commit history
   push [options]                Push local database to remote
   pull <owner/database>         Pull remote database to local
   sync [options]                Bidirectional sync with remote
@@ -222,6 +256,24 @@ EXAMPLES:
 
   # Studio with specific data directory
   parquedb studio ./my-data --port 8080
+
+  # List all branches
+  parquedb branch
+
+  # Create a new branch
+  parquedb branch feature/new-schema
+
+  # Switch to a branch
+  parquedb checkout feature/new-schema
+
+  # Create and switch to a branch
+  parquedb checkout -b feature/new-schema
+
+  # Show commit history
+  parquedb log
+
+  # Delete a branch
+  parquedb branch -d feature/new-schema
 
   # Login to oauth.do
   parquedb login

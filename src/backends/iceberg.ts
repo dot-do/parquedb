@@ -28,6 +28,7 @@ import type { Filter } from '../types/filter'
 import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions } from '../types/options'
 import type { Update } from '../types/update'
 import type { StorageBackend } from '../types/storage'
+import { isETagMismatchError } from '../storage/errors'
 
 // Import shared Parquet utilities
 import {
@@ -66,7 +67,20 @@ import {
   type StorageBackend as IcebergStorageBackend,
   type ManifestEntry,
   type ManifestFile,
+  // Avro encoding for Iceberg manifest files (required for DuckDB/Spark/Snowflake interop)
+  AvroEncoder,
+  AvroFileWriter,
+  createManifestEntrySchema,
+  createManifestListSchema,
+  encodeManifestEntry,
+  encodeManifestListEntry,
+  type EncodableManifestEntry,
+  type EncodableManifestListEntry,
+  type PartitionFieldDef,
 } from '@dotdo/iceberg'
+
+// Avro magic bytes for detecting Avro container files
+const AVRO_MAGIC = new Uint8Array([0x4f, 0x62, 0x6a, 0x01]) // 'Obj' + version 1
 
 // Import Parquet utilities
 import { ParquetWriter } from '../parquet/writer'
@@ -105,8 +119,11 @@ export class IcebergBackend implements EntityBackend {
   // Cache of loaded table metadata per namespace
   private tableCache = new Map<string, TableMetadata>()
 
-  // Mutex locks for concurrent write operations per namespace
+  // Mutex locks for concurrent write operations per namespace (same-instance protection)
   private writeLocks = new Map<string, Promise<void>>()
+
+  // Maximum retries for optimistic concurrency control (cross-instance protection)
+  private readonly maxOccRetries = 10
 
   // Counter for ensuring unique snapshot IDs within the same millisecond
   private snapshotIdCounter = 0

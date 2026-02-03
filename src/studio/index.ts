@@ -122,6 +122,32 @@ export {
   type DatabaseRoutingConfig,
 } from './database'
 
+// Database context management (cookie-based)
+export {
+  // Constants
+  PAYLOAD_DATABASE_COOKIE,
+  DEFAULT_COOKIE_MAX_AGE,
+  // Cookie utilities
+  parseCookies,
+  buildSetCookie,
+  buildClearCookie,
+  // Context functions
+  getDatabaseContext,
+  getCookieDatabaseId,
+  setDatabaseContext,
+  clearDatabaseContext,
+  // Middleware
+  databaseContextMiddleware,
+  requireDatabaseContext,
+  autoSelectDatabase,
+  // Types
+  type DatabaseContextData,
+  type DatabaseContextVariables,
+  type DatabaseContextConfig,
+  type CookieOptions,
+  type HonoWithDatabaseContext,
+} from './context'
+
 // React Components (for Payload admin UI)
 export {
   DatabaseCard,
@@ -141,5 +167,23 @@ export {
   createPayloadConfig,
   createDevConfig,
   generatePayloadCollections,
+  getComponentPaths,
+  generateWrapperFile,
+  generateAllWrapperFiles,
   type PayloadConfigOptions,
+  type ComponentPaths,
 } from './payload-config'
+
+// API Routes (Hono handlers for database dashboard)
+export {
+  createDatabaseRoutes,
+  databaseRoutes,
+  requireAuthUser,
+  requireActor,
+  type DatabaseApiEnv,
+  type DatabaseApiVariables,
+  type CreateDatabaseBody,
+  type UpdateDatabaseBody,
+  type ListDatabasesResponse,
+  type DeleteDatabaseResponse,
+} from './api'

@@ -417,6 +417,15 @@ export type IcebergCatalogConfig =
 /** Delta Lake backend configuration */
 export interface DeltaBackendConfig extends BaseBackendConfig {
   type: 'delta'
+
+  /** Maximum number of retries on commit conflict (default: 10) */
+  maxRetries?: number
+
+  /** Base backoff time in ms for exponential backoff (default: 100) */
+  baseBackoffMs?: number
+
+  /** Maximum backoff time in ms (default: 10000) */
+  maxBackoffMs?: number
 }
 
 /** Union of all backend configurations */
@@ -433,3 +442,28 @@ export type BackendConfig =
  * Create an entity backend from configuration
  */
 export type CreateBackendFn = (config: BackendConfig) => Promise<EntityBackend>
+
+// =============================================================================
+// Backend Errors
+// =============================================================================
+
+/**
+ * Error thrown when a commit fails due to concurrent writes
+ *
+ * This is part of the optimistic concurrency control (OCC) mechanism.
+ * When multiple processes try to commit at the same version, only one succeeds
+ * and the others receive this error after exhausting retries.
+ */
+export class CommitConflictError extends Error {
+  override readonly name = 'CommitConflictError'
+
+  constructor(
+    message: string,
+    public readonly ns: string,
+    public readonly version: number,
+    public readonly retries: number
+  ) {
+    super(message)
+    Object.setPrototypeOf(this, CommitConflictError.prototype)
+  }
+}

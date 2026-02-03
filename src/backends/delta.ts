@@ -21,6 +21,8 @@ import type {
   BackendStats,
   SchemaFieldType,
 } from './types'
+import { CommitConflictError } from './types'
+import { AlreadyExistsError } from '../storage/errors'
 import type { Entity, EntityId, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
 import type { Filter } from '../types/filter'
 import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions } from '../types/options'
@@ -145,13 +147,20 @@ export class DeltaBackend implements EntityBackend {
   // Cache of table versions per namespace
   private versionCache = new Map<string, number>()
 
-  // Lock for concurrent operations per namespace
-  private operationLocks = new Map<string, Promise<void>>()
+  // OCC configuration
+  private readonly maxRetries: number
+  private readonly baseBackoffMs: number
+  private readonly maxBackoffMs: number
 
   constructor(config: DeltaBackendConfig) {
     this.storage = config.storage
     this.location = config.location ?? ''
     this.readOnly = config.readOnly ?? false
+
+    // OCC defaults
+    this.maxRetries = config.maxRetries ?? 10
+    this.baseBackoffMs = config.baseBackoffMs ?? 100
+    this.maxBackoffMs = config.maxBackoffMs ?? 10000
   }
 
   // ===========================================================================
@@ -173,7 +182,6 @@ export class DeltaBackend implements EntityBackend {
 
   async close(): Promise<void> {
     this.versionCache.clear()
-    this.operationLocks.clear()
     this.initialized = false
   }
 
@@ -561,31 +569,278 @@ export class DeltaBackend implements EntityBackend {
   // Maintenance
   // ===========================================================================
 
-  async compact(_ns: string, _options?: CompactOptions): Promise<CompactResult> {
+  async compact(ns: string, options?: CompactOptions): Promise<CompactResult> {
     if (this.readOnly) {
       throw new Error('Backend is read-only')
     }
 
-    // TODO: Implement file compaction
+    const startTime = Date.now()
+    const targetSize = options?.targetFileSize ?? 128 * 1024 * 1024 // 128MB default
+    const minFileSize = options?.minFileSize ?? targetSize / 4
+    const maxFiles = options?.maxFiles ?? 100
+    const dryRun = options?.dryRun ?? false
+
+    const currentVersion = await this.getCurrentVersion(ns)
+    if (currentVersion < 0) {
+      return {
+        filesCompacted: 0,
+        filesCreated: 0,
+        bytesBefore: 0,
+        bytesAfter: 0,
+        durationMs: Date.now() - startTime,
+      }
+    }
+
+    const tableLocation = this.getTableLocation(ns)
+
+    // Get active file paths (relative) at current version
+    const activeFilePaths = await this.getActiveFilesAtVersion(ns, currentVersion)
+
+    // Get file stats to identify small files
+    interface FileInfo {
+      path: string
+      size: number
+    }
+
+    const fileInfos: FileInfo[] = []
+    let totalBytes = 0
+
+    for (const relativePath of activeFilePaths) {
+      const fullPath = `${tableLocation}/${relativePath}`
+      const stat = await this.storage.stat(fullPath)
+      if (stat) {
+        fileInfos.push({ path: relativePath, size: stat.size })
+        totalBytes += stat.size
+      }
+    }
+
+    // Filter to small files only
+    const smallFiles = fileInfos.filter(f => f.size < minFileSize)
+
+    // Need at least 2 small files to compact
+    if (smallFiles.length < 2) {
+      return {
+        filesCompacted: 0,
+        filesCreated: 0,
+        bytesBefore: totalBytes,
+        bytesAfter: totalBytes,
+        durationMs: Date.now() - startTime,
+      }
+    }
+
+    // Limit number of files to compact
+    const filesToCompact = smallFiles.slice(0, maxFiles)
+    let bytesBefore = 0
+    for (const f of filesToCompact) {
+      bytesBefore += f.size
+    }
+
+    if (dryRun) {
+      return {
+        filesCompacted: filesToCompact.length,
+        filesCreated: 1,
+        bytesBefore,
+        bytesAfter: bytesBefore, // Estimate same size
+        durationMs: Date.now() - startTime,
+      }
+    }
+
+    // Read all entities from small files
+    const entities: Entity[] = []
+    for (const fileInfo of filesToCompact) {
+      const fullPath = `${tableLocation}/${fileInfo.path}`
+      try {
+        const rows = await readParquet<Record<string, unknown>>(this.storage, fullPath)
+        for (const row of rows) {
+          entities.push(rowToEntity(row))
+        }
+      } catch {
+        // Skip unreadable files
+      }
+    }
+
+    if (entities.length === 0) {
+      return {
+        filesCompacted: 0,
+        filesCreated: 0,
+        bytesBefore,
+        bytesAfter: bytesBefore,
+        durationMs: Date.now() - startTime,
+      }
+    }
+
+    // Write combined entities to new file
+    const dataFileId = this.generateUUID()
+    const newDataFilePath = `${tableLocation}/${dataFileId}.parquet`
+
+    const parquetSchema = buildEntityParquetSchema()
+    const rows = entities.map(entity => entityToRow(entity))
+
+    const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
+    const writeResult = await writer.write(newDataFilePath, rows, parquetSchema)
+    const bytesAfter = writeResult.size
+
+    // Create commit with remove actions for old files and add action for new file
+    const actions: DeltaAction[] = []
+
+    // Remove actions for compacted files
+    for (const fileInfo of filesToCompact) {
+      const remove: RemoveAction = {
+        remove: {
+          path: fileInfo.path,
+          deletionTimestamp: Date.now(),
+          dataChange: false, // Data didn't change, just reorganized
+        },
+      }
+      actions.push(remove)
+    }
+
+    // Add action for new combined file
+    const add: AddAction = {
+      add: {
+        path: `${dataFileId}.parquet`,
+        size: bytesAfter,
+        modificationTime: Date.now(),
+        dataChange: false,
+      },
+    }
+    actions.push(add)
+
+    // Commit info
+    const commitInfo: CommitInfoAction = {
+      commitInfo: {
+        timestamp: Date.now(),
+        operation: 'OPTIMIZE',
+        operationParameters: {
+          targetFileSize,
+          minFileSize,
+        },
+        readVersion: currentVersion,
+        isBlindAppend: false,
+        operationMetrics: {
+          numFilesRemoved: String(filesToCompact.length),
+          numFilesAdded: '1',
+        },
+      },
+    }
+    actions.push(commitInfo)
+
+    // Write commit
+    const newVersion = currentVersion + 1
+    const commitContent = actions.map(a => JSON.stringify(a)).join('\n')
+    const commitPath = `${tableLocation}/_delta_log/${this.formatVersion(newVersion)}.json`
+
+    try {
+      await this.storage.write(
+        commitPath,
+        new TextEncoder().encode(commitContent),
+        { ifNoneMatch: '*' }
+      )
+      this.versionCache.set(ns, newVersion)
+    } catch (error) {
+      // Clean up orphaned new file on conflict
+      await this.storage.delete(newDataFilePath).catch(() => {})
+      throw error
+    }
+
     return {
-      filesCompacted: 0,
-      filesCreated: 0,
-      bytesBefore: 0,
-      bytesAfter: 0,
-      durationMs: 0,
+      filesCompacted: filesToCompact.length,
+      filesCreated: 1,
+      bytesBefore,
+      bytesAfter,
+      durationMs: Date.now() - startTime,
     }
   }
 
-  async vacuum(_ns: string, _options?: VacuumOptions): Promise<VacuumResult> {
+  async vacuum(ns: string, options?: VacuumOptions): Promise<VacuumResult> {
     if (this.readOnly) {
       throw new Error('Backend is read-only')
     }
 
-    // TODO: Implement vacuum
+    const retentionMs = options?.retentionMs ?? 7 * 24 * 60 * 60 * 1000 // 7 days default
+    const dryRun = options?.dryRun ?? false
+    const cutoffTime = Date.now() - retentionMs
+
+    const currentVersion = await this.getCurrentVersion(ns)
+    if (currentVersion < 0) {
+      return {
+        filesDeleted: 0,
+        bytesReclaimed: 0,
+        snapshotsExpired: 0,
+      }
+    }
+
+    const tableLocation = this.getTableLocation(ns)
+
+    // Collect all files that are referenced by active commits
+    // We need to keep files referenced by any commit within the retention period
+    const referencedFiles = new Set<string>()
+
+    for (let v = 0; v <= currentVersion; v++) {
+      const commitPath = `${tableLocation}/_delta_log/${this.formatVersion(v)}.json`
+      try {
+        const commitData = await this.storage.read(commitPath)
+        const commitText = new TextDecoder().decode(commitData)
+        const actions = this.parseCommitFile(commitText)
+
+        // Get commit timestamp
+        const commitInfo = actions.find((a): a is CommitInfoAction => 'commitInfo' in a)
+        const commitTimestamp = commitInfo?.commitInfo.timestamp ?? Date.now()
+
+        // If commit is within retention, mark all its files as referenced
+        if (commitTimestamp >= cutoffTime) {
+          for (const action of actions) {
+            if ('add' in action) {
+              referencedFiles.add(action.add.path)
+            }
+          }
+        }
+      } catch {
+        // Skip unreadable commits
+      }
+    }
+
+    // Also always keep files that are active in the current version
+    const activeFiles = await this.getActiveFilesAtVersion(ns, currentVersion)
+    for (const file of activeFiles) {
+      referencedFiles.add(file)
+    }
+
+    // List all parquet files in the table directory
+    const allFiles = await this.storage.list(`${tableLocation}/`)
+    const parquetFiles = allFiles.files.filter(f => f.endsWith('.parquet') && !f.includes('_delta_log'))
+
+    // Find unreferenced files older than retention
+    let filesDeleted = 0
+    let bytesReclaimed = 0
+
+    for (const fullPath of parquetFiles) {
+      // Extract relative path
+      const relativePath = fullPath.slice(tableLocation.length + 1)
+
+      if (!referencedFiles.has(relativePath)) {
+        const stat = await this.storage.stat(fullPath)
+        if (stat && stat.mtime && stat.mtime.getTime() < cutoffTime) {
+          if (!dryRun) {
+            try {
+              await this.storage.delete(fullPath)
+              filesDeleted++
+              bytesReclaimed += stat.size
+            } catch {
+              // Skip files that can't be deleted
+            }
+          } else {
+            filesDeleted++
+            bytesReclaimed += stat.size
+          }
+        }
+      }
+    }
+
     return {
-      filesDeleted: 0,
-      bytesReclaimed: 0,
-      snapshotsExpired: 0,
+      filesDeleted,
+      bytesReclaimed,
+      snapshotsExpired: 0, // Delta Lake doesn't expire snapshots in vacuum, that's a separate operation
     }
   }
 
@@ -777,7 +1032,12 @@ export class DeltaBackend implements EntityBackend {
   }
 
   /**
-   * Append entities to a Delta table
+   * Append entities to a Delta table using optimistic concurrency control
+   *
+   * Uses atomic file creation with ifNoneMatch: '*' to ensure only one
+   * process can successfully create a commit file at a given version.
+   * If a concurrent write is detected, the operation retries with a fresh version
+   * and exponential backoff.
    */
   private async appendEntities<T>(
     ns: string,
@@ -785,112 +1045,199 @@ export class DeltaBackend implements EntityBackend {
     operation: string
   ): Promise<void> {
     if (entities.length === 0) return
+    const tableLocation = this.getTableLocation(ns)
 
-    // Serialize operations for the same namespace
-    const lock = this.operationLocks.get(ns) ?? Promise.resolve()
-    const newLock = lock.then(async () => {
-      await this.appendEntitiesInternal(ns, entities, operation)
-    })
-    this.operationLocks.set(ns, newLock)
-    await newLock
+    // OCC: Retry loop with exponential backoff
+    let retries = 0
+    let lastError: Error | null = null
+    let dataFilePath: string | null = null
+
+    while (retries <= this.maxRetries) {
+      // Invalidate version cache to get fresh version on retry
+      if (retries > 0) {
+        this.versionCache.delete(ns)
+      }
+
+      const currentVersion = await this.getCurrentVersion(ns)
+      const isNewTable = currentVersion < 0
+
+      // Create directories if new table
+      if (isNewTable) {
+        await this.storage.mkdir(tableLocation).catch(() => {})
+        await this.storage.mkdir(`${tableLocation}/_delta_log`).catch(() => {})
+      }
+
+      // Determine version for this commit
+      const newVersion = isNewTable ? 0 : currentVersion + 1
+
+      // Step 1: Write entities to Parquet file (only on first attempt or if we cleaned up)
+      if (!dataFilePath) {
+        const dataFileId = this.generateUUID()
+        dataFilePath = `${tableLocation}/${dataFileId}.parquet`
+
+        // Build parquet schema and data
+        const parquetSchema = buildEntityParquetSchema()
+        const rows = entities.map(entity => entityToRow(entity))
+
+        // Write parquet file
+        const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
+        await writer.write(dataFilePath, rows, parquetSchema)
+      }
+
+      // Get relative path for add action
+      const dataFileRelativePath = dataFilePath.slice(tableLocation.length + 1)
+      const stat = await this.storage.stat(dataFilePath)
+
+      // Step 2: Create add action
+      const add: AddAction = {
+        add: {
+          path: dataFileRelativePath,
+          size: stat?.size ?? 0,
+          modificationTime: Date.now(),
+          dataChange: true,
+        },
+      }
+
+      // Step 3: Create commit info
+      const commitInfo: CommitInfoAction = {
+        commitInfo: {
+          timestamp: Date.now(),
+          operation,
+          operationParameters: {},
+          readVersion: isNewTable ? undefined : currentVersion,
+          isBlindAppend: true,
+        },
+      }
+
+      // Step 4: Build actions array
+      const actions: DeltaAction[] = []
+
+      // First commit (version 0) needs protocol and metadata
+      if (isNewTable) {
+        const protocol: ProtocolAction = {
+          protocol: {
+            minReaderVersion: 1,
+            minWriterVersion: 2,
+          },
+        }
+
+        const deltaSchema = this.createDefaultDeltaSchema()
+        const metaData: MetaDataAction = {
+          metaData: {
+            id: this.generateUUID(),
+            schemaString: JSON.stringify(deltaSchema),
+            partitionColumns: [],
+            createdTime: Date.now(),
+          },
+        }
+
+        actions.push(protocol)
+        actions.push(metaData)
+      }
+
+      actions.push(add)
+      actions.push(commitInfo)
+
+      // Step 5: Write commit file with OCC (ifNoneMatch prevents overwriting existing commit)
+      const commitContent = actions.map(a => JSON.stringify(a)).join('\n')
+      const commitPath = `${tableLocation}/_delta_log/${this.formatVersion(newVersion)}.json`
+
+      try {
+        await this.storage.write(
+          commitPath,
+          new TextEncoder().encode(commitContent),
+          { ifNoneMatch: '*' }
+        )
+
+        // Success! Update version cache
+        this.versionCache.set(ns, newVersion)
+
+        // Check if we should create a checkpoint (at version 10, 20, 30, etc.)
+        if (newVersion > 0 && newVersion % CHECKPOINT_THRESHOLD === 0) {
+          await this.createCheckpoint(ns, newVersion)
+        }
+
+        return // Commit succeeded
+      } catch (error) {
+        // Check if this is a conflict error (file already exists)
+        if (error instanceof AlreadyExistsError || this.isConflictError(error)) {
+          lastError = error as Error
+          retries++
+
+          if (retries <= this.maxRetries) {
+            // Exponential backoff with jitter
+            const backoffMs = Math.min(
+              this.baseBackoffMs * Math.pow(2, retries - 1) + Math.random() * this.baseBackoffMs,
+              this.maxBackoffMs
+            )
+            await this.sleep(backoffMs)
+            continue
+          }
+        }
+
+        // Non-conflict error or max retries exceeded
+        // Clean up orphaned parquet file
+        if (dataFilePath) {
+          await this.storage.delete(dataFilePath).catch(() => {})
+        }
+
+        if (retries > this.maxRetries) {
+          throw new CommitConflictError(
+            `Commit conflict for namespace '${ns}' at version ${currentVersion + 1} after ${retries} retries exceeded`,
+            ns,
+            currentVersion + 1,
+            retries
+          )
+        }
+
+        throw error
+      }
+    }
+
+    // Clean up orphaned parquet file on max retries
+    if (dataFilePath) {
+      await this.storage.delete(dataFilePath).catch(() => {})
+    }
+
+    const finalVersion = await this.getCurrentVersion(ns)
+    throw new CommitConflictError(
+      `Commit conflict for namespace '${ns}' at version ${finalVersion + 1} after ${retries} retries exceeded`,
+      ns,
+      finalVersion + 1,
+      retries
+    )
   }
 
-  private async appendEntitiesInternal<T>(
-    ns: string,
-    entities: Entity<T>[],
-    operation: string
-  ): Promise<void> {
-    const tableLocation = this.getTableLocation(ns)
-    const currentVersion = await this.getCurrentVersion(ns)
-    const isNewTable = currentVersion < 0
-
-    // Create directories if new table
-    if (isNewTable) {
-      await this.storage.mkdir(tableLocation).catch(() => {})
-      await this.storage.mkdir(`${tableLocation}/_delta_log`).catch(() => {})
-    }
-
-    // Determine version for this commit
-    const newVersion = isNewTable ? 0 : currentVersion + 1
-
-    // Step 1: Write entities to Parquet file
-    const dataFileId = this.generateUUID()
-    const dataFilePath = `${tableLocation}/${dataFileId}.parquet`
-
-    // Build parquet schema and data
-    const parquetSchema = buildEntityParquetSchema()
-    const rows = entities.map(entity => entityToRow(entity))
-
-    // Write parquet file
-    const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
-    const writeResult = await writer.write(dataFilePath, rows, parquetSchema)
-
-    // Step 2: Create add action
-    const add: AddAction = {
-      add: {
-        path: `${dataFileId}.parquet`,
-        size: writeResult.size,
-        modificationTime: Date.now(),
-        dataChange: true,
-      },
-    }
-
-    // Step 3: Create commit info
-    const commitInfo: CommitInfoAction = {
-      commitInfo: {
-        timestamp: Date.now(),
-        operation,
-        operationParameters: {},
-        readVersion: isNewTable ? undefined : currentVersion,
-        isBlindAppend: true,
-      },
-    }
-
-    // Step 4: Build actions array
-    const actions: DeltaAction[] = []
-
-    // First commit (version 0) needs protocol and metadata
-    if (isNewTable) {
-      const protocol: ProtocolAction = {
-        protocol: {
-          minReaderVersion: 1,
-          minWriterVersion: 2,
-        },
+  /**
+   * Check if an error indicates a conflict (file already exists)
+   */
+  private isConflictError(error: unknown): boolean {
+    if (error instanceof Error) {
+      // Check for AlreadyExistsError or similar
+      if ('code' in error && (error as { code: string }).code === 'ALREADY_EXISTS') {
+        return true
       }
-
-      const deltaSchema = this.createDefaultDeltaSchema()
-      const metaData: MetaDataAction = {
-        metaData: {
-          id: this.generateUUID(),
-          schemaString: JSON.stringify(deltaSchema),
-          partitionColumns: [],
-          createdTime: Date.now(),
-        },
+      // Check message for common patterns
+      if (error.message.includes('already exists') || error.message.includes('ALREADY_EXISTS')) {
+        return true
       }
-
-      actions.push(protocol)
-      actions.push(metaData)
     }
+    return false
+  }
 
-    actions.push(add)
-    actions.push(commitInfo)
-
-    // Step 5: Write commit file
-    const commitContent = actions.map(a => JSON.stringify(a)).join('\n')
-    const commitPath = `${tableLocation}/_delta_log/${this.formatVersion(newVersion)}.json`
-    await this.storage.write(commitPath, new TextEncoder().encode(commitContent))
-
-    // Update version cache
-    this.versionCache.set(ns, newVersion)
-
-    // Check if we should create a checkpoint (at version 10, 20, 30, etc.)
-    if (newVersion > 0 && newVersion % CHECKPOINT_THRESHOLD === 0) {
-      await this.createCheckpoint(ns, newVersion)
-    }
+  /**
+   * Sleep for specified milliseconds
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms))
   }
 
   /**
    * Create a checkpoint file
+   *
+   * Delta Lake checkpoints are Parquet files with the following schema:
+   * - txn, add, remove, metaData, protocol, commitInfo (all optional strings containing JSON)
+   * Each row represents one action, with the appropriate column containing JSON.
    */
   private async createCheckpoint(ns: string, version: number): Promise<void> {
     const tableLocation = this.getTableLocation(ns)
@@ -931,10 +1278,38 @@ export class DeltaBackend implements EntityBackend {
       ...Array.from(activeFiles.values()),
     ]
 
-    // Write checkpoint parquet file
+    // Convert actions to checkpoint rows (Delta Lake checkpoint Parquet schema)
+    const checkpointRows = checkpointActions.map(action => {
+      const row: Record<string, string | null> = {
+        txn: null,
+        add: null,
+        remove: null,
+        metaData: null,
+        protocol: null,
+        commitInfo: null,
+      }
+      if ('protocol' in action) row.protocol = JSON.stringify(action.protocol)
+      if ('metaData' in action) row.metaData = JSON.stringify(action.metaData)
+      if ('add' in action) row.add = JSON.stringify(action.add)
+      if ('remove' in action) row.remove = JSON.stringify(action.remove)
+      if ('commitInfo' in action) row.commitInfo = JSON.stringify(action.commitInfo)
+      return row
+    })
+
+    // Delta Lake checkpoint schema (all optional strings containing JSON)
+    const checkpointSchema = {
+      txn: { type: 'STRING', optional: true },
+      add: { type: 'STRING', optional: true },
+      remove: { type: 'STRING', optional: true },
+      metaData: { type: 'STRING', optional: true },
+      protocol: { type: 'STRING', optional: true },
+      commitInfo: { type: 'STRING', optional: true },
+    }
+
+    // Write checkpoint as proper Parquet file
     const checkpointPath = `${logPath}${this.formatVersion(version)}.checkpoint.parquet`
-    const checkpointContent = checkpointActions.map(a => JSON.stringify(a)).join('\n')
-    await this.storage.write(checkpointPath, new TextEncoder().encode(checkpointContent))
+    const writer = new ParquetWriter(this.storage, { compression: 'snappy' })
+    await writer.write(checkpointPath, checkpointRows, checkpointSchema)
 
     // Write _last_checkpoint
     const lastCheckpoint: LastCheckpoint = {
