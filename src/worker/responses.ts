@@ -194,11 +194,19 @@ export function buildResponse(
 }
 
 /**
+ * Extended error interface for errors with additional metadata
+ */
+export interface ExtendedError extends Error {
+  code?: string
+  hint?: string
+}
+
+/**
  * Build an error response with Cloudflare metadata
  */
 export function buildErrorResponse(
   request: Request,
-  error: Error,
+  error: Error | ExtendedError,
   status: number = 500,
   startTime?: number
 ): Response {
@@ -218,10 +226,15 @@ export function buildErrorResponse(
   const rayId = request.headers.get('cf-ray')?.split('-')[0]
   const ray = rayId && cf.colo ? `${rayId}-${cf.colo}` : rayId
 
+  // Extract extended error properties if present
+  const extError = error as ExtendedError
+
   return Response.json({
     api: {
       error: true,
+      ...(extError.code ? { code: extError.code } : {}),
       message: error.message,
+      ...(extError.hint ? { hint: extError.hint } : {}),
       status,
     },
     links: {

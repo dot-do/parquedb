@@ -40,6 +40,7 @@
     "bench:examples": "vitest bench tests/benchmarks/examples.bench.ts",
     "benchmark": "tsx scripts/benchmark.mjs",
     "typecheck": "tsc --noEmit",
+    "check:datasets": "node scripts/check-datasets.mjs",
     "load:onet": "tsx scripts/load-data.ts --dataset onet --output ./data/onet",
     "load:imdb": "tsx scripts/load-data.ts --dataset imdb --output ./data/imdb",
     "load:wiktionary": "tsx scripts/load-data.ts --dataset wiktionary --output ./data/wiktionary",

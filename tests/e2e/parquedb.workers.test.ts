@@ -396,4 +396,375 @@ describe('ParqueDB Workers E2E', () => {
       await waitOnExecutionContext(ctx)
     })
   })
+
+  // =============================================================================
+  // Dataset Endpoint Tests (RED - Expected to fail)
+  // =============================================================================
+  // These tests verify that dataset endpoints return actual data from Parquet files.
+  // They are designed to catch the "File not found" errors that occur in production.
+  // =============================================================================
+
+  describe('Dataset Endpoints', () => {
+    describe('/datasets - List all datasets', () => {
+      it('returns list of available datasets', async () => {
+        const ctx = createExecutionContext()
+        const response = await SELF.fetch(new Request('http://localhost/datasets'))
+
+        expect(response.status).toBe(200)
+        const body = await response.json() as Record<string, unknown>
+
+        expect(body.api).toBeDefined()
+        expect((body.api as Record<string, unknown>).resource).toBe('datasets')
+        expect(body.items).toBeDefined()
+        expect(Array.isArray(body.items)).toBe(true)
+        expect((body.items as unknown[]).length).toBeGreaterThan(0)
+
+        // Verify expected datasets are present
+        const items = body.items as Array<Record<string, unknown>>
+        const datasetIds = items.map(item => item.id)
+        expect(datasetIds).toContain('onet-graph')
+        expect(datasetIds).toContain('imdb')
+        expect(datasetIds).toContain('unspsc')
+
+        await waitOnExecutionContext(ctx)
+      })
+    })
+
+    describe('/datasets/:dataset - Dataset detail', () => {
+      it('returns onet-graph dataset details', async () => {
+        const ctx = createExecutionContext()
+        const response = await SELF.fetch(new Request('http://localhost/datasets/onet-graph'))
+
+        expect(response.status).toBe(200)
+        const body = await response.json() as Record<string, unknown>
+
+        expect(body.api).toBeDefined()
+        expect((body.api as Record<string, unknown>).resource).toBe('dataset')
+        expect((body.api as Record<string, unknown>).id).toBe('onet-graph')
+
+        // Verify collections are listed
+        expect(body.data).toBeDefined()
+        const data = body.data as Record<string, unknown>
+        expect(data.collections).toBeDefined()
+
+        await waitOnExecutionContext(ctx)
+      })
+
+      it('returns 404 for non-existent dataset', async () => {
+        const ctx = createExecutionContext()
+        const response = await SELF.fetch(new Request('http://localhost/datasets/nonexistent'))
+
+        expect(response.status).toBe(404)
+
+        await waitOnExecutionContext(ctx)
+      })
+    })
+
+    describe('/datasets/:dataset/:collection - Collection list', () => {
+      // O*NET Graph Dataset Tests
+      describe('onet-graph dataset', () => {
+        it('returns occupations with actual data', async () => {
+          const ctx = createExecutionContext()
+          const response = await SELF.fetch(
+            new Request('http://localhost/datasets/onet-graph/occupations')
+          )
+
+          expect(response.status).toBe(200)
+          const body = await response.json() as Record<string, unknown>
+
+          // Verify response structure
+          expect(body.api).toBeDefined()
+          expect((body.api as Record<string, unknown>).resource).toBe('collection')
+          expect((body.api as Record<string, unknown>).dataset).toBe('onet-graph')
+          expect((body.api as Record<string, unknown>).collection).toBe('occupations')
+
+          // Verify items contain actual data (not empty)
+          expect(body.items).toBeDefined()
+          expect(Array.isArray(body.items)).toBe(true)
+          const items = body.items as Array<Record<string, unknown>>
+          expect(items.length).toBeGreaterThan(0)
+
+          // Verify first item has expected structure
+          const firstItem = items[0]
+          expect(firstItem.$id).toBeDefined()
+          expect(firstItem.name).toBeDefined()
+
+          await waitOnExecutionContext(ctx)
+        })
+
+        it('returns skills with actual data', async () => {
+          const ctx = createExecutionContext()
+          const response = await SELF.fetch(
+            new Request('http://localhost/datasets/onet-graph/skills')
+          )
+
+          expect(response.status).toBe(200)
+          const body = await response.json() as Record<string, unknown>
+
+          expect(body.items).toBeDefined()
+          const items = body.items as Array<Record<string, unknown>>
+          expect(items.length).toBeGreaterThan(0)
+          expect(items[0].$id).toBeDefined()
+
+          await waitOnExecutionContext(ctx)
+        })
+
+        it('returns abilities with actual data', async () => {
+          const ctx = createExecutionContext()
+          const response = await SELF.fetch(
+            new Request('http://localhost/datasets/onet-graph/abilities')
+          )
+
+          expect(response.status).toBe(200)
+          const body = await response.json() as Record<string, unknown>
+
+          expect(body.items).toBeDefined()
+          const items = body.items as Array<Record<string, unknown>>
+          expect(items.length).toBeGreaterThan(0)
+
+          await waitOnExecutionContext(ctx)
+        })
+
+        it('returns knowledge with actual data', async () => {
+          const ctx = createExecutionContext()
+          const response = await SELF.fetch(
+            new Request('http://localhost/datasets/onet-graph/knowledge')
+          )
+
+          expect(response.status).toBe(200)
+          const body = await response.json() as Record<string, unknown>
+
+          expect(body.items).toBeDefined()
+          const items = body.items as Array<Record<string, unknown>>
+          expect(items.length).toBeGreaterThan(0)
+
+          await waitOnExecutionContext(ctx)
+        })
+      })
+
+      // IMDB Dataset Tests
+      describe('imdb dataset', () => {
+        it('returns titles with actual data', async () => {
+          const ctx = createExecutionContext()
+          const response = await SELF.fetch(
+            new Request('http://localhost/datasets/imdb/titles')
+          )
+
+          expect(response.status).toBe(200)
+          const body = await response.json() as Record<string, unknown>
+
+          expect(body.api).toBeDefined()
+          expect((body.api as Record<string, unknown>).dataset).toBe('imdb')
+          expect((body.api as Record<string, unknown>).collection).toBe('titles')
+
+          expect(body.items).toBeDefined()
+          const items = body.items as Array<Record<string, unknown>>
+          expect(items.length).toBeGreaterThan(0)
+
+          await waitOnExecutionContext(ctx)
+        })
+
+        it('returns names with actual data', async () => {
+          const ctx = createExecutionContext()
+          const response = await SELF.fetch(
+            new Request('http://localhost/datasets/imdb/names')
+          )
+
+          expect(response.status).toBe(200)
+          const body = await response.json() as Record<string, unknown>
+
+          expect(body.items).toBeDefined()
+          const items = body.items as Array<Record<string, unknown>>
+          expect(items.length).toBeGreaterThan(0)
+
+          await waitOnExecutionContext(ctx)
+        })
+      })
+
+      // UNSPSC Dataset Tests
+      describe('unspsc dataset', () => {
+        it('returns segments with actual data', async () => {
+          const ctx = createExecutionContext()
+          const response = await SELF.fetch(
+            new Request('http://localhost/datasets/unspsc/segments')
+          )
+
+          expect(response.status).toBe(200)
+          const body = await response.json() as Record<string, unknown>
+
+          expect(body.items).toBeDefined()
+          const items = body.items as Array<Record<string, unknown>>
+          expect(items.length).toBeGreaterThan(0)
+
+          await waitOnExecutionContext(ctx)
+        })
+      })
+    })
+
+    describe('Filtering', () => {
+      it('filters onet-graph occupations by name', async () => {
+        const ctx = createExecutionContext()
+        const filter = encodeURIComponent(JSON.stringify({ name: { $regex: 'Software' } }))
+        const response = await SELF.fetch(
+          new Request(`http://localhost/datasets/onet-graph/occupations?filter=${filter}`)
+        )
+
+        expect(response.status).toBe(200)
+        const body = await response.json() as Record<string, unknown>
+
+        expect(body.api).toBeDefined()
+        expect((body.api as Record<string, unknown>).filter).toBeDefined()
+
+        expect(body.items).toBeDefined()
+        const items = body.items as Array<Record<string, unknown>>
+        // Should return matching items (or empty if no match, but not an error)
+        expect(Array.isArray(items)).toBe(true)
+
+        await waitOnExecutionContext(ctx)
+      })
+
+      it('filters with equality operator', async () => {
+        const ctx = createExecutionContext()
+        // Filter for a specific $type
+        const filter = encodeURIComponent(JSON.stringify({ $type: 'Occupation' }))
+        const response = await SELF.fetch(
+          new Request(`http://localhost/datasets/onet-graph/occupations?filter=${filter}`)
+        )
+
+        expect(response.status).toBe(200)
+        const body = await response.json() as Record<string, unknown>
+
+        expect(body.items).toBeDefined()
+        const items = body.items as Array<Record<string, unknown>>
+        // All returned items should have the specified $type
+        for (const item of items) {
+          expect(item.$type).toBe('Occupation')
+        }
+
+        await waitOnExecutionContext(ctx)
+      })
+    })
+
+    describe('Pagination', () => {
+      it('respects limit parameter', async () => {
+        const ctx = createExecutionContext()
+        const response = await SELF.fetch(
+          new Request('http://localhost/datasets/onet-graph/occupations?limit=5')
+        )
+
+        expect(response.status).toBe(200)
+        const body = await response.json() as Record<string, unknown>
+
+        expect(body.api).toBeDefined()
+        expect((body.api as Record<string, unknown>).limit).toBe(5)
+
+        expect(body.items).toBeDefined()
+        const items = body.items as Array<Record<string, unknown>>
+        expect(items.length).toBeLessThanOrEqual(5)
+
+        await waitOnExecutionContext(ctx)
+      })
+
+      it('respects skip parameter', async () => {
+        const ctx = createExecutionContext()
+
+        // Get first page
+        const response1 = await SELF.fetch(
+          new Request('http://localhost/datasets/onet-graph/occupations?limit=5')
+        )
+        expect(response1.status).toBe(200)
+        const body1 = await response1.json() as Record<string, unknown>
+        const items1 = body1.items as Array<Record<string, unknown>>
+
+        // Get second page with skip
+        const response2 = await SELF.fetch(
+          new Request('http://localhost/datasets/onet-graph/occupations?limit=5&skip=5')
+        )
+        expect(response2.status).toBe(200)
+        const body2 = await response2.json() as Record<string, unknown>
+        const items2 = body2.items as Array<Record<string, unknown>>
+
+        expect((body2.api as Record<string, unknown>).skip).toBe(5)
+
+        // Items from page 2 should be different from page 1
+        if (items1.length > 0 && items2.length > 0) {
+          expect(items1[0].$id).not.toBe(items2[0].$id)
+        }
+
+        await waitOnExecutionContext(ctx)
+      })
+
+      it('indicates hasMore when more results exist', async () => {
+        const ctx = createExecutionContext()
+        const response = await SELF.fetch(
+          new Request('http://localhost/datasets/onet-graph/occupations?limit=1')
+        )
+
+        expect(response.status).toBe(200)
+        const body = await response.json() as Record<string, unknown>
+
+        // O*NET has ~1000 occupations, so hasMore should be true with limit=1
+        expect((body.api as Record<string, unknown>).hasMore).toBe(true)
+
+        await waitOnExecutionContext(ctx)
+      })
+
+      it('provides pagination links', async () => {
+        const ctx = createExecutionContext()
+        const response = await SELF.fetch(
+          new Request('http://localhost/datasets/onet-graph/occupations?limit=10')
+        )
+
+        expect(response.status).toBe(200)
+        const body = await response.json() as Record<string, unknown>
+
+        expect(body.links).toBeDefined()
+        const links = body.links as Record<string, string>
+
+        // Should have next link if hasMore is true
+        if ((body.api as Record<string, unknown>).hasMore) {
+          expect(links.next).toBeDefined()
+        }
+
+        await waitOnExecutionContext(ctx)
+      })
+    })
+
+    describe('Error handling', () => {
+      it('returns 404 for non-existent collection', async () => {
+        const ctx = createExecutionContext()
+        const response = await SELF.fetch(
+          new Request('http://localhost/datasets/onet-graph/nonexistent')
+        )
+
+        // Should return error (either 404 or 500 with file not found)
+        // Currently returns Error 1101 (file not found) which may be 500
+        expect(response.status).toBeGreaterThanOrEqual(400)
+
+        await waitOnExecutionContext(ctx)
+      })
+
+      it('handles invalid filter JSON gracefully', async () => {
+        const ctx = createExecutionContext()
+        const response = await SELF.fetch(
+          new Request('http://localhost/datasets/onet-graph/occupations?filter=invalid-json')
+        )
+
+        expect(response.status).toBe(400)
+
+        await waitOnExecutionContext(ctx)
+      })
+
+      it('handles invalid limit parameter', async () => {
+        const ctx = createExecutionContext()
+        const response = await SELF.fetch(
+          new Request('http://localhost/datasets/onet-graph/occupations?limit=-1')
+        )
+
+        expect(response.status).toBe(400)
+
+        await waitOnExecutionContext(ctx)
+      })
+    })
+  })
 })

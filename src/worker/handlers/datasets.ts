@@ -4,11 +4,34 @@
  * Handles /datasets/* routes for browsing available datasets and collections.
  */
 
-import { buildResponse, buildErrorResponse } from '../responses'
+import { buildResponse, buildErrorResponse, type ExtendedError } from '../responses'
 import { parseQueryFilter, parseQueryOptions } from '../routing'
 import { DATASETS, type DatasetConfig } from '../datasets'
 import type { EntityRecord } from '../../types/entity'
 import type { HandlerContext } from './types'
+
+/**
+ * Check if an error is a "File not found" error and return a 404 response if so.
+ * Returns null if the error is not a file-not-found error.
+ */
+export function handleFileNotFoundError(
+  error: unknown,
+  request: Request,
+  startTime: number,
+  defaultPath: string
+): Response | null {
+  const errorMessage = error instanceof Error ? error.message : String(error)
+  if (errorMessage.includes('File not found')) {
+    // Extract the file path from the error message
+    const match = errorMessage.match(/File not found: (.+)/)
+    const filePath = match ? match[1] : defaultPath
+    const extendedError = new Error(`Dataset file not found: ${filePath}`) as ExtendedError
+    extendedError.code = 'DATASET_NOT_FOUND'
+    extendedError.hint = 'This collection may not have been uploaded yet.'
+    return buildErrorResponse(request, extendedError, 404, startTime)
+  }
+  return null
+}
 
 /**
  * Handle /datasets - List all datasets
@@ -114,7 +137,16 @@ export async function handleCollectionList(
   const options = parseQueryOptions(url.searchParams)
   if (!options.limit) options.limit = 20
 
-  const result = await worker.find<EntityRecord>(ns, filter, options)
+  let result
+  try {
+    result = await worker.find<EntityRecord>(ns, filter, options)
+  } catch (error) {
+    // Handle "File not found" errors with 404 instead of 500
+    const notFoundResponse = handleFileNotFoundError(error, request, startTime, `${ns}.parquet`)
+    if (notFoundResponse) return notFoundResponse
+    // Re-throw other errors
+    throw error
+  }
 
   // Build enriched items with href links
   const enrichedItems: unknown[] = []

@@ -12,6 +12,7 @@ import {
   measureTiming,
 } from '../responses'
 import { DATASETS } from '../datasets'
+import { handleFileNotFoundError } from './datasets'
 import type { EntityRecord } from '../../types/entity'
 import type { HandlerContext } from './types'
 
@@ -45,10 +46,20 @@ export async function handleEntityDetail(
 
   // PARALLEL: Fetch entity and relationships simultaneously (2 subrequests)
   markTiming(timing, 'parallel_start')
-  const [entityResult, allRels] = await Promise.all([
-    worker.find<EntityRecord>(datasetId, { $id: fullId }, { limit: 1 }),
-    worker.getRelationships(datasetId, entityId),
-  ])
+  let entityResult
+  let allRels
+  try {
+    [entityResult, allRels] = await Promise.all([
+      worker.find<EntityRecord>(datasetId, { $id: fullId }, { limit: 1 }),
+      worker.getRelationships(datasetId, entityId),
+    ])
+  } catch (error) {
+    // Handle "File not found" errors with 404 instead of 500
+    const notFoundResponse = handleFileNotFoundError(error, request, startTime, `${datasetId}/${collectionId}.parquet`)
+    if (notFoundResponse) return notFoundResponse
+    // Re-throw other errors
+    throw error
+  }
   measureTiming(timing, 'parallel', 'parallel_start')
 
   if (entityResult.items.length === 0) {

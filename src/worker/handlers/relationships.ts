@@ -10,6 +10,7 @@ import {
   markTiming,
   measureTiming,
 } from '../responses'
+import { handleFileNotFoundError } from './datasets'
 import type { HandlerContext } from './types'
 
 /**
@@ -22,12 +23,21 @@ export async function handleRelationshipTraversal(
   entityId: string,
   predicate: string
 ): Promise<Response> {
-  const { request, url, baseUrl, worker } = context
+  const { request, url, baseUrl, worker, startTime } = context
   const timing = createTimingContext()
 
   // Read relationships from rels.parquet
   markTiming(timing, 'rels_start')
-  const rels = await worker.getRelationships(datasetId, entityId, predicate)
+  let rels
+  try {
+    rels = await worker.getRelationships(datasetId, entityId, predicate)
+  } catch (error) {
+    // Handle "File not found" errors with 404 instead of 500
+    const notFoundResponse = handleFileNotFoundError(error, request, startTime, `${datasetId}/rels.parquet`)
+    if (notFoundResponse) return notFoundResponse
+    // Re-throw other errors
+    throw error
+  }
   measureTiming(timing, 'rels', 'rels_start')
 
   // Convert to display format

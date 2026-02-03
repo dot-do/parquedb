@@ -5,7 +5,7 @@
  * Tests routing utilities, health, root, dataset, ns, and entity handlers.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import {
   parseQueryFilter,
   parseQueryOptions,
@@ -22,8 +22,20 @@ import {
 } from '@/worker/handlers/datasets'
 import { handleNsRoute } from '@/worker/handlers/ns'
 import { handleRelationshipTraversal } from '@/worker/handlers/relationships'
+import { handleEntityDetail } from '@/worker/handlers/entity'
 import { DATASETS } from '@/worker/datasets'
 import type { HandlerContext } from '@/worker/handlers/types'
+
+// Mock the Cloudflare caches API for Node.js environment
+const mockCache = {
+  match: vi.fn().mockResolvedValue(null),
+  put: vi.fn().mockResolvedValue(undefined),
+}
+const mockCaches = {
+  open: vi.fn().mockResolvedValue(mockCache),
+}
+// @ts-expect-error - mocking global caches API
+globalThis.caches = mockCaches
 
 // =============================================================================
 // Mock Helpers
@@ -1078,5 +1090,235 @@ describe('handleRelationshipTraversal', () => {
     expect(links.self).toContain('/datasets/onet-graph/occupations/')
     expect(links.self).toContain('/skills')
     expect(links.entity).toContain('/datasets/onet-graph/occupations/')
+  })
+
+  it('should return 404 with proper error format when parquet file is missing', async () => {
+    const worker = createMockWorker({
+      getRelationships: vi.fn().mockRejectedValue(
+        new Error('File not found: onet-graph/rels.parquet')
+      ),
+      getStorageStats: vi.fn().mockReturnValue({
+        cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false,
+      }),
+    })
+
+    const context = createContext(
+      'https://test.parquedb.com/datasets/onet-graph/occupations/11-1011/skills',
+      { worker }
+    )
+
+    const response = await handleRelationshipTraversal(
+      context, 'onet-graph', 'occupations', '11-1011', 'skills'
+    )
+
+    expect(response.status).toBe(404)
+    const body = await response.json() as Record<string, unknown>
+    const api = body.api as Record<string, unknown>
+    expect(api.error).toBe(true)
+    expect(api.code).toBe('DATASET_NOT_FOUND')
+    expect(api.message).toContain('Dataset file not found')
+    expect(api.hint).toBe('This collection may not have been uploaded yet.')
+  })
+})
+
+// =============================================================================
+// File Not Found Error Handling (404 instead of 500)
+// =============================================================================
+
+describe('File Not Found Error Handling', () => {
+  describe('handleCollectionList', () => {
+    it('should return 404 when parquet file is missing', async () => {
+      const worker = createMockWorker({
+        find: vi.fn().mockRejectedValue(
+          new Error('File not found: imdb/titles.parquet')
+        ),
+      })
+      const context = createContext(
+        'https://test.parquedb.com/datasets/imdb/titles',
+        { worker }
+      )
+
+      const response = await handleCollectionList(context, 'imdb', 'titles')
+
+      expect(response.status).toBe(404)
+      const body = await response.json() as Record<string, unknown>
+      const api = body.api as Record<string, unknown>
+      expect(api.error).toBe(true)
+      expect(api.code).toBe('DATASET_NOT_FOUND')
+      expect(api.message).toBe('Dataset file not found: imdb/titles.parquet')
+      expect(api.hint).toBe('This collection may not have been uploaded yet.')
+    })
+
+    it('should re-throw non file-not-found errors', async () => {
+      const worker = createMockWorker({
+        find: vi.fn().mockRejectedValue(new Error('Some other error')),
+      })
+      const context = createContext(
+        'https://test.parquedb.com/datasets/imdb/titles',
+        { worker }
+      )
+
+      await expect(handleCollectionList(context, 'imdb', 'titles')).rejects.toThrow('Some other error')
+    })
+
+    it('should extract file path from error message', async () => {
+      const worker = createMockWorker({
+        find: vi.fn().mockRejectedValue(
+          new Error('File not found: onet-graph/occupations.parquet')
+        ),
+      })
+      const context = createContext(
+        'https://test.parquedb.com/datasets/onet-graph/occupations',
+        { worker }
+      )
+
+      const response = await handleCollectionList(context, 'onet-graph', 'occupations')
+
+      expect(response.status).toBe(404)
+      const body = await response.json() as Record<string, unknown>
+      const api = body.api as Record<string, unknown>
+      expect(api.message).toBe('Dataset file not found: onet-graph/occupations.parquet')
+    })
+
+    it('should use default path when file path cannot be extracted', async () => {
+      const worker = createMockWorker({
+        find: vi.fn().mockRejectedValue(
+          new Error('File not found')
+        ),
+      })
+      const context = createContext(
+        'https://test.parquedb.com/datasets/imdb/titles',
+        { worker }
+      )
+
+      const response = await handleCollectionList(context, 'imdb', 'titles')
+
+      expect(response.status).toBe(404)
+      const body = await response.json() as Record<string, unknown>
+      const api = body.api as Record<string, unknown>
+      // Should fallback to the default path constructed from namespace
+      expect(api.message).toBe('Dataset file not found: imdb/titles.parquet')
+    })
+  })
+
+  describe('handleRelationshipTraversal', () => {
+    it('should return 404 when rels parquet file is missing', async () => {
+      const worker = createMockWorker({
+        getRelationships: vi.fn().mockRejectedValue(
+          new Error('File not found: onet-graph/rels.parquet')
+        ),
+        getStorageStats: vi.fn().mockReturnValue({
+          cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false,
+        }),
+      })
+      const context = createContext(
+        'https://test.parquedb.com/datasets/onet-graph/occupations/11-1011/skills',
+        { worker }
+      )
+
+      const response = await handleRelationshipTraversal(
+        context, 'onet-graph', 'occupations', '11-1011', 'skills'
+      )
+
+      expect(response.status).toBe(404)
+      const body = await response.json() as Record<string, unknown>
+      const api = body.api as Record<string, unknown>
+      expect(api.error).toBe(true)
+      expect(api.code).toBe('DATASET_NOT_FOUND')
+      expect(api.message).toBe('Dataset file not found: onet-graph/rels.parquet')
+      expect(api.hint).toBe('This collection may not have been uploaded yet.')
+    })
+
+    it('should re-throw non file-not-found errors', async () => {
+      const worker = createMockWorker({
+        getRelationships: vi.fn().mockRejectedValue(new Error('Connection timeout')),
+        getStorageStats: vi.fn().mockReturnValue({
+          cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false,
+        }),
+      })
+      const context = createContext(
+        'https://test.parquedb.com/datasets/onet-graph/occupations/11-1011/skills',
+        { worker }
+      )
+
+      await expect(
+        handleRelationshipTraversal(context, 'onet-graph', 'occupations', '11-1011', 'skills')
+      ).rejects.toThrow('Connection timeout')
+    })
+  })
+
+  describe('handleEntityDetail', () => {
+    it('should return 404 when parquet file is missing', async () => {
+      const worker = createMockWorker({
+        find: vi.fn().mockRejectedValue(
+          new Error('File not found: onet-graph/occupations.parquet')
+        ),
+        getRelationships: vi.fn().mockResolvedValue([]),
+        getStorageStats: vi.fn().mockReturnValue({
+          cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false,
+        }),
+      })
+      const context = createContext(
+        'https://test.parquedb.com/datasets/onet-graph/occupations/11-1011',
+        { worker }
+      )
+
+      const response = await handleEntityDetail(
+        context, 'onet-graph', 'occupations', '11-1011'
+      )
+
+      expect(response.status).toBe(404)
+      const body = await response.json() as Record<string, unknown>
+      const api = body.api as Record<string, unknown>
+      expect(api.error).toBe(true)
+      expect(api.code).toBe('DATASET_NOT_FOUND')
+      expect(api.message).toBe('Dataset file not found: onet-graph/occupations.parquet')
+      expect(api.hint).toBe('This collection may not have been uploaded yet.')
+    })
+
+    it('should re-throw non file-not-found errors', async () => {
+      const worker = createMockWorker({
+        find: vi.fn().mockRejectedValue(new Error('Database connection failed')),
+        getRelationships: vi.fn().mockResolvedValue([]),
+        getStorageStats: vi.fn().mockReturnValue({
+          cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false,
+        }),
+      })
+      const context = createContext(
+        'https://test.parquedb.com/datasets/onet-graph/occupations/11-1011',
+        { worker }
+      )
+
+      await expect(
+        handleEntityDetail(context, 'onet-graph', 'occupations', '11-1011')
+      ).rejects.toThrow('Database connection failed')
+    })
+
+    it('should return 404 when relationship file is missing', async () => {
+      const worker = createMockWorker({
+        find: vi.fn().mockResolvedValue({ items: [{ $id: 'occupations/11-1011', name: 'Test' }], hasMore: false, stats: {} }),
+        getRelationships: vi.fn().mockRejectedValue(
+          new Error('File not found: onet-graph/rels.parquet')
+        ),
+        getStorageStats: vi.fn().mockReturnValue({
+          cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false,
+        }),
+      })
+      const context = createContext(
+        'https://test.parquedb.com/datasets/onet-graph/occupations/11-1011',
+        { worker }
+      )
+
+      const response = await handleEntityDetail(
+        context, 'onet-graph', 'occupations', '11-1011'
+      )
+
+      expect(response.status).toBe(404)
+      const body = await response.json() as Record<string, unknown>
+      const api = body.api as Record<string, unknown>
+      expect(api.error).toBe(true)
+      expect(api.code).toBe('DATASET_NOT_FOUND')
+      expect(api.message).toBe('Dataset file not found: onet-graph/rels.parquet')
+    })
   })
 })
