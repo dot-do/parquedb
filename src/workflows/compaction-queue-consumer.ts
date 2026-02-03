@@ -190,7 +190,8 @@ export async function handleCompactionQueue(
     }
 
     const [, timestampStr, writerId] = match
-    const timestamp = parseInt(timestampStr ?? '0', 10)
+    // Filename timestamps are in seconds, convert to milliseconds
+    const timestamp = parseInt(timestampStr ?? '0', 10) * 1000
 
     updates.push({
       namespace,
@@ -270,6 +271,23 @@ export async function handleCompactionQueue(
 // State Durable Object
 // =============================================================================
 
+/** Serializable window state for storage */
+interface StoredWindowState {
+  windowStart: number
+  windowEnd: number
+  filesByWriter: Record<string, string[]>
+  writers: string[]
+  lastActivityAt: number
+  totalSize: number
+}
+
+/** Stored state structure */
+interface StoredState {
+  windows: Record<string, StoredWindowState>
+  knownWriters: string[]
+  writerLastSeen: Record<string, number>
+}
+
 /**
  * Durable Object for tracking compaction state across queue messages
  */
@@ -278,12 +296,61 @@ export class CompactionStateDO {
   private windows: Map<string, WindowState> = new Map()
   private knownWriters: Set<string> = new Set()
   private writerLastSeen: Map<string, number> = new Map()
+  private initialized = false
 
   constructor(state: DurableObjectState) {
     this.state = state
   }
 
+  /** Load state from storage */
+  private async ensureInitialized(): Promise<void> {
+    if (this.initialized) return
+
+    const stored = await this.state.storage.get<StoredState>('compactionState')
+    if (stored) {
+      // Restore windows
+      for (const [key, sw] of Object.entries(stored.windows)) {
+        this.windows.set(key, {
+          windowStart: sw.windowStart,
+          windowEnd: sw.windowEnd,
+          filesByWriter: new Map(Object.entries(sw.filesByWriter)),
+          writers: new Set(sw.writers),
+          lastActivityAt: sw.lastActivityAt,
+          totalSize: sw.totalSize,
+        })
+      }
+      // Restore writers
+      this.knownWriters = new Set(stored.knownWriters)
+      this.writerLastSeen = new Map(Object.entries(stored.writerLastSeen))
+    }
+
+    this.initialized = true
+  }
+
+  /** Save state to storage */
+  private async saveState(): Promise<void> {
+    const stored: StoredState = {
+      windows: {},
+      knownWriters: Array.from(this.knownWriters),
+      writerLastSeen: Object.fromEntries(this.writerLastSeen),
+    }
+
+    for (const [key, window] of this.windows) {
+      stored.windows[key] = {
+        windowStart: window.windowStart,
+        windowEnd: window.windowEnd,
+        filesByWriter: Object.fromEntries(window.filesByWriter),
+        writers: Array.from(window.writers),
+        lastActivityAt: window.lastActivityAt,
+        totalSize: window.totalSize,
+      }
+    }
+
+    await this.state.storage.put('compactionState', stored)
+  }
+
   async fetch(request: Request): Promise<Response> {
+    await this.ensureInitialized()
     const url = new URL(request.url)
 
     if (url.pathname === '/update' && request.method === 'POST') {
@@ -402,9 +469,7 @@ export class CompactionStateDO {
     }
 
     // Persist state
-    await this.state.storage.put('windows', Array.from(this.windows.entries()))
-    await this.state.storage.put('knownWriters', Array.from(this.knownWriters))
-    await this.state.storage.put('writerLastSeen', Array.from(this.writerLastSeen.entries()))
+    await this.saveState()
 
     return new Response(JSON.stringify({ windowsReady }), {
       headers: { 'Content-Type': 'application/json' },

@@ -899,6 +899,19 @@ export default {
       }
 
       // =======================================================================
+      // Compaction Status - Event-driven compaction tracking
+      // =======================================================================
+      if (path === '/compaction/status') {
+        if (!env.COMPACTION_STATE) {
+          return buildErrorResponse(500, 'COMPACTION_STATE_NOT_CONFIGURED', 'Compaction State DO not available')
+        }
+
+        const id = env.COMPACTION_STATE.idFromName('default')
+        const stub = env.COMPACTION_STATE.get(id)
+        return stub.fetch(new Request(new URL('/status', request.url).toString()))
+      }
+
+      // =======================================================================
       // Health Check
       // =======================================================================
       if (path === '/health') {
