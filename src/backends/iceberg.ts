@@ -453,11 +453,10 @@ export class IcebergBackend implements EntityBackend {
         const icebergType = this.entityFieldTypeToIceberg(field.type) as
           | 'string' | 'int' | 'long' | 'float' | 'double' | 'boolean'
           | 'date' | 'time' | 'timestamp' | 'timestamptz' | 'uuid' | 'binary'
-        builder.addColumn(
-          field.name,
-          icebergType,
-          !field.nullable
-        )
+        builder.addColumn(field.name, icebergType, {
+          required: !field.nullable,
+          doc: field.doc,
+        })
       }
     }
 
@@ -532,8 +531,8 @@ export class IcebergBackend implements EntityBackend {
     const manager = new SnapshotManager(metadata)
     const retentionMs = options?.retentionMs ?? 7 * 24 * 60 * 60 * 1000 // 7 days default
     const olderThanMs = Date.now() - retentionMs
-    const minSnapshots = options?.minSnapshots ?? 1
-    const result = manager.expireSnapshots(olderThanMs, minSnapshots)
+    // Note: minSnapshots is handled by SnapshotManager's retention policy, not this method
+    const result = manager.expireSnapshots(olderThanMs)
 
     if (!options?.dryRun) {
       // TODO: Write updated metadata and delete orphaned files
@@ -598,10 +597,13 @@ export class IcebergBackend implements EntityBackend {
       // Convert ParqueDB StorageBackend to Iceberg StorageBackend
       const icebergStorage = this.toIcebergStorage()
       const metadata = await readTableMetadata(icebergStorage, location)
-      this.tableCache.set(ns, metadata)
-      return metadata
+      if (metadata) {
+        this.tableCache.set(ns, metadata)
+        return metadata
+      }
+      return null
     } catch {
-      // Table doesn't exist
+      // Table doesn't exist or error reading
       return null
     }
   }

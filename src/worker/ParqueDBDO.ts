@@ -1095,22 +1095,14 @@ export class ParqueDBDO extends DurableObject<Env> {
       )
     }
 
-    // Append REL_CREATE event to WAL (Phase 4 relationship batching)
+    // Append relationship event
     await this.appendEvent({
       id: generateULID(),
       ts: Date.now(),
-      op: 'REL_CREATE',
+      op: 'CREATE',
       target: relTarget(entityTarget(fromNs, fromEntityId), predicate, entityTarget(toNs, toEntityId)),
       before: undefined,
-      after: {
-        predicate,
-        reverse,
-        fromNs,
-        fromId: fromEntityId,
-        toNs,
-        toId: toEntityId,
-        data: options.data,
-      } as Variant,
+      after: { predicate, to: toId, data: options.data } as Variant,
       actor: actor as string,
     })
 
@@ -1146,23 +1138,22 @@ export class ParqueDBDO extends DurableObject<Env> {
     const toNs = toNsPart!
     const toEntityId = toIdParts.join('/')
 
-    // Generate reverse predicate name
-    const reverse = predicate.endsWith('s') ? predicate : predicate + 's'
+    // Soft delete the relationship
+    this.sql.exec(
+      `UPDATE relationships
+       SET deleted_at = ?, deleted_by = ?, version = version + 1
+       WHERE from_ns = ? AND from_id = ? AND predicate = ? AND to_ns = ? AND to_id = ?
+       AND deleted_at IS NULL`,
+      now, actor, fromNs, fromEntityId, predicate, toNs, toEntityId
+    )
 
-    // Append REL_DELETE event to WAL (Phase 4 relationship batching)
+    // Append relationship event
     await this.appendEvent({
       id: generateULID(),
       ts: Date.now(),
-      op: 'REL_DELETE',
+      op: 'DELETE',
       target: relTarget(entityTarget(fromNs, fromEntityId), predicate, entityTarget(toNs, toEntityId)),
-      before: {
-        predicate,
-        reverse,
-        fromNs,
-        fromId: fromEntityId,
-        toNs,
-        toId: toEntityId,
-      } as Variant,
+      before: { predicate, to: toId } as Variant,
       after: undefined,
       actor: actor as string,
     })
