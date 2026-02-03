@@ -98,6 +98,18 @@ export interface DatabaseContextVariables {
 }
 
 /**
+ * Minimal context interface for getDatabaseContext and related functions
+ *
+ * This allows these functions to work with any Hono context regardless of
+ * the specific Bindings/Variables type parameters, avoiding the need for
+ * `c as unknown as Context` casts in typed route handlers.
+ */
+interface ContextWithDatabaseVars {
+  var: DatabaseContextVariables | { [key: string]: unknown }
+  req: { header(name: string): string | undefined }
+}
+
+/**
  * Configuration for database context middleware
  */
 export interface DatabaseContextConfig {
@@ -348,8 +360,9 @@ function capitalize(str: string): string {
  * })
  * ```
  */
-export function getDatabaseContext(c: Context): DatabaseContextData | null {
-  return (c.var as unknown as DatabaseContextVariables).databaseContext ?? null
+export function getDatabaseContext(c: ContextWithDatabaseVars): DatabaseContextData | null {
+  const vars = c.var as DatabaseContextVariables
+  return vars.databaseContext ?? null
 }
 
 /**
@@ -374,11 +387,12 @@ export function getDatabaseContext(c: Context): DatabaseContextData | null {
  * ```
  */
 export function getCookieDatabaseId(
-  c: Context,
+  c: ContextWithDatabaseVars,
   cookieName: string = PAYLOAD_DATABASE_COOKIE
 ): string | null {
   // Check if already parsed by middleware
-  const fromVar = (c.var as unknown as DatabaseContextVariables).cookieDatabaseId
+  const vars = c.var as DatabaseContextVariables
+  const fromVar = vars.cookieDatabaseId
   if (fromVar !== undefined) {
     return fromVar
   }
@@ -579,33 +593,23 @@ export function databaseContextMiddleware(
     const cookieDatabaseId = cookies[cookieName] || null
 
     // Set cookie database ID in context
-    ;(c as Context & { var: DatabaseContextVariables }).set(
-      'cookieDatabaseId' as never,
-      cookieDatabaseId
-    )
+    c.set('cookieDatabaseId', cookieDatabaseId)
 
     // Try to get database ID from path parameter
     const databaseId = c.req.param('databaseId')
 
     if (!databaseId) {
       // No database in path - context is null
-      ;(c as Context & { var: DatabaseContextVariables }).set(
-        'databaseContext' as never,
-        null
-      )
+      c.set('databaseContext', null)
       return next()
     }
 
     // Get user from context (set by auth middleware)
-    const user = (c as Context & { var: { user?: { id: string } | null } }).var
-      ?.user
+    const user = c.var.user
 
     if (!user) {
       // Not authenticated - context is null
-      ;(c as Context & { var: DatabaseContextVariables }).set(
-        'databaseContext' as never,
-        null
-      )
+      c.set('databaseContext', null)
       return next()
     }
 
@@ -619,10 +623,7 @@ export function databaseContextMiddleware(
 
       if (!database) {
         // Database not found - context is null
-        ;(c as Context & { var: DatabaseContextVariables }).set(
-          'databaseContext' as never,
-          null
-        )
+        c.set('databaseContext', null)
         return next()
       }
 
@@ -637,19 +638,13 @@ export function databaseContextMiddleware(
         basePath: `${pathPrefix}/${databaseId}`,
       }
 
-      ;(c as Context & { var: DatabaseContextVariables }).set(
-        'databaseContext' as never,
-        context
-      )
+      c.set('databaseContext', context)
 
       return next()
     } catch (error) {
       // Error resolving database - context is null
       console.error('[databaseContextMiddleware] Error:', error)
-      ;(c as Context & { var: DatabaseContextVariables }).set(
-        'databaseContext' as never,
-        null
-      )
+      c.set('databaseContext', null)
       return next()
     }
   }

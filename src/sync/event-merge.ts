@@ -14,6 +14,7 @@
 
 import type { Event, Variant } from '../types/entity'
 import { deepEqual } from '../utils'
+import { opsAsVariant } from '../types/cast'
 import {
   isCommutative,
   combineOperations,
@@ -21,13 +22,13 @@ import {
   type UpdateOps,
 } from './commutative-ops'
 import {
-  detectConflicts,
+  detectConflicts as _detectConflicts,
   type ConflictInfo,
 } from './conflict-detection'
 import {
   resolveConflict,
-  resolveAllConflicts,
-  allResolutionsComplete,
+  resolveAllConflicts as _resolveAllConflicts,
+  allResolutionsComplete as _allResolutionsComplete,
   type ConflictResolution,
   type ResolutionStrategy,
 } from './conflict-resolution'
@@ -37,17 +38,26 @@ import {
 // =============================================================================
 
 /**
+ * Custom merge function type
+ */
+export type CustomMergeFn = (
+  target: string,
+  ourEvents: readonly Event[],
+  theirEvents: readonly Event[]
+) => MergeTargetResult | null
+
+/**
  * Options for the merge operation
  */
 export interface MergeOptions {
   /** Resolution strategy for conflicts (default: no auto-resolution) */
-  resolutionStrategy?: ResolutionStrategy
+  readonly resolutionStrategy?: ResolutionStrategy
 
   /** Whether to auto-merge commutative operations (default: true) */
-  autoMergeCommutative?: boolean
+  readonly autoMergeCommutative?: boolean
 
   /** Custom merge function for specific targets */
-  customMerge?: (target: string, ourEvents: Event[], theirEvents: Event[]) => MergeTargetResult | null
+  readonly customMerge?: CustomMergeFn
 }
 
 /**
@@ -55,16 +65,16 @@ export interface MergeOptions {
  */
 export interface MergeTargetResult {
   /** Whether the merge was successful */
-  success: boolean
+  readonly success: boolean
 
   /** Combined operations (if auto-merged) */
-  combinedOps?: UpdateOps
+  readonly combinedOps?: UpdateOps
 
   /** Conflicts that were detected */
-  conflicts: ConflictInfo[]
+  readonly conflicts: readonly ConflictInfo[]
 
   /** Events from both streams for this target */
-  events: Event[]
+  readonly events: readonly Event[]
 }
 
 /**
@@ -72,19 +82,19 @@ export interface MergeTargetResult {
  */
 export interface AutoMergeInfo {
   /** Target that was auto-merged */
-  target: string
+  readonly target: string
 
   /** The combined operations */
-  combinedOps: UpdateOps
+  readonly combinedOps: UpdateOps
 
   /** Our original operations */
-  ourOps: UpdateOps
+  readonly ourOps: UpdateOps
 
   /** Their original operations */
-  theirOps: UpdateOps
+  readonly theirOps: UpdateOps
 
   /** Events that were combined */
-  events: Event[]
+  readonly events: readonly Event[]
 }
 
 /**
@@ -92,10 +102,10 @@ export interface AutoMergeInfo {
  */
 export interface MergeConflict extends ConflictInfo {
   /** Whether the conflict was automatically resolved */
-  resolved: boolean
+  readonly resolved: boolean
 
   /** Resolution if resolved */
-  resolution?: ConflictResolution
+  readonly resolution?: ConflictResolution
 }
 
 /**
@@ -103,19 +113,19 @@ export interface MergeConflict extends ConflictInfo {
  */
 export interface MergeStats {
   /** Number of events from our stream */
-  fromOurs: number
+  readonly fromOurs: number
 
   /** Number of events from their stream */
-  fromTheirs: number
+  readonly fromTheirs: number
 
   /** Number of entities processed */
-  entitiesProcessed: number
+  readonly entitiesProcessed: number
 
   /** Number of entities with conflicts */
-  entitiesWithConflicts: number
+  readonly entitiesWithConflicts: number
 
   /** Number of auto-merged operations */
-  autoMerged: number
+  readonly autoMerged: number
 }
 
 /**
@@ -123,28 +133,28 @@ export interface MergeStats {
  */
 export interface EventMergeResult {
   /** Whether the merge was successful (no unresolved conflicts) */
-  success: boolean
+  readonly success: boolean
 
   /** All conflicts detected during merge */
-  conflicts: MergeConflict[]
+  readonly conflicts: readonly MergeConflict[]
 
   /** Operations that were auto-merged */
-  autoMerged: AutoMergeInfo[]
+  readonly autoMerged: readonly AutoMergeInfo[]
 
   /** Conflicts that were resolved by strategy */
-  resolved: ConflictResolution[]
+  readonly resolved: readonly ConflictResolution[]
 
   /** Merged event stream (sorted by timestamp) */
-  mergedEvents: Event[]
+  readonly mergedEvents: readonly Event[]
 
   /** Statistics about the merge */
-  stats: MergeStats
+  readonly stats: MergeStats
 
   /** Events from our stream */
-  ourEvents: Event[]
+  readonly ourEvents: readonly Event[]
 
   /** Events from their stream */
-  theirEvents: Event[]
+  readonly theirEvents: readonly Event[]
 }
 
 // =============================================================================
@@ -625,8 +635,8 @@ function createMergedEvent(
     metadata: {
       merged: true,
       sources: [ourEvent.id, theirEvent.id],
-      update: combinedOps,
-    },
+      update: opsAsVariant(combinedOps),
+    } as Variant,
   }
 }
 

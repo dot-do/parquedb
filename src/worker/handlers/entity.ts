@@ -15,6 +15,7 @@ import { DATASETS as _DATASETS } from '../datasets'
 import { handleFileNotFoundError } from './datasets'
 import type { EntityRecord } from '../../types/entity'
 import type { HandlerContext } from './types'
+import { entityAsRecord } from '../../types/cast'
 
 /**
  * Handle /datasets/:dataset/:collection/:id - Entity detail
@@ -67,7 +68,7 @@ export async function handleEntityDetail(
   }
 
   const entity = entityResult.items[0]
-  const entityRaw = entity as unknown as Record<string, unknown>
+  const entityRaw = entityAsRecord(entity)
 
   // Group relationships by predicate
   const relationships: Record<string, {

@@ -12,87 +12,93 @@ export interface Octokit {
 }
 
 interface CreateCheckParams {
-  owner: string
-  repo: string
-  name: string
-  head_sha: string
-  status: 'queued' | 'in_progress' | 'completed'
-  output?: {
-    title: string
-    summary: string
-    text?: string
-    annotations?: Annotation[]
+  readonly owner: string
+  readonly repo: string
+  readonly name: string
+  readonly head_sha: string
+  readonly status: 'queued' | 'in_progress' | 'completed'
+  readonly output?: {
+    readonly title: string
+    readonly summary: string
+    readonly text?: string
+    readonly annotations?: readonly Annotation[]
   }
 }
 
 interface UpdateCheckParams {
-  owner: string
-  repo: string
-  check_run_id: number
-  status?: 'queued' | 'in_progress' | 'completed'
-  conclusion?: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required'
-  output?: {
-    title: string
-    summary: string
-    text?: string
-    annotations?: Annotation[]
+  readonly owner: string
+  readonly repo: string
+  readonly check_run_id: number
+  readonly status?: 'queued' | 'in_progress' | 'completed'
+  readonly conclusion?: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required'
+  readonly output?: {
+    readonly title: string
+    readonly summary: string
+    readonly text?: string
+    readonly annotations?: readonly Annotation[]
   }
 }
 
 interface Annotation {
-  path: string
-  start_line: number
-  end_line: number
-  annotation_level: 'notice' | 'warning' | 'failure'
-  message: string
-  title?: string
+  readonly path: string
+  readonly start_line: number
+  readonly end_line: number
+  readonly annotation_level: 'notice' | 'warning' | 'failure'
+  readonly message: string
+  readonly title?: string
 }
 
 export interface CreateMergeCheckOptions {
-  owner: string
-  repo: string
-  pr: number
-  headSha: string
+  readonly owner: string
+  readonly repo: string
+  readonly pr: number
+  readonly headSha: string
+}
+
+export interface CollectionChangeCounts {
+  readonly added: number
+  readonly removed: number
+  readonly modified: number
 }
 
 export interface MergePreview {
-  collections: Record<string, { added: number; removed: number; modified: number }>
+  readonly collections: Readonly<Record<string, CollectionChangeCounts>>
 }
 
 export interface UpdateCheckSuccessOptions {
-  owner: string
-  repo: string
-  checkId: number
-  mergePreview: MergePreview
+  readonly owner: string
+  readonly repo: string
+  readonly checkId: number
+  readonly mergePreview: MergePreview
 }
 
 export interface Conflict {
-  ns: string
-  entityId: string
-  field: string
-  ours: string
-  theirs: string
+  readonly ns: string
+  readonly entityId: string
+  readonly field: string
+  readonly ours: string
+  readonly theirs: string
 }
 
 export interface UpdateCheckFailureOptions {
-  owner: string
-  repo: string
-  checkId: number
-  conflicts: Conflict[]
+  readonly owner: string
+  readonly repo: string
+  readonly checkId: number
+  readonly conflicts: readonly Conflict[]
 }
 
 export interface SchemaWarning {
-  type: 'breaking' | 'warning'
-  collection: string
-  field: string
-  message: string
+  readonly type: 'breaking' | 'warning'
+  readonly collection: string
+  readonly field: string
+  readonly message: string
 }
 
 export interface UpdateCheckWithSchemaWarningsOptions {
-  owner: string
-  repo: string
-  checkId: number
-  warnings: SchemaWarning[]
+  readonly owner: string
+  readonly repo: string
+  readonly checkId: number
+  readonly warnings: readonly SchemaWarning[]
 }
 
 const CHECK_NAME = 'ParqueDB Merge Check'

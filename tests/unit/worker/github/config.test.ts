@@ -6,6 +6,8 @@ import {
   shouldIgnoreBranch,
   parseTTL,
   clearConfigCache,
+  invalidateConfigCache,
+  getConfigCacheTTL,
   type ParqueDBGitHubConfig
 } from '../../../../src/worker/github/config'
 
@@ -245,6 +247,78 @@ diff:
       // Should only fetch once due to caching
       expect(mockFetch).toHaveBeenCalledTimes(1)
     })
+
+    it('deduplicates concurrent requests (race condition prevention)', async () => {
+      // This test verifies that when multiple concurrent requests come in
+      // for the same repo config, only ONE fetch is made (promise deduplication)
+      let fetchCallCount = 0
+      const mockFetch = vi.fn().mockImplementation(async () => {
+        fetchCallCount++
+        // Simulate network delay to ensure requests overlap
+        await new Promise(resolve => setTimeout(resolve, 50))
+        return {
+          ok: true,
+          text: async () => 'database:\n  name: test-db',
+        }
+      })
+      global.fetch = mockFetch
+
+      // Fire off 5 concurrent requests for the same repo
+      const promises = [
+        loadConfigFromRepo('owner', 'concurrent-repo'),
+        loadConfigFromRepo('owner', 'concurrent-repo'),
+        loadConfigFromRepo('owner', 'concurrent-repo'),
+        loadConfigFromRepo('owner', 'concurrent-repo'),
+        loadConfigFromRepo('owner', 'concurrent-repo'),
+      ]
+
+      const results = await Promise.all(promises)
+
+      // All results should be the same config object
+      expect(results[0].database.name).toBe('test-db')
+      for (const result of results) {
+        expect(result).toBe(results[0]) // Same reference
+      }
+
+      // Critical: only ONE fetch should have been made
+      // The promise deduplication ensures that when multiple concurrent requests
+      // arrive, they all share the same in-flight promise rather than each
+      // starting their own fetch. This prevents the "thundering herd" problem.
+      expect(fetchCallCount).toBe(1)
+      expect(mockFetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('handles concurrent request errors correctly', async () => {
+      const mockFetch = vi.fn().mockImplementation(async () => {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        return {
+          ok: true,
+          text: async () => { throw new Error('Network error') },
+        }
+      })
+      global.fetch = mockFetch
+
+      // Fire concurrent requests that will fail
+      const promises = [
+        loadConfigFromRepo('owner', 'error-repo'),
+        loadConfigFromRepo('owner', 'error-repo'),
+        loadConfigFromRepo('owner', 'error-repo'),
+      ]
+
+      // All should reject with the same error
+      await expect(Promise.all(promises)).rejects.toThrow()
+
+      // After error, cache should be cleared so retry works
+      clearConfigCache()
+      const mockFetchSuccess = vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => 'database:\n  name: recovered',
+      })
+      global.fetch = mockFetchSuccess
+
+      const result = await loadConfigFromRepo('owner', 'error-repo')
+      expect(result.database.name).toBe('recovered')
+    })
   })
 
   describe('pattern matching', () => {
@@ -475,6 +549,91 @@ branches:
     - '{invalid'
 `
       expect(() => parseConfig(yaml)).toThrow(/invalid glob/i)
+    })
+  })
+
+  describe('ReDoS protection', () => {
+    it('handles complex glob patterns without catastrophic backtracking', () => {
+      // This pattern could cause ReDoS with naive regex conversion
+      // Pattern like */**/*/**/* generates regex with nested quantifiers
+      const config: ParqueDBGitHubConfig = {
+        database: { name: 'test' },
+        branches: { auto_create: ['*/**/*/**/*'], ignore: [] },
+        preview: { enabled: true, ttl: '24h', visibility: 'unlisted' },
+        merge: { required_check: true, default_strategy: 'manual' },
+        diff: { auto_comment: true, max_entities: 100, show_samples: false },
+      }
+
+      // Create a malicious input that would cause exponential backtracking
+      // This string has many segments that could match the pattern ambiguously
+      const maliciousInput = 'a/' + 'b/'.repeat(25) + 'c/d/e'
+
+      // Should complete within reasonable time (not hang)
+      const startTime = Date.now()
+      const result = shouldCreateBranch(config, maliciousInput)
+      const elapsed = Date.now() - startTime
+
+      // Should complete in under 100ms, not hang for seconds/minutes
+      expect(elapsed).toBeLessThan(100)
+      expect(result).toBe(true)
+    })
+
+    it('handles patterns with many wildcards efficiently', () => {
+      const config: ParqueDBGitHubConfig = {
+        database: { name: 'test' },
+        branches: { auto_create: ['**/*/*/*/*/**'], ignore: [] },
+        preview: { enabled: true, ttl: '24h', visibility: 'unlisted' },
+        merge: { required_check: true, default_strategy: 'manual' },
+        diff: { auto_comment: true, max_entities: 100, show_samples: false },
+      }
+
+      // Another potentially malicious input
+      const maliciousInput = 'x/'.repeat(30) + 'y'
+
+      const startTime = Date.now()
+      const result = shouldCreateBranch(config, maliciousInput)
+      const elapsed = Date.now() - startTime
+
+      // Should complete quickly
+      expect(elapsed).toBeLessThan(100)
+      expect(result).toBe(true)
+    })
+
+    it('rejects overly complex patterns to prevent abuse', () => {
+      // Patterns with excessive nesting should be rejected to prevent potential DoS
+      // Pattern complexity is measured by counting wildcards
+      const yaml = `
+branches:
+  auto_create:
+    - '${'**/'.repeat(20)}*'
+`
+      expect(() => parseConfig(yaml)).toThrow(/pattern.*complex/i)
+    })
+
+    it('handles pathological patterns safely using DP algorithm', () => {
+      // This test verifies that the DP-based glob matching handles patterns
+      // that would cause catastrophic backtracking with naive regex.
+      // The pattern a*a*a*a*a*b with input aaaa...c would hang with regex
+      // but completes instantly with our DP implementation.
+      // Note: pattern stays within MAX_WILDCARD_COUNT (10)
+      const config: ParqueDBGitHubConfig = {
+        database: { name: 'test' },
+        branches: { auto_create: ['a*a*a*a*a*b'], ignore: [] },
+        preview: { enabled: true, ttl: '24h', visibility: 'unlisted' },
+        merge: { required_check: true, default_strategy: 'manual' },
+        diff: { auto_comment: true, max_entities: 100, show_samples: false },
+      }
+
+      // This input would cause catastrophic backtracking with naive regex
+      const maliciousInput = 'a'.repeat(30) + 'c'
+
+      const startTime = Date.now()
+      const result = shouldCreateBranch(config, maliciousInput)
+      const elapsed = Date.now() - startTime
+
+      // Should complete quickly (< 100ms), not hang for minutes
+      expect(elapsed).toBeLessThan(100)
+      expect(result).toBe(false) // Doesn't match because it ends in 'c' not 'b'
     })
   })
 })

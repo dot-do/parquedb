@@ -4,17 +4,18 @@
  * Handles all write operations for consistency. Reads can bypass the DO
  * and go directly to R2 for better performance.
  *
- * Architecture:
- * - SQLite for entity metadata and indexes (fast lookups)
- * - Event log accumulates changes before flushing to Parquet
- * - Periodic flush to R2 as Parquet files
+ * EVENT-SOURCED ARCHITECTURE:
+ * - events_wal is the SINGLE SOURCE OF TRUTH for entity state
+ * - Entity state is derived by replaying events (event sourcing)
+ * - Entity cache provides fast lookups for recent entities
+ * - Relationships table maintained for graph traversal performance
+ * - Periodic flush to R2 as Parquet files for reads
  *
- * SOURCE OF TRUTH:
- * In Cloudflare Workers, this SQLite store is the authoritative source for writes.
- * Reads go through QueryExecutor/ReadPath to R2 for performance.
- *
- * This is separate from ParqueDB.ts which uses globalEntityStore (in-memory) for
- * Node.js/testing environments. See docs/architecture/ENTITY_STORAGE.md for details.
+ * This follows true event-sourcing principles:
+ * 1. All mutations append events to events_wal
+ * 2. Entity state is reconstructed by replaying events
+ * 3. Cache invalidation happens on write
+ * 4. Snapshots can be used for performance (future enhancement)
  *
  * @see ParqueDBWorker - The Worker entrypoint that coordinates reads (R2) and writes (this DO)
  * @see QueryExecutor - Handles reads directly from R2 Parquet files
@@ -37,6 +38,27 @@ import type {
 import { entityTarget, relTarget } from '../types'
 import type { Env, FlushConfig } from '../types/worker'
 import { getRandom48Bit, parseStoredData } from '../utils'
+
+// =============================================================================
+// Cache Invalidation Types
+// =============================================================================
+
+/**
+ * Cache invalidation signal stored in DO
+ * Workers poll this to know when to invalidate their caches
+ */
+export interface CacheInvalidationSignal {
+  /** Namespace that was modified */
+  ns: string
+  /** Type of invalidation */
+  type: 'entity' | 'relationship' | 'full'
+  /** Timestamp of the modification */
+  timestamp: number
+  /** Version number (monotonically increasing) */
+  version: number
+  /** Optional entity ID for entity-specific invalidation */
+  entityId?: string
+}
 
 // Initialize Sqids for short ID generation
 const sqids = new Sqids()
@@ -159,10 +181,12 @@ interface StoredRelationship {
  * Durable Object for ParqueDB write operations
  *
  * All write operations go through this DO to ensure consistency.
- * The DO maintains:
- * - Entity metadata in SQLite for fast lookups
- * - Relationship graph in SQLite
- * - Event log that gets periodically flushed to Parquet
+ * The DO maintains state using EVENT SOURCING:
+ * - events_wal is the SINGLE SOURCE OF TRUTH
+ * - Entity state is reconstructed by replaying events
+ * - Entity cache provides fast in-memory access
+ * - Relationship graph in SQLite for traversal performance
+ * - Event log periodically flushed to Parquet for reads
  */
 /** WAL batch thresholds */
 const EVENT_BATCH_COUNT_THRESHOLD = 100
@@ -213,8 +237,14 @@ export class ParqueDBDO extends DurableObject<Env> {
   /** Maximum size of the entity cache */
   private static readonly ENTITY_CACHE_MAX_SIZE = 1000
 
-  /** Flag to skip entity table writes (Phase 3 WAL) */
-  private skipEntityTableWrites = true
+  /** Cache invalidation version per namespace - used by Workers to detect stale caches */
+  private invalidationVersions: Map<string, number> = new Map()
+
+  /** Pending invalidation signals - Workers poll this to know what to invalidate */
+  private pendingInvalidations: CacheInvalidationSignal[] = []
+
+  /** Maximum pending invalidation signals to keep (circular buffer behavior) */
+  private static readonly MAX_PENDING_INVALIDATIONS = 100
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -472,14 +502,8 @@ export class ParqueDBDO extends DurableObject<Env> {
 
     const dataJson = JSON.stringify(dataWithoutLinks)
 
-    // Phase 3 WAL: Skip entity table writes - state derived from events
-    if (!this.skipEntityTableWrites) {
-      this.sql.exec(
-        `INSERT INTO entities (ns, id, type, name, version, created_at, created_by, updated_at, updated_by, data)
-         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
-        ns, id, $type, name, now, actor, now, actor, dataJson
-      )
-    }
+    // EVENT SOURCING: Entity state is derived from events, no need to write to entities table
+    // The events_wal is the single source of truth
 
     // Create relationships
     for (const link of links) {
@@ -496,6 +520,9 @@ export class ParqueDBDO extends DurableObject<Env> {
       after: { ...dataWithoutLinks, $type, name } as Variant,
       actor: actor as string,
     })
+
+    // Signal cache invalidation for Workers
+    this.signalCacheInvalidation(ns, 'entity', id)
 
     // Schedule flush if needed
     await this.maybeScheduleFlush()
@@ -614,15 +641,7 @@ export class ParqueDBDO extends DurableObject<Env> {
         data: JSON.stringify(dataObj),
       })
 
-      // Phase 3 WAL: Skip entity table writes - state derived from events
-      if (!this.skipEntityTableWrites) {
-        const dataJson = JSON.stringify(rest)
-        this.sql.exec(
-          `INSERT INTO entities (ns, id, type, name, version, created_at, created_by, updated_at, updated_by, data)
-           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
-          ns, id, $type, name, now, actor, now, actor, dataJson
-        )
-      }
+      // EVENT SOURCING: Entity state is derived from events, no need to write to entities table
     }
 
     // Write pending Parquet file to R2
@@ -670,6 +689,9 @@ export class ParqueDBDO extends DurableObject<Env> {
         actor: actor as string,
       })
     }
+
+    // Signal cache invalidation for bulk writes
+    this.signalCacheInvalidation(ns, 'full')
 
     await this.maybeScheduleFlush()
 
@@ -789,36 +811,24 @@ export class ParqueDBDO extends DurableObject<Env> {
     const now = new Date().toISOString()
     const actor = options.actor || 'system/anonymous'
 
-    // Phase 3 WAL: Get current entity state from events first, fall back to table
+    // EVENT SOURCING: Get current entity state from events (single source of truth)
     let current: StoredEntity | null = null
 
-    if (this.skipEntityTableWrites) {
-      const currentEntity = await this.getEntityFromEvents(ns, id)
-      if (currentEntity && !currentEntity.deletedAt) {
-        const { $id: _$id, $type, name: entityName, createdAt, createdBy, updatedAt, updatedBy, deletedAt: _deletedAt, deletedBy: _deletedBy, version, ...rest } = currentEntity
-        current = {
-          ns, id,
-          type: $type,
-          name: entityName,
-          version,
-          created_at: createdAt.toISOString(),
-          created_by: createdBy as string,
-          updated_at: updatedAt.toISOString(),
-          updated_by: updatedBy as string,
-          deleted_at: null,
-          deleted_by: null,
-          data: JSON.stringify(rest),
-        }
-      }
-    }
-
-    if (!current) {
-      const rows = [...this.sql.exec<StoredEntity>(
-        'SELECT * FROM entities WHERE ns = ? AND id = ? AND deleted_at IS NULL',
-        ns, id
-      )]
-      if (rows.length > 0) {
-        current = rows[0]!
+    const currentEntity = await this.getEntityFromEvents(ns, id)
+    if (currentEntity && !currentEntity.deletedAt) {
+      const { $id: _$id, $type, name: entityName, createdAt, createdBy, updatedAt, updatedBy, deletedAt: _deletedAt, deletedBy: _deletedBy, version, ...rest } = currentEntity
+      current = {
+        ns, id,
+        type: $type,
+        name: entityName,
+        version,
+        created_at: createdAt.toISOString(),
+        created_by: createdBy as string,
+        updated_at: updatedAt.toISOString(),
+        updated_by: updatedBy as string,
+        deleted_at: null,
+        deleted_by: null,
+        data: JSON.stringify(rest),
       }
     }
 
@@ -918,15 +928,7 @@ export class ParqueDBDO extends DurableObject<Env> {
     const newVersion = current.version + 1
     const dataJson = JSON.stringify(data)
 
-    // Phase 3 WAL: Skip entity table writes - state derived from events
-    if (!this.skipEntityTableWrites) {
-      this.sql.exec(
-        `UPDATE entities
-         SET type = ?, name = ?, version = ?, updated_at = ?, updated_by = ?, data = ?
-         WHERE ns = ? AND id = ?`,
-        type, name, newVersion, now, actor, dataJson, ns, id
-      )
-    }
+    // EVENT SOURCING: Entity state is derived from events, no need to update entities table
 
     // Invalidate cache for this entity
     this.invalidateCache(ns, id)
@@ -941,6 +943,9 @@ export class ParqueDBDO extends DurableObject<Env> {
       after: { ...data, $type: type, name } as Variant,
       actor: actor as string,
     })
+
+    // Signal cache invalidation for Workers
+    this.signalCacheInvalidation(ns, 'entity', id)
 
     await this.maybeScheduleFlush()
 
@@ -971,36 +976,24 @@ export class ParqueDBDO extends DurableObject<Env> {
     const now = new Date().toISOString()
     const actor = options.actor || 'system/anonymous'
 
-    // Phase 3 WAL: Get current entity state from events first, fall back to table
+    // EVENT SOURCING: Get current entity state from events (single source of truth)
     let current: StoredEntity | null = null
 
-    if (this.skipEntityTableWrites) {
-      const currentEntity = await this.getEntityFromEvents(ns, id)
-      if (currentEntity) {
-        const { $id: _$id, $type, name: entityName, createdAt, createdBy, updatedAt, updatedBy, deletedAt, deletedBy, version, ...rest } = currentEntity
-        current = {
-          ns, id,
-          type: $type,
-          name: entityName,
-          version,
-          created_at: createdAt.toISOString(),
-          created_by: createdBy as string,
-          updated_at: updatedAt.toISOString(),
-          updated_by: updatedBy as string,
-          deleted_at: deletedAt?.toISOString() ?? null,
-          deleted_by: (deletedBy as string) ?? null,
-          data: JSON.stringify(rest),
-        }
-      }
-    }
-
-    if (!current) {
-      const rows = [...this.sql.exec<StoredEntity>(
-        'SELECT * FROM entities WHERE ns = ? AND id = ?',
-        ns, id
-      )]
-      if (rows.length > 0) {
-        current = rows[0]!
+    const currentEntity = await this.getEntityFromEvents(ns, id)
+    if (currentEntity) {
+      const { $id: _$id, $type, name: entityName, createdAt, createdBy, updatedAt, updatedBy, deletedAt, deletedBy, version, ...rest } = currentEntity
+      current = {
+        ns, id,
+        type: $type,
+        name: entityName,
+        version,
+        created_at: createdAt.toISOString(),
+        created_by: createdBy as string,
+        updated_at: updatedAt.toISOString(),
+        updated_by: updatedBy as string,
+        deleted_at: deletedAt?.toISOString() ?? null,
+        deleted_by: (deletedBy as string) ?? null,
+        data: JSON.stringify(rest),
       }
     }
 
@@ -1013,17 +1006,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       throw new Error(`Version mismatch: expected ${options.expectedVersion}, got ${current.version}`)
     }
 
-    // Phase 3 WAL: Skip entity table writes - state derived from events
-    if (!this.skipEntityTableWrites) {
-      if (options.hard) {
-        this.sql.exec('DELETE FROM entities WHERE ns = ? AND id = ?', ns, id)
-      } else {
-        this.sql.exec(
-          `UPDATE entities SET deleted_at = ?, deleted_by = ?, version = version + 1 WHERE ns = ? AND id = ?`,
-          now, actor, ns, id
-        )
-      }
-    }
+    // EVENT SOURCING: Entity state is derived from events, no need to update entities table
 
     // Handle relationships (still use relationships table)
     if (options.hard) {
@@ -1052,6 +1035,9 @@ export class ParqueDBDO extends DurableObject<Env> {
       after: undefined,
       actor: actor as string,
     })
+
+    // Signal cache invalidation for Workers
+    this.signalCacheInvalidation(ns, 'entity', id)
 
     await this.maybeScheduleFlush()
 
@@ -1134,6 +1120,12 @@ export class ParqueDBDO extends DurableObject<Env> {
       actor: actor as string,
     })
 
+    // Signal cache invalidation for relationship caches
+    this.signalCacheInvalidation(fromNs, 'relationship')
+    if (fromNs !== toNs) {
+      this.signalCacheInvalidation(toNs, 'relationship')
+    }
+
     await this.maybeScheduleFlush()
   }
 
@@ -1185,6 +1177,12 @@ export class ParqueDBDO extends DurableObject<Env> {
       actor: actor as string,
     })
 
+    // Signal cache invalidation for relationship caches
+    this.signalCacheInvalidation(fromNs, 'relationship')
+    if (fromNs !== toNs) {
+      this.signalCacheInvalidation(toNs, 'relationship')
+    }
+
     await this.maybeScheduleFlush()
   }
 
@@ -1195,11 +1193,10 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Get an entity by ID from DO storage
    *
-   * Phase 3 WAL: Entity state is derived from events, not stored in entities table.
+   * EVENT SOURCING: Entity state is derived from events (single source of truth).
    * Priority order:
    * 1. Check in-memory entity cache
-   * 2. Reconstruct from unflushed events
-   * 3. Fall back to entities table (backward compatibility)
+   * 2. Reconstruct from events
    */
   async get(ns: string, id: string, includeDeleted = false): Promise<Entity | null> {
     await this.ensureInitialized()
@@ -1216,7 +1213,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       return entity
     }
 
-    // 2. Try to reconstruct from events
+    // 2. Reconstruct from events (single source of truth)
     const entityFromEvents = await this.getEntityFromEvents(ns, id)
     if (entityFromEvents) {
       if (!includeDeleted && entityFromEvents.deletedAt) {
@@ -1226,20 +1223,8 @@ export class ParqueDBDO extends DurableObject<Env> {
       return entityFromEvents
     }
 
-    // 3. Fall back to entities table (backward compatibility)
-    const query = includeDeleted
-      ? 'SELECT * FROM entities WHERE ns = ? AND id = ?'
-      : 'SELECT * FROM entities WHERE ns = ? AND id = ? AND deleted_at IS NULL'
-
-    const rows = [...this.sql.exec<StoredEntity>(query, ns, id)]
-
-    if (rows.length === 0) {
-      return null
-    }
-
-    const entity = this.toEntity(rows[0]!)
-    this.cacheEntity(cacheKey, entity)
-    return entity
+    // Entity not found in events - does not exist
+    return null
   }
 
   /**
@@ -1387,14 +1372,7 @@ export class ParqueDBDO extends DurableObject<Env> {
     }
   }
 
-  // Phase 3 helper methods for testing/migration
-  setSkipEntityTableWrites(skip: boolean): void {
-    this.skipEntityTableWrites = skip
-  }
-
-  getSkipEntityTableWrites(): boolean {
-    return this.skipEntityTableWrites
-  }
+  // Helper methods for testing/monitoring
 
   getCacheStats(): { size: number; maxSize: number } {
     return { size: this.entityCache.size, maxSize: ParqueDBDO.ENTITY_CACHE_MAX_SIZE }
@@ -1406,6 +1384,113 @@ export class ParqueDBDO extends DurableObject<Env> {
 
   isEntityCached(ns: string, id: string): boolean {
     return this.entityCache.has(`${ns}/${id}`)
+  }
+
+  // ===========================================================================
+  // Cache Invalidation Signaling
+  // ===========================================================================
+
+  /**
+   * Signal cache invalidation for a namespace
+   *
+   * Called after write operations to notify Workers that caches are stale.
+   * Workers poll getInvalidationVersion() or getPendingInvalidations() to
+   * detect when to invalidate their caches.
+   *
+   * @param ns - Namespace that was modified
+   * @param type - Type of invalidation (entity, relationship, or full)
+   * @param entityId - Optional entity ID for entity-specific invalidation
+   */
+  private signalCacheInvalidation(
+    ns: string,
+    type: 'entity' | 'relationship' | 'full',
+    entityId?: string
+  ): void {
+    // Bump version for this namespace
+    const currentVersion = this.invalidationVersions.get(ns) ?? 0
+    const newVersion = currentVersion + 1
+    this.invalidationVersions.set(ns, newVersion)
+
+    // Create invalidation signal
+    const signal: CacheInvalidationSignal = {
+      ns,
+      type,
+      timestamp: Date.now(),
+      version: newVersion,
+      entityId,
+    }
+
+    // Add to pending invalidations (circular buffer)
+    this.pendingInvalidations.push(signal)
+    if (this.pendingInvalidations.length > ParqueDBDO.MAX_PENDING_INVALIDATIONS) {
+      this.pendingInvalidations.shift()
+    }
+  }
+
+  /**
+   * Get the current invalidation version for a namespace
+   *
+   * Workers can compare this with their cached version to detect stale caches.
+   * If the DO version is higher, caches should be invalidated.
+   *
+   * @param ns - Namespace to check
+   * @returns Current invalidation version (0 if never modified)
+   */
+  getInvalidationVersion(ns: string): number {
+    return this.invalidationVersions.get(ns) ?? 0
+  }
+
+  /**
+   * Get invalidation versions for all namespaces
+   *
+   * Useful for Workers to batch-check multiple namespaces.
+   *
+   * @returns Map of namespace to invalidation version
+   */
+  getAllInvalidationVersions(): Record<string, number> {
+    const result: Record<string, number> = {}
+    for (const [ns, version] of this.invalidationVersions) {
+      result[ns] = version
+    }
+    return result
+  }
+
+  /**
+   * Get pending invalidation signals since a given version
+   *
+   * Workers can poll this to get detailed invalidation information.
+   * Useful for surgical cache invalidation rather than full namespace purge.
+   *
+   * @param ns - Namespace to get signals for (or undefined for all)
+   * @param sinceVersion - Only return signals with version > this value
+   * @returns Array of invalidation signals
+   */
+  getPendingInvalidations(ns?: string, sinceVersion?: number): CacheInvalidationSignal[] {
+    let signals = this.pendingInvalidations
+
+    if (ns) {
+      signals = signals.filter(s => s.ns === ns)
+    }
+
+    if (sinceVersion !== undefined) {
+      signals = signals.filter(s => s.version > sinceVersion)
+    }
+
+    return signals
+  }
+
+  /**
+   * Check if caches for a namespace are stale
+   *
+   * Convenience method for Workers to quickly check if invalidation is needed.
+   *
+   * @param ns - Namespace to check
+   * @param workerVersion - Worker's cached version for this namespace
+   * @returns true if Worker should invalidate its caches
+   */
+  shouldInvalidate(ns: string, workerVersion: number): boolean {
+    const doVersion = this.invalidationVersions.get(ns) ?? 0
+    return doVersion > workerVersion
   }
 
   /**
@@ -1792,15 +1877,8 @@ export class ParqueDBDO extends DurableObject<Env> {
   // Relationship Event Batching (Phase 4)
   // ===========================================================================
 
-  /**
-   * Get next relationship sequence for a namespace
-   */
-  private getNextRelSeq(ns: string): number {
-    const relCounterKey = `rel:${ns}`
-    const seq = this.counters.get(relCounterKey) || 1
-    this.counters.set(relCounterKey, seq + 1)
-    return seq
-  }
+  // Note: Relationship sequence generation is handled inline in appendRelEvent
+  // This keeps the sequence counter management close to its usage
 
   /**
    * Append a relationship event with namespace-based batching
@@ -2047,7 +2125,12 @@ export class ParqueDBDO extends DurableObject<Env> {
     }
 
     const json = new TextDecoder().decode(data)
-    return JSON.parse(json) as Event[]
+    try {
+      return JSON.parse(json) as Event[]
+    } catch {
+      // Invalid JSON in event batch - return empty array
+      return []
+    }
   }
 
   /**
@@ -2103,11 +2186,28 @@ export class ParqueDBDO extends DurableObject<Env> {
     const datePath = `${date.getUTCFullYear()}/${String(date.getUTCMonth() + 1).padStart(2, '0')}/${String(date.getUTCDate()).padStart(2, '0')}`
     const parquetPath = `events/archive/${datePath}/${checkpointId}.parquet`
 
-    // TODO: Actually write Parquet file to R2
-    // In a real implementation, we would:
-    // 1. Convert events to Parquet format
-    // 2. Write to R2: this.env.BUCKET.put(parquetPath, parquetBuffer)
-    // 3. Verify the write succeeded
+    // Convert events to columnar format for Parquet
+    const columnData = [
+      { name: 'id', data: allEvents.map(e => e.id) },
+      { name: 'ts', data: allEvents.map(e => e.ts) },
+      { name: 'op', data: allEvents.map(e => e.op) },
+      { name: 'target', data: allEvents.map(e => e.target) },
+      { name: 'before', data: allEvents.map(e => e.before ? JSON.stringify(e.before) : null) },
+      { name: 'after', data: allEvents.map(e => e.after ? JSON.stringify(e.after) : null) },
+      { name: 'actor', data: allEvents.map(e => e.actor ?? null) },
+      { name: 'metadata', data: allEvents.map(e => e.metadata ? JSON.stringify(e.metadata) : null) },
+    ]
+
+    // Write Parquet file to R2 using hyparquet-writer
+    try {
+      const { parquetWriteBuffer } = await import('hyparquet-writer')
+      const parquetBuffer = parquetWriteBuffer({ columnData })
+      await this.env.BUCKET.put(parquetPath, parquetBuffer)
+    } catch (error: unknown) {
+      // If Parquet writing fails, log and re-throw to prevent marking batches as flushed
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      throw new Error(`Failed to write Parquet file to R2: ${message}`)
+    }
 
     // Mark batches as flushed
     await this.markEventBatchesFlushed(batchIds)
@@ -2211,4 +2311,261 @@ export class ParqueDBDO extends DurableObject<Env> {
       data: stored.data ? parseStoredData(stored.data) : undefined,
     }
   }
+
+  // ===========================================================================
+  // Transaction Management
+  // ===========================================================================
+
+  /** Transaction snapshot for rollback */
+  private transactionSnapshot: TransactionSnapshot | null = null
+
+  /** Whether currently in a transaction */
+  private inTransaction = false
+
+  /**
+   * Begin a transaction
+   *
+   * Captures a snapshot of all mutable state that can be restored on rollback.
+   * This includes:
+   * - Namespace sequence counters
+   * - Entity cache
+   * - Event buffers (both legacy and namespace-based)
+   * - Relationship event buffers
+   *
+   * @returns Transaction ID (for tracking purposes)
+   */
+  beginTransaction(): string {
+    if (this.inTransaction) {
+      throw new Error('Transaction already in progress')
+    }
+
+    this.inTransaction = true
+
+    // Deep copy all mutable in-memory state
+    this.transactionSnapshot = {
+      counters: new Map(this.counters),
+      entityCache: new Map(),
+      eventBuffer: [...this.eventBuffer],
+      eventBufferSize: this.eventBufferSize,
+      nsEventBuffers: new Map(),
+      relEventBuffers: new Map(),
+      sqlRollbackOps: [],
+      pendingR2Paths: [],
+    }
+
+    // Deep copy entity cache entries
+    for (const [key, value] of this.entityCache) {
+      this.transactionSnapshot.entityCache.set(key, {
+        entity: JSON.parse(JSON.stringify(value.entity)),
+        version: value.version,
+      })
+    }
+
+    // Deep copy namespace event buffers
+    for (const [ns, buffer] of this.nsEventBuffers) {
+      this.transactionSnapshot.nsEventBuffers.set(ns, {
+        events: [...buffer.events],
+        firstSeq: buffer.firstSeq,
+        lastSeq: buffer.lastSeq,
+        sizeBytes: buffer.sizeBytes,
+      })
+    }
+
+    // Deep copy relationship event buffers
+    for (const [ns, buffer] of this.relEventBuffers) {
+      this.transactionSnapshot.relEventBuffers.set(ns, {
+        events: [...buffer.events],
+        firstSeq: buffer.firstSeq,
+        lastSeq: buffer.lastSeq,
+        sizeBytes: buffer.sizeBytes,
+      })
+    }
+
+    return `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  }
+
+  /**
+   * Record a SQL operation for potential rollback
+   */
+  recordSqlOperation(
+    type: 'entity_insert' | 'entity_update' | 'entity_delete' | 'rel_insert' | 'rel_update' | 'rel_delete' | 'pending_row_group',
+    ns: string,
+    id: string,
+    beforeState?: StoredEntity | StoredRelationship | null,
+    extra?: { predicate?: string; toNs?: string; toId?: string }
+  ): void {
+    if (!this.inTransaction || !this.transactionSnapshot) return
+    this.transactionSnapshot.sqlRollbackOps.push({ type, ns, id, beforeState, ...extra })
+  }
+
+  /**
+   * Record an R2 path for potential rollback
+   */
+  recordR2Write(path: string): void {
+    if (!this.inTransaction || !this.transactionSnapshot) return
+    this.transactionSnapshot.pendingR2Paths.push(path)
+  }
+
+  /**
+   * Commit the current transaction
+   */
+  async commitTransaction(): Promise<void> {
+    if (!this.inTransaction) {
+      throw new Error('No transaction in progress')
+    }
+    this.transactionSnapshot = null
+    this.inTransaction = false
+  }
+
+  /**
+   * Rollback the current transaction
+   *
+   * Restores all state from the snapshot and reverses any SQL/R2 operations.
+   */
+  async rollbackTransaction(): Promise<void> {
+    if (!this.inTransaction || !this.transactionSnapshot) {
+      throw new Error('No transaction in progress')
+    }
+
+    const snapshot = this.transactionSnapshot
+
+    // 1. Restore in-memory state
+    this.counters.clear()
+    for (const [k, v] of snapshot.counters) {
+      this.counters.set(k, v)
+    }
+
+    this.entityCache.clear()
+    for (const [k, v] of snapshot.entityCache) {
+      this.entityCache.set(k, v)
+    }
+
+    this.eventBuffer = [...snapshot.eventBuffer]
+    this.eventBufferSize = snapshot.eventBufferSize
+
+    this.nsEventBuffers.clear()
+    for (const [ns, buffer] of snapshot.nsEventBuffers) {
+      this.nsEventBuffers.set(ns, { ...buffer, events: [...buffer.events] })
+    }
+
+    this.relEventBuffers.clear()
+    for (const [ns, buffer] of snapshot.relEventBuffers) {
+      this.relEventBuffers.set(ns, { ...buffer, events: [...buffer.events] })
+    }
+
+    // 2. Reverse SQL operations (in reverse order)
+    for (const op of snapshot.sqlRollbackOps.reverse()) {
+      switch (op.type) {
+        case 'entity_insert':
+          this.sql.exec('DELETE FROM entities WHERE ns = ? AND id = ?', op.ns, op.id)
+          break
+        case 'entity_update':
+          if (op.beforeState) {
+            const before = op.beforeState as StoredEntity
+            this.sql.exec(
+              `UPDATE entities SET type = ?, name = ?, version = ?, created_at = ?, created_by = ?,
+               updated_at = ?, updated_by = ?, deleted_at = ?, deleted_by = ?, data = ?
+               WHERE ns = ? AND id = ?`,
+              before.type, before.name, before.version, before.created_at, before.created_by,
+              before.updated_at, before.updated_by, before.deleted_at, before.deleted_by, before.data,
+              op.ns, op.id
+            )
+          }
+          break
+        case 'entity_delete':
+          if (op.beforeState) {
+            const before = op.beforeState as StoredEntity
+            this.sql.exec(
+              `INSERT OR REPLACE INTO entities (ns, id, type, name, version, created_at, created_by,
+               updated_at, updated_by, deleted_at, deleted_by, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              op.ns, op.id, before.type, before.name, before.version, before.created_at,
+              before.created_by, before.updated_at, before.updated_by, before.deleted_at,
+              before.deleted_by, before.data
+            )
+          }
+          break
+        case 'rel_insert':
+          this.sql.exec(
+            'DELETE FROM relationships WHERE from_ns = ? AND from_id = ? AND predicate = ? AND to_ns = ? AND to_id = ?',
+            op.ns, op.id, op.predicate, op.toNs, op.toId
+          )
+          break
+        case 'rel_update':
+          if (op.beforeState) {
+            const before = op.beforeState as StoredRelationship
+            this.sql.exec(
+              `UPDATE relationships SET version = ?, deleted_at = ?, deleted_by = ?, data = ?
+               WHERE from_ns = ? AND from_id = ? AND predicate = ? AND to_ns = ? AND to_id = ?`,
+              before.version, before.deleted_at, before.deleted_by, before.data,
+              op.ns, op.id, op.predicate, op.toNs, op.toId
+            )
+          }
+          break
+        case 'rel_delete':
+          if (op.beforeState) {
+            const before = op.beforeState as StoredRelationship
+            this.sql.exec(
+              `INSERT OR REPLACE INTO relationships (from_ns, from_id, predicate, to_ns, to_id,
+               reverse, version, created_at, created_by, deleted_at, deleted_by, data)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              op.ns, op.id, before.predicate, before.to_ns, before.to_id, before.reverse,
+              before.version, before.created_at, before.created_by, before.deleted_at,
+              before.deleted_by, before.data
+            )
+          }
+          break
+        case 'pending_row_group':
+          this.sql.exec('DELETE FROM pending_row_groups WHERE id = ?', op.id)
+          break
+      }
+    }
+
+    // 3. Delete R2 files written during transaction
+    for (const path of snapshot.pendingR2Paths) {
+      try {
+        await this.env.BUCKET.delete(path)
+      } catch {
+        // Ignore errors - file might not exist
+      }
+    }
+
+    this.transactionSnapshot = null
+    this.inTransaction = false
+  }
+
+  /**
+   * Check if currently in a transaction
+   */
+  isInTransaction(): boolean {
+    return this.inTransaction
+  }
+
+  /**
+   * Get transaction snapshot for testing
+   */
+  getTransactionSnapshot(): TransactionSnapshot | null {
+    return this.transactionSnapshot
+  }
+}
+
+/**
+ * Transaction snapshot interface
+ */
+interface TransactionSnapshot {
+  counters: Map<string, number>
+  entityCache: Map<string, { entity: Entity; version: number }>
+  eventBuffer: Event[]
+  eventBufferSize: number
+  nsEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }>
+  relEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }>
+  sqlRollbackOps: Array<{
+    type: 'entity_insert' | 'entity_update' | 'entity_delete' | 'rel_insert' | 'rel_update' | 'rel_delete' | 'pending_row_group'
+    ns: string
+    id: string
+    predicate?: string
+    toNs?: string
+    toId?: string
+    beforeState?: StoredEntity | StoredRelationship | null
+  }>
+  pendingR2Paths: string[]
 }

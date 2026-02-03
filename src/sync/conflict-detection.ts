@@ -36,34 +36,34 @@ export type ConflictType =
  */
 export interface ConflictInfo {
   /** Type of conflict */
-  type: ConflictType
+  readonly type: ConflictType
 
   /** Target entity/relationship identifier */
-  target: string
+  readonly target: string
 
   /** Field that has a conflict (undefined for entity-level conflicts like delete_update) */
-  field?: string
+  readonly field?: string
 
   /** Our value for the field */
-  ourValue: unknown
+  readonly ourValue: unknown
 
   /** Their value for the field */
-  theirValue: unknown
+  readonly theirValue: unknown
 
   /** Base value before either change (undefined for CREATE) */
-  baseValue: unknown
+  readonly baseValue: unknown
 
   /** Our event that caused the conflict */
-  ourEvent: Event
+  readonly ourEvent: Event
 
   /** Their event that caused the conflict */
-  theirEvent: Event
+  readonly theirEvent: Event
 
   /** Operations from our event (if embedded) */
-  ourOps?: UpdateOps
+  readonly ourOps?: UpdateOps
 
   /** Operations from their event (if embedded) */
-  theirOps?: UpdateOps
+  readonly theirOps?: UpdateOps
 }
 
 // =============================================================================

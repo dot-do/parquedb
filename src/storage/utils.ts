@@ -155,3 +155,93 @@ export function normalizeFilePath(path: string): string {
   }
   return path
 }
+
+/**
+ * Safely convert an unknown error to an Error instance
+ *
+ * This is a common pattern in storage backends when wrapping errors.
+ * It ensures that any thrown value (string, object, Error, etc.) is
+ * converted to a proper Error instance for consistent error handling.
+ *
+ * @param error - The unknown error value to convert
+ * @returns An Error instance
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await riskyOperation()
+ * } catch (error: unknown) {
+ *   const err = toError(error)
+ *   throw new MyOperationError(`Failed: ${err.message}`, err)
+ * }
+ * ```
+ */
+export function toError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error
+  }
+  return new Error(String(error))
+}
+
+/**
+ * Apply a prefix to a path, ensuring proper separator handling
+ *
+ * @param path - The path to prefix
+ * @param prefix - The prefix to apply (should end with '/' if non-empty)
+ * @returns The prefixed path
+ *
+ * @example
+ * ```typescript
+ * applyPrefix('data/file.txt', 'tenant1/')  // 'tenant1/data/file.txt'
+ * applyPrefix('data/file.txt', '')          // 'data/file.txt'
+ * ```
+ */
+export function applyPrefix(path: string, prefix: string): string {
+  return prefix + path
+}
+
+/**
+ * Remove a prefix from a path if present
+ *
+ * @param path - The path to strip prefix from
+ * @param prefix - The prefix to remove
+ * @returns The path without the prefix
+ *
+ * @example
+ * ```typescript
+ * stripPrefix('tenant1/data/file.txt', 'tenant1/')  // 'data/file.txt'
+ * stripPrefix('data/file.txt', '')                   // 'data/file.txt'
+ * stripPrefix('other/path', 'tenant1/')              // 'other/path' (no change)
+ * ```
+ */
+export function stripPrefix(path: string, prefix: string): string {
+  if (prefix && path.startsWith(prefix)) {
+    return path.slice(prefix.length)
+  }
+  return path
+}
+
+/**
+ * Normalize a prefix to ensure it ends with '/' if non-empty
+ *
+ * Storage backends commonly need prefixes that act as path segments.
+ * This ensures consistent prefix handling across all backends.
+ *
+ * @param prefix - The raw prefix string (may or may not end with '/')
+ * @returns The normalized prefix (empty string or string ending with '/')
+ *
+ * @example
+ * ```typescript
+ * normalizePrefix('tenant1')   // 'tenant1/'
+ * normalizePrefix('tenant1/')  // 'tenant1/'
+ * normalizePrefix('')          // ''
+ * normalizePrefix(undefined)   // ''
+ * ```
+ */
+export function normalizePrefix(prefix: string | undefined): string {
+  const raw = prefix ?? ''
+  if (raw && !raw.endsWith('/')) {
+    return raw + '/'
+  }
+  return raw
+}

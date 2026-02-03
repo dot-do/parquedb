@@ -150,19 +150,44 @@ export interface TextOperator {
     $caseSensitive?: boolean
     /** Diacritic sensitive matching */
     $diacriticSensitive?: boolean
+    /** Minimum score threshold (0-1) */
+    $minScore?: number
   }
 }
+
+/**
+ * Hybrid search strategy for combining vector search with metadata filtering
+ *
+ * - 'pre-filter': Apply metadata filters first, then vector search on filtered set (faster for selective filters)
+ * - 'post-filter': Perform vector search first, then filter results (faster for broad filters)
+ * - 'auto': Automatically choose strategy based on filter selectivity (default)
+ */
+export type HybridSearchStrategy = 'pre-filter' | 'post-filter' | 'auto'
 
 /** Vector similarity search */
 export interface VectorOperator {
   $vector: {
-    /** Query vector */
-    $near: number[]
-    /** Number of results */
-    $k: number
+    /** Query vector (or text for auto-embedding if embedder is configured) */
+    query: number[] | string
     /** Field containing vectors */
-    $field: string
+    field: string
+    /** Number of results */
+    topK: number
     /** Minimum similarity threshold (0-1) */
+    minScore?: number
+    /** Hybrid search strategy */
+    strategy?: HybridSearchStrategy
+    /** HNSW efSearch parameter for search quality/speed tradeoff */
+    efSearch?: number
+
+    // Legacy format support (deprecated, use query/field/topK instead)
+    /** @deprecated Use `query` instead */
+    $near?: number[]
+    /** @deprecated Use `topK` instead */
+    $k?: number
+    /** @deprecated Use `field` instead */
+    $field?: string
+    /** @deprecated Use `minScore` instead */
     $minScore?: number
   }
 }

@@ -120,9 +120,9 @@ export function auth(options: AuthOptions): MiddlewareHandler {
     const token = extractToken(c)
 
     // Set default values
-    c.set('token' as never, token)
-    c.set('user' as never, null)
-    c.set('actor' as never, null)
+    c.set('token', token)
+    c.set('user', null)
+    c.set('actor', null)
 
     if (!token) {
       return next()
@@ -145,11 +145,11 @@ export function auth(options: AuthOptions): MiddlewareHandler {
       })
 
       // Get user from oauth.do middleware result
-      const user = (c as any).var?.user as AuthUser | undefined
+      const user = c.var.user
 
       if (user) {
-        c.set('user' as never, user)
-        c.set('actor' as never, `${actorNamespace}/${user.id}` as EntityId)
+        c.set('user', user)
+        c.set('actor', `${actorNamespace}/${user.id}` as EntityId)
       }
     } catch (error) {
       // Token verification failed, continue without user
@@ -182,7 +182,7 @@ export function requireAuth(options: {
   message?: string
 } = {}): MiddlewareHandler {
   return async (c: Context, next: Next) => {
-    const user = (c as any).var?.user as AuthUser | null
+    const user = c.var.user
 
     if (!user) {
       return c.json(
@@ -209,7 +209,21 @@ export function requireAuth(options: {
 }
 
 /**
+ * Minimal context interface for getUser
+ *
+ * This allows getUser to work with any Hono context regardless of
+ * the specific Bindings/Variables type parameters, avoiding the need
+ * for `c as unknown as Context` casts in typed route handlers.
+ */
+interface ContextWithVars {
+  var: { user?: AuthUser | null; [key: string]: unknown }
+}
+
+/**
  * Get authenticated user from Hono context
+ *
+ * Accepts any Hono-like context with a var property containing user.
+ * This avoids the need for type casts when using typed route handlers.
  *
  * @example
  * ```typescript
@@ -220,14 +234,14 @@ export function requireAuth(options: {
  * })
  * ```
  */
-export function getUser(c: Context): AuthUser | null {
-  return (c.var as any).user ?? null
+export function getUser(c: ContextWithVars): AuthUser | null {
+  return c.var.user ?? null
 }
 
 /**
  * Assert user is authenticated (throws if not)
  */
-export function assertAuth(c: Context): AuthUser {
+export function assertAuth(c: ContextWithVars): AuthUser {
   const user = getUser(c)
   if (!user) {
     throw new Error('Authentication required')
@@ -238,7 +252,7 @@ export function assertAuth(c: Context): AuthUser {
 /**
  * Assert user has specific role (throws if not)
  */
-export function assertRole(c: Context, role: string): AuthUser {
+export function assertRole(c: ContextWithVars, role: string): AuthUser {
   const user = assertAuth(c)
   if (!user.roles?.includes(role)) {
     throw new Error(`Required role: ${role}`)

@@ -18,6 +18,7 @@ import type {
   TranslatedQuery,
   TranslatedMutation,
 } from './types.js'
+import { validateWhereClause } from '../../utils/sql-security.js'
 
 // ============================================================================
 // Main Translator
@@ -322,11 +323,22 @@ import { parseSQL } from './parser.js'
 /**
  * Quick helper to translate a WHERE clause string to filter
  *
+ * SECURITY NOTE: This function parses user-provided SQL fragments.
+ * The parser is designed to only accept valid WHERE clause syntax,
+ * rejecting dangerous constructs like multiple statements, comments,
+ * or SQL injection attempts. Values should use parameterized placeholders ($1, $2)
+ * rather than being embedded in the string.
+ *
  * @example
  * const filter = whereToFilter("status = $1 AND age > $2", ['active', 25])
  * // Returns: { status: 'active', age: { $gt: 25 } }
+ *
+ * @throws Error if the WHERE clause contains potentially dangerous SQL constructs
  */
 export function whereToFilter(whereClause: string, params: unknown[] = []): Filter {
+  // Validate the WHERE clause doesn't contain SQL injection patterns
+  validateWhereClause(whereClause)
+
   // Wrap in a dummy SELECT to parse the WHERE clause
   const sql = `SELECT * FROM dummy WHERE ${whereClause}`
   const stmt = parseSQL(sql) as SQLSelect

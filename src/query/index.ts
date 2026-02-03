@@ -101,3 +101,13 @@ export {
   type HyparquetFilter,
   type PredicatePushdownResult,
 } from './predicate-pushdown'
+
+// Vector query text-to-embedding conversion
+export {
+  normalizeVectorFilter,
+  normalizeVectorFilterBatch,
+  extractVectorQuery,
+  isTextVectorQuery,
+  type NormalizedVectorQuery,
+  type VectorFilterNormalizationResult,
+} from './vector-query'

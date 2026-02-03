@@ -127,14 +127,14 @@ function showDiffDetailed(
     const currentCol = current.state.collections[ns]
     const targetCol = target.state.collections[ns]
 
-    if (!targetCol) {
+    if (!targetCol && currentCol) {
       print(`+ ${ns} (new collection)`)
       print(`    ${currentCol.rowCount} rows`)
       hasChanges = true
     } else if (!currentCol) {
       print(`- ${ns} (removed)`)
       hasChanges = true
-    } else {
+    } else if (currentCol && targetCol) {
       // Compare
       const rowDiff = currentCol.rowCount - targetCol.rowCount
       const dataChanged = currentCol.dataHash !== targetCol.dataHash
@@ -253,11 +253,11 @@ function showDiffJson(
     const currentCol = current.state.collections[ns]
     const targetCol = target.state.collections[ns]
 
-    if (!targetCol) {
+    if (!targetCol && currentCol) {
       collections[ns] = { status: 'added', rows: currentCol.rowCount }
     } else if (!currentCol) {
       collections[ns] = { status: 'removed' }
-    } else {
+    } else if (currentCol && targetCol) {
       collections[ns] = {
         status: 'modified',
         rowDiff: currentCol.rowCount - targetCol.rowCount,

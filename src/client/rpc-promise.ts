@@ -9,6 +9,7 @@
  */
 
 import type { RpcPromiseMarker } from '../types/integrations'
+import { chainRpcPromise } from '../types/cast'
 
 /**
  * Service interface for RPC communication
@@ -172,7 +173,7 @@ export function createRpcPromise<T>(
       chain.push({ method: 'map', args: [fnString] })
 
       // Return the same promise (chain is modified in place)
-      return rpcPromise as unknown as RpcPromiseMarker<T extends unknown[] ? U[] : U>
+      return chainRpcPromise<RpcPromiseMarker<T extends unknown[] ? U[] : U>>(rpcPromise)
     },
   })
 
@@ -404,7 +405,12 @@ function getAtPath(obj: unknown, path: string): unknown {
  * @returns Reconstructed function
  */
 export function deserializeFunction<T, U>(serialized: string): (value: T) => U {
-  const parsed = JSON.parse(serialized)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(serialized)
+  } catch {
+    throw new Error('Invalid serialized mapper: not valid JSON')
+  }
 
   // Handle secure format
   if ('mapperType' in parsed) {

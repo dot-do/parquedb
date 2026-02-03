@@ -13,6 +13,7 @@ import { QueryExecutor, type FindResult } from './QueryExecutor'
 import { ReadPath } from './ReadPath'
 import { DEFAULT_CACHE_CONFIG } from './CacheStrategy'
 import { logger } from '../utils/logger'
+import { asGlobalR2Bucket } from '../types/cast'
 
 // =============================================================================
 // Types
@@ -185,10 +186,10 @@ export async function runPushdownBenchmark(
   const startTime = performance.now()
 
   // Initialize query executor - cast bucket to global R2Bucket for compatibility
-  const readPath = new ReadPath(bucket as unknown as globalThis.R2Bucket, cache, DEFAULT_CACHE_CONFIG)
+  const readPath = new ReadPath(asGlobalR2Bucket(bucket as R2Bucket), cache, DEFAULT_CACHE_CONFIG)
   const queryExecutor = new QueryExecutor(
     readPath,
-    bucket as unknown as globalThis.R2Bucket,
+    asGlobalR2Bucket(bucket as R2Bucket),
     undefined,
     undefined
   )

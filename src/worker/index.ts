@@ -12,7 +12,9 @@
  */
 
 import { WorkerEntrypoint } from 'cloudflare:workers'
-import type { Env, ParqueDBDOStub } from '../types/worker'
+import type { Env } from '../types/worker'
+import { getDOStubByName } from '../utils/type-utils'
+import type { ParqueDBDOStub } from '../types/worker'
 import { handleBenchmarkRequest } from './benchmark'
 import { handleDatasetBenchmarkRequest } from './benchmark-datasets'
 import { handleIndexedBenchmarkRequest } from './benchmark-indexed'
@@ -44,6 +46,9 @@ import { RoutePatterns, matchRoute } from './routing'
 
 // Import public routes handler
 import { handlePublicRoutes } from './public-routes'
+
+// Import sync routes handler
+import { handleSyncRoutes, handleUpload, handleDownload } from './sync-routes'
 
 // Import handlers
 import {
@@ -105,7 +110,19 @@ export { DATASETS, getDataset, getDatasetIds, type DatasetConfig } from './datas
 
 // Export Durable Objects for Cloudflare Workers runtime
 // These are required for the DOs to be available as bindings
-export { ParqueDBDO } from './ParqueDBDO'
+export { ParqueDBDO, type CacheInvalidationSignal } from './ParqueDBDO'
+
+// Re-export cache invalidation utilities
+export {
+  CacheInvalidator,
+  createCacheInvalidator,
+  invalidateAfterWrite,
+  getNamespaceCachePaths,
+  getAllCachePaths,
+  type NamespaceCachePaths,
+  type InvalidationResult,
+  type CacheVersion,
+} from './CacheInvalidation'
 export {
   DatabaseIndexDO,
   getUserDatabaseIndex,
@@ -113,6 +130,16 @@ export {
   type RegisterDatabaseOptions,
   type UpdateDatabaseOptions,
 } from './DatabaseIndexDO'
+export {
+  RateLimitDO,
+  getRateLimiter,
+  getClientId,
+  buildRateLimitHeaders,
+  buildRateLimitResponse,
+  DEFAULT_RATE_LIMITS,
+  type RateLimitConfig,
+  type RateLimitResult,
+} from './RateLimitDO'
 
 // =============================================================================
 // Worker Implementation
@@ -308,8 +335,7 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     await this.ensureInitialized()
 
     // Delegate to DO via RPC
-    const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
     const result = await stub.create(ns, data, options)
 
     // Invalidate cache after write
@@ -338,8 +364,7 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     await this.ensureInitialized()
 
     // Delegate to DO via RPC
-    const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
     const result = await stub.update(ns, id, update, options)
 
     // Invalidate cache after write
@@ -366,8 +391,7 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     await this.ensureInitialized()
 
     // Delegate to DO via RPC
-    const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
     const result = await stub.updateMany(ns, filter, update, options)
 
     // Invalidate cache after write
@@ -392,8 +416,7 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     await this.ensureInitialized()
 
     // Delegate to DO via RPC
-    const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
     const result = await stub.delete(ns, id, options)
 
     // Invalidate cache after write
@@ -418,8 +441,7 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     await this.ensureInitialized()
 
     // Delegate to DO via RPC
-    const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
     const result = await stub.deleteMany(ns, filter, options)
 
     // Invalidate cache after write
@@ -451,8 +473,7 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     await this.ensureInitialized()
 
     // Delegate to DO via RPC
-    const doId = this.env.PARQUEDB.idFromName(fromNs)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, fromNs)
     await stub.link(fromNs, fromId, predicate, toNs, toId)
 
     // Invalidate relationship caches
@@ -481,8 +502,7 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     await this.ensureInitialized()
 
     // Delegate to DO via RPC
-    const doId = this.env.PARQUEDB.idFromName(fromNs)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, fromNs)
     await stub.unlink(fromNs, fromId, predicate, toNs, toId)
 
     // Invalidate relationship caches
@@ -509,8 +529,7 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // TODO: Implement relationship traversal via R2
     // For now, delegate to DO via RPC
-    const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
     return stub.related(ns, id, options) as Promise<PaginatedResult<T>>
   }
 
@@ -565,6 +584,81 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Invalidate bloom filter
     await this.readPath.invalidate([`indexes/bloom/${ns}.bloom`])
+  }
+
+  // ===========================================================================
+  // Cache Invalidation Version Checking
+  // ===========================================================================
+
+  /**
+   * Get invalidation version for a namespace from DO
+   *
+   * Workers can use this to check if their caches are stale.
+   * Compare with locally tracked version to detect stale caches.
+   *
+   * @param ns - Namespace to check
+   * @returns Current invalidation version from DO
+   */
+  async getInvalidationVersion(ns: string): Promise<number> {
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
+    return stub.getInvalidationVersion(ns)
+  }
+
+  /**
+   * Check if Worker's cache for a namespace is stale
+   *
+   * Compares the DO's invalidation version with the Worker's tracked version.
+   * Returns true if Worker should invalidate its caches.
+   *
+   * @param ns - Namespace to check
+   * @param workerVersion - Worker's last known version for this namespace
+   * @returns true if cache is stale and should be invalidated
+   */
+  async shouldInvalidateCache(ns: string, workerVersion: number): Promise<boolean> {
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
+    return stub.shouldInvalidate(ns, workerVersion)
+  }
+
+  /**
+   * Check cache validity and invalidate if stale
+   *
+   * This is the main method for CQRS cache coherence. Call before reads
+   * to ensure cache consistency with DO writes.
+   *
+   * @param ns - Namespace to validate
+   * @returns Object with wasInvalidated flag and new version
+   */
+  async validateAndInvalidateCache(ns: string): Promise<{
+    wasInvalidated: boolean
+    version: number
+  }> {
+    await this.ensureInitialized()
+
+    // Get current version from DO
+    const doVersion = await this.getInvalidationVersion(ns)
+
+    // Get Worker's tracked version (from a local cache)
+    const workerVersion = this.getCachedVersion(ns)
+
+    if (doVersion > workerVersion) {
+      // Cache is stale - invalidate
+      await this.invalidateCacheForNamespace(ns)
+      this.setCachedVersion(ns, doVersion)
+      return { wasInvalidated: true, version: doVersion }
+    }
+
+    return { wasInvalidated: false, version: workerVersion }
+  }
+
+  /** Track invalidation versions per namespace locally in Worker */
+  private cachedVersions = new Map<string, number>()
+
+  private getCachedVersion(ns: string): number {
+    return this.cachedVersions.get(ns) ?? 0
+  }
+
+  private setCachedVersion(ns: string, version: number): void {
+    this.cachedVersions.set(ns, version)
   }
 }
 
@@ -676,6 +770,27 @@ export default {
 
       if (path === '/debug/cache') {
         return handleDebugCache(context)
+      }
+
+      // =======================================================================
+      // Sync API Routes (push/pull/sync)
+      // =======================================================================
+      const syncResponse = await handleSyncRoutes(request, env, path)
+      if (syncResponse) {
+        return syncResponse
+      }
+
+      // Handle sync upload/download endpoints
+      const uploadMatch = path.match(/^\/api\/sync\/upload\/([^/]+)\/(.+)$/)
+      if (uploadMatch && request.method === 'PUT') {
+        const [, databaseId, filePath] = uploadMatch
+        return handleUpload(request, env, databaseId!, decodeURIComponent(filePath!))
+      }
+
+      const downloadMatch = path.match(/^\/api\/sync\/download\/([^/]+)\/(.+)$/)
+      if (downloadMatch && request.method === 'GET') {
+        const [, databaseId, filePath] = downloadMatch
+        return handleDownload(request, env, databaseId!, decodeURIComponent(filePath!))
       }
 
       // =======================================================================

@@ -38,6 +38,7 @@ import { getNestedValue, compareValues, generateId, deepClone } from '../utils'
 import { matchesFilter as canonicalMatchesFilter } from '../query/filter'
 import { applyOperators } from '../mutation/operators'
 import { DEFAULT_MAX_INBOUND } from '../constants'
+import { asRelEventPayload } from '../types/cast'
 import pluralize from 'pluralize'
 
 /**
@@ -92,10 +93,18 @@ import {
   getArchivedEventStore,
   getSnapshotStore,
   getQueryStatsStore,
+  getReverseRelIndex,
+  addToReverseRelIndex,
+  removeFromReverseRelIndex,
+  getFromReverseRelIndex,
+  getAllFromReverseRelIndexByNs,
+  removeAllFromReverseRelIndex,
   clearGlobalState,
 } from './store'
 import type { IStorageRouter, StorageMode } from '../storage/router'
 import type { CollectionOptions } from '../db'
+import type { EmbeddingProvider } from '../embeddings/provider'
+import { normalizeVectorFilter, isTextVectorQuery } from '../query/vector-query'
 
 // =============================================================================
 // ParqueDB Implementation
@@ -114,6 +123,7 @@ export class ParqueDBImpl {
   private archivedEvents: Event[] // Shared via global store for archived events
   private snapshots: Snapshot[] // Shared via global store
   private queryStats: Map<string, SnapshotQueryStats> // Shared via global store
+  private reverseRelIndex: Map<string, Map<string, Set<string>>> // Reverse relationship index for O(1) lookups
   private snapshotConfig: SnapshotConfig
   private eventLogConfig: Required<EventLogConfig>
   private pendingEvents: Event[] = [] // Buffer for batched writes
@@ -122,6 +132,7 @@ export class ParqueDBImpl {
   private indexManager: IndexManager // Index management
   private storageRouter: IStorageRouter | null = null // Routes storage by collection mode
   private collectionOptions: Map<string, CollectionOptions> = new Map() // Per-collection options
+  private _embeddingProvider: EmbeddingProvider | null = null // Embedding provider for text-to-vector conversion
 
   constructor(config: ParqueDBConfig) {
     if (!config.storage) {
@@ -136,6 +147,7 @@ export class ParqueDBImpl {
     this.archivedEvents = getArchivedEventStore(config.storage)
     this.snapshots = getSnapshotStore(config.storage)
     this.queryStats = getQueryStatsStore(config.storage)
+    this.reverseRelIndex = getReverseRelIndex(config.storage)
     // Initialize index manager
     this.indexManager = new IndexManager(config.storage)
     // Initialize storage router and collection options if provided
@@ -148,6 +160,24 @@ export class ParqueDBImpl {
     if (config.schema) {
       this.registerSchema(config.schema)
     }
+    // Initialize embedding provider for query-time text-to-vector conversion
+    if (config.embeddingProvider) {
+      this._embeddingProvider = config.embeddingProvider
+    }
+  }
+
+  /**
+   * Get the embedding provider
+   */
+  get embeddingProvider(): EmbeddingProvider | null {
+    return this._embeddingProvider
+  }
+
+  /**
+   * Set the embedding provider for query-time text-to-vector conversion
+   */
+  setEmbeddingProvider(provider: EmbeddingProvider): void {
+    this._embeddingProvider = provider
   }
 
   /**
@@ -195,6 +225,7 @@ export class ParqueDBImpl {
     this.events.length = 0
     this.snapshots.length = 0
     this.queryStats.clear()
+    this.reverseRelIndex.clear()
   }
 
   /**
@@ -273,6 +304,13 @@ export class ParqueDBImpl {
       validateFilter(filter)
     }
 
+    // Normalize vector filter: convert text queries to embeddings if needed
+    let normalizedFilter = filter
+    if (filter && isTextVectorQuery(filter)) {
+      const result = await normalizeVectorFilter(filter, this._embeddingProvider ?? undefined)
+      normalizedFilter = result.filter
+    }
+
     // If asOf is specified, we need to reconstruct entity states at that time
     const asOf = options?.asOf
 
@@ -302,7 +340,7 @@ export class ParqueDBImpl {
       for (const fullId of entityIds) {
         const entity = this.reconstructEntityAtTime(fullId, asOf)
         if (entity && !entity.deletedAt) {
-          if (!filter || canonicalMatchesFilter(entity, filter)) {
+          if (!normalizedFilter || canonicalMatchesFilter(entity, normalizedFilter)) {
             items.push(entity as Entity<T>)
           }
         }
@@ -311,32 +349,32 @@ export class ParqueDBImpl {
       // Try to use indexes if filter is present
       let candidateDocIds: Set<string> | null = null
 
-      if (filter) {
-        const selectedIndex = await this.indexManager.selectIndex(namespace, filter)
+      if (normalizedFilter) {
+        const selectedIndex = await this.indexManager.selectIndex(namespace, normalizedFilter)
 
         if (selectedIndex) {
           // Index found - use it to narrow down candidate documents
-          if (selectedIndex.type === 'fts' && filter.$text) {
+          if (selectedIndex.type === 'fts' && normalizedFilter.$text) {
             // Use FTS index for full-text search
             const ftsResults = await this.indexManager.ftsSearch(
               namespace,
-              filter.$text.$search,
+              normalizedFilter.$text.$search,
               {
-                language: filter.$text.$language,
+                language: normalizedFilter.$text.$language,
                 limit: options?.limit,
-                minScore: filter.$text.$minScore,
+                minScore: normalizedFilter.$text.$minScore,
               }
             )
             candidateDocIds = new Set(ftsResults.map(r => `${namespace}/${r.docId}`))
-          } else if (selectedIndex.type === 'vector' && filter.$vector) {
+          } else if (selectedIndex.type === 'vector' && normalizedFilter.$vector) {
             // Use vector index for similarity search
             const vectorResults = await this.indexManager.vectorSearch(
               namespace,
               selectedIndex.index.name,
-              filter.$vector.$near,
-              filter.$vector.$k,
+              normalizedFilter.$vector.$near ?? normalizedFilter.$vector.query as number[],
+              normalizedFilter.$vector.$k ?? normalizedFilter.$vector.topK,
               {
-                minScore: filter.$vector.$minScore,
+                minScore: normalizedFilter.$vector.$minScore ?? normalizedFilter.$vector.minScore,
               }
             )
             candidateDocIds = new Set(vectorResults.docIds.map(id => `${namespace}/${id}`))
@@ -359,7 +397,7 @@ export class ParqueDBImpl {
 
           // Apply remaining filter conditions
           // For indexed queries, we still need to apply non-indexed filter conditions
-          if (!filter || canonicalMatchesFilter(entity, filter)) {
+          if (!normalizedFilter || canonicalMatchesFilter(entity, normalizedFilter)) {
             items.push(entity as Entity<T>)
           }
         }
@@ -651,23 +689,19 @@ export class ParqueDBImpl {
       const relatedTypeDef = this.schema[relatedType]
       const relatedNs = relatedTypeDef?.$ns as string || relatedType.toLowerCase()
 
-      // Find all related entities that point to this entity
-      this.entities.forEach((relatedEntity, relatedId) => {
-        if (!relatedId.startsWith(`${relatedNs}/`)) return
+      // Use reverse relationship index for O(1) lookup instead of scanning all entities
+      const sourceIds = getFromReverseRelIndex(this.reverseRelIndex, fullId, relatedNs, relatedField)
+
+      // Batch load all related entities from the index
+      for (const sourceId of sourceIds) {
+        const relatedEntity = this.entities.get(sourceId)
+        if (!relatedEntity) continue
 
         // Skip deleted unless includeDeleted is true
-        if (relatedEntity.deletedAt && !options?.includeDeleted) return
+        if (relatedEntity.deletedAt && !options?.includeDeleted) continue
 
-        // Check if the related entity's field points to this entity
-        const refField = (relatedEntity as Record<string, unknown>)[relatedField]
-        if (refField && typeof refField === 'object') {
-          for (const [, refId] of Object.entries(refField)) {
-            if (refId === fullId) {
-              allRelatedEntities.push(relatedEntity as Entity<T>)
-            }
-          }
-        }
-      })
+        allRelatedEntities.push(relatedEntity as Entity<T>)
+      }
     } else {
       // Not a relationship field
       return { items: [], total: 0, hasMore: false }
@@ -786,6 +820,9 @@ export class ParqueDBImpl {
 
     // Store in memory
     this.entities.set(fullId, entity as Entity)
+
+    // Update reverse relationship index for any relationships in the initial data
+    this.indexRelationshipsForEntity(fullId, entity as Entity)
 
     // Update indexes - add new document
     // Note: rowGroup and rowOffset are placeholders for in-memory operations
@@ -927,7 +964,7 @@ export class ParqueDBImpl {
               'CREATE',
               relTarget(fromTarget, predicate, toTarget),
               null,
-              { predicate, to: linkTarget } as unknown as Entity,
+              asRelEventPayload({ predicate, to: linkTarget }),
               actor as EntityId | undefined
             )
           }
@@ -947,7 +984,7 @@ export class ParqueDBImpl {
             await this.recordEvent(
               'DELETE',
               relTarget(fromTarget, predicate, toTarget),
-              { predicate, to: unlinkTarget } as unknown as Entity,
+              asRelEventPayload({ predicate, to: unlinkTarget }),
               null,
               actor as EntityId | undefined
             )
@@ -1020,6 +1057,9 @@ export class ParqueDBImpl {
     if (options?.hard) {
       // Hard delete - remove from storage
       this.entities.delete(fullId)
+
+      // Remove all relationships from reverse index
+      this.unindexRelationshipsForEntity(fullId, entity)
 
       // Remove from indexes
       const [entityNs, entityIdStr] = fullId.split('/')
@@ -1344,6 +1384,40 @@ export class ParqueDBImpl {
   }
 
   /**
+   * Index all relationships from an entity into the reverse relationship index.
+   * This scans the entity for relationship fields (objects with entity ID values)
+   * and adds them to the reverse index for O(1) reverse lookups.
+   *
+   * @param sourceId - The full entity ID (e.g., "posts/abc")
+   * @param entity - The entity to index relationships from
+   */
+  private indexRelationshipsForEntity(sourceId: string, entity: Entity): void {
+    for (const [fieldName, fieldValue] of Object.entries(entity)) {
+      // Skip meta fields and non-object values
+      if (fieldName.startsWith('$')) continue
+      if (!fieldValue || typeof fieldValue !== 'object' || Array.isArray(fieldValue)) continue
+
+      // Check if this looks like a relationship field: { displayName: 'ns/id' }
+      for (const targetId of Object.values(fieldValue as Record<string, unknown>)) {
+        if (typeof targetId === 'string' && targetId.includes('/')) {
+          addToReverseRelIndex(this.reverseRelIndex, sourceId, fieldName, targetId)
+        }
+      }
+    }
+  }
+
+  /**
+   * Remove all relationship indexes for an entity.
+   * Call this before deleting an entity or before re-indexing after update.
+   *
+   * @param sourceId - The full entity ID (e.g., "posts/abc")
+   * @param entity - The entity to remove relationship indexes for
+   */
+  private unindexRelationshipsForEntity(sourceId: string, entity: Entity): void {
+    removeAllFromReverseRelIndex(this.reverseRelIndex, sourceId, entity)
+  }
+
+  /**
    * Apply default values from schema
    */
   private applySchemaDefaults<T>(data: CreateInput<T>): CreateInput<T> {
@@ -1457,8 +1531,17 @@ export class ParqueDBImpl {
           entityRec[key] = {}
         }
 
-        // For singular relationships, clear existing links first
+        // For singular relationships, clear existing links first and update reverse index
         if (!isPlural) {
+          // Remove old links from reverse index before clearing
+          const oldLinks = entityRec[key] as Record<string, EntityId> | undefined
+          if (oldLinks && typeof oldLinks === 'object') {
+            for (const oldTargetId of Object.values(oldLinks)) {
+              if (typeof oldTargetId === 'string' && oldTargetId.includes('/')) {
+                removeFromReverseRelIndex(this.reverseRelIndex, fullId, key, oldTargetId)
+              }
+            }
+          }
           entityRec[key] = {}
         }
 
@@ -1471,6 +1554,8 @@ export class ParqueDBImpl {
             const existingValues = Object.values(entityRec[key] as Record<string, EntityId>)
             if (!existingValues.includes(targetId as EntityId)) {
               ;(entityRec[key] as Record<string, unknown>)[displayName] = targetId
+              // Add to reverse index for O(1) reverse lookups
+              addToReverseRelIndex(this.reverseRelIndex, fullId, key, targetId as string)
             }
           }
         }
@@ -1507,6 +1592,15 @@ export class ParqueDBImpl {
         const entityRec = entity as Record<string, unknown>
         // Handle $all to remove all links
         if (value === '$all') {
+          // Remove all from reverse index before clearing
+          const oldLinks = entityRec[key] as Record<string, EntityId> | undefined
+          if (oldLinks && typeof oldLinks === 'object') {
+            for (const oldTargetId of Object.values(oldLinks)) {
+              if (typeof oldTargetId === 'string' && oldTargetId.includes('/')) {
+                removeFromReverseRelIndex(this.reverseRelIndex, fullId, key, oldTargetId)
+              }
+            }
+          }
           entityRec[key] = {}
           continue
         }
@@ -1520,6 +1614,8 @@ export class ParqueDBImpl {
             for (const [displayName, id] of Object.entries(currentRel as Record<string, EntityId>)) {
               if (id === targetId) {
                 delete (currentRel as Record<string, EntityId>)[displayName]
+                // Remove from reverse index
+                removeFromReverseRelIndex(this.reverseRelIndex, fullId, key, targetId as string)
               }
             }
           }
@@ -1584,26 +1680,21 @@ export class ParqueDBImpl {
             const relatedTypeDef = this.schema[relatedType]
             const relatedNs = relatedTypeDef?.$ns as string || relatedType.toLowerCase()
 
-            // Find all entities of the related type that reference this entity
-            const allRelatedEntities: Array<{ name: string; id: EntityId }> = []
-            this.entities.forEach((relatedEntity, relatedId) => {
-              if (!relatedId.startsWith(`${relatedNs}/`)) return
-              if (relatedEntity.deletedAt) return // Skip deleted
+            // Use reverse relationship index for O(1) lookup instead of scanning all entities
+            const sourceIds = getFromReverseRelIndex(this.reverseRelIndex, fullId, relatedNs, relatedField)
 
-              // Check if the related entity's field points to this entity
-              const refField = (relatedEntity as Record<string, unknown>)[relatedField]
-              if (refField && typeof refField === 'object') {
-                // Reference format: { 'Display Name': 'ns/id' }
-                for (const [, refId] of Object.entries(refField)) {
-                  if (refId === fullId) {
-                    allRelatedEntities.push({
-                      name: relatedEntity.name || relatedId,
-                      id: relatedId as EntityId,
-                    })
-                  }
-                }
-              }
-            })
+            // Batch load related entities from the index
+            const allRelatedEntities: Array<{ name: string; id: EntityId }> = []
+            for (const relatedId of sourceIds) {
+              const relatedEntity = this.entities.get(relatedId)
+              if (!relatedEntity) continue
+              if (relatedEntity.deletedAt) continue // Skip deleted
+
+              allRelatedEntities.push({
+                name: relatedEntity.name || relatedId,
+                id: relatedId as EntityId,
+              })
+            }
 
             // Build RelSet with $count and optional $next
             const totalCount = allRelatedEntities.length
@@ -1643,25 +1734,26 @@ export class ParqueDBImpl {
         // e.g., 'posts' -> 'posts' namespace
         const relatedNs = fieldName.toLowerCase()
 
-        this.entities.forEach((relatedEntity, relatedId) => {
-          if (!relatedId.startsWith(`${relatedNs}/`)) return
-          if (relatedEntity.deletedAt) return // Skip deleted
+        // Use reverse relationship index for O(1) lookup
+        // Get all fields from this namespace that reference our entity
+        const fieldToSourcesMap = getAllFromReverseRelIndexByNs(this.reverseRelIndex, fullId, relatedNs)
 
-          // Check all fields of the related entity for references to this entity
-          for (const [refFieldName, refField] of Object.entries(relatedEntity)) {
-            if (refFieldName.startsWith('$')) continue // Skip meta fields
-            if (refField && typeof refField === 'object' && !Array.isArray(refField)) {
-              // Check if this is a reference field pointing to our entity
-              // Reference format: { 'Display Name': 'ns/id' }
-              for (const refValue of Object.values(refField as Record<string, unknown>)) {
-                if (refValue === fullId) {
-                  relatedEntities[relatedEntity.name || relatedId] = relatedId as EntityId
-                  break
-                }
-              }
-            }
+        // Collect all unique source entities across all fields
+        const allSourceIds = new Set<string>()
+        for (const sourceSet of fieldToSourcesMap.values()) {
+          for (const sourceId of sourceSet) {
+            allSourceIds.add(sourceId)
           }
-        })
+        }
+
+        // Batch load related entities
+        for (const relatedId of allSourceIds) {
+          const relatedEntity = this.entities.get(relatedId)
+          if (!relatedEntity) continue
+          if (relatedEntity.deletedAt) continue // Skip deleted
+
+          relatedEntities[relatedEntity.name || relatedId] = relatedId as EntityId
+        }
 
         if (Object.keys(relatedEntities).length > 0) {
           ;(hydratedEntity as Record<string, unknown>)[fieldName] = relatedEntities

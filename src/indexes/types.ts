@@ -337,6 +337,44 @@ export interface VectorSearchResult {
   entriesScanned: number
 }
 
+/**
+ * Hybrid search strategy
+ *
+ * - 'pre-filter': Apply metadata filters first, then vector search on filtered set
+ * - 'post-filter': Perform vector search first, then filter results
+ * - 'auto': Automatically choose based on estimated filter selectivity
+ */
+export type HybridSearchStrategy = 'pre-filter' | 'post-filter' | 'auto'
+
+/**
+ * Options for hybrid search (vector + metadata filtering)
+ */
+export interface HybridSearchOptions extends VectorSearchOptions {
+  /** Search strategy for combining vector search with filtering */
+  strategy?: HybridSearchStrategy
+  /** Candidate IDs to restrict vector search to (for pre-filter strategy) */
+  candidateIds?: Set<string>
+  /**
+   * Over-fetch multiplier for post-filter strategy.
+   * When using post-filter, we fetch topK * multiplier candidates
+   * to ensure we have enough results after filtering.
+   * Default: 3
+   */
+  overFetchMultiplier?: number
+}
+
+/**
+ * Result of a hybrid search combining vector similarity and metadata filtering
+ */
+export interface HybridSearchResult extends VectorSearchResult {
+  /** Strategy that was used */
+  strategyUsed: HybridSearchStrategy
+  /** Number of candidates after pre-filtering (if pre-filter strategy) */
+  preFilterCount?: number
+  /** Number of results before post-filtering (if post-filter strategy) */
+  postFilterCount?: number
+}
+
 // =============================================================================
 // Index Events
 // =============================================================================

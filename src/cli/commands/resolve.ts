@@ -46,7 +46,7 @@ export async function resolveCommand(parsed: ParsedArgs): Promise<number> {
     const storage = new FsBackend(parsed.options.directory)
 
     // Check for merge in progress
-    const { hasMergeInProgress, loadMergeState, saveMergeState } = await import(
+    const { hasMergeInProgress, loadMergeState, saveMergeState: _saveMergeState } = await import(
       '../../sync/merge-state'
     )
     const mergeInProgress = await hasMergeInProgress(storage)
@@ -111,7 +111,7 @@ export async function resolveCommand(parsed: ParsedArgs): Promise<number> {
  * Resolve conflicts for a specific entity
  */
 async function resolveEntityConflict(
-  storage: Awaited<ReturnType<typeof import('../../storage/FsBackend').FsBackend>>,
+  storage: InstanceType<typeof import('../../storage/FsBackend').FsBackend>,
   state: Awaited<ReturnType<typeof import('../../sync/merge-state').loadMergeState>>,
   entityPattern: string,
   strategy: 'ours' | 'theirs' | 'newest'
@@ -167,7 +167,7 @@ async function resolveEntityConflict(
  * Resolve all conflicts with the same strategy
  */
 async function resolveAllConflicts(
-  storage: Awaited<ReturnType<typeof import('../../storage/FsBackend').FsBackend>>,
+  storage: InstanceType<typeof import('../../storage/FsBackend').FsBackend>,
   state: Awaited<ReturnType<typeof import('../../sync/merge-state').loadMergeState>>,
   strategy: 'ours' | 'theirs' | 'newest'
 ): Promise<number> {

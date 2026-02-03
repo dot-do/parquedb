@@ -12,7 +12,7 @@
  *   parquedb import <namespace> <file>
  */
 
-import { join, extname } from 'node:path'
+import { join, extname, isAbsolute, resolve } from 'node:path'
 import { promises as fs } from 'node:fs'
 import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
@@ -21,6 +21,10 @@ import { print, printError, printSuccess } from '../types'
 import { ParqueDB } from '../../ParqueDB'
 import { FsBackend } from '../../storage/FsBackend'
 import type { CreateInput } from '../../types'
+import {
+  validateFilePathWithAllowedDirs,
+  PathValidationError,
+} from '../../utils/fs-path-safety'
 
 // =============================================================================
 // Constants
@@ -30,6 +34,27 @@ import { MAX_BATCH_SIZE } from '../../constants'
 
 const CONFIG_FILENAME = 'parquedb.json'
 const BATCH_SIZE = MAX_BATCH_SIZE // Process in batches for large files
+
+/**
+ * Allowed file extensions for import
+ * Maps extension (lowercase, with leading dot) to format
+ */
+const ALLOWED_EXTENSIONS: Record<string, string> = {
+  '.json': 'json',
+  '.ndjson': 'ndjson',
+  '.jsonl': 'ndjson',
+  '.csv': 'csv',
+}
+
+/**
+ * Validate that a file has an allowed extension for import
+ * @param filePath - The file path to check
+ * @returns The detected format, or null if extension is not allowed
+ */
+export function validateFileExtension(filePath: string): string | null {
+  const ext = extname(filePath).toLowerCase()
+  return ALLOWED_EXTENSIONS[ext] ?? null
+}
 
 // =============================================================================
 // Import Command
@@ -47,8 +72,39 @@ export async function importCommand(parsed: ParsedArgs): Promise<number> {
   }
 
   const namespace = parsed.args[0]!
-  const filePath = parsed.args[1]!
+  const rawFilePath = parsed.args[1]!
   const directory = parsed.options.directory
+
+  // Validate file path for security (path traversal, dangerous characters)
+  // Allow files in: current working directory, data directory, or absolute paths within those
+  const cwd = process.cwd()
+  const allowedDirs = [cwd, resolve(directory)]
+
+  // If the path is absolute, validate against allowed directories
+  // If relative, it will be resolved against cwd
+  const basePath = isAbsolute(rawFilePath) ? cwd : cwd
+
+  try {
+    validateFilePathWithAllowedDirs(basePath, rawFilePath, allowedDirs)
+  } catch (error) {
+    if (error instanceof PathValidationError) {
+      printError(`Invalid file path: ${error.message}`)
+      return 1
+    }
+    throw error
+  }
+
+  // Resolve to absolute path for consistent handling
+  const filePath = isAbsolute(rawFilePath) ? rawFilePath : resolve(cwd, rawFilePath)
+
+  // Validate file extension
+  const detectedFormat = validateFileExtension(filePath)
+  if (detectedFormat === null) {
+    const ext = extname(filePath).toLowerCase() || '(none)'
+    printError(`Invalid file extension: ${ext}`)
+    print('Supported extensions: .json, .ndjson, .jsonl, .csv')
+    return 1
+  }
 
   // Check if database is initialized
   const configPath = join(directory, CONFIG_FILENAME)

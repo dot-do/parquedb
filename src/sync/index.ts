@@ -13,15 +13,25 @@
 // Push/Pull/Sync operations
 export * from './manifest'
 export * from './engine'
+export * from './client'
 
 // Git-inspired version control
 export * from './hash'
 export * from './commit'
 export * from './refs'
 export * from './branch-manager'
+export * from './state-store'
 
 // Event-based merge engine
 export * from './commutative-ops'
 export * from './conflict-detection'
 export * from './conflict-resolution'
 export * from './event-merge'
+export * from './merge-state'
+export * from './merge-commit'
+
+// Common ancestor algorithm
+export * from './common-ancestor'
+
+// Distributed locking
+export * from './lock'

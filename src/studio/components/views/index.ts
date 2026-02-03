@@ -7,3 +7,4 @@
 
 export { DatabaseDashboardView, type DatabaseDashboardViewProps } from './DatabaseDashboardView'
 export { DatabaseSelectView, type DatabaseSelectViewProps } from './DatabaseSelectView'
+export { SettingsView, type SettingsViewProps } from './SettingsView'

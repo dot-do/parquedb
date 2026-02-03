@@ -190,7 +190,7 @@ function displayOneline(
 ): void {
   for (const commit of commits) {
     const shortHash = commit.hash.substring(0, 8)
-    const firstLine = commit.message.split('\n')[0]
+    const firstLine = commit.message.split('\n')[0] ?? ''
     const truncated = firstLine.length > 60 ? firstLine.substring(0, 57) + '...' : firstLine
     print(`${shortHash} ${truncated}`)
   }
@@ -210,7 +210,9 @@ function displayFull(
 ): void {
   for (let i = 0; i < commits.length; i++) {
     const commit = commits[i]
-    const shortHash = commit.hash.substring(0, 8)
+    if (!commit) continue
+
+    // shortHash computed but not displayed in full format (only used in header)
     const relativeTime = formatRelativeTime(commit.timestamp)
     const absoluteTime = formatDate(commit.timestamp)
 

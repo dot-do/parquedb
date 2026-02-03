@@ -264,17 +264,24 @@ export {
 } from './events'
 
 // =============================================================================
-// Embeddings (Workers AI)
+// Embeddings (Workers AI & Vercel AI SDK)
 // =============================================================================
 
 export {
-  // Core Embeddings
+  // Workers AI Embeddings (Cloudflare Workers)
   WorkersAIEmbeddings,
   createEmbeddings,
   getModelDimensions,
   DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
   DEFAULT_DIMENSIONS as DEFAULT_EMBEDDING_DIMENSIONS,
   EMBEDDING_MODELS,
+  // Vercel AI SDK Embeddings (Node.js)
+  AISDKEmbeddings,
+  createAISDKEmbeddings,
+  getAISDKModelDimensions,
+  listAISDKModels,
+  AI_SDK_MODELS,
+  DEFAULT_AI_SDK_DIMENSIONS,
   // Auto-Embedding
   processEmbedOperator,
   autoEmbedFields,
@@ -285,6 +292,10 @@ export {
   type AIBinding,
   type EmbeddingModelConfig,
   type EmbedOptions,
+  type EmbeddingProvider,
+  type AISDKProvider,
+  type AISDKEmbeddingsConfig,
+  type AISDKEmbedOptions,
   type AutoEmbedFieldConfig,
   type AutoEmbedConfig,
   type ProcessEmbeddingsOptions,
@@ -345,6 +356,81 @@ export {
   type MigrationResult,
   type MigrationError,
 } from './migration'
+
+// =============================================================================
+// Error Handling
+// =============================================================================
+
+export {
+  // Base class
+  ParqueDBError,
+  ErrorCode,
+  // Validation errors
+  ValidationError as ParqueDBValidationError,
+  // Not found errors
+  NotFoundError as ParqueDBNotFoundError,
+  EntityNotFoundError as ParqueDBEntityNotFoundError,
+  IndexNotFoundError as ParqueDBIndexNotFoundError,
+  EventNotFoundError,
+  SnapshotNotFoundError,
+  FileNotFoundError as ParqueDBFileNotFoundError,
+  // Conflict errors
+  ConflictError,
+  VersionConflictError as ParqueDBVersionConflictError,
+  AlreadyExistsError as ParqueDBAlreadyExistsError,
+  ETagMismatchError as ParqueDBETagMismatchError,
+  UniqueConstraintError as ParqueDBUniqueConstraintError,
+  // Relationship errors
+  RelationshipError as ParqueDBRelationshipError,
+  // Query errors
+  QueryError,
+  InvalidFilterError,
+  // Storage errors
+  StorageError as ParqueDBStorageError,
+  QuotaExceededError as ParqueDBQuotaExceededError,
+  InvalidPathError as ParqueDBInvalidPathError,
+  PathTraversalError as ParqueDBPathTraversalError,
+  NetworkError as ParqueDBNetworkError,
+  // Authorization errors
+  AuthorizationError,
+  PermissionDeniedError as ParqueDBPermissionDeniedError,
+  // Configuration errors
+  ConfigurationError,
+  // Timeout error
+  TimeoutError,
+  // RPC errors
+  RpcError as ParqueDBRpcError,
+  // Index errors
+  IndexError,
+  IndexBuildError as ParqueDBIndexBuildError,
+  IndexLoadError as ParqueDBIndexLoadError,
+  IndexAlreadyExistsError as ParqueDBIndexAlreadyExistsError,
+  // Event errors
+  EventError as ParqueDBEventError,
+  // Type guards
+  isParqueDBError,
+  isValidationError,
+  isNotFoundError,
+  isEntityNotFoundError,
+  isConflictError,
+  isVersionConflictError,
+  isETagMismatchError,
+  isAlreadyExistsError,
+  isStorageError,
+  isRelationshipError,
+  isQueryError,
+  isAuthorizationError,
+  isRpcError,
+  isIndexError,
+  isEventError,
+  // Factory functions
+  wrapError,
+  errorFromStatus,
+  assertValid,
+  assertFound,
+  // Types
+  type SerializedError,
+} from './errors'
 
 // =============================================================================
 // Mutation Layer
@@ -584,6 +670,27 @@ export {
   allowsDiscovery,
   type Visibility,
 } from './types/visibility'
+
+// =============================================================================
+// Security (CSRF Protection)
+// =============================================================================
+
+export {
+  // CSRF Middleware (for Hono)
+  csrf,
+  csrfToken,
+  validateCsrf,
+  // Token Functions
+  generateCsrfToken,
+  verifyCsrfToken,
+  // CORS Helpers
+  buildSecureCorsHeaders,
+  getAllowedOriginHeader,
+  // Types
+  type CsrfOptions,
+  type CsrfValidationResult,
+  type CsrfTokenPayload,
+} from './security'
 
 // =============================================================================
 // Version

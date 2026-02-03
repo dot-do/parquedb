@@ -26,8 +26,11 @@ import type {
   HistoryOptions,
 } from '../types'
 
+import type { HybridSearchStrategy } from '../indexes/types'
+
 import type { IStorageRouter } from '../storage/router'
 import type { CollectionOptions } from '../db'
+import type { EmbeddingProvider } from '../embeddings/provider'
 
 // =============================================================================
 // Configuration Types
@@ -161,6 +164,30 @@ export interface ParqueDBConfig {
 
   /** Per-collection options from DB() schema */
   collectionOptions?: Map<string, CollectionOptions>
+
+  /**
+   * Embedding provider for query-time text-to-vector conversion
+   *
+   * When configured, enables automatic embedding of text queries in $vector filters:
+   *
+   * @example
+   * ```typescript
+   * const db = new ParqueDB({
+   *   storage,
+   *   embeddingProvider: createWorkersAIProvider(env.AI)
+   * })
+   *
+   * // Now can use text in vector queries
+   * await db.Posts.find({
+   *   $vector: {
+   *     field: 'embedding',
+   *     query: 'machine learning tutorials',  // auto-embedded
+   *     topK: 10
+   *   }
+   * })
+   * ```
+   */
+  embeddingProvider?: EmbeddingProvider
 }
 
 // =============================================================================
@@ -215,6 +242,73 @@ export interface Collection<T = Record<string, unknown>> {
    * @returns Delete result
    */
   delete(id: string, options?: DeleteOptions): Promise<DeleteResult>
+
+  /**
+   * Semantic search using vector similarity
+   *
+   * Searches for entities with vectors similar to the query.
+   * Query can be a text string (requires embeddingProvider) or a pre-computed vector.
+   *
+   * @param query - Search query (text string or vector array)
+   * @param options - Search options
+   * @returns Array of entities with similarity scores
+   *
+   * @example
+   * ```typescript
+   * // Text query (requires embeddingProvider configured on db)
+   * const results = await collection.semanticSearch('machine learning tutorials', {
+   *   limit: 10,
+   *   minScore: 0.7
+   * })
+   *
+   * // Vector query
+   * const results = await collection.semanticSearch(queryVector, {
+   *   limit: 10,
+   *   field: 'embedding'
+   * })
+   *
+   * // Results include $score
+   * results.forEach(r => console.log(r.name, r.$score))
+   * ```
+   */
+  semanticSearch(
+    query: string | number[],
+    options?: SemanticSearchOptions
+  ): Promise<SemanticSearchResult<T>[]>
+
+  /**
+   * Hybrid search combining vector similarity with metadata filtering
+   *
+   * Supports multiple strategies for combining vector search with filters:
+   * - 'pre-filter': Apply filters first, then vector search on filtered set
+   * - 'post-filter': Vector search first, then filter results
+   * - 'auto': Automatically choose based on estimated filter selectivity
+   *
+   * @param query - Search query (text string or vector array)
+   * @param options - Hybrid search options
+   * @returns Array of entities with similarity scores
+   *
+   * @example
+   * ```typescript
+   * // Search with metadata filter
+   * const results = await collection.hybridSearch('ML tutorials', {
+   *   filter: { category: 'tech', status: 'published' },
+   *   limit: 10,
+   *   strategy: 'auto'
+   * })
+   *
+   * // RRF-weighted hybrid with text + vector
+   * const results = await collection.hybridSearch(queryVector, {
+   *   filter: { author: 'alice' },
+   *   limit: 20,
+   *   strategy: 'pre-filter'
+   * })
+   * ```
+   */
+  hybridSearch(
+    query: string | number[],
+    options?: HybridSearchOptionsCollection
+  ): Promise<SemanticSearchResult<T>[]>
 }
 
 // =============================================================================
@@ -416,60 +510,34 @@ export interface EventLog {
 // Error Classes
 // =============================================================================
 
-/**
- * Error thrown when optimistic concurrency check fails
- */
-export class VersionConflictError extends Error {
-  override name = 'VersionConflictError'
-  expectedVersion: number
-  actualVersion: number | undefined
-  namespace?: string
-  entityId?: string
+// Re-export from the centralized errors module for backward compatibility
+// These errors now extend ParqueDBError and support serialization for RPC
+export {
+  VersionConflictError,
+  EntityNotFoundError,
+  RelationshipError,
+  EventError,
+} from '../errors'
 
-  constructor(
-    expectedVersion: number,
-    actualVersion: number | undefined,
-    context?: { namespace?: string; entityId?: string }
-  ) {
-    const baseMsg = `Version conflict: expected ${expectedVersion}, got ${actualVersion}`
-    const contextMsg = context?.namespace && context?.entityId
-      ? ` for ${context.namespace}/${context.entityId}`
-      : context?.entityId
-      ? ` for entity ${context.entityId}`
-      : ''
-    super(baseMsg + contextMsg)
-    this.expectedVersion = expectedVersion
-    this.actualVersion = actualVersion
-    this.namespace = context?.namespace
-    this.entityId = context?.entityId
-  }
-}
-
-/**
- * Error thrown when an entity is not found
- */
-export class EntityNotFoundError extends Error {
-  override name = 'EntityNotFoundError'
-  namespace: string
-  entityId: string
-
-  constructor(namespace: string, entityId: string) {
-    super(`Entity not found: ${namespace}/${entityId}`)
-    this.namespace = namespace
-    this.entityId = entityId
-  }
-}
+// Import and re-export ValidationError with backward-compatible constructor
+import {
+  ValidationError as BaseValidationError,
+  ErrorCode,
+} from '../errors'
 
 /**
  * Error thrown when validation fails
+ *
+ * @deprecated Use ValidationError from '../errors' directly for new code.
+ * This wrapper provides backward compatibility with the old constructor signature.
  */
-export class ValidationError extends Error {
-  override name = 'ValidationError'
-  operation: string
-  namespace: string
-  fieldName?: string
-  expectedType?: string
-  actualType?: string
+export class ValidationError extends BaseValidationError {
+  /** @deprecated Use context.field instead */
+  readonly operation: string
+  /** @deprecated Use context.namespace instead */
+  declare readonly namespace: string
+  /** @deprecated Use field getter instead */
+  readonly fieldName?: string
 
   constructor(
     operation: string,
@@ -484,79 +552,20 @@ export class ValidationError extends Error {
     const contextMsg = context?.fieldName
       ? ` (field: ${context.fieldName}${context.expectedType ? `, expected: ${context.expectedType}` : ''}${context.actualType ? `, got: ${context.actualType}` : ''})`
       : ''
-    super(`Validation failed for '${namespace}' ${operation}: ${message}${contextMsg}`)
+    super(
+      `Validation failed for '${namespace}' ${operation}: ${message}${contextMsg}`,
+      {
+        field: context?.fieldName,
+        expectedType: context?.expectedType,
+        actualType: context?.actualType,
+        namespace,
+        operation,
+      }
+    )
     this.operation = operation
-    this.namespace = namespace
     this.fieldName = context?.fieldName
-    this.expectedType = context?.expectedType
-    this.actualType = context?.actualType
-  }
-}
-
-/**
- * Error thrown when a relationship operation fails
- */
-export class RelationshipError extends Error {
-  override name = 'RelationshipError'
-  operation: string
-  namespace: string
-  entityId?: string
-  relationshipName?: string
-  targetId?: string
-
-  constructor(
-    operation: string,
-    namespace: string,
-    message: string,
-    context?: {
-      entityId?: string
-      relationshipName?: string
-      targetId?: string
-    }
-  ) {
-    const entityMsg = context?.entityId ? ` ${namespace}/${context.entityId}` : ` '${namespace}'`
-    const relMsg = context?.relationshipName ? ` relationship '${context.relationshipName}'` : ''
-    const targetMsg = context?.targetId ? ` with target ${context.targetId}` : ''
-    super(`${operation} failed for${entityMsg}${relMsg}${targetMsg}: ${message}`)
-    this.operation = operation
-    this.namespace = namespace
-    this.entityId = context?.entityId
-    this.relationshipName = context?.relationshipName
-    this.targetId = context?.targetId
-  }
-}
-
-/**
- * Error thrown when an event/snapshot operation fails
- */
-export class EventError extends Error {
-  override name = 'EventError'
-  operation: string
-  eventId?: string
-  snapshotId?: string
-  entityId?: string
-
-  constructor(
-    operation: string,
-    message: string,
-    context?: {
-      eventId?: string
-      snapshotId?: string
-      entityId?: string
-    }
-  ) {
-    const contextMsg = context?.eventId
-      ? ` event ${context.eventId}`
-      : context?.snapshotId
-      ? ` snapshot ${context.snapshotId}`
-      : context?.entityId
-      ? ` for entity ${context.entityId}`
-      : ''
-    super(`${operation} failed${contextMsg}: ${message}`)
-    this.operation = operation
-    this.eventId = context?.eventId
-    this.snapshotId = context?.snapshotId
-    this.entityId = context?.entityId
+    // Note: namespace is already set via context in base class
+    Object.setPrototypeOf(this, ValidationError.prototype)
   }
 }
 

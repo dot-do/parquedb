@@ -9,6 +9,7 @@
 import { useState } from 'react'
 import type { DatabaseInfo } from '../../worker/DatabaseIndexDO'
 import type { Visibility } from '../../types/visibility'
+import { ErrorDisplay } from './ErrorDisplay'
 
 export interface CreateDatabaseModalProps {
   /** Close the modal */
@@ -43,7 +44,7 @@ export function CreateDatabaseModal({
     }
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent, retryCount = 0) => {
     e.preventDefault()
     setError(null)
 
@@ -52,11 +53,16 @@ export function CreateDatabaseModal({
       return
     }
 
+    const maxRetries = 2
+
     try {
       setLoading(true)
       const response = await fetch(apiEndpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest', // CSRF protection
+        },
         body: JSON.stringify({
           name: name.trim(),
           description: description.trim() || undefined,
@@ -67,13 +73,29 @@ export function CreateDatabaseModal({
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({})) as { error?: string }
-        throw new Error(data.error || 'Failed to create database')
+        const error = new Error(data.error || `Failed to create database (${response.status})`)
+
+        // Retry on server errors (5xx) but not on client errors (4xx)
+        if (response.status >= 500 && retryCount < maxRetries) {
+          console.warn(`[CreateDatabase] Server error, retrying (${retryCount + 1}/${maxRetries})...`)
+          const delay = Math.pow(2, retryCount) * 1000 // Exponential backoff
+          await new Promise(resolve => setTimeout(resolve, delay))
+          setLoading(false)
+          return handleSubmit(e, retryCount + 1)
+        }
+
+        throw error
       }
 
       const database = await response.json() as DatabaseInfo
       onCreate(database)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create database')
+      // Provide user-friendly error messages
+      const errorMessage = err instanceof Error ? err.message : 'Failed to create database'
+      const userMessage = errorMessage.includes('Failed to fetch')
+        ? 'Unable to connect to the server. Please check your connection and try again.'
+        : errorMessage
+      setError(userMessage)
     } finally {
       setLoading(false)
     }
@@ -131,16 +153,13 @@ export function CreateDatabaseModal({
 
         {/* Error message */}
         {error && (
-          <div style={{
-            padding: '0.75rem 1rem',
-            background: 'var(--theme-error-100, #fef2f2)',
-            color: 'var(--theme-error-500, #dc2626)',
-            borderRadius: '6px',
-            marginBottom: '1rem',
-            fontSize: '0.875rem',
-          }}>
-            {error}
-          </div>
+          <ErrorDisplay
+            error={error}
+            compact
+            dismissible
+            onDismiss={() => setError(null)}
+            style={{ marginBottom: '1rem' }}
+          />
         )}
 
         {/* Form */}

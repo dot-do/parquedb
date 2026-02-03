@@ -6,6 +6,7 @@
 
 import type { Filter } from '../types/filter'
 import type { FindOptions } from '../types/options'
+import { matchGroupsAs } from '../types/cast'
 
 // =============================================================================
 // Error Types
@@ -160,5 +161,5 @@ export function matchRoute<T extends string[]>(
 ): T | null {
   const match = path.match(pattern)
   if (!match) return null
-  return match.slice(1) as unknown as T
+  return matchGroupsAs<T>(match.slice(1))
 }

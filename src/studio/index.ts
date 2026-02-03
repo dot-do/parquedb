@@ -153,13 +153,21 @@ export {
   DatabaseCard,
   DatabaseDashboard,
   CreateDatabaseModal,
+  ConfirmationDialog,
+  SettingsPage,
   DatabaseDashboardView,
   DatabaseSelectView,
+  SettingsView,
   type DatabaseCardProps,
   type DatabaseDashboardProps,
   type CreateDatabaseModalProps,
+  type ConfirmationDialogProps,
+  type ConfirmationVariant,
+  type SettingsPageProps,
+  type StudioSettings,
   type DatabaseDashboardViewProps,
   type DatabaseSelectViewProps,
+  type SettingsViewProps,
 } from './components'
 
 // Payload Configuration Factory

@@ -9,6 +9,7 @@
 
 import type { CacheConfig } from './CacheStrategy'
 import { DEFAULT_CACHE_CONFIG } from './CacheStrategy'
+import { asBodyInit } from '../types/cast'
 
 // =============================================================================
 // Errors
@@ -258,7 +259,7 @@ export class ReadPath {
     // Cache the range - cast to BodyInit for Response constructor
     await this.cache.put(
       cacheKey,
-      new Response(data as unknown as BodyInit, {
+      new Response(asBodyInit(data), {
         headers: {
           'Cache-Control': `max-age=${ttl}`,
           'X-Range': `${start}-${end}`,

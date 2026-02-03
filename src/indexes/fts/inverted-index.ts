@@ -410,7 +410,7 @@ export class InvertedIndex {
 
   private deserialize(data: Uint8Array): void {
     const json = new TextDecoder().decode(data)
-    const parsed = JSON.parse(json) as {
+    let parsed: {
       version: number
       index: Array<[string, Posting[]]>
       docStats: Array<{
@@ -423,6 +423,11 @@ export class InvertedIndex {
         avgDocLength: number
         documentFrequency: Array<[string, number]>
       }
+    }
+    try {
+      parsed = JSON.parse(json) as typeof parsed
+    } catch {
+      throw new Error('Invalid inverted index data: not valid JSON')
     }
 
     if (parsed.version !== 1) {

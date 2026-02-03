@@ -288,29 +288,61 @@ export class QueryExecutor {
         }
 
         case 'vector': {
-          // Handle vector similarity search
+          // Handle vector similarity search with hybrid filtering support
           const vectorCondition = indexPlan.condition as {
-            $near: number[]
-            $k: number
-            $field: string
+            // New format
+            query?: number[] | string
+            field?: string
+            topK?: number
+            minScore?: number
+            strategy?: 'pre-filter' | 'post-filter' | 'auto'
+            efSearch?: number
+            // Legacy format
+            $near?: number[]
+            $k?: number
+            $field?: string
             $minScore?: number
           }
 
-          if (vectorCondition.$near && vectorCondition.$k) {
-            const vectorResult = await this.indexManager!.vectorSearch(
-              ns,
-              indexPlan.index.name,
-              vectorCondition.$near,
-              vectorCondition.$k,
-              { minScore: vectorCondition.$minScore }
-            )
+          // Support both new and legacy format
+          const queryVector = vectorCondition.query ?? vectorCondition.$near
+          const topK = vectorCondition.topK ?? vectorCondition.$k
+          const minScore = vectorCondition.minScore ?? vectorCondition.$minScore
+          const strategy = vectorCondition.strategy ?? 'auto'
+          const efSearch = vectorCondition.efSearch
 
-            // Vector search returns results ordered by similarity
-            // We want to preserve this order in the final results
-            candidateDocIds = vectorResult.docIds
+          if (queryVector && typeof queryVector !== 'string' && topK) {
+            // Check if there are metadata filters (fields other than $vector)
+            const metadataFilter = this.extractMetadataFilter(filter)
+            const hasMetadataFilter = Object.keys(metadataFilter).length > 0
 
-            // Store scores for potential use in result metadata
-            // For now, candidateDocIds maintains the order by similarity
+            if (hasMetadataFilter) {
+              // Hybrid search: combine vector similarity with metadata filtering
+              const hybridResult = await this.executeHybridVectorSearch<T>(
+                ns,
+                indexPlan.index.name,
+                queryVector,
+                topK,
+                metadataFilter,
+                { minScore, strategy, efSearch },
+                startTime
+              )
+              if (hybridResult) {
+                return hybridResult
+              }
+            } else {
+              // Pure vector search (no metadata filtering)
+              const vectorResult = await this.indexManager!.vectorSearch(
+                ns,
+                indexPlan.index.name,
+                queryVector,
+                topK,
+                { minScore, efSearch }
+              )
+
+              // Vector search returns results ordered by similarity
+              candidateDocIds = vectorResult.docIds
+            }
           }
           break
         }
@@ -380,6 +412,167 @@ export class QueryExecutor {
       logger.debug('Index-based query execution failed, falling back to full scan', error)
       return null
     }
+  }
+
+  /**
+   * Execute hybrid vector search combining vector similarity with metadata filtering.
+   *
+   * Supports two strategies:
+   * - pre-filter: Apply metadata filters first, then vector search on filtered candidates
+   * - post-filter: Perform vector search first, then filter results by metadata
+   */
+  private async executeHybridVectorSearch<T>(
+    ns: string,
+    indexName: string,
+    queryVector: number[],
+    topK: number,
+    metadataFilter: Filter,
+    options: {
+      minScore?: number
+      strategy?: 'pre-filter' | 'post-filter' | 'auto'
+      efSearch?: number
+    },
+    startTime: number
+  ): Promise<QueryResult<T> | null> {
+    const strategy = options.strategy ?? 'auto'
+
+    // Load data for filtering
+    const dataPath = `data/${ns}/data.parquet`
+    const metadata = await this.reader.readMetadata(dataPath)
+
+    // Read all rows for filtering
+    const allRows = await this.reader.readAll<T>(dataPath)
+    const predicate = toPredicate(metadataFilter)
+
+    // Determine strategy
+    let actualStrategy = strategy
+    if (strategy === 'auto') {
+      // Estimate filter selectivity by sampling or use heuristics
+      const totalRows = allRows.length
+      const matchingRows = allRows.filter(row => predicate(row)).length
+      const selectivity = totalRows > 0 ? matchingRows / totalRows : 1
+
+      // Use pre-filter if filtering removes more than 50% of documents
+      actualStrategy = selectivity < 0.5 ? 'pre-filter' : 'post-filter'
+    }
+
+    let results: T[]
+    let vectorScores: Map<string, number> = new Map()
+
+    if (actualStrategy === 'pre-filter') {
+      // Pre-filter: First filter by metadata, then vector search on candidates
+      const filteredRows = allRows.filter(row => predicate(row))
+      const candidateIds = new Set(
+        filteredRows.map(row => (row as Record<string, unknown>).$id as string)
+      )
+
+      // Perform hybrid search with candidate restriction
+      const hybridResult = await this.indexManager!.hybridSearch(
+        ns,
+        indexName,
+        queryVector,
+        topK,
+        {
+          strategy: 'pre-filter',
+          candidateIds,
+          minScore: options.minScore,
+          efSearch: options.efSearch,
+        }
+      )
+
+      // Map results back to rows
+      const resultIdSet = new Set(hybridResult.docIds)
+      results = filteredRows.filter(row => {
+        const id = (row as Record<string, unknown>).$id as string
+        return resultIdSet.has(id)
+      })
+
+      // Store scores for sorting
+      hybridResult.docIds.forEach((docId, i) => {
+        vectorScores.set(docId, hybridResult.scores?.[i] ?? 0)
+      })
+
+      // Sort by vector similarity score
+      results.sort((a, b) => {
+        const scoreA = vectorScores.get((a as Record<string, unknown>).$id as string) ?? 0
+        const scoreB = vectorScores.get((b as Record<string, unknown>).$id as string) ?? 0
+        return scoreB - scoreA // Descending by score
+      })
+    } else {
+      // Post-filter: Perform vector search with over-fetching, then filter
+      const overFetchMultiplier = 3
+      const hybridResult = await this.indexManager!.hybridSearch(
+        ns,
+        indexName,
+        queryVector,
+        topK * overFetchMultiplier,
+        {
+          strategy: 'post-filter',
+          minScore: options.minScore,
+          efSearch: options.efSearch,
+          overFetchMultiplier,
+        }
+      )
+
+      // Store scores
+      hybridResult.docIds.forEach((docId, i) => {
+        vectorScores.set(docId, hybridResult.scores?.[i] ?? 0)
+      })
+
+      // Filter vector results by metadata
+      const resultIdSet = new Set(hybridResult.docIds)
+      const candidateRows = allRows.filter(row => {
+        const id = (row as Record<string, unknown>).$id as string
+        return resultIdSet.has(id)
+      })
+
+      // Apply metadata filter
+      results = candidateRows.filter(row => predicate(row))
+
+      // Sort by vector similarity score
+      results.sort((a, b) => {
+        const scoreA = vectorScores.get((a as Record<string, unknown>).$id as string) ?? 0
+        const scoreB = vectorScores.get((b as Record<string, unknown>).$id as string) ?? 0
+        return scoreB - scoreA
+      })
+
+      // Limit to topK after filtering
+      results = results.slice(0, topK)
+    }
+
+    return {
+      rows: results,
+      hasMore: false,
+      stats: {
+        totalRowGroups: metadata.rowGroups?.length ?? 0,
+        scannedRowGroups: 1,
+        skippedRowGroups: 0,
+        rowsScanned: allRows.length,
+        rowsMatched: results.length,
+        executionTimeMs: Date.now() - startTime,
+        columnsRead: [],
+        usedBloomFilter: false,
+        indexUsed: indexName,
+        indexType: 'vector',
+      },
+    }
+  }
+
+  /**
+   * Extract metadata filter from a filter that includes $vector.
+   * Returns a filter with $vector removed.
+   */
+  private extractMetadataFilter(filter: Filter): Filter {
+    const result: Filter = {}
+
+    for (const [key, value] of Object.entries(filter)) {
+      // Skip $vector and other special operators we don't want in metadata filter
+      if (key === '$vector') continue
+
+      result[key] = value
+    }
+
+    return result
   }
 
   /**

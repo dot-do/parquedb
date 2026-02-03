@@ -111,7 +111,12 @@ export class ManifestManager {
 
     if (data) {
       const json = new TextDecoder().decode(data)
-      this.manifest = JSON.parse(json) as EventManifest
+      try {
+        this.manifest = JSON.parse(json) as EventManifest
+      } catch {
+        // Invalid manifest JSON - create new empty manifest
+        this.manifest = this.createEmptyManifest()
+      }
     } else {
       this.manifest = this.createEmptyManifest()
     }

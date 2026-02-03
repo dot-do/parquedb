@@ -45,6 +45,9 @@ export interface Env {
   /** Durable Object namespace for database index (user's database registry) */
   DATABASE_INDEX?: DurableObjectNamespace
 
+  /** Durable Object namespace for rate limiting */
+  RATE_LIMITER?: DurableObjectNamespace
+
   // Note: Caching uses the free Cloudflare Cache API (caches.default), not KV.
   // Cache API provides 500MB on free accounts, 5GB+ on enterprise.
   // No binding needed - caches.default is globally available in Workers.
@@ -84,6 +87,9 @@ export interface ParqueDBDOStub {
   link(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
   unlink(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
   related(ns: string, id: string, options?: unknown): Promise<unknown>
+  // Cache invalidation methods
+  getInvalidationVersion(ns: string): Promise<number>
+  shouldInvalidate(ns: string, workerVersion: number): Promise<boolean>
 }
 
 export type ParqueDBService = Fetcher

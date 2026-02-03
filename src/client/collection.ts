@@ -22,6 +22,7 @@ import type {
 } from '../types'
 import type { RpcTargetMarker, RpcPromiseMarker } from '../types/integrations'
 import { createRpcPromise, type RpcService } from './rpc-promise'
+import { chainRpcPromise } from '../types/cast'
 
 // Re-export RpcService for backwards compatibility
 export type { RpcService }
@@ -301,7 +302,7 @@ export class CollectionClient<T = unknown> implements RpcTargetMarker {
   ): RpcPromiseMarker<U[]> {
     // The map function on RpcPromise takes (T extends (infer E)[] ? E : T) => U
     // Since find() returns PaginatedResult<Entity<T>>.items which is Entity<T>[], the mapper is correct
-    return this.find(filter).map(mapper as (entity: Entity<T>) => U) as unknown as RpcPromiseMarker<U[]>
+    return chainRpcPromise<RpcPromiseMarker<U[]>>(this.find(filter).map(mapper as (entity: Entity<T>) => U))
   }
 
   /**

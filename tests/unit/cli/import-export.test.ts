@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { importCommand } from '../../../src/cli/commands/import'
+import { importCommand, validateFileExtension } from '../../../src/cli/commands/import'
 import { exportCommand } from '../../../src/cli/commands/export'
 import { initCommand } from '../../../src/cli/commands/init'
 import type { ParsedArgs } from '../../../src/cli/index'
@@ -103,7 +103,8 @@ describe('import and export commands', () => {
       stdoutOutput = []
       stderrOutput = []
 
-      const args = createArgs('import', ['posts', '/nonexistent/file.json'])
+      // Use a path within the temp directory that doesn't exist
+      const args = createArgs('import', ['posts', join(tempDir, 'nonexistent.json')])
       const code = await importCommand(args)
 
       expect(code).toBe(1)
@@ -190,6 +191,177 @@ Post,Post 2,Second Post`
 
       expect(code).toBe(0)
       expect(stdoutOutput.join('')).toContain('Imported 2 entities')
+    })
+
+    // =========================================================================
+    // Path Validation Tests
+    // =========================================================================
+
+    it('should reject paths with path traversal sequences', async () => {
+      stdoutOutput = []
+      stderrOutput = []
+
+      const args = createArgs('import', ['posts', '../../../etc/passwd'])
+      const code = await importCommand(args)
+
+      expect(code).toBe(1)
+      expect(stderrOutput.join('')).toContain('Invalid file path')
+      expect(stderrOutput.join('')).toContain('traversal')
+    })
+
+    it('should reject paths with null bytes', async () => {
+      stdoutOutput = []
+      stderrOutput = []
+
+      const args = createArgs('import', ['posts', 'file\0.txt'])
+      const code = await importCommand(args)
+
+      expect(code).toBe(1)
+      expect(stderrOutput.join('')).toContain('Invalid file path')
+      expect(stderrOutput.join('')).toContain('dangerous characters')
+    })
+
+    it('should reject paths with newlines', async () => {
+      stdoutOutput = []
+      stderrOutput = []
+
+      const args = createArgs('import', ['posts', 'file\n.txt'])
+      const code = await importCommand(args)
+
+      expect(code).toBe(1)
+      expect(stderrOutput.join('')).toContain('Invalid file path')
+      expect(stderrOutput.join('')).toContain('dangerous characters')
+    })
+
+    it('should reject absolute paths outside allowed directories', async () => {
+      stdoutOutput = []
+      stderrOutput = []
+
+      const args = createArgs('import', ['posts', '/etc/passwd'])
+      const code = await importCommand(args)
+
+      expect(code).toBe(1)
+      expect(stderrOutput.join('')).toContain('Invalid file path')
+    })
+
+    it('should accept absolute paths within the data directory', async () => {
+      stdoutOutput = []
+      stderrOutput = []
+
+      const filePath = join(tempDir, 'valid.json')
+      await fs.writeFile(filePath, '[]')
+
+      const args = createArgs('import', ['posts', filePath])
+      const code = await importCommand(args)
+
+      expect(code).toBe(0)
+      expect(stdoutOutput.join('')).toContain('Imported 0 entities')
+    })
+
+    // =========================================================================
+    // File Extension Validation Tests
+    // =========================================================================
+
+    it('should reject files with unsupported extensions', async () => {
+      stdoutOutput = []
+      stderrOutput = []
+
+      const filePath = join(tempDir, 'data.txt')
+      await fs.writeFile(filePath, '[]')
+
+      const args = createArgs('import', ['posts', filePath])
+      const code = await importCommand(args)
+
+      expect(code).toBe(1)
+      expect(stderrOutput.join('')).toContain('Invalid file extension')
+      expect(stderrOutput.join('')).toContain('.txt')
+    })
+
+    it('should reject files with no extension', async () => {
+      stdoutOutput = []
+      stderrOutput = []
+
+      const filePath = join(tempDir, 'datafile')
+      await fs.writeFile(filePath, '[]')
+
+      const args = createArgs('import', ['posts', filePath])
+      const code = await importCommand(args)
+
+      expect(code).toBe(1)
+      expect(stderrOutput.join('')).toContain('Invalid file extension')
+      expect(stderrOutput.join('')).toContain('(none)')
+    })
+
+    it('should reject files with dangerous extensions like .exe', async () => {
+      stdoutOutput = []
+      stderrOutput = []
+
+      const filePath = join(tempDir, 'malware.exe')
+      await fs.writeFile(filePath, '[]')
+
+      const args = createArgs('import', ['posts', filePath])
+      const code = await importCommand(args)
+
+      expect(code).toBe(1)
+      expect(stderrOutput.join('')).toContain('Invalid file extension')
+      expect(stderrOutput.join('')).toContain('.exe')
+    })
+
+    it('should accept .jsonl files as NDJSON format', async () => {
+      stdoutOutput = []
+      stderrOutput = []
+
+      const filePath = join(tempDir, 'posts.jsonl')
+      const lines = [
+        JSON.stringify({ $type: 'Post', name: 'Post 1', title: 'First' }),
+      ]
+      await fs.writeFile(filePath, lines.join('\n'))
+
+      const args = createArgs('import', ['posts', filePath])
+      const code = await importCommand(args)
+
+      expect(code).toBe(0)
+      expect(stdoutOutput.join('')).toContain('Imported 1 entities')
+    })
+  })
+
+  // ===========================================================================
+  // validateFileExtension Unit Tests
+  // ===========================================================================
+
+  describe('validateFileExtension', () => {
+    it('returns json for .json files', () => {
+      expect(validateFileExtension('data.json')).toBe('json')
+      expect(validateFileExtension('/path/to/data.json')).toBe('json')
+      expect(validateFileExtension('data.JSON')).toBe('json')
+    })
+
+    it('returns ndjson for .ndjson files', () => {
+      expect(validateFileExtension('data.ndjson')).toBe('ndjson')
+      expect(validateFileExtension('/path/to/data.ndjson')).toBe('ndjson')
+    })
+
+    it('returns ndjson for .jsonl files', () => {
+      expect(validateFileExtension('data.jsonl')).toBe('ndjson')
+      expect(validateFileExtension('/path/to/data.jsonl')).toBe('ndjson')
+    })
+
+    it('returns csv for .csv files', () => {
+      expect(validateFileExtension('data.csv')).toBe('csv')
+      expect(validateFileExtension('/path/to/data.csv')).toBe('csv')
+      expect(validateFileExtension('data.CSV')).toBe('csv')
+    })
+
+    it('returns null for unsupported extensions', () => {
+      expect(validateFileExtension('data.txt')).toBeNull()
+      expect(validateFileExtension('data.xml')).toBeNull()
+      expect(validateFileExtension('data.parquet')).toBeNull()
+      expect(validateFileExtension('data.exe')).toBeNull()
+    })
+
+    it('returns null for files without extension', () => {
+      expect(validateFileExtension('datafile')).toBeNull()
+      expect(validateFileExtension('/path/to/datafile')).toBeNull()
     })
   })
 

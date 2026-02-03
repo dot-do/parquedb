@@ -30,9 +30,14 @@
     "./config": {
       "import": "./dist/config/index.js",
       "types": "./dist/config/index.d.ts"
+    },
+    "./mcp": {
+      "import": "./dist/integrations/mcp/index.js",
+      "types": "./dist/integrations/mcp/index.d.ts"
     }
   },
   "peerDependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "hono": "^4.0.0",
     "payload": "^3.0.0"
   },
@@ -41,6 +46,9 @@
       "optional": true
     },
     "hono": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
       "optional": true
     }
   },
@@ -102,6 +110,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.8",
     "@cloudflare/workers-types": "^4.20241230.0",
+    "@modelcontextprotocol/sdk": "^1.25.3",
     "@types/node": "^25.1.0",
     "@types/react": "^19.2.10",
     "@types/react-dom": "^19.2.3",
@@ -118,7 +127,8 @@
     "typescript": "^5.7.2",
     "vitest": "^3.0.4",
     "wrangler": "^3.99.0",
-    "yaml": "^2.8.2"
+    "yaml": "^2.8.2",
+    "zod": "^3.25.0"
   },
   "keywords": [
     "parquet",

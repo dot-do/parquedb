@@ -26,6 +26,7 @@
  */
 
 import type { EntityId } from '../../types'
+import { asJWTPayload } from '../../types/cast'
 
 // =============================================================================
 // Types
@@ -242,7 +243,7 @@ export async function verifyOAuthToken(
 
     return {
       valid: true,
-      payload: payload as unknown as OAuthJWTPayload,
+      payload: asJWTPayload<OAuthJWTPayload>(payload),
     }
   } catch (error) {
     return {

@@ -55,6 +55,7 @@ import type {
   SortDirection,
 } from './types'
 import { normalizeSortDirection } from './types'
+import { castEntity, entityAsRecord } from './types/cast'
 import { deepClone, getNestedValue, compareValues, generateId } from './utils'
 import { validatePath, validateKey, validateObjectKeys, validateObjectKeysDeep } from './utils/path-safety'
 import { matchesFilter as canonicalMatchesFilter } from './query/filter'
@@ -706,7 +707,7 @@ export class Collection<T = Record<string, unknown>> {
         const sourceEntity = sourceStorage?.get(sourceLocalId)
         if (sourceEntity) {
           if (!opts?.includeDeleted && (sourceEntity as Record<string, unknown>).deletedAt) continue
-          items.push({ ...sourceEntity } as unknown as Entity<R>)
+          items.push(castEntity<R>({ ...sourceEntity }))
         }
       }
 
@@ -803,7 +804,7 @@ export class Collection<T = Record<string, unknown>> {
       entityId: fullId,
       ns: this.namespace,
       before: null,
-      after: entity as unknown as Record<string, unknown>,
+      after: entityAsRecord(entity),
       actor,
     })
 
@@ -960,7 +961,7 @@ export class Collection<T = Record<string, unknown>> {
       op: 'UPDATE',
       entityId,
       ns: this.namespace,
-      before: beforeState as unknown as Record<string, unknown>,
+      before: entityAsRecord(beforeState),
       after: updated as Record<string, unknown>,
       actor,
     })
@@ -1029,7 +1030,7 @@ export class Collection<T = Record<string, unknown>> {
         op: 'DELETE',
         entityId,
         ns: this.namespace,
-        before: entity as unknown as Record<string, unknown>,
+        before: entityAsRecord(entity),
         after: null,
         actor,
       })
@@ -1054,7 +1055,7 @@ export class Collection<T = Record<string, unknown>> {
         op: 'DELETE',
         entityId,
         ns: this.namespace,
-        before: beforeState as unknown as Record<string, unknown>,
+        before: entityAsRecord(beforeState),
         after: null, // Per test expectations, after is null for DELETE
         actor,
       })

@@ -465,7 +465,15 @@ export class EventCompactor {
     // Deserialize (same format as SegmentWriter)
     const json = new TextDecoder().decode(data)
     const lines = json.split('\n').filter(line => line.trim())
-    const events: Event[] = lines.map(line => JSON.parse(line))
+    const events: Event[] = []
+    for (const line of lines) {
+      try {
+        events.push(JSON.parse(line) as Event)
+      } catch {
+        // Skip invalid JSON lines in event segments
+        continue
+      }
+    }
 
     return {
       events,

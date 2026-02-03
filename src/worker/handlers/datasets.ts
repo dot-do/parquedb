@@ -9,6 +9,7 @@ import { parseQueryFilter, parseQueryOptions } from '../routing'
 import { DATASETS } from '../datasets'
 import type { EntityRecord } from '../../types/entity'
 import type { HandlerContext } from './types'
+import { entityAsRecord, statsAsRecord } from '../../types/cast'
 
 /**
  * Check if an error is a "File not found" error and return a 404 response if so.
@@ -157,7 +158,7 @@ export async function handleCollectionList(
 
   if (result.items) {
     for (const item of result.items) {
-      const entity = item as unknown as Record<string, unknown>
+      const entity = entityAsRecord(item)
       const entityId = entity.$id || entity.id
       if (entityId) {
         const localId = String(entityId).split('/').pop() || ''
@@ -244,7 +245,7 @@ export async function handleCollectionList(
 
   // Add next/prev links if applicable
   if (result.hasMore) {
-    const nextCursor = (result.stats as unknown as Record<string, unknown>)?.nextCursor
+    const nextCursor = statsAsRecord(result.stats)?.nextCursor
     if (nextCursor) {
       paginationLinks.next = `${basePath}?cursor=${nextCursor}&limit=${currentLimit}${arrayParam}`
     } else {
@@ -275,6 +276,6 @@ export async function handleCollectionList(
       ...itemLinks,
     },
     items: enrichedItems,
-    stats: result.stats as unknown as Record<string, unknown>,
+    stats: statsAsRecord(result.stats),
   }, startTime)
 }

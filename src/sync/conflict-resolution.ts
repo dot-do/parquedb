@@ -37,19 +37,19 @@ export type ResolutionStrategy = BuiltinStrategy | CustomResolutionFn
  */
 export interface ConflictResolution {
   /** The resolved value to use */
-  resolvedValue: unknown
+  readonly resolvedValue: unknown
 
   /** The strategy that was used */
-  strategy: string
+  readonly strategy: string
 
   /** Whether manual resolution is required */
-  requiresManualResolution: boolean
+  readonly requiresManualResolution: boolean
 
   /** Optional explanation of the resolution */
-  explanation?: string
+  readonly explanation?: string
 
   /** Original conflict information */
-  conflict?: ConflictInfo
+  readonly conflict?: ConflictInfo
 }
 
 // =============================================================================

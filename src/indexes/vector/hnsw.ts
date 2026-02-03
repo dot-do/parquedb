@@ -17,6 +17,9 @@ import type {
   VectorSearchOptions,
   VectorSearchResult,
   VectorMetric,
+  HybridSearchOptions,
+  HybridSearchResult,
+  HybridSearchStrategy,
 } from '../types'
 import { getDistanceFunction, distanceToScore } from './distance'
 import { logger } from '../../utils/logger'
@@ -405,6 +408,163 @@ export class VectorIndex {
       exact: false,
       entriesScanned,
     }
+  }
+
+  /**
+   * Hybrid search combining vector similarity with metadata filtering.
+   *
+   * Supports two strategies:
+   * - 'pre-filter': Restricts vector search to a set of candidate IDs
+   * - 'post-filter': Performs full vector search, results are filtered by caller
+   *
+   * @param query - Query vector
+   * @param k - Number of results to return
+   * @param options - Hybrid search options including candidateIds for pre-filtering
+   * @returns Hybrid search results
+   */
+  hybridSearch(
+    query: number[],
+    k: number,
+    options?: HybridSearchOptions
+  ): HybridSearchResult {
+    const strategy = options?.strategy ?? 'auto'
+    const candidateIds = options?.candidateIds
+    const overFetchMultiplier = options?.overFetchMultiplier ?? 3
+
+    // Determine actual strategy to use
+    let actualStrategy: HybridSearchStrategy = strategy
+
+    if (strategy === 'auto') {
+      // Heuristic: use pre-filter if candidate set is small relative to index size
+      // Use post-filter if no candidates provided or candidates are most of the index
+      if (candidateIds && candidateIds.size > 0) {
+        const selectivity = candidateIds.size / this.nodes.size
+        // If filtering removes more than 50% of docs, pre-filter is more efficient
+        actualStrategy = selectivity < 0.5 ? 'pre-filter' : 'post-filter'
+      } else {
+        // No candidates means no filtering needed - fall through to standard search
+        actualStrategy = 'post-filter'
+      }
+    }
+
+    // Handle pre-filter strategy with candidates
+    if (actualStrategy === 'pre-filter' && candidateIds) {
+      // Empty candidate set returns empty results
+      if (candidateIds.size === 0) {
+        return {
+          docIds: [],
+          rowGroups: [],
+          scores: [],
+          exact: true,
+          entriesScanned: 0,
+          strategyUsed: 'pre-filter',
+          preFilterCount: 0,
+        }
+      }
+      return this.preFilterSearch(query, k, candidateIds, options)
+    } else {
+      return this.postFilterSearch(query, k, overFetchMultiplier, options)
+    }
+  }
+
+  /**
+   * Pre-filter search: Only consider vectors in the candidate set
+   */
+  private preFilterSearch(
+    query: number[],
+    k: number,
+    candidateIds: Set<string>,
+    options?: VectorSearchOptions
+  ): HybridSearchResult {
+    const minScore = options?.minScore
+
+    // Brute force search over candidates (more efficient for small candidate sets)
+    // For large candidate sets, we could use a modified HNSW search
+    const results: Array<{
+      docId: string
+      rowGroup: number
+      distance: number
+    }> = []
+
+    let entriesScanned = 0
+
+    for (const docId of candidateIds) {
+      const nodeId = this.docIdToNodeId.get(docId)
+      if (nodeId === undefined) continue
+
+      const node = this.nodes.get(nodeId)
+      if (!node) continue
+
+      entriesScanned++
+      const distance = this.distanceFn(query, node.vector)
+      const score = distanceToScore(distance, this.metric)
+
+      // Apply minimum score filter
+      if (minScore !== undefined && score < minScore) continue
+
+      results.push({
+        docId: node.docId,
+        rowGroup: node.rowGroup,
+        distance,
+      })
+    }
+
+    // Sort by distance and take top k
+    results.sort((a, b) => a.distance - b.distance)
+    const topK = results.slice(0, k)
+
+    const rowGroupsSet = new Set<number>()
+    for (const r of topK) {
+      rowGroupsSet.add(r.rowGroup)
+    }
+
+    return {
+      docIds: topK.map(r => r.docId),
+      rowGroups: [...rowGroupsSet],
+      scores: topK.map(r => distanceToScore(r.distance, this.metric)),
+      exact: true, // Brute force is exact
+      entriesScanned,
+      strategyUsed: 'pre-filter',
+      preFilterCount: candidateIds.size,
+    }
+  }
+
+  /**
+   * Post-filter search: Perform vector search, caller will filter results
+   * Over-fetches to account for results that will be filtered out
+   * Note: Returns over-fetched results; caller is responsible for final limiting
+   */
+  private postFilterSearch(
+    query: number[],
+    k: number,
+    overFetchMultiplier: number,
+    options?: VectorSearchOptions
+  ): HybridSearchResult {
+    // Over-fetch to account for filtering
+    const fetchK = k * overFetchMultiplier
+
+    // Use standard search with increased k
+    const searchResult = this.search(query, fetchK, options)
+
+    return {
+      ...searchResult,
+      strategyUsed: 'post-filter',
+      postFilterCount: searchResult.docIds.length,
+    }
+  }
+
+  /**
+   * Get all document IDs in the index (for pre-filtering intersection)
+   */
+  getAllDocIds(): Set<string> {
+    return new Set(this.docIdToNodeId.keys())
+  }
+
+  /**
+   * Check if a document exists in the index
+   */
+  hasDocument(docId: string): boolean {
+    return this.docIdToNodeId.has(docId)
   }
 
   // ===========================================================================

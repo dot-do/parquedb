@@ -33,7 +33,7 @@ import type {
   RmdirOptions,
 } from '../types/storage'
 import { validateRange } from './validation'
-import { generateEtag, globToRegex, normalizeFilePath } from './utils'
+import { generateEtag, globToRegex, normalizeFilePath, normalizePrefix, applyPrefix, stripPrefix } from './utils'
 
 /**
  * Error thrown when a file is not found
@@ -129,9 +129,7 @@ export class DOSqliteBackend implements StorageBackend {
 
   constructor(sql: SqlStorage, options?: DOSqliteBackendOptions) {
     this.sql = sql
-    // Normalize prefix: ensure it ends with / if provided
-    const rawPrefix = options?.prefix ?? ''
-    this.prefix = rawPrefix && !rawPrefix.endsWith('/') ? rawPrefix + '/' : rawPrefix
+    this.prefix = normalizePrefix(options?.prefix)
   }
 
   /**
@@ -162,17 +160,14 @@ export class DOSqliteBackend implements StorageBackend {
    * Apply prefix to a path
    */
   private withPrefix(path: string): string {
-    return this.prefix + normalizeFilePath(path)
+    return applyPrefix(normalizeFilePath(path), this.prefix)
   }
 
   /**
    * Remove prefix from a path
    */
   private withoutPrefix(path: string): string {
-    if (this.prefix && path.startsWith(this.prefix)) {
-      return path.slice(this.prefix.length)
-    }
-    return path
+    return stripPrefix(path, this.prefix)
   }
 
   async read(path: string): Promise<Uint8Array> {

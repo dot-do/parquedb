@@ -57,7 +57,7 @@ export async function branchCommand(parsed: ParsedArgs): Promise<number> {
     // Parse options and arguments
     const deleteFlag = findOption(parsed.args, '-d') || findOption(parsed.args, '--delete')
     const renameOld = findOption(parsed.args, '-m') || findOption(parsed.args, '--move')
-    const listFlag = hasFlag(parsed.args, '-l', '--list')
+    // listFlag is implicitly used (when no other action, we list branches)
     const allFlag = hasFlag(parsed.args, '-a', '--all')
     const remoteFlag = hasFlag(parsed.args, '-r', '--remote')
     const forceFlag = hasFlag(parsed.args, '--force')
@@ -92,7 +92,7 @@ export async function branchCommand(parsed: ParsedArgs): Promise<number> {
 
     // Handle create operation
     if (positionalArgs.length > 0) {
-      const name = positionalArgs[0]
+      const name = positionalArgs[0]!
       const base = positionalArgs[1]
       return await createBranch(branchManager, name, base)
     }

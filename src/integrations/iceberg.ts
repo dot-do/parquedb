@@ -37,6 +37,7 @@
 
 import type { StorageBackend } from '../types/storage'
 import type { EventManifest, EventSegment } from '../events/types'
+import { getStorageFromDB } from '../types/cast'
 
 // =============================================================================
 // Types
@@ -256,7 +257,12 @@ export class IcebergMetadataManager {
     const metadataPath = this.getMetadataPath()
     const data = await this.storage.read(metadataPath)
     const json = new TextDecoder().decode(data)
-    const metadata = JSON.parse(json)
+    let metadata
+    try {
+      metadata = JSON.parse(json)
+    } catch {
+      throw new Error(`Invalid Iceberg metadata at ${metadataPath}: not valid JSON`)
+    }
 
     // Load snapshots
     if (metadata.snapshots) {
@@ -720,7 +726,7 @@ export async function enableIcebergMetadata(
 ): Promise<IcebergMetadataManager> {
   // Get storage from db (this is a simplified approach)
   // In practice, you'd access db.storage directly
-  const storage = (db as unknown as { storage: StorageBackend }).storage
+  const storage = getStorageFromDB(db)
 
   if (!storage) {
     throw new Error('Could not access storage backend from ParqueDB instance')

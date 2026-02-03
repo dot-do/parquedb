@@ -5,16 +5,24 @@
  * These routes interact with the DatabaseIndexDO Durable Object to manage
  * user databases.
  *
+ * CSRF Protection:
+ * All mutation endpoints (POST, PATCH, DELETE) require CSRF validation.
+ * Clients must include the X-Requested-With header with their requests.
+ *
  * @example
  * ```typescript
  * import { Hono } from 'hono'
  * import { databaseRoutes } from 'parquedb/studio'
  * import { auth, requireAuth } from 'parquedb/hono'
+ * import { csrf } from 'parquedb/security'
  *
  * const app = new Hono()
  *
  * // Add auth middleware
  * app.use('*', auth({ jwksUri: env.JWKS_URI }))
+ *
+ * // Add CSRF protection for mutation routes
+ * app.use('/api/databases/*', csrf())
  *
  * // Mount database routes
  * app.route('/api/databases', databaseRoutes)
@@ -35,6 +43,7 @@ import type {
 } from '../worker/DatabaseIndexDO'
 import { getUserDatabaseIndex } from '../worker/DatabaseIndexDO'
 import { getUser, type AuthUser, type AuthVariables } from '../integrations/hono/auth'
+import { validateCsrf } from '../security/csrf'
 
 // =============================================================================
 // Types
@@ -149,7 +158,7 @@ export function createDatabaseRoutes<
    * @returns { databases: DatabaseInfo[] }
    */
   app.get('/', async (c) => {
-    const user = getUser(c as unknown as Context)
+    const user = getUser(c)
     if (!user) {
       return c.json({ error: 'Authentication required' }, 401)
     }
@@ -172,12 +181,26 @@ export function createDatabaseRoutes<
    * POST /api/databases/create
    *
    * Create a new database.
+   * Requires CSRF validation (X-Requested-With header).
    *
    * @body { name, description?, slug?, visibility?, metadata? }
    * @returns DatabaseInfo
    */
   app.post('/create', async (c) => {
-    const user = getUser(c as unknown as Context)
+    // Validate CSRF protection
+    const csrfResult = validateCsrf(c)
+    if (!csrfResult.valid) {
+      return c.json(
+        {
+          error: 'CSRF validation failed',
+          code: 'CSRF_VALIDATION_FAILED',
+          reason: csrfResult.reason,
+        },
+        403
+      )
+    }
+
+    const user = getUser(c)
     const actor = (c.var as V).actor
 
     if (!user || !actor) {
@@ -238,7 +261,7 @@ export function createDatabaseRoutes<
    * @returns DatabaseInfo or 404
    */
   app.get('/:id', async (c) => {
-    const user = getUser(c as unknown as Context)
+    const user = getUser(c)
     if (!user) {
       return c.json({ error: 'Authentication required' }, 401)
     }
@@ -270,13 +293,27 @@ export function createDatabaseRoutes<
    * PATCH /api/databases/:id
    *
    * Update a database's metadata.
+   * Requires CSRF validation (X-Requested-With header).
    *
    * @param id - Database ID
    * @body UpdateDatabaseOptions
    * @returns Updated DatabaseInfo or 404
    */
   app.patch('/:id', async (c) => {
-    const user = getUser(c as unknown as Context)
+    // Validate CSRF protection
+    const csrfResult = validateCsrf(c)
+    if (!csrfResult.valid) {
+      return c.json(
+        {
+          error: 'CSRF validation failed',
+          code: 'CSRF_VALIDATION_FAILED',
+          reason: csrfResult.reason,
+        },
+        403
+      )
+    }
+
+    const user = getUser(c)
     if (!user) {
       return c.json({ error: 'Authentication required' }, 401)
     }
@@ -357,13 +394,27 @@ export function createDatabaseRoutes<
    * DELETE /api/databases/:id
    *
    * Soft delete (unregister) a database.
+   * Requires CSRF validation (X-Requested-With header).
    * Note: This does NOT delete the actual data in R2.
    *
    * @param id - Database ID
    * @returns { deleted: true } or 404
    */
   app.delete('/:id', async (c) => {
-    const user = getUser(c as unknown as Context)
+    // Validate CSRF protection
+    const csrfResult = validateCsrf(c)
+    if (!csrfResult.valid) {
+      return c.json(
+        {
+          error: 'CSRF validation failed',
+          code: 'CSRF_VALIDATION_FAILED',
+          reason: csrfResult.reason,
+        },
+        403
+      )
+    }
+
+    const user = getUser(c)
     if (!user) {
       return c.json({ error: 'Authentication required' }, 401)
     }

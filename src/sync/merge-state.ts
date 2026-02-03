@@ -26,31 +26,31 @@ export type ConflictResolutionStrategy = 'ours' | 'theirs' | 'newest' | 'manual'
  */
 export interface ConflictInfo {
   /** Entity ID that has conflicts */
-  entityId: string
+  readonly entityId: string
 
   /** Collection/namespace the entity belongs to */
-  collection: string
+  readonly collection: string
 
   /** Fields that have conflicts */
-  fields: string[]
+  readonly fields: readonly string[]
 
   /** Whether this conflict has been resolved */
-  resolved: boolean
+  readonly resolved: boolean
 
   /** Resolution strategy used (if resolved) */
-  resolution?: ConflictResolutionStrategy
+  readonly resolution?: ConflictResolutionStrategy
 
   /** Resolved value (if manually resolved) */
-  resolvedValue?: unknown
+  readonly resolvedValue?: unknown
 
   /** Our value for conflicting fields */
-  ourValue?: unknown
+  readonly ourValue?: unknown
 
   /** Their value for conflicting fields */
-  theirValue?: unknown
+  readonly theirValue?: unknown
 
   /** Base value (common ancestor) */
-  baseValue?: unknown
+  readonly baseValue?: unknown
 }
 
 /**
@@ -58,34 +58,34 @@ export interface ConflictInfo {
  */
 export interface MergeState {
   /** Status of the merge */
-  status: MergeStatus
+  readonly status: MergeStatus
 
   /** Branch being merged in (source) */
-  source: string
+  readonly source: string
 
   /** Branch being merged into (target/current) */
-  target: string
+  readonly target: string
 
   /** Common ancestor commit */
-  baseCommit: string
+  readonly baseCommit: string
 
   /** Source branch head commit */
-  sourceCommit: string
+  readonly sourceCommit: string
 
   /** Target branch head at merge start */
-  targetCommit: string
+  readonly targetCommit: string
 
-  /** List of conflicts */
+  /** List of conflicts (mutable during conflict resolution) */
   conflicts: ConflictInfo[]
 
   /** Timestamp when merge started */
-  startedAt: string
+  readonly startedAt: string
 
   /** Default resolution strategy */
-  strategy: ConflictResolutionStrategy
+  readonly strategy: ConflictResolutionStrategy
 
   /** Additional metadata */
-  metadata?: Record<string, unknown>
+  readonly metadata?: Readonly<Record<string, unknown>>
 }
 
 // =============================================================================

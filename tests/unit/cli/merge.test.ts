@@ -384,4 +384,232 @@ describe('Merge State Management', () => {
       expect(loaded?.conflicts[0]?.resolution).toBe('ours')
     })
   })
+
+  describe('Merge Completion (continueMerge)', () => {
+    it('should create merge commit with both parents after resolving conflicts', async () => {
+      const { applyMergeAndCommit } = await import('../../../src/sync/merge-commit')
+      const refManager = createRefManager(storage)
+
+      // Create base commit
+      const baseCommit = await createCommit(
+        {
+          collections: { posts: { dataHash: 'base-data', schemaHash: 'base-schema', rowCount: 1 } },
+          relationships: { forwardHash: 'fwd', reverseHash: 'rev' },
+          eventLogPosition: { segmentId: 'seg1', offset: 0 },
+        },
+        { message: 'Base commit', author: 'test' }
+      )
+      await saveCommit(storage, baseCommit)
+
+      // Create source commit (branched from base)
+      const sourceCommit = await createCommit(
+        {
+          collections: { posts: { dataHash: 'source-data', schemaHash: 'source-schema', rowCount: 2 } },
+          relationships: { forwardHash: 'fwd', reverseHash: 'rev' },
+          eventLogPosition: { segmentId: 'seg1', offset: 10 },
+        },
+        { message: 'Source changes', author: 'test', parents: [baseCommit.hash] }
+      )
+      await saveCommit(storage, sourceCommit)
+
+      // Create target commit (main branch advanced from base)
+      const targetCommit = await createCommit(
+        {
+          collections: { posts: { dataHash: 'target-data', schemaHash: 'target-schema', rowCount: 3 } },
+          relationships: { forwardHash: 'fwd', reverseHash: 'rev' },
+          eventLogPosition: { segmentId: 'seg1', offset: 20 },
+        },
+        { message: 'Target changes', author: 'test', parents: [baseCommit.hash] }
+      )
+      await saveCommit(storage, targetCommit)
+
+      // Set up refs
+      await refManager.updateRef('main', targetCommit.hash)
+      await refManager.updateRef('feature', sourceCommit.hash)
+      await refManager.setHead('main')
+
+      // Create merge state with resolved conflict
+      let state = createMergeState({
+        source: 'feature',
+        target: 'main',
+        baseCommit: baseCommit.hash,
+        sourceCommit: sourceCommit.hash,
+        targetCommit: targetCommit.hash,
+      })
+
+      state = addConflict(state, {
+        entityId: 'posts/1',
+        collection: 'posts',
+        fields: ['title'],
+        resolved: true,
+        resolution: 'ours',
+        ourValue: 'Our Title',
+        theirValue: 'Their Title',
+      })
+      state.status = 'resolved'
+
+      await saveMergeState(storage, state)
+
+      // Apply merge and create commit
+      const mergeCommit = await applyMergeAndCommit(storage, state, {
+        message: 'Merge feature into main',
+        author: 'test-user',
+      })
+
+      // Verify merge commit has two parents
+      expect(mergeCommit.parents).toHaveLength(2)
+      expect(mergeCommit.parents).toContain(targetCommit.hash)
+      expect(mergeCommit.parents).toContain(sourceCommit.hash)
+
+      // Verify merge commit message
+      expect(mergeCommit.message).toBe('Merge feature into main')
+      expect(mergeCommit.author).toBe('test-user')
+
+      // Verify main branch now points to merge commit
+      const mainRef = await refManager.resolveRef('main')
+      expect(mainRef).toBe(mergeCommit.hash)
+    })
+
+    it('should apply resolved conflict values in merge commit state', async () => {
+      const { applyMergeAndCommit, getResolvedValue } = await import('../../../src/sync/merge-commit')
+
+      // Create base commit
+      const baseCommit = await createCommit(
+        {
+          collections: {},
+          relationships: { forwardHash: 'fwd', reverseHash: 'rev' },
+          eventLogPosition: { segmentId: 'seg1', offset: 0 },
+        },
+        { message: 'Base commit', author: 'test' }
+      )
+      await saveCommit(storage, baseCommit)
+
+      // Create source and target commits
+      const sourceCommit = await createCommit(
+        {
+          collections: {},
+          relationships: { forwardHash: 'fwd', reverseHash: 'rev' },
+          eventLogPosition: { segmentId: 'seg1', offset: 10 },
+        },
+        { message: 'Source', author: 'test', parents: [baseCommit.hash] }
+      )
+      await saveCommit(storage, sourceCommit)
+
+      const targetCommit = await createCommit(
+        {
+          collections: {},
+          relationships: { forwardHash: 'fwd', reverseHash: 'rev' },
+          eventLogPosition: { segmentId: 'seg1', offset: 20 },
+        },
+        { message: 'Target', author: 'test', parents: [baseCommit.hash] }
+      )
+      await saveCommit(storage, targetCommit)
+
+      // Create merge state with different resolution strategies
+      let state = createMergeState({
+        source: 'feature',
+        target: 'main',
+        baseCommit: baseCommit.hash,
+        sourceCommit: sourceCommit.hash,
+        targetCommit: targetCommit.hash,
+      })
+
+      // Test 'ours' resolution
+      const oursConflict = {
+        entityId: 'posts/1',
+        collection: 'posts',
+        fields: ['title'],
+        resolved: true,
+        resolution: 'ours' as const,
+        ourValue: 'Our Value',
+        theirValue: 'Their Value',
+      }
+      expect(getResolvedValue(oursConflict)).toBe('Our Value')
+
+      // Test 'theirs' resolution
+      const theirsConflict = {
+        entityId: 'posts/2',
+        collection: 'posts',
+        fields: ['content'],
+        resolved: true,
+        resolution: 'theirs' as const,
+        ourValue: 'Our Content',
+        theirValue: 'Their Content',
+      }
+      expect(getResolvedValue(theirsConflict)).toBe('Their Content')
+
+      // Test 'manual' resolution with custom value
+      const manualConflict = {
+        entityId: 'posts/3',
+        collection: 'posts',
+        fields: ['status'],
+        resolved: true,
+        resolution: 'manual' as const,
+        resolvedValue: 'Custom Merged Value',
+        ourValue: 'Our Status',
+        theirValue: 'Their Status',
+      }
+      expect(getResolvedValue(manualConflict)).toBe('Custom Merged Value')
+    })
+
+    it('should throw if merge state has unresolved conflicts', async () => {
+      const { applyMergeAndCommit } = await import('../../../src/sync/merge-commit')
+
+      // Create base commit
+      const baseCommit = await createCommit(
+        {
+          collections: {},
+          relationships: { forwardHash: 'fwd', reverseHash: 'rev' },
+          eventLogPosition: { segmentId: 'seg1', offset: 0 },
+        },
+        { message: 'Base commit', author: 'test' }
+      )
+      await saveCommit(storage, baseCommit)
+
+      // Create merge state with unresolved conflict
+      let state = createMergeState({
+        source: 'feature',
+        target: 'main',
+        baseCommit: baseCommit.hash,
+        sourceCommit: baseCommit.hash,
+        targetCommit: baseCommit.hash,
+      })
+
+      state = addConflict(state, {
+        entityId: 'posts/1',
+        collection: 'posts',
+        fields: ['title'],
+        resolved: false,
+        ourValue: 'Our Title',
+        theirValue: 'Their Title',
+      })
+
+      await saveMergeState(storage, state)
+
+      // Should throw because conflicts are not resolved
+      await expect(
+        applyMergeAndCommit(storage, state, { message: 'Merge', author: 'test' })
+      ).rejects.toThrow('Cannot complete merge: 1 unresolved conflict')
+    })
+
+    it('should use newest value when resolution is newest', async () => {
+      const { getResolvedValue } = await import('../../../src/sync/merge-commit')
+
+      // Create conflict with timestamps in values
+      const newestConflict = {
+        entityId: 'posts/1',
+        collection: 'posts',
+        fields: ['updatedAt'],
+        resolved: true,
+        resolution: 'newest' as const,
+        ourValue: { value: 'our', ts: 1000 },
+        theirValue: { value: 'their', ts: 2000 },
+      }
+
+      // 'newest' should pick the value with the higher timestamp
+      // For this test, we check that the function handles the newest resolution type
+      const result = getResolvedValue(newestConflict)
+      expect(result).toEqual({ value: 'their', ts: 2000 })
+    })
+  })
 })

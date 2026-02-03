@@ -148,7 +148,12 @@ export function parseAction(json: string): LogAction {
     throw new Error('Cannot parse empty JSON string')
   }
 
-  const parsed = JSON.parse(json)
+  let parsed
+  try {
+    parsed = JSON.parse(json)
+  } catch {
+    throw new Error('Invalid action: not valid JSON')
+  }
 
   // Validate that it's an object
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
@@ -413,7 +418,12 @@ export function isCommitInfoAction(action: LogAction): action is CommitInfoActio
  * Parse stats JSON string from AddAction
  */
 export function parseStats(statsJson: string): FileStats {
-  const parsed = JSON.parse(statsJson)
+  let parsed
+  try {
+    parsed = JSON.parse(statsJson)
+  } catch {
+    throw new Error('Invalid stats: not valid JSON')
+  }
 
   if (parsed.numRecords === undefined || parsed.numRecords === null) {
     throw new Error('numRecords is required')

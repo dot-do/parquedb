@@ -262,13 +262,16 @@ export function buildErrorResponse(
 
 /**
  * Build a CORS preflight response
+ *
+ * Includes X-Requested-With header support for CSRF protection.
+ * Clients must send this header with mutations to pass CSRF validation.
  */
 export function buildCorsPreflightResponse(): Response {
   return new Response(null, {
     headers: {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Requested-With, X-CSRF-Token, Authorization',
     },
   })
 }

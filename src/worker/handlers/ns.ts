@@ -2,13 +2,16 @@
  * Legacy /ns Routes Handler
  *
  * Provides backwards compatibility for /ns/:namespace routes.
+ * Includes CSRF protection for mutation operations.
  */
 
 import { buildResponse, buildErrorResponse } from '../responses'
 import { parseQueryFilter, parseQueryOptions, QueryParamError } from '../routing'
+import { validateCsrfRequest } from './csrf-validation'
 import type { EntityRecord } from '../../types/entity'
 import type { Update } from '../../types/update'
 import type { HandlerContext } from './types'
+import { statsAsRecord } from '../../types/cast'
 
 /**
  * Handle /ns/:namespace or /ns/:namespace/:id routes
@@ -56,12 +59,23 @@ export async function handleNsRoute(
             home: baseUrl,
           },
           items: result.items,
-          stats: result.stats as unknown as Record<string, unknown>,
+          stats: statsAsRecord(result.stats),
         }, startTime)
       }
     }
 
     case 'POST': {
+      // Validate CSRF protection for mutation
+      const csrfResult = validateCsrfRequest(request)
+      if (!csrfResult.valid) {
+        return buildErrorResponse(
+          request,
+          new Error(`CSRF validation failed: ${csrfResult.reason}`),
+          403,
+          startTime
+        )
+      }
+
       let body: unknown
       try {
         body = await request.json()
@@ -83,6 +97,17 @@ export async function handleNsRoute(
     }
 
     case 'PATCH': {
+      // Validate CSRF protection for mutation
+      const csrfResult = validateCsrfRequest(request)
+      if (!csrfResult.valid) {
+        return buildErrorResponse(
+          request,
+          new Error(`CSRF validation failed: ${csrfResult.reason}`),
+          403,
+          startTime
+        )
+      }
+
       if (!id) {
         return buildErrorResponse(request, new Error('ID required for update'), 400, startTime)
       }
@@ -101,6 +126,17 @@ export async function handleNsRoute(
     }
 
     case 'DELETE': {
+      // Validate CSRF protection for mutation
+      const csrfResult = validateCsrfRequest(request)
+      if (!csrfResult.valid) {
+        return buildErrorResponse(
+          request,
+          new Error(`CSRF validation failed: ${csrfResult.reason}`),
+          403,
+          startTime
+        )
+      }
+
       if (!id) {
         return buildErrorResponse(request, new Error('ID required for delete'), 400, startTime)
       }

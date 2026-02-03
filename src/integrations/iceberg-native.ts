@@ -20,6 +20,7 @@
 
 import type { StorageBackend } from '../types/storage'
 import type { EventSegment } from '../events/types'
+import { asDynamicModule, asBuilder } from '../types/cast'
 
 // =============================================================================
 // Types (defined locally to avoid import errors when @dotdo/iceberg is not installed)
@@ -254,7 +255,7 @@ async function loadIcebergLib(): Promise<IcebergLibrary> {
     // Using Function constructor to avoid TypeScript static analysis
     const dynamicImport = new Function('specifier', 'return import(specifier)')
     const lib = await dynamicImport('@dotdo/iceberg')
-    icebergLib = lib as unknown as IcebergLibrary
+    icebergLib = asDynamicModule<IcebergLibrary>(lib)
     return icebergLib
   } catch {
     // Intentionally ignored: dynamic import failure means the optional dependency is not installed
@@ -470,7 +471,7 @@ export class NativeIcebergMetadataManager {
             currentMetadata,
           })
 
-          const snapshot = (snapshotBuilder as unknown as { build: () => unknown }).build()
+          const snapshot = asBuilder<unknown>(snapshotBuilder).build()
           builder.addSnapshot(snapshot)
 
           return builder.build()

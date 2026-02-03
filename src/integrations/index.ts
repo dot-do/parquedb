@@ -116,3 +116,108 @@ export {
   type DrizzleProxyCallback,
   type PrismaDriverAdapter,
 } from './sql'
+
+// MCP (Model Context Protocol) integration for AI agents
+export {
+  createParqueDBMCPServer,
+  type ParqueDBMCPOptions,
+  type ToolResult,
+  type CollectionInfo,
+  type FindToolParams,
+  type GetToolParams,
+  type CreateToolParams,
+  type UpdateToolParams,
+  type DeleteToolParams,
+  type CountToolParams,
+  type AggregateToolParams,
+  type SemanticSearchToolParams,
+} from './mcp'
+
+// Evalite (AI evaluation framework) integration
+export {
+  ParqueDBEvaliteAdapter,
+  createEvaliteAdapter,
+  type EvaliteAdapterConfig,
+  type ResolvedEvaliteConfig,
+  type RunType,
+  type EvalRun,
+  type CreateRunOptions,
+  type GetRunsOptions,
+  type SuiteStatus,
+  type EvalSuite,
+  type CreateSuiteOptions,
+  type UpdateSuiteOptions,
+  type GetSuitesOptions,
+  type EvalStatus,
+  type EvalResult,
+  type CreateEvalOptions,
+  type UpdateEvalOptions,
+  type GetEvalsOptions,
+  type EvalScore,
+  type CreateScoreOptions,
+  type GetScoresOptions,
+  type EvalTrace,
+  type CreateTraceOptions,
+  type GetTracesOptions,
+  type ScoreHistoryOptions,
+  type ScorePoint,
+  type RunStats,
+  type RunWithResults,
+  type EvalWithDetails,
+} from './evalite'
+
+// ai-database integration (DBProvider/DBProviderExtended)
+export {
+  ParqueDBAdapter,
+  createParqueDBProvider,
+  type DBProvider,
+  type DBProviderExtended,
+  type Transaction as AIDBTransaction,
+  type DBEvent as AIDBEvent,
+  type DBAction as AIDBAction,
+  type DBArtifact as AIDBartifact,
+  type ListOptions as AIDBListOptions,
+  type SearchOptions as AIDBSearchOptions,
+  type SemanticSearchOptions as AIDBSemanticSearchOptions,
+  type HybridSearchOptions as AIDBHybridSearchOptions,
+  type SemanticSearchResult as AIDBSemanticSearchResult,
+  type HybridSearchResult as AIDBHybridSearchResult,
+  type RelationMetadata as AIDBRelationMetadata,
+  type CreateEventOptions as AIDBCreateEventOptions,
+  type CreateActionOptions as AIDBCreateActionOptions,
+  type EmbeddingsConfig as AIDBEmbeddingsConfig,
+} from './ai-database'
+
+// Vercel AI SDK middleware (caching/logging)
+export {
+  createParqueDBMiddleware,
+  hashParams,
+  isExpired,
+  queryCacheEntries,
+  queryLogEntries,
+  clearExpiredCache,
+  getCacheStats,
+  type ParqueDBMiddlewareOptions,
+  type CacheConfig,
+  type LoggingConfig,
+  type CacheEntry,
+  type LogEntry,
+  type LanguageModelV3Middleware,
+  type LanguageModelCallOptions,
+  type LanguageModelGenerateResult,
+  type LanguageModelStreamResult,
+  type LanguageModel,
+} from './ai-sdk'
+
+// rpc.do integration (promise pipelining and batching)
+export {
+  createParqueDBRPCClient,
+  type ParqueDBRPCClientOptions,
+  type ParqueDBRPCClient,
+  type RPCCollection,
+  type BatchRelatedRequest,
+  type BatchingOptions,
+  type BatchedRequest,
+  type BatchedResponse,
+  type Transport as RPCTransport,
+} from './rpc-do'

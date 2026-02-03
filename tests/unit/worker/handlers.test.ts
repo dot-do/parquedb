@@ -81,10 +81,20 @@ function createContext(
   const baseUrl = `${url.protocol}//${url.host}`
   const path = url.pathname
 
+  // Build headers - include CSRF headers for mutation methods
+  const headers: Record<string, string> = {}
+  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
+    headers['X-Requested-With'] = 'XMLHttpRequest'
+    headers['Origin'] = baseUrl
+  }
+
   const requestInit: RequestInit = { method }
   if (options.body) {
     requestInit.body = JSON.stringify(options.body)
-    requestInit.headers = { 'Content-Type': 'application/json' }
+    headers['Content-Type'] = 'application/json'
+  }
+  if (Object.keys(headers).length > 0) {
+    requestInit.headers = headers
   }
 
   const request = new Request(urlStr, requestInit)
@@ -789,7 +799,11 @@ describe('handleNsRoute', () => {
       const request = new Request('https://test.parquedb.com/ns/posts', {
         method: 'POST',
         body: 'not json',
-        headers: { 'Content-Type': 'text/plain' },
+        headers: {
+          'Content-Type': 'text/plain',
+          'X-Requested-With': 'XMLHttpRequest',
+          'Origin': 'https://test.parquedb.com',
+        },
       })
       const url = new URL(request.url)
       const context: HandlerContext = {

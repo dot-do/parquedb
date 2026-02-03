@@ -20,6 +20,7 @@
 import { RemoteBackend } from '../storage/RemoteBackend'
 import type { Filter, FindOptions, Entity, PaginatedResult } from '../types'
 import type { Visibility } from '../types/visibility'
+import { proxyTarget } from '../types/cast'
 
 // =============================================================================
 // Validation Helpers
@@ -247,7 +248,7 @@ class RemoteDBImpl implements RemoteDB {
       get(target, prop: string) {
         // Return known properties
         if (prop in target) {
-          return (target as unknown as Record<string, unknown>)[prop]
+          return proxyTarget<unknown>(target)[prop]
         }
 
         // Dynamic collection access: db.Posts -> db.collection('posts')

@@ -9,19 +9,32 @@
  * - GET /api/db/:owner/:slug - Database metadata
  * - GET /api/db/:owner/:slug/:collection - Query collection
  * - GET /db/:owner/:slug/* - Raw file access with Range support
+ *
+ * Security:
+ * - Rate limiting on all public endpoints to prevent DoS and enumeration attacks
+ * - CORS headers for cross-origin access control
+ * - Visibility checks for database access
  */
 
 import type { Env } from '../types/worker'
 import { type DatabaseIndexDO, type DatabaseInfo } from './DatabaseIndexDO'
 import { allowsAnonymousRead } from '../types/visibility'
+import { getDOStub } from '../utils/type-utils'
+import {
+  type RateLimitDO,
+  type RateLimitResult,
+  getClientId,
+  buildRateLimitHeaders,
+  buildRateLimitResponse,
+} from './RateLimitDO'
 
 /**
  * Get the database index stub for a user
  */
-function getDatabaseIndex(env: Env, owner: string) {
+function getDatabaseIndex(env: Env, owner: string): DatabaseIndexDO | null {
   if (!env.DATABASE_INDEX) return null
   const indexId = env.DATABASE_INDEX.idFromName(`user:${owner}`)
-  return env.DATABASE_INDEX.get(indexId) as unknown as DatabaseIndexDO
+  return getDOStub<DatabaseIndexDO>(env.DATABASE_INDEX, indexId)
 }
 
 // =============================================================================
@@ -91,6 +104,74 @@ function addAuthenticatedCorsHeaders(response: Response): Response {
   })
 }
 
+/**
+ * Add rate limit headers to response
+ */
+function addRateLimitHeaders(response: Response, rateLimitResult: RateLimitResult): Response {
+  const headers = new Headers(response.headers)
+  const rateLimitHeaders = buildRateLimitHeaders(rateLimitResult)
+  for (const [key, value] of Object.entries(rateLimitHeaders)) {
+    headers.set(key, value)
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+// =============================================================================
+// Rate Limiting
+// =============================================================================
+
+/**
+ * Endpoint type mapping for rate limiting
+ * Maps URL patterns to rate limit categories
+ */
+type EndpointType = 'public' | 'database' | 'query' | 'file'
+
+/**
+ * Get endpoint type from path for rate limiting
+ */
+function getEndpointType(path: string): EndpointType {
+  if (path === '/api/public') return 'public'
+  if (path.match(/^\/api\/db\/[^/]+\/[^/]+$/)) return 'database'
+  if (path.match(/^\/api\/db\/[^/]+\/[^/]+\/[^/]+$/)) return 'query'
+  if (path.startsWith('/db/')) return 'file'
+  return 'public' // Default fallback
+}
+
+/**
+ * Check rate limit for a request
+ *
+ * @param request - Incoming request
+ * @param env - Worker environment
+ * @param endpointType - Type of endpoint for rate limit category
+ * @returns Rate limit result or null if rate limiting is not configured
+ */
+async function checkRateLimit(
+  request: Request,
+  env: Env,
+  endpointType: EndpointType
+): Promise<RateLimitResult | null> {
+  // Rate limiting requires RATE_LIMITER binding
+  if (!env.RATE_LIMITER) {
+    return null
+  }
+
+  const clientId = getClientId(request)
+  const rateLimitId = env.RATE_LIMITER.idFromName(clientId)
+  const limiter = env.RATE_LIMITER.get(rateLimitId) as unknown as RateLimitDO
+
+  try {
+    return await limiter.checkLimit(endpointType)
+  } catch (error) {
+    // If rate limiting fails, log but allow the request through
+    console.error('[RateLimit] Error checking rate limit:', error)
+    return null
+  }
+}
+
 // =============================================================================
 // Route Handlers
 // =============================================================================
@@ -98,6 +179,11 @@ function addAuthenticatedCorsHeaders(response: Response): Response {
 /**
  * Handle public database routes
  * Returns null if route doesn't match
+ *
+ * Rate limiting is applied to all public endpoints to prevent:
+ * - DoS attacks that could overwhelm the database
+ * - Database enumeration through brute-force requests
+ * - Resource exhaustion from excessive file reads
  */
 export async function handlePublicRoutes(
   request: Request,
@@ -116,9 +202,37 @@ export async function handlePublicRoutes(
     }
   }
 
+  // Check if this is a public route that needs rate limiting
+  const isPublicRoute =
+    path === '/api/public' ||
+    path.startsWith('/api/db/') ||
+    path.startsWith('/db/')
+
+  if (!isPublicRoute) {
+    return null
+  }
+
+  // Apply rate limiting
+  const endpointType = getEndpointType(path)
+  const rateLimitResult = await checkRateLimit(request, env, endpointType)
+
+  // If rate limited, return 429 response
+  if (rateLimitResult && !rateLimitResult.allowed) {
+    return addPublicCorsHeaders(buildRateLimitResponse(rateLimitResult))
+  }
+
+  // Helper to add rate limit headers to response
+  const withRateLimitHeaders = (response: Response): Response => {
+    if (rateLimitResult) {
+      return addRateLimitHeaders(response, rateLimitResult)
+    }
+    return response
+  }
+
   // GET /api/public - List public databases (no auth needed)
   if (path === '/api/public' && request.method === 'GET') {
-    return addPublicCorsHeaders(await handleListPublic(request, env))
+    const response = await handleListPublic(request, env)
+    return withRateLimitHeaders(addPublicCorsHeaders(response))
   }
 
   // GET /api/db/:owner/:slug - Database metadata
@@ -126,7 +240,8 @@ export async function handlePublicRoutes(
   const dbMetaMatch = path.match(/^\/api\/db\/([^/]+)\/([^/]+)$/)
   if (dbMetaMatch && request.method === 'GET') {
     const [, owner, slug] = dbMetaMatch
-    return addAuthenticatedCorsHeaders(await handleDatabaseMeta(request, env, owner!, slug!))
+    const response = await handleDatabaseMeta(request, env, owner!, slug!)
+    return withRateLimitHeaders(addAuthenticatedCorsHeaders(response))
   }
 
   // GET /api/db/:owner/:slug/:collection - Query collection
@@ -134,7 +249,8 @@ export async function handlePublicRoutes(
   const collectionMatch = path.match(/^\/api\/db\/([^/]+)\/([^/]+)\/([^/]+)$/)
   if (collectionMatch && request.method === 'GET') {
     const [, owner, slug, collection] = collectionMatch
-    return addAuthenticatedCorsHeaders(await handleCollectionQuery(request, env, owner!, slug!, collection!))
+    const response = await handleCollectionQuery(request, env, owner!, slug!, collection!)
+    return withRateLimitHeaders(addAuthenticatedCorsHeaders(response))
   }
 
   // GET /db/:owner/:slug/* - Raw file access
@@ -142,7 +258,8 @@ export async function handlePublicRoutes(
   const rawFileMatch = path.match(/^\/db\/([^/]+)\/([^/]+)\/(.+)$/)
   if (rawFileMatch && (request.method === 'GET' || request.method === 'HEAD')) {
     const [, owner, slug, filePath] = rawFileMatch
-    return addAuthenticatedCorsHeaders(await handleRawFileAccess(request, env, owner!, slug!, filePath!))
+    const response = await handleRawFileAccess(request, env, owner!, slug!, filePath!)
+    return withRateLimitHeaders(addAuthenticatedCorsHeaders(response))
   }
 
   return null

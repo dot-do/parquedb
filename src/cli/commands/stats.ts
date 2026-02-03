@@ -81,7 +81,13 @@ export async function statsCommand(parsed: ParsedArgs): Promise<number> {
   try {
     // Read config
     const configContent = await fs.readFile(configPath, 'utf-8')
-    const config = JSON.parse(configContent) as { name?: string }
+    let config: { name?: string }
+    try {
+      config = JSON.parse(configContent) as { name?: string }
+    } catch {
+      printError('Invalid parquedb.json: not valid JSON')
+      return 1
+    }
 
     // Create storage backend
     const storage = new FsBackend(directory)

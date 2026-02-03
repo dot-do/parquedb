@@ -9,8 +9,8 @@ export type RefType = 'heads' | 'tags'
  * HEAD state - either points to a branch or is detached
  */
 export interface HeadState {
-  type: 'branch' | 'detached'
-  ref: string  // Branch name (e.g., 'main') or commit hash
+  readonly type: 'branch' | 'detached'
+  readonly ref: string  // Branch name (e.g., 'main') or commit hash
 }
 
 /**

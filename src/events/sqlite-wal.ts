@@ -10,6 +10,7 @@
 
 import type { Event } from '../types/entity'
 import type { EventBatch, SerializedBatch, WalRow } from './types'
+import { isValidTableName } from '../utils/sql-security'
 
 // =============================================================================
 // Types
@@ -70,6 +71,14 @@ export class SqliteWal {
   constructor(sql: SqliteInterface, options: SqliteWalOptions = {}) {
     this.sql = sql
     this.options = { ...DEFAULT_OPTIONS, ...options }
+
+    // Validate table name to prevent SQL injection
+    // Table names must be alphanumeric with underscores only
+    if (!isValidTableName(this.options.tableName)) {
+      throw new Error(
+        `Invalid table name "${this.options.tableName}": must contain only alphanumeric characters and underscores, and start with a letter or underscore`
+      )
+    }
   }
 
   // ===========================================================================
@@ -313,7 +322,13 @@ export class SqliteWal {
     }
 
     const json = new TextDecoder().decode(data)
-    const events: Event[] = JSON.parse(json)
+    let events: Event[]
+    try {
+      events = JSON.parse(json) as Event[]
+    } catch {
+      // Invalid JSON in event batch - return empty batch
+      events = []
+    }
 
     return {
       events,
@@ -347,3 +362,6 @@ export function createSqliteFlushHandler(wal: SqliteWal) {
     wal.writeBatch(batch)
   }
 }
+
+// Re-export for backward compatibility
+export { isValidTableName } from '../utils/sql-security'

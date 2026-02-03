@@ -15,66 +15,136 @@
 // =============================================================================
 
 /**
+ * Data for linking a GitHub installation
+ */
+export interface GitHubInstallationLinkData {
+  readonly login: string
+  readonly type: string
+  readonly repositories?: readonly string[]
+}
+
+/**
  * Interface for the DatabaseIndex service
  */
 export interface DatabaseIndexService {
-  getUserByInstallation: (installationId: number) => Promise<{ id: string } | null>
-  linkGitHubInstallation: (
+  readonly getUserByInstallation: (installationId: number) => Promise<{ readonly id: string } | null>
+  readonly linkGitHubInstallation: (
     userId: string,
     installationId: number,
-    data: {
-      login: string
-      type: string
-      repositories?: string[]
-    }
+    data: GitHubInstallationLinkData
   ) => Promise<void>
-  unlinkGitHubInstallation: (installationId: number) => Promise<boolean>
-  getDatabaseByRepo: (fullName: string) => Promise<DatabaseInfo | null>
+  readonly unlinkGitHubInstallation: (installationId: number) => Promise<boolean>
+  readonly getDatabaseByRepo: (fullName: string) => Promise<DatabaseInfo | null>
+}
+
+/**
+ * Branch configuration options
+ */
+export interface BranchConfig {
+  readonly auto_create?: readonly string[]
+  readonly auto_delete?: boolean
+  readonly ignore?: readonly string[]
+}
+
+/**
+ * Preview configuration options
+ */
+export interface PreviewConfig {
+  readonly enabled?: boolean
+}
+
+/**
+ * Merge configuration options
+ */
+export interface MergeConfig {
+  readonly strategy?: string
+}
+
+/**
+ * Database configuration
+ */
+export interface DatabaseConfig {
+  readonly branches?: BranchConfig
+  readonly preview?: PreviewConfig
+  readonly merge?: MergeConfig
 }
 
 /**
  * Database info returned from index
  */
 export interface DatabaseInfo {
-  id: string
-  defaultBranch?: string
-  previewUrl?: string
-  config?: {
-    branches?: {
-      auto_create?: string[]
-      auto_delete?: boolean
-      ignore?: string[]
-    }
-    preview?: {
-      enabled?: boolean
-    }
-    merge?: {
-      strategy?: string
-    }
-  }
+  readonly id: string
+  readonly defaultBranch?: string
+  readonly previewUrl?: string
+  readonly config?: DatabaseConfig
+}
+
+/**
+ * Branch creation options
+ */
+export interface BranchCreateOptions {
+  readonly from: string
+}
+
+/**
+ * Merge options
+ */
+export interface MergeServiceOptions {
+  readonly strategy?: string
+}
+
+/**
+ * Merge conflict result
+ */
+export interface MergeConflictResult {
+  readonly entityId: string
+  readonly field: string
+}
+
+/**
+ * Merge result
+ */
+export interface MergeServiceResult {
+  readonly conflicts: readonly MergeConflictResult[]
+}
+
+/**
+ * Diff change counts
+ */
+export interface DiffChangeCounts {
+  readonly added?: number
+  readonly modified?: number
+  readonly deleted?: number
+}
+
+/**
+ * Diff result
+ */
+export interface DiffResult {
+  readonly entities: DiffChangeCounts
+  readonly relationships: DiffChangeCounts
+}
+
+/**
+ * Branch service interface
+ */
+export interface BranchService {
+  readonly create: (name: string, options: BranchCreateOptions) => Promise<{ readonly name: string }>
+  readonly delete: (name: string) => Promise<boolean>
+  readonly exists: (name: string) => Promise<boolean>
 }
 
 /**
  * Interface for ParqueDB branch operations
  */
 export interface ParqueDBService {
-  branch: {
-    create: (name: string, options: { from: string }) => Promise<{ name: string }>
-    delete: (name: string) => Promise<boolean>
-    exists: (name: string) => Promise<boolean>
-  }
-  merge: (
+  readonly branch: BranchService
+  readonly merge: (
     source: string,
     target: string,
-    options?: { strategy?: string }
-  ) => Promise<{ conflicts: Array<{ entityId: string; field: string }> }>
-  diff: (
-    source: string,
-    target: string
-  ) => Promise<{
-    entities: { added?: number; modified?: number; deleted?: number }
-    relationships: { added?: number; modified?: number; deleted?: number }
-  }>
+    options?: MergeServiceOptions
+  ) => Promise<MergeServiceResult>
+  readonly diff: (source: string, target: string) => Promise<DiffResult>
 }
 
 /**

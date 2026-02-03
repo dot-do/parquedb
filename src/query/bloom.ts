@@ -462,7 +462,7 @@ export function deserializeBloomFilterIndex(data: Uint8Array): BloomFilterIndex 
   // Read header JSON
   const headerBytes = data.slice(4, 4 + headerLength)
   const headerJson = new TextDecoder().decode(headerBytes)
-  const header = JSON.parse(headerJson) as {
+  let header: {
     version: number
     metadata: {
       createdAt: string
@@ -470,6 +470,11 @@ export function deserializeBloomFilterIndex(data: Uint8Array): BloomFilterIndex 
       fields: string[]
     }
     filterOffsets: Record<string, { offset: number; length: number }>
+  }
+  try {
+    header = JSON.parse(headerJson) as typeof header
+  } catch {
+    throw new Error('Invalid bloom filter index: not valid JSON header')
   }
 
   // Read filters

@@ -6,8 +6,9 @@
  */
 
 import { RefManager, createRefManager } from './refs'
-import { DatabaseCommit, loadCommit } from './commit'
+import { type DatabaseCommit as _DatabaseCommit, loadCommit } from './commit'
 import type { StorageBackend } from '../types/storage'
+import { reconstructState, checkUncommittedChanges } from './state-store'
 
 // =============================================================================
 // Types
@@ -18,13 +19,13 @@ import type { StorageBackend } from '../types/storage'
  */
 export interface BranchInfo {
   /** Branch name (e.g., 'main', 'feature/new-schema') */
-  name: string
+  readonly name: string
   /** Commit hash the branch points to */
-  commit: string
+  readonly commit: string
   /** Whether this is the current branch (HEAD points to it) */
-  isCurrent: boolean
+  readonly isCurrent: boolean
   /** Whether this is a remote tracking branch */
-  isRemote: boolean
+  readonly isRemote: boolean
 }
 
 /**
@@ -32,7 +33,7 @@ export interface BranchInfo {
  */
 export interface BranchManagerOptions {
   /** Storage backend to use */
-  storage: StorageBackend
+  readonly storage: StorageBackend
 }
 
 /**
@@ -40,7 +41,11 @@ export interface BranchManagerOptions {
  */
 export interface CheckoutOptions {
   /** Create branch if it doesn't exist */
-  create?: boolean
+  readonly create?: boolean
+  /** Force checkout even with uncommitted changes (discards changes) */
+  readonly force?: boolean
+  /** Skip state reconstruction (only update HEAD) */
+  readonly skipStateReconstruction?: boolean
 }
 
 /**
@@ -48,7 +53,7 @@ export interface CheckoutOptions {
  */
 export interface DeleteOptions {
   /** Force delete even if branch has unmerged changes */
-  force?: boolean
+  readonly force?: boolean
 }
 
 /**
@@ -56,7 +61,7 @@ export interface DeleteOptions {
  */
 export interface CreateOptions {
   /** Base branch or commit to create from (defaults to current HEAD) */
-  from?: string
+  readonly from?: string
 }
 
 // =============================================================================
@@ -250,7 +255,7 @@ export class BranchManager {
    * state to match the commit the branch points to.
    *
    * @param name Branch name to switch to
-   * @param opts Options including create flag
+   * @param opts Options including create flag, force flag, and skipStateReconstruction
    */
   async checkout(name: string, opts?: CheckoutOptions): Promise<void> {
     // Check if branch exists
@@ -269,32 +274,108 @@ export class BranchManager {
     }
 
     // Get the commit the branch points to
-    const commit = await this.refs.resolveRef(name)
-    if (!commit) {
+    const targetCommitHash = await this.refs.resolveRef(name)
+    if (!targetCommitHash) {
       throw new Error(`Branch ${name} does not point to a valid commit`)
     }
 
-    // Verify the commit exists
+    // Load and verify the target commit
+    let targetCommit
     try {
-      await loadCommit(this.opts.storage, commit)
+      targetCommit = await loadCommit(this.opts.storage, targetCommitHash)
     } catch (error) {
       throw new Error(
-        `Cannot checkout ${name}: commit ${commit} not found. ${
+        `Cannot checkout ${name}: commit ${targetCommitHash} not found. ${
           error instanceof Error ? error.message : String(error)
         }`
       )
     }
 
+    // Check for uncommitted changes (unless force flag is set)
+    if (!opts?.force && !opts?.skipStateReconstruction) {
+      const currentCommitHash = await this.refs.resolveRef('HEAD')
+      if (currentCommitHash && currentCommitHash !== targetCommitHash) {
+        try {
+          const currentCommit = await loadCommit(this.opts.storage, currentCommitHash)
+          const uncommitted = await checkUncommittedChanges(this.opts.storage, currentCommit)
+
+          if (uncommitted.hasChanges) {
+            throw new Error(
+              `Cannot checkout ${name}: you have uncommitted changes.\n` +
+              `  ${uncommitted.summary}\n` +
+              `Use --force to discard changes, or commit them first.`
+            )
+          }
+        } catch (error) {
+          // If we can't check for uncommitted changes (e.g., no previous commit),
+          // we can proceed - this handles the initial checkout case
+          if (error instanceof Error && error.message.includes('Cannot checkout')) {
+            throw error
+          }
+          // Otherwise, ignore and proceed (first checkout scenario)
+        }
+      }
+    }
+
     // Update HEAD to point to the branch
     await this.refs.setHead(name)
 
-    // TODO: In a full implementation, we would:
-    // 1. Load the commit object
-    // 2. Reconstruct the database state from the commit's state snapshot
-    // 3. Update all data files, relationships, and event log to match
-    //
-    // For now, we just update HEAD. The actual state reconstruction
-    // will be implemented as part of the restore functionality.
+    // Reconstruct database state from the commit (unless skipped)
+    if (!opts?.skipStateReconstruction) {
+      try {
+        await reconstructState(this.opts.storage, targetCommit)
+      } catch (error) {
+        // If state reconstruction fails, revert HEAD
+        // Try to restore the previous HEAD state
+        const currentBranch = await this.current()
+        if (currentBranch && currentBranch !== name) {
+          await this.refs.setHead(currentBranch)
+        }
+
+        throw new Error(
+          `Checkout failed during state reconstruction: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        )
+      }
+    }
+  }
+
+  /**
+   * Check if there are uncommitted changes compared to the current commit
+   *
+   * @returns Object with hasChanges boolean and details
+   */
+  async hasUncommittedChanges(): Promise<{
+    hasChanges: boolean
+    summary: string
+    changedCollections: string[]
+    relationshipsChanged: boolean
+  }> {
+    const currentCommitHash = await this.refs.resolveRef('HEAD')
+
+    if (!currentCommitHash) {
+      // No commit yet - check if there are any data files
+      return {
+        hasChanges: false,
+        summary: 'No commits yet',
+        changedCollections: [],
+        relationshipsChanged: false,
+      }
+    }
+
+    try {
+      const currentCommit = await loadCommit(this.opts.storage, currentCommitHash)
+      return checkUncommittedChanges(this.opts.storage, currentCommit)
+    } catch {
+      // If we can't load the commit, assume no changes
+      return {
+        hasChanges: false,
+        summary: 'Unable to check uncommitted changes',
+        changedCollections: [],
+        relationshipsChanged: false,
+      }
+    }
   }
 
   /**

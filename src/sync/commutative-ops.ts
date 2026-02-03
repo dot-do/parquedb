@@ -27,23 +27,23 @@ import { deepEqual } from '../utils'
  * Update operation extracted from an event
  */
 export interface UpdateOps {
-  $set?: Record<string, unknown>
-  $unset?: Record<string, unknown>
-  $inc?: Record<string, number>
-  $addToSet?: Record<string, unknown>
-  $push?: Record<string, unknown>
-  $pull?: Record<string, unknown>
-  $min?: Record<string, unknown>
-  $max?: Record<string, unknown>
-  [key: string]: unknown
+  readonly $set?: Readonly<Record<string, unknown>>
+  readonly $unset?: Readonly<Record<string, unknown>>
+  readonly $inc?: Readonly<Record<string, number>>
+  readonly $addToSet?: Readonly<Record<string, unknown>>
+  readonly $push?: Readonly<Record<string, unknown>>
+  readonly $pull?: Readonly<Record<string, unknown>>
+  readonly $min?: Readonly<Record<string, unknown>>
+  readonly $max?: Readonly<Record<string, unknown>>
+  readonly [key: string]: unknown
 }
 
 /**
  * A pair of operations to check for commutativity
  */
 export interface OperationPair {
-  op1: UpdateOps
-  op2: UpdateOps
+  readonly op1: UpdateOps
+  readonly op2: UpdateOps
 }
 
 // =============================================================================

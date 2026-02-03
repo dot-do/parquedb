@@ -115,11 +115,9 @@ export async function detectStoragePaths(): Promise<StoragePaths | null> {
 
   try {
     let cwd: string
-    let fs: any
-    let path: any
 
     if (runtime === 'deno') {
-      cwd = (globalThis as any).Deno.cwd()
+      cwd = globalThis.Deno!.cwd()
       // Deno uses different fs API
       return {
         projectRoot: cwd,
@@ -128,10 +126,10 @@ export async function detectStoragePaths(): Promise<StoragePaths | null> {
       }
     }
 
-    // Node.js or Bun
+    // Node.js or Bun - import Node types
     cwd = process.cwd()
-    fs = await import('node:fs/promises')
-    path = await import('node:path')
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
 
     const candidates = ['.parquedb', '.db', 'data']
     let dataDir: string | null = null

@@ -9,37 +9,9 @@ import type { ParsedArgs } from '../index'
 import { print, printError, printSuccess } from '../index'
 import type { Visibility } from '../../types/visibility'
 import { isValidVisibility, DEFAULT_VISIBILITY } from '../../types/visibility'
-import type { ConflictStrategy } from '../../sync/manifest'
-
-// =============================================================================
-// Validation Helpers
-// =============================================================================
-
-/**
- * Validate that an object has all required fields
- * @returns Error message if validation fails, null if valid
- */
-function validateRequiredFields(
-  obj: unknown,
-  requiredFields: string[],
-  context: string
-): string | null {
-  if (obj === null || obj === undefined) {
-    return `${context}: Response is null or undefined`
-  }
-  if (typeof obj !== 'object') {
-    return `${context}: Expected object, got ${typeof obj}`
-  }
-  const record = obj as Record<string, unknown>
-  const missingFields = requiredFields.filter(field => {
-    const value = record[field]
-    return value === null || value === undefined
-  })
-  if (missingFields.length > 0) {
-    return `${context}: Missing required fields: ${missingFields.join(', ')}`
-  }
-  return null
-}
+import type { ConflictStrategy, SyncFileEntry, SyncManifest } from '../../sync/manifest'
+import { createSyncClient } from '../../sync/client'
+import { diffManifests, resolveConflicts } from '../../sync/manifest'
 
 // =============================================================================
 // Push Command
@@ -104,13 +76,16 @@ export async function pushCommand(parsed: ParsedArgs): Promise<number> {
       visibility = config.visibility
     }
 
-    // Create storage backends
+    // Create local storage backend
     const { FsBackend } = await import('../../storage/FsBackend')
     const localBackend = new FsBackend(parsed.options.directory)
 
-    // For now, we'll use a placeholder for the remote backend
-    // In production, this would connect to the ParqueDB cloud service
+    // Create sync client
     const remoteUrl = process.env.PARQUEDB_REMOTE_URL ?? 'https://api.parque.db'
+    const syncClient = createSyncClient({
+      baseUrl: remoteUrl,
+      token,
+    })
 
     print('')
     print(`Pushing to ${remoteUrl}...`)
@@ -120,21 +95,12 @@ export async function pushCommand(parsed: ParsedArgs): Promise<number> {
     }
     print('')
 
-    if (dryRun) {
-      print('[Dry run] Would push the following changes:')
-      // In a real implementation, we'd create the sync engine and call status()
-      print('  - Scanning local files...')
-      return 0
-    }
-
     // Register database with remote service
-    const registerResult = await registerDatabase({
-      token,
+    const registerResult = await syncClient.registerDatabase({
       name: config.defaultNamespace ?? 'default',
       visibility,
       slug: slugArg,
       owner,
-      remoteUrl,
     })
 
     if (!registerResult.success) {
@@ -142,45 +108,108 @@ export async function pushCommand(parsed: ParsedArgs): Promise<number> {
       return 1
     }
 
-    print(`Database registered: ${registerResult.databaseId}`)
+    const databaseId = registerResult.databaseId!
+    print(`Database registered: ${databaseId}`)
     print('')
 
-    // Create sync engine
-    // Note: Remote backend creation requires the R2 credentials from the service
-    // For now, we'll simulate the upload process
-    print('Uploading files...')
+    // Build local manifest
+    print('Scanning local files...')
+    const localManifest = await buildLocalManifest(localBackend, databaseId, config.defaultNamespace ?? 'default', owner, visibility)
+    const localFiles = Object.values(localManifest.files)
 
-    // In production, this would:
-    // 1. Get presigned URLs from the service for each file
-    // 2. Upload files directly to R2
-    // 3. Update the manifest
-
-    // Simulate progress
-    let fileCount = 0
-    try {
-      const entries = await localBackend.list('data')
-      // Filter to only include parquet files (files array contains paths as strings)
-      fileCount = entries.files.filter(f => f.endsWith('.parquet')).length
-    } catch {
-      // data directory might not exist
+    if (localFiles.length === 0) {
+      print('No files to upload.')
+      return 0
     }
 
-    if (fileCount === 0) {
-      print('No data files to upload.')
+    print(`Found ${localFiles.length} files to sync.`)
+
+    // Get remote manifest
+    const remoteManifest = await syncClient.getManifest(databaseId)
+
+    // Compare manifests
+    const diff = diffManifests(localManifest, remoteManifest)
+
+    const toUpload = [...diff.toUpload]
+    const { upload: conflictUploads } = resolveConflicts(diff.conflicts, 'local-wins')
+    toUpload.push(...conflictUploads)
+
+    if (toUpload.length === 0) {
+      print('Already up to date.')
+      return 0
+    }
+
+    if (dryRun) {
+      print('[Dry run] Would upload the following files:')
+      for (const file of toUpload) {
+        print(`  - ${file.path} (${formatBytes(file.size)})`)
+      }
+      return 0
+    }
+
+    // Get presigned upload URLs
+    print('')
+    print(`Uploading ${toUpload.length} files...`)
+
+    const uploadUrls = await syncClient.getUploadUrls(
+      databaseId,
+      toUpload.map(f => ({
+        path: f.path,
+        size: f.size,
+        contentType: f.contentType,
+      }))
+    )
+
+    // Upload each file
+    let uploaded = 0
+    let totalBytes = 0
+    const errors: Array<{ path: string; error: string }> = []
+
+    for (const urlInfo of uploadUrls) {
+      const file = toUpload.find(f => f.path === urlInfo.path)
+      if (!file) continue
+
+      try {
+        const data = await localBackend.read(file.path)
+        await syncClient.uploadFile(urlInfo, data)
+        uploaded++
+        totalBytes += data.length
+        printProgress(uploaded, toUpload.length, file.path)
+      } catch (error) {
+        errors.push({
+          path: file.path,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
+    // Update remote manifest
+    localManifest.lastSyncedAt = new Date().toISOString()
+    localManifest.syncedFrom = 'local'
+    await syncClient.updateManifest(databaseId, localManifest)
+
+    // Save local manifest
+    await localBackend.write(
+      '_meta/manifest.json',
+      new TextEncoder().encode(JSON.stringify(localManifest, null, 2))
+    )
+
+    print('')
+    if (errors.length > 0) {
+      printError(`Uploaded ${uploaded} files with ${errors.length} errors:`)
+      for (const err of errors) {
+        print(`  - ${err.path}: ${err.error}`)
+      }
     } else {
-      print(`Uploaded ${fileCount} files.`)
+      printSuccess(`Uploaded ${uploaded} files (${formatBytes(totalBytes)})`)
     }
 
-    print('')
     if (visibility === 'public' || visibility === 'unlisted') {
-      const publicUrl = `https://parque.db/${owner}/${slugArg ?? registerResult.databaseId}`
-      printSuccess(`Database pushed successfully!`)
+      const publicUrl = `https://parque.db/${owner}/${slugArg ?? databaseId}`
       print(`  URL: ${publicUrl}`)
-    } else {
-      printSuccess('Database pushed successfully!')
     }
 
-    return 0
+    return errors.length > 0 ? 1 : 0
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     printError(`Push failed: ${message}`)
@@ -218,16 +247,36 @@ export async function pullCommand(parsed: ParsedArgs): Promise<number> {
 
     print(`Fetching database info from ${remoteUrl}...`)
 
-    // Lookup database
-    const dbInfo = await lookupDatabase({
-      owner: owner!,
-      slug: slug!,
-      remoteUrl,
+    // Check if auth is needed - try unauthenticated first
+    let token: string | undefined
+    let syncClient = createSyncClient({
+      baseUrl: remoteUrl,
+      token: '',
     })
 
+    // Lookup database
+    let dbInfo = await syncClient.lookupDatabase(owner!, slug!)
+
     if (!dbInfo) {
-      printError(`Database not found: ${dbRef}`)
-      return 1
+      // Try with authentication
+      print('Database not found or requires authentication...')
+      const { ensureLoggedIn } = await import('oauth.do/node')
+      const authResult = await ensureLoggedIn({
+        openBrowser: true,
+        print: (msg: string) => print(msg),
+      })
+      token = authResult.token
+
+      syncClient = createSyncClient({
+        baseUrl: remoteUrl,
+        token,
+      })
+
+      dbInfo = await syncClient.lookupDatabase(owner!, slug!)
+      if (!dbInfo) {
+        printError(`Database not found: ${dbRef}`)
+        return 1
+      }
     }
 
     print('')
@@ -236,60 +285,107 @@ export async function pullCommand(parsed: ParsedArgs): Promise<number> {
     print(`  Collections: ${dbInfo.collectionCount ?? 'unknown'}`)
     print('')
 
-    // Check if auth is required
-    if (dbInfo.visibility === 'private') {
-      print('Private database - authenticating...')
-      const { ensureLoggedIn } = await import('oauth.do/node')
-      await ensureLoggedIn({
-        openBrowser: true,
-        print: (msg: string) => print(msg),
-      })
-    }
-
     const targetDir = parsed.options.directory
 
-    if (dryRun) {
-      print(`[Dry run] Would download to: ${targetDir}`)
-      return 0
-    }
-
-    print(`Downloading to ${targetDir}...`)
-
-    // In production, this would:
-    // 1. Fetch the manifest from remote
-    // 2. Download each file from R2 (using range requests for Parquet)
-    // 3. Create local manifest
-
-    // Create local directory structure
+    // Create local storage backend
     const { FsBackend } = await import('../../storage/FsBackend')
     const localBackend = new FsBackend(targetDir)
 
+    // Ensure directories exist
     await localBackend.mkdir('data')
     await localBackend.mkdir('_meta')
 
-    // Write placeholder manifest
-    const manifest = {
-      version: 1,
-      databaseId: dbInfo.id,
-      name: dbInfo.name,
-      owner: dbInfo.owner,
-      slug: dbInfo.slug,
-      visibility: dbInfo.visibility,
+    // Get remote manifest
+    const remoteManifest = await syncClient.getManifest(dbInfo.id)
+    if (!remoteManifest) {
+      printError('Remote manifest not found. Database may be empty.')
+      return 1
+    }
+
+    // Load local manifest if exists
+    let localManifest: SyncManifest | null = null
+    try {
+      const data = await localBackend.read('_meta/manifest.json')
+      localManifest = JSON.parse(new TextDecoder().decode(data)) as SyncManifest
+    } catch {
+      // No local manifest, will download everything
+    }
+
+    // Compare manifests
+    const diff = diffManifests(localManifest, remoteManifest)
+    const toDownload = [...diff.toDownload]
+    const { download: conflictDownloads } = resolveConflicts(diff.conflicts, 'remote-wins')
+    toDownload.push(...conflictDownloads)
+
+    if (toDownload.length === 0) {
+      print('Already up to date.')
+      return 0
+    }
+
+    if (dryRun) {
+      print(`[Dry run] Would download to: ${targetDir}`)
+      print('Files to download:')
+      for (const file of toDownload) {
+        print(`  - ${file.path} (${formatBytes(file.size)})`)
+      }
+      return 0
+    }
+
+    print(`Downloading ${toDownload.length} files to ${targetDir}...`)
+
+    // Get presigned download URLs
+    const downloadUrls = await syncClient.getDownloadUrls(
+      dbInfo.id,
+      toDownload.map(f => f.path)
+    )
+
+    // Download each file
+    let downloaded = 0
+    let totalBytes = 0
+    const errors: Array<{ path: string; error: string }> = []
+
+    for (const urlInfo of downloadUrls) {
+      const file = toDownload.find(f => f.path === urlInfo.path)
+      if (!file) continue
+
+      try {
+        const data = await syncClient.downloadFile(urlInfo)
+        await localBackend.write(file.path, data)
+        downloaded++
+        totalBytes += data.length
+        printProgress(downloaded, toDownload.length, file.path)
+      } catch (error) {
+        errors.push({
+          path: file.path,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
+    // Save local manifest
+    const updatedManifest: SyncManifest = {
+      ...remoteManifest,
       lastSyncedAt: new Date().toISOString(),
       syncedFrom: `remote:${remoteUrl}`,
-      files: {},
     }
 
     await localBackend.write(
       '_meta/manifest.json',
-      new TextEncoder().encode(JSON.stringify(manifest, null, 2))
+      new TextEncoder().encode(JSON.stringify(updatedManifest, null, 2))
     )
 
     print('')
-    printSuccess(`Database pulled successfully!`)
-    print(`  Location: ${targetDir}`)
+    if (errors.length > 0) {
+      printError(`Downloaded ${downloaded} files with ${errors.length} errors:`)
+      for (const err of errors) {
+        print(`  - ${err.path}: ${err.error}`)
+      }
+    } else {
+      printSuccess(`Downloaded ${downloaded} files (${formatBytes(totalBytes)})`)
+      print(`  Location: ${targetDir}`)
+    }
 
-    return 0
+    return errors.length > 0 ? 1 : 0
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     printError(`Pull failed: ${message}`)
@@ -346,53 +442,199 @@ export async function syncCommand(parsed: ParsedArgs): Promise<number> {
       return 1
     }
 
-    // Check for existing manifest
+    // Create local storage backend
     const { FsBackend } = await import('../../storage/FsBackend')
     const localBackend = new FsBackend(parsed.options.directory)
 
-    let manifest
+    // Check for existing manifest
+    let localManifest: SyncManifest
     try {
       const data = await localBackend.read('_meta/manifest.json')
-      manifest = JSON.parse(new TextDecoder().decode(data))
+      localManifest = JSON.parse(new TextDecoder().decode(data)) as SyncManifest
     } catch {
       printError('No manifest found. Run "parquedb push" first to establish a sync.')
       return 1
     }
 
-    // Remote URL for future sync implementation
-    const _remoteUrl = process.env.PARQUEDB_REMOTE_URL ?? 'https://api.parque.db'
-    void _remoteUrl // Intentionally unused for now
+    const databaseId = localManifest.databaseId
+    if (!databaseId) {
+      printError('Invalid manifest: missing databaseId. Run "parquedb push" to re-register.')
+      return 1
+    }
+
+    // Create sync client
+    const remoteUrl = process.env.PARQUEDB_REMOTE_URL ?? 'https://api.parque.db'
+    const syncClient = createSyncClient({
+      baseUrl: remoteUrl,
+      token,
+    })
 
     print('')
     print('Checking sync status...')
 
+    // Build current local state
+    const currentLocalManifest = await buildLocalManifest(
+      localBackend,
+      databaseId,
+      localManifest.name,
+      localManifest.owner,
+      localManifest.visibility
+    )
+
+    // Get remote manifest
+    const remoteManifest = await syncClient.getManifest(databaseId)
+
+    // Compare
+    const diff = diffManifests(currentLocalManifest, remoteManifest)
+
+    const isSynced =
+      diff.toUpload.length === 0 &&
+      diff.toDownload.length === 0 &&
+      diff.conflicts.length === 0
+
     if (statusOnly) {
       print('')
       print('Local manifest:')
-      print(`  Database: ${manifest.name}`)
-      print(`  Last synced: ${manifest.lastSyncedAt}`)
-      print(`  Files: ${Object.keys(manifest.files).length}`)
+      print(`  Database: ${localManifest.name}`)
+      print(`  Last synced: ${localManifest.lastSyncedAt}`)
+      print(`  Local files: ${Object.keys(currentLocalManifest.files).length}`)
+      print('')
+      print('Status:')
+      if (isSynced) {
+        printSuccess('  Up to date')
+      } else {
+        print(`  Files to upload: ${diff.toUpload.length}`)
+        print(`  Files to download: ${diff.toDownload.length}`)
+        print(`  Conflicts: ${diff.conflicts.length}`)
+      }
+      return 0
+    }
+
+    if (isSynced) {
+      printSuccess('Already up to date.')
       return 0
     }
 
     print(`  Strategy: ${strategy}`)
+    print(`  Files to upload: ${diff.toUpload.length}`)
+    print(`  Files to download: ${diff.toDownload.length}`)
+    print(`  Conflicts: ${diff.conflicts.length}`)
     print('')
+
+    // Resolve conflicts
+    const resolved = resolveConflicts(diff.conflicts, strategy)
+    const toUpload = [...diff.toUpload, ...resolved.upload]
+    const toDownload = [...diff.toDownload, ...resolved.download]
+
+    if (resolved.manual.length > 0) {
+      printError(`${resolved.manual.length} conflicts require manual resolution:`)
+      for (const conflict of resolved.manual) {
+        print(`  - ${conflict.path}`)
+      }
+      print('')
+      print('Use --strategy=local-wins or --strategy=remote-wins to auto-resolve.')
+      return 1
+    }
 
     if (dryRun) {
       print('[Dry run] Would sync the following changes:')
-      // In production, compare manifests and show diff
+      if (toUpload.length > 0) {
+        print('  Upload:')
+        for (const file of toUpload) {
+          print(`    - ${file.path} (${formatBytes(file.size)})`)
+        }
+      }
+      if (toDownload.length > 0) {
+        print('  Download:')
+        for (const file of toDownload) {
+          print(`    - ${file.path} (${formatBytes(file.size)})`)
+        }
+      }
       return 0
     }
 
-    // In production, this would:
-    // 1. Load remote manifest
-    // 2. Compare with local
-    // 3. Apply sync based on strategy
-
     print('Syncing...')
-    print('')
-    printSuccess('Sync complete!')
+    const errors: Array<{ path: string; error: string }> = []
 
+    // Upload files
+    if (toUpload.length > 0) {
+      print(`Uploading ${toUpload.length} files...`)
+      const uploadUrls = await syncClient.getUploadUrls(
+        databaseId,
+        toUpload.map(f => ({
+          path: f.path,
+          size: f.size,
+          contentType: f.contentType,
+        }))
+      )
+
+      for (const urlInfo of uploadUrls) {
+        const file = toUpload.find(f => f.path === urlInfo.path)
+        if (!file) continue
+
+        try {
+          const data = await localBackend.read(file.path)
+          await syncClient.uploadFile(urlInfo, data)
+        } catch (error) {
+          errors.push({
+            path: file.path,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+    }
+
+    // Download files
+    if (toDownload.length > 0) {
+      print(`Downloading ${toDownload.length} files...`)
+      const downloadUrls = await syncClient.getDownloadUrls(
+        databaseId,
+        toDownload.map(f => f.path)
+      )
+
+      for (const urlInfo of downloadUrls) {
+        const file = toDownload.find(f => f.path === urlInfo.path)
+        if (!file) continue
+
+        try {
+          const data = await syncClient.downloadFile(urlInfo)
+          await localBackend.write(file.path, data)
+        } catch (error) {
+          errors.push({
+            path: file.path,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+    }
+
+    // Update manifests
+    const updatedManifest = await buildLocalManifest(
+      localBackend,
+      databaseId,
+      currentLocalManifest.name,
+      currentLocalManifest.owner,
+      currentLocalManifest.visibility
+    )
+    updatedManifest.lastSyncedAt = new Date().toISOString()
+    updatedManifest.syncedFrom = 'bidirectional'
+
+    await syncClient.updateManifest(databaseId, updatedManifest)
+    await localBackend.write(
+      '_meta/manifest.json',
+      new TextEncoder().encode(JSON.stringify(updatedManifest, null, 2))
+    )
+
+    print('')
+    if (errors.length > 0) {
+      printError(`Sync completed with ${errors.length} errors:`)
+      for (const err of errors) {
+        print(`  - ${err.path}: ${err.error}`)
+      }
+      return 1
+    }
+
+    printSuccess(`Sync complete! Uploaded ${toUpload.length}, downloaded ${toDownload.length} files.`)
     return 0
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -424,112 +666,114 @@ function isValidSlug(slug: string): boolean {
 }
 
 /**
- * Format progress for display (used in future progress reporting)
+ * Format bytes for display
  */
-function _formatProgress(progress: { operation: string; currentFile?: string; processed: number; total: number }): string {
-  const percent = progress.total > 0
-    ? Math.round((progress.processed / progress.total) * 100)
-    : 0
-  return `[${percent}%] ${progress.operation}: ${progress.currentFile ?? ''}`
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
-void _formatProgress // Will be used in future implementation
 
 /**
- * Register database with remote service
+ * Print progress indicator
  */
-async function registerDatabase(options: {
-  token: string
-  name: string
+function printProgress(current: number, total: number, file: string): void {
+  const percent = Math.round((current / total) * 100)
+  const shortFile = file.length > 40 ? '...' + file.slice(-37) : file
+  print(`  [${percent}%] ${shortFile}`)
+}
+
+/**
+ * Build a manifest from local files
+ */
+async function buildLocalManifest(
+  backend: { list: (prefix: string) => Promise<{ files: string[] }>; stat: (path: string) => Promise<{ size: number; mtime: Date } | null>; read: (path: string) => Promise<Uint8Array> },
+  databaseId: string,
+  name: string,
+  owner: string | undefined,
   visibility: Visibility
-  slug?: string
-  owner: string
-  remoteUrl: string
-}): Promise<{ success: boolean; databaseId?: string; error?: string }> {
-  // In production, this would call the ParqueDB API
-  // For now, return a simulated response
-  try {
-    const response = await fetch(`${options.remoteUrl}/api/databases`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${options.token}`,
-      },
-      body: JSON.stringify({
-        name: options.name,
-        visibility: options.visibility,
-        slug: options.slug,
-        owner: options.owner,
-      }),
-    })
+): Promise<SyncManifest> {
+  const files: Record<string, SyncFileEntry> = {}
 
-    if (!response.ok) {
-      // If the remote isn't available, return a mock success for local development
-      if (response.status === 0 || options.remoteUrl.includes('localhost')) {
-        return {
-          success: true,
-          databaseId: `db_${Date.now().toString(36)}`,
-        }
-      }
-      const error = await response.text()
-      return { success: false, error }
+  const IGNORED_PATHS = [
+    '_meta/manifest.json',
+    '.git',
+    '.DS_Store',
+    'node_modules',
+  ]
+
+  // List all files
+  const result = await backend.list('')
+
+  for (const filePath of result.files) {
+    // Skip ignored paths
+    if (IGNORED_PATHS.some(p => filePath.startsWith(p))) {
+      continue
     }
 
-    const data = await response.json()
-    const validationError = validateRequiredFields(data, ['id'], 'registerDatabase')
-    if (validationError) {
-      return { success: false, error: validationError }
+    // Get file info
+    const stat = await backend.stat(filePath)
+    if (!stat) continue
+
+    // Calculate hash
+    const hash = await hashFile(filePath, backend)
+
+    files[filePath] = {
+      path: filePath,
+      size: stat.size,
+      hash,
+      hashAlgorithm: 'sha256',
+      modifiedAt: stat.mtime.toISOString(),
+      contentType: guessContentType(filePath),
     }
-    return { success: true, databaseId: (data as { id: string }).id }
-  } catch {
-    // For local development without a remote service
-    return {
-      success: true,
-      databaseId: `db_${Date.now().toString(36)}`,
-    }
+  }
+
+  return {
+    version: 1,
+    databaseId,
+    name,
+    owner,
+    visibility,
+    lastSyncedAt: new Date().toISOString(),
+    files,
   }
 }
 
 /**
- * Lookup database from remote service
+ * Calculate file hash
  */
-async function lookupDatabase(options: {
-  owner: string
-  slug: string
-  remoteUrl: string
-}): Promise<{
-  id: string
-  name: string
-  visibility: Visibility
-  collectionCount?: number
-  owner?: string
-  slug?: string
-} | null> {
-  try {
-    const response = await fetch(
-      `${options.remoteUrl}/api/db/${options.owner}/${options.slug}`,
-      { method: 'GET' }
-    )
+async function hashFile(
+  path: string,
+  storage: { read: (path: string) => Promise<Uint8Array> }
+): Promise<string> {
+  const data = await storage.read(path)
 
-    if (!response.ok) {
-      // Mock response for local development
-      return null
-    }
-
-    const data = await response.json()
-    const validationError = validateRequiredFields(data, ['id', 'name', 'visibility'], 'lookupDatabase')
-    if (validationError) {
-      return null
-    }
-    return data as {
-      id: string
-      name: string
-      visibility: Visibility
-      collectionCount?: number
-      owner?: string
-      slug?: string
-    }
-  } catch {
-    // For local development, return null (not found)
-    return null
+  // Use crypto.subtle
+  if (typeof crypto === 'undefined' || !crypto.subtle) {
+    throw new Error('crypto.subtle is not available')
   }
+
+  // Create a fresh ArrayBuffer to avoid SharedArrayBuffer issues
+  const buffer = new ArrayBuffer(data.length)
+  const view = new Uint8Array(buffer)
+  view.set(data)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Guess content type from file extension
+ */
+function guessContentType(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase()
+  const types: Record<string, string> = {
+    parquet: 'application/vnd.apache.parquet',
+    json: 'application/json',
+    jsonl: 'application/x-ndjson',
+    csv: 'text/csv',
+    txt: 'text/plain',
+  }
+  return types[ext ?? ''] ?? 'application/octet-stream'
 }

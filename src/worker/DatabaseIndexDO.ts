@@ -28,6 +28,7 @@ import { DurableObject } from 'cloudflare:workers'
 import type { EntityId } from '../types'
 import type { Visibility } from '../types/visibility'
 import { DEFAULT_VISIBILITY, isValidVisibility } from '../types/visibility'
+import { escapeLikePattern } from '../utils/sql-security'
 
 // =============================================================================
 // Types
@@ -513,11 +514,13 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
    * Search databases by name
    */
   async search(query: string): Promise<DatabaseInfo[]> {
+    // Escape LIKE special characters to prevent SQL injection via wildcards
+    const escapedQuery = escapeLikePattern(query)
     const rows = this.sql.exec(`
       SELECT * FROM databases
-      WHERE name LIKE ? AND deleted_at IS NULL
+      WHERE name LIKE ? ESCAPE '\\' AND deleted_at IS NULL
       ORDER BY name
-    `, `%${query}%`).toArray()
+    `, `%${escapedQuery}%`).toArray()
 
     return rows.map((row) => this.rowToDatabase(row))
   }
@@ -672,7 +675,14 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
       entityCount: row.entity_count as number | undefined,
       schemaVersion: row.schema_version as number | undefined,
       metadata: row.metadata
-        ? JSON.parse(row.metadata as string)
+        ? (() => {
+            try {
+              return JSON.parse(row.metadata as string)
+            } catch {
+              // Invalid metadata JSON - return undefined
+              return undefined
+            }
+          })()
         : undefined,
       visibility: isValidVisibility(visibility) ? visibility : DEFAULT_VISIBILITY,
       slug: row.slug as string | undefined,

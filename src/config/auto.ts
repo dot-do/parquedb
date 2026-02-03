@@ -35,6 +35,10 @@ import {
   createEnvActorResolver,
 } from './auth'
 import type { EntityId } from '../types/entity'
+import { createEmptyProxy, asR2Bucket, getCollection, extendFunction } from '../utils/type-utils'
+import type { R2Bucket } from '../storage/types/r2'
+import type { Collection } from '../Collection'
+import type { SQLQueryOptions } from '../integrations/sql'
 
 // Module-scoped instance cache
 let _db: DBInstance | null = null
@@ -197,8 +201,8 @@ async function resolveStorage(
       const workersEnv = await loadWorkersEnv()
       if (workersEnv?.BUCKET) {
         const { R2Backend } = await import('../storage/R2Backend')
-        // Cast to any since Workers R2Bucket type differs from internal type
-        return new R2Backend(workersEnv.BUCKET as any)
+        // Bridge between @cloudflare/workers-types R2Bucket and our internal type
+        return new R2Backend(asR2Bucket<R2Bucket>(workersEnv.BUCKET))
       }
     }
 
@@ -217,8 +221,8 @@ async function createWorkersStorage(env: Env): Promise<StorageBackend | undefine
   // Prefer R2 for storage
   if (bindings.hasR2 && env.BUCKET) {
     const { R2Backend } = await import('../storage/R2Backend')
-    // Cast to any since Workers R2Bucket type differs from internal type
-    return new R2Backend(env.BUCKET as any)
+    // Bridge between @cloudflare/workers-types R2Bucket and our internal type
+    return new R2Backend(asR2Bucket<R2Bucket>(env.BUCKET))
   }
 
   // Could add DO-based storage here in the future
@@ -286,7 +290,7 @@ function createLazyProxy(): DBInstance {
     },
   }
 
-  return new Proxy({}, handler) as unknown as DBInstance
+  return createEmptyProxy<DBInstance>(handler)
 }
 
 /**
@@ -300,9 +304,11 @@ function createLazyCollectionProxy(collectionName: string) {
       // Return async function that initializes and calls method
       return async function (...args: unknown[]) {
         const db = await initializeDB()
-        const collection = (db as any)[collectionName]
-        if (collection && typeof collection[method] === 'function') {
-          return collection[method](...args)
+        // Use type-safe collection access from Proxy-based db
+        const collection = getCollection<Collection>(db as Record<string, unknown>, collectionName)
+        if (collection && typeof collection[method as keyof Collection] === 'function') {
+          const methodFn = collection[method as keyof Collection] as (...args: unknown[]) => unknown
+          return methodFn.apply(collection, args)
         }
         throw new Error(`Method ${method} not found on collection ${collectionName}`)
       }
@@ -325,17 +331,17 @@ function createLazySqlProxy() {
     return db.sql(strings, ...values)
   }
 
-  // Add .raw method
-  ;(sqlProxy as any).raw = async function (
+  // Add .raw method using type-safe function extension
+  const rawMethod = async function (
     query: string,
     params?: unknown[],
-    options?: unknown
+    options?: SQLQueryOptions
   ) {
     const db = await initializeDB()
-    return db.sql.raw(query, params, options as any)
+    return db.sql.raw(query, params, options)
   }
 
-  return sqlProxy
+  return extendFunction(sqlProxy, { raw: rawMethod })
 }
 
 // =============================================================================

@@ -257,14 +257,8 @@ function convertToGraphDLInput(schema: DBSchema): Record<string, Record<string, 
   return result
 }
 
-/**
- * Get list of flexible collections from schema
- */
-function getFlexibleCollections(schema: DBSchema): string[] {
-  return Object.entries(schema)
-    .filter(([, collectionSchema]) => isCollectionFlexible(collectionSchema))
-    .map(([name]) => name)
-}
+// Note: getFlexibleCollections helper available for schema inspection
+// Currently used internally by isCollectionFlexible checks
 
 // =============================================================================
 // Collection Options Helpers

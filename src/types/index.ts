@@ -33,3 +33,6 @@ export * from './result'
 
 // Visibility types (public, unlisted, private)
 export * from './visibility'
+
+// Type cast utilities (eliminates double assertions)
+export * from './cast'

@@ -3,6 +3,13 @@
  *
  * Main dashboard view showing all databases for a user.
  * Integrates with Payload CMS admin panel as a custom root view.
+ * Includes delete functionality with confirmation dialogs.
+ *
+ * Features:
+ * - Automatic retry with exponential backoff on fetch failures
+ * - Clear error messages with user-friendly descriptions
+ * - Loading states during fetches and retries
+ * - Error boundaries for render errors
  *
  * @example Payload Config Integration
  * ```typescript
@@ -24,10 +31,15 @@
 
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
 import type { DatabaseInfo } from '../../worker/DatabaseIndexDO'
 import { DatabaseCard } from './DatabaseCard'
 import { CreateDatabaseModal } from './CreateDatabaseModal'
+import { ConfirmationDialog } from './ConfirmationDialog'
+import { ErrorDisplay } from './ErrorDisplay'
+import { LoadingSpinner } from './LoadingSpinner'
+import { ErrorBoundary } from './ErrorBoundary'
+import { useRetry } from './hooks/useRetry'
 
 export interface DatabaseDashboardProps {
   /** Base path for admin routes (default: '/admin') */
@@ -40,6 +52,8 @@ export interface DatabaseDashboardProps {
   onSelectDatabase?: (database: DatabaseInfo) => void
   /** Show create button */
   showCreate?: boolean
+  /** Show delete buttons on cards */
+  showDelete?: boolean
   /** Custom header component */
   header?: React.ReactNode
 }
@@ -53,38 +67,62 @@ export function DatabaseDashboard({
   apiEndpoint = '/api/databases',
   onSelectDatabase,
   showCreate = true,
+  showDelete = true,
   header,
 }: DatabaseDashboardProps) {
-  const [databases, setDatabases] = useState<DatabaseInfo[]>(initialDatabases)
-  const [loading, setLoading] = useState(!initialDatabases.length)
-  const [error, setError] = useState<string | null>(null)
+  const [localDatabases, setLocalDatabases] = useState<DatabaseInfo[]>(initialDatabases)
   const [searchQuery, setSearchQuery] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [sortBy, setSortBy] = useState<'name' | 'lastAccessed' | 'created'>('lastAccessed')
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  // Fetch databases
-  const fetchDatabases = useCallback(async () => {
-    try {
-      setLoading(true)
-      setError(null)
+  // Batch delete state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false)
+  const [batchDeleting, setBatchDeleting] = useState(false)
+
+  // Use retry hook for fetching databases with exponential backoff
+  const {
+    data: fetchedData,
+    loading,
+    error,
+    retryCount,
+    isRetrying,
+    isExhausted,
+    nextRetryIn,
+    retry: retryFetch,
+    reset: resetFetch,
+  } = useRetry<{ databases: DatabaseInfo[] }>(
+    async () => {
       const response = await fetch(apiEndpoint)
       if (!response.ok) {
-        throw new Error('Failed to fetch databases')
+        const errorData = await response.json().catch(() => ({})) as { error?: string }
+        throw new Error(errorData.error || `Failed to fetch databases (${response.status})`)
       }
-      const data = await response.json() as { databases?: DatabaseInfo[] }
-      setDatabases(data.databases || [])
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load databases')
-    } finally {
-      setLoading(false)
+      return response.json()
+    },
+    {
+      fetchOnMount: !initialDatabases.length,
+      maxRetries: 3,
+      baseDelay: 1000,
+      autoRetry: true,
+      onError: (err, count) => {
+        console.error(`[DatabaseDashboard] Fetch error (attempt ${count}):`, err.message)
+      },
+      onSuccess: (data) => {
+        // Sync local state with fetched data
+        const result = data as { databases: DatabaseInfo[] }
+        setLocalDatabases(result.databases || [])
+      },
+      onExhausted: (err) => {
+        console.error('[DatabaseDashboard] Max retries exhausted:', err.message)
+      },
     }
-  }, [apiEndpoint])
+  )
 
-  useEffect(() => {
-    if (!initialDatabases.length) {
-      fetchDatabases()
-    }
-  }, [fetchDatabases, initialDatabases.length])
+  // Merge fetched data with local state (for optimistic updates)
+  const databases = fetchedData?.databases ?? localDatabases
 
   // Filter and sort databases
   const filteredDatabases = databases
@@ -111,7 +149,7 @@ export function DatabaseDashboard({
     })
 
   const handleDatabaseCreated = (database: DatabaseInfo) => {
-    setDatabases([database, ...databases])
+    setLocalDatabases([database, ...databases])
     setShowCreateModal(false)
     if (onSelectDatabase) {
       onSelectDatabase(database)
@@ -121,7 +159,148 @@ export function DatabaseDashboard({
     }
   }
 
+  // Delete a single database with retry support
+  const handleDeleteDatabase = async (database: DatabaseInfo, retries = 0): Promise<void> => {
+    const maxDeleteRetries = 2
+    setDeletingId(database.id)
+    setDeleteError(null)
+
+    try {
+      const response = await fetch(`${apiEndpoint}/${database.id}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest', // CSRF protection
+        },
+      })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({})) as { error?: string }
+        const error = new Error(data.error || `Failed to delete database (${response.status})`)
+
+        // Retry on server errors (5xx) but not on client errors (4xx)
+        if (response.status >= 500 && retries < maxDeleteRetries) {
+          console.warn(`[DatabaseDashboard] Delete failed, retrying (${retries + 1}/${maxDeleteRetries})...`)
+          const delay = Math.pow(2, retries) * 1000 // Exponential backoff
+          await new Promise(resolve => setTimeout(resolve, delay))
+          return handleDeleteDatabase(database, retries + 1)
+        }
+
+        throw error
+      }
+
+      // Remove from local state (optimistic update)
+      setLocalDatabases(prev => prev.filter(db => db.id !== database.id))
+      setSelectedIds(prev => {
+        const next = new Set(prev)
+        next.delete(database.id)
+        return next
+      })
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to delete database'
+      setDeleteError(`Could not delete "${database.name}": ${errorMessage}`)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  // Batch delete selected databases with retry logic per database
+  const handleBatchDelete = async () => {
+    if (selectedIds.size === 0) return
+
+    setBatchDeleting(true)
+    setDeleteError(null)
+
+    const errors: string[] = []
+    const deletedIds: string[] = []
+    const maxRetries = 2
+
+    for (const id of selectedIds) {
+      let success = false
+      let lastError = ''
+
+      for (let attempt = 0; attempt <= maxRetries && !success; attempt++) {
+        try {
+          // Add delay for retries (exponential backoff)
+          if (attempt > 0) {
+            await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 1) * 1000))
+          }
+
+          const response = await fetch(`${apiEndpoint}/${id}`, {
+            method: 'DELETE',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Requested-With': 'XMLHttpRequest',
+            },
+          })
+
+          if (response.ok) {
+            success = true
+            deletedIds.push(id)
+          } else {
+            const data = await response.json().catch(() => ({})) as { error?: string }
+            lastError = data.error || `HTTP ${response.status}`
+
+            // Don't retry on client errors (4xx)
+            if (response.status < 500) break
+          }
+        } catch (err) {
+          lastError = err instanceof Error ? err.message : 'Network error'
+        }
+      }
+
+      if (!success) {
+        const db = databases.find(d => d.id === id)
+        errors.push(`${db?.name || id}: ${lastError}`)
+      }
+    }
+
+    // Update local state (optimistic update)
+    setLocalDatabases(prev => prev.filter(db => !deletedIds.includes(db.id)))
+    setSelectedIds(new Set())
+    setShowBatchDeleteConfirm(false)
+    setBatchDeleting(false)
+
+    if (errors.length > 0) {
+      const successCount = deletedIds.length
+      const failCount = errors.length
+      const header = successCount > 0
+        ? `Deleted ${successCount} database${successCount !== 1 ? 's' : ''}, but ${failCount} failed:`
+        : `Could not delete ${failCount} database${failCount !== 1 ? 's' : ''}:`
+      setDeleteError(`${header}\n${errors.join('\n')}`)
+    }
+  }
+
+  // Toggle selection for batch delete
+  const toggleSelection = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  // Select all visible databases
+  const selectAll = () => {
+    if (selectedIds.size === filteredDatabases.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(filteredDatabases.map(db => db.id)))
+    }
+  }
+
   return (
+    <ErrorBoundary
+      onError={(err, info) => {
+        console.error('[DatabaseDashboard] Render error:', err, info)
+      }}
+      maxRetries={2}
+      showDetails={process.env.NODE_ENV === 'development'}
+    >
     <div className="database-dashboard" style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
       {/* Header */}
       {header || (
@@ -143,6 +322,17 @@ export function DatabaseDashboard({
         </div>
       )}
 
+      {/* Delete error notification */}
+      {deleteError && (
+        <ErrorDisplay
+          error={deleteError}
+          title="Delete Operation Failed"
+          dismissible
+          onDismiss={() => setDeleteError(null)}
+          style={{ marginBottom: '1rem' }}
+        />
+      )}
+
       {/* Toolbar */}
       <div style={{
         display: 'flex',
@@ -151,6 +341,43 @@ export function DatabaseDashboard({
         flexWrap: 'wrap',
         alignItems: 'center',
       }}>
+        {/* Batch selection controls */}
+        {showDelete && filteredDatabases.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <input
+              type="checkbox"
+              checked={selectedIds.size === filteredDatabases.length && filteredDatabases.length > 0}
+              onChange={selectAll}
+              style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+              title={selectedIds.size === filteredDatabases.length ? 'Deselect all' : 'Select all'}
+            />
+            {selectedIds.size > 0 && (
+              <button
+                onClick={() => setShowBatchDeleteConfirm(true)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.5rem 0.75rem',
+                  background: 'var(--theme-error-500, #dc2626)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontSize: '0.8125rem',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+                Delete ({selectedIds.size})
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Search */}
         <div style={{ position: 'relative', flex: '1 1 300px' }}>
           <input
@@ -237,56 +464,75 @@ export function DatabaseDashboard({
         )}
       </div>
 
-      {/* Loading state */}
-      {loading && (
-        <div style={{
-          textAlign: 'center',
-          padding: '4rem',
-          color: 'var(--theme-elevation-500, #888)',
-        }}>
-          <div style={{
-            width: '32px',
-            height: '32px',
-            border: '3px solid var(--theme-elevation-150, #eee)',
-            borderTopColor: 'var(--theme-elevation-600, #666)',
-            borderRadius: '50%',
-            margin: '0 auto 1rem',
-            animation: 'spin 1s linear infinite',
-          }} />
-          Loading databases...
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        </div>
+      {/* Loading state (initial load) */}
+      {loading && !isRetrying && (
+        <LoadingSpinner
+          size="md"
+          message="Loading databases..."
+          centered
+        />
+      )}
+
+      {/* Retrying state */}
+      {isRetrying && (
+        <LoadingSpinner
+          size="md"
+          message={`Retrying... (attempt ${retryCount + 1})`}
+          centered
+        />
       )}
 
       {/* Error state */}
-      {error && (
+      {error && !loading && !isRetrying && (
+        <ErrorDisplay
+          error={error}
+          onRetry={retryFetch}
+          retryCount={retryCount}
+          maxRetries={3}
+          nextRetryIn={nextRetryIn}
+          isRetrying={isRetrying}
+          title="Unable to load databases"
+          style={{ marginBottom: '1rem' }}
+        />
+      )}
+
+      {/* Exhausted state with additional troubleshooting help */}
+      {isExhausted && (
         <div style={{
           padding: '1rem',
-          background: 'var(--theme-error-100, #fef2f2)',
-          color: 'var(--theme-error-500, #dc2626)',
+          background: 'var(--theme-elevation-50, #f5f5f5)',
           borderRadius: '6px',
           marginBottom: '1rem',
+          fontSize: '0.875rem',
+          color: 'var(--theme-elevation-600, #666)',
         }}>
-          {error}
+          <strong>Troubleshooting tips:</strong>
+          <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.5rem' }}>
+            <li>Check your internet connection</li>
+            <li>Try refreshing the page</li>
+            <li>Clear your browser cache</li>
+            <li>If the problem persists, contact support</li>
+          </ul>
           <button
-            onClick={fetchDatabases}
+            onClick={() => resetFetch()}
             style={{
-              marginLeft: '1rem',
-              padding: '0.25rem 0.5rem',
-              background: 'transparent',
-              border: '1px solid currentColor',
-              borderRadius: '4px',
-              color: 'inherit',
+              marginTop: '1rem',
+              padding: '0.5rem 1rem',
+              background: 'var(--theme-elevation-800, #333)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              fontSize: '0.8125rem',
               cursor: 'pointer',
             }}
           >
-            Retry
+            Try Again
           </button>
         </div>
       )}
 
       {/* Database grid */}
-      {!loading && !error && (
+      {!loading && !isRetrying && !error && (
         <>
           {filteredDatabases.length > 0 ? (
             <div style={{
@@ -295,12 +541,44 @@ export function DatabaseDashboard({
               gap: '1rem',
             }}>
               {filteredDatabases.map((database) => (
-                <DatabaseCard
+                <div
                   key={database.id}
-                  database={database}
-                  basePath={basePath}
-                  onSelect={onSelectDatabase}
-                />
+                  style={{
+                    position: 'relative',
+                    ...(selectedIds.has(database.id) ? {
+                      outline: '2px solid var(--theme-elevation-800, #333)',
+                      borderRadius: '8px',
+                    } : {}),
+                  }}
+                >
+                  {/* Selection checkbox overlay */}
+                  {showDelete && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '0.75rem',
+                        left: '0.75rem',
+                        zIndex: 10,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(database.id)}
+                        onChange={() => toggleSelection(database.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        title={selectedIds.has(database.id) ? 'Deselect' : 'Select'}
+                      />
+                    </div>
+                  )}
+                  <DatabaseCard
+                    database={database}
+                    basePath={basePath}
+                    onSelect={onSelectDatabase}
+                    onDelete={showDelete ? handleDeleteDatabase : undefined}
+                    deleting={deletingId === database.id}
+                  />
+                </div>
               ))}
             </div>
           ) : (
@@ -393,7 +671,22 @@ export function DatabaseDashboard({
           apiEndpoint={`${apiEndpoint}/create`}
         />
       )}
+
+      {/* Batch delete confirmation dialog */}
+      <ConfirmationDialog
+        isOpen={showBatchDeleteConfirm}
+        onClose={() => setShowBatchDeleteConfirm(false)}
+        onConfirm={handleBatchDelete}
+        title="Delete Multiple Databases"
+        message={`Are you sure you want to delete ${selectedIds.size} database${selectedIds.size === 1 ? '' : 's'}? This will unregister them from your account.`}
+        details="Note: The underlying data in storage will not be deleted and can be re-registered later."
+        confirmLabel={`Delete ${selectedIds.size} Database${selectedIds.size === 1 ? '' : 's'}`}
+        cancelLabel="Cancel"
+        variant="danger"
+        loading={batchDeleting}
+      />
     </div>
+    </ErrorBoundary>
   )
 }
 

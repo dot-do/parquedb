@@ -12,6 +12,10 @@ import {
   generateDeterministicEtag,
   normalizePath,
   normalizeFilePath,
+  toError,
+  applyPrefix,
+  stripPrefix,
+  normalizePrefix,
 } from '../../../src/storage/utils'
 
 describe('Storage Utilities', () => {
@@ -304,6 +308,134 @@ describe('Storage Utilities', () => {
 
     it('should preserve internal slashes', () => {
       expect(normalizeFilePath('/a/b/c/')).toBe('a/b/c')
+    })
+  })
+
+  // ===========================================================================
+  // toError
+  // ===========================================================================
+
+  describe('toError', () => {
+    it('should return Error instances unchanged', () => {
+      const originalError = new Error('test error')
+      const result = toError(originalError)
+      expect(result).toBe(originalError)
+    })
+
+    it('should convert strings to Error', () => {
+      const result = toError('string error')
+      expect(result).toBeInstanceOf(Error)
+      expect(result.message).toBe('string error')
+    })
+
+    it('should convert numbers to Error', () => {
+      const result = toError(404)
+      expect(result).toBeInstanceOf(Error)
+      expect(result.message).toBe('404')
+    })
+
+    it('should convert null to Error', () => {
+      const result = toError(null)
+      expect(result).toBeInstanceOf(Error)
+      expect(result.message).toBe('null')
+    })
+
+    it('should convert undefined to Error', () => {
+      const result = toError(undefined)
+      expect(result).toBeInstanceOf(Error)
+      expect(result.message).toBe('undefined')
+    })
+
+    it('should convert objects to Error', () => {
+      const obj = { code: 'ENOENT', message: 'file not found' }
+      const result = toError(obj)
+      expect(result).toBeInstanceOf(Error)
+      expect(result.message).toBe('[object Object]')
+    })
+
+    it('should preserve Error subclasses', () => {
+      const typeError = new TypeError('type error')
+      const result = toError(typeError)
+      expect(result).toBe(typeError)
+      expect(result).toBeInstanceOf(TypeError)
+    })
+  })
+
+  // ===========================================================================
+  // applyPrefix
+  // ===========================================================================
+
+  describe('applyPrefix', () => {
+    it('should prepend prefix to path', () => {
+      expect(applyPrefix('data/file.txt', 'tenant1/')).toBe('tenant1/data/file.txt')
+    })
+
+    it('should handle empty prefix', () => {
+      expect(applyPrefix('data/file.txt', '')).toBe('data/file.txt')
+    })
+
+    it('should handle empty path', () => {
+      expect(applyPrefix('', 'tenant1/')).toBe('tenant1/')
+    })
+
+    it('should concatenate directly (no automatic separator)', () => {
+      expect(applyPrefix('file.txt', 'dir')).toBe('dirfile.txt')
+    })
+  })
+
+  // ===========================================================================
+  // stripPrefix
+  // ===========================================================================
+
+  describe('stripPrefix', () => {
+    it('should remove prefix from path', () => {
+      expect(stripPrefix('tenant1/data/file.txt', 'tenant1/')).toBe('data/file.txt')
+    })
+
+    it('should handle empty prefix', () => {
+      expect(stripPrefix('data/file.txt', '')).toBe('data/file.txt')
+    })
+
+    it('should return unchanged if prefix not present', () => {
+      expect(stripPrefix('other/path', 'tenant1/')).toBe('other/path')
+    })
+
+    it('should not remove partial prefix matches', () => {
+      expect(stripPrefix('tenant123/file.txt', 'tenant1')).toBe('23/file.txt')
+    })
+
+    it('should handle path equal to prefix', () => {
+      expect(stripPrefix('tenant1/', 'tenant1/')).toBe('')
+    })
+  })
+
+  // ===========================================================================
+  // normalizePrefix
+  // ===========================================================================
+
+  describe('normalizePrefix', () => {
+    it('should add trailing slash if missing', () => {
+      expect(normalizePrefix('tenant1')).toBe('tenant1/')
+    })
+
+    it('should keep trailing slash if present', () => {
+      expect(normalizePrefix('tenant1/')).toBe('tenant1/')
+    })
+
+    it('should handle empty string', () => {
+      expect(normalizePrefix('')).toBe('')
+    })
+
+    it('should handle undefined', () => {
+      expect(normalizePrefix(undefined)).toBe('')
+    })
+
+    it('should handle multi-segment prefix', () => {
+      expect(normalizePrefix('a/b/c')).toBe('a/b/c/')
+    })
+
+    it('should handle prefix with only slash', () => {
+      expect(normalizePrefix('/')).toBe('/')
     })
   })
 })

@@ -29,6 +29,7 @@ import type { EntityId } from '../../types/entity.js'
 import type { SQLQueryResult, SQLQueryOptions } from './types.js'
 import { parseSQL } from './parser.js'
 import { translateSelect, translateInsert, translateUpdate, translateDelete } from './translator.js'
+import { sqlResultAs, sqlItemsAs } from '../../types/cast.js'
 
 // ============================================================================
 // SQL Template Tag
@@ -110,7 +111,7 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
               }
               return obj as T
             })
-          : (items as unknown as T[])
+          : sqlItemsAs<T>(items)
 
         return {
           rows: projected,
@@ -134,7 +135,7 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
         )
 
         return {
-          rows: [result as unknown as T],
+          rows: [sqlResultAs<T>(result)],
           rowCount: 1,
           command: 'INSERT',
         }
@@ -156,7 +157,7 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
             { actor: actor as EntityId }
           )
           if (updated) {
-            results.push(updated as unknown as T)
+            results.push(sqlResultAs<T>(updated))
           }
         }
 
@@ -178,7 +179,7 @@ export function createSQL(db: ParqueDB, options: CreateSQLOptions = {}): SQLExec
         for (const entity of findResult.items) {
           const localId = extractLocalId(entity.$id)
           await collection.delete(localId, { actor: actor as EntityId })
-          results.push(entity as unknown as T)
+          results.push(sqlResultAs<T>(entity))
         }
 
         return {

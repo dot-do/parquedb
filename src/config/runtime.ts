@@ -92,12 +92,12 @@ export function getRuntimeInfo(): RuntimeInfo {
       break
 
     case 'bun':
-      info.version = (globalThis as any).Bun?.version
+      info.version = globalThis.Bun?.version
       info.features.hasFileSystem = true
       break
 
     case 'deno':
-      info.version = (globalThis as any).Deno?.version?.deno
+      info.version = globalThis.Deno?.version?.deno
       info.features.hasFileSystem = true
       break
 

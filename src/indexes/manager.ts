@@ -355,13 +355,17 @@ export class IndexManager {
 
     // Check for $vector operator -> use vector index
     if (filter.$vector) {
-      const vectorIndex = this.findVectorIndex(ns, filter.$vector.$field)
-      if (vectorIndex) {
-        return {
-          index: vectorIndex,
-          type: 'vector',
-          field: filter.$vector.$field,
-          condition: filter.$vector,
+      // Support both new format (field) and legacy format ($field)
+      const vectorField = filter.$vector.field ?? filter.$vector.$field
+      if (vectorField) {
+        const vectorIndex = this.findVectorIndex(ns, vectorField)
+        if (vectorIndex) {
+          return {
+            index: vectorIndex,
+            type: 'vector',
+            field: vectorField,
+            condition: filter.$vector,
+          }
         }
       }
     }

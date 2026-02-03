@@ -131,11 +131,7 @@ async function checkoutBranch(
   force: boolean
 ): Promise<number> {
   try {
-    // Check if we have uncommitted changes
-    // TODO: Implement uncommitted changes check
-    // For now, we'll skip this check unless --force is used
-
-    await branchManager.checkout(target)
+    await branchManager.checkout(target, { force })
 
     printSuccess(`Switched to branch '${target}'`)
     print('')
@@ -145,7 +141,14 @@ async function checkoutBranch(
     return 0
   } catch (error) {
     printError(getErrorMessage(error))
-    if (error instanceof Error && error.message.includes('not found')) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+
+    if (errorMessage.includes('uncommitted changes')) {
+      print('')
+      print('Options:')
+      print(`  parquedb checkout -f ${target}  # Force checkout, discard changes`)
+      print('  parquedb commit                 # Commit changes first')
+    } else if (errorMessage.includes('not found')) {
       print('')
       print('Did you mean to create a new branch?')
       print(`  parquedb checkout -b ${target}`)
@@ -199,12 +202,12 @@ async function checkoutFromGit(
 
     if (exists) {
       // Switch to existing branch
-      await branchManager.checkout(gitBranch)
+      await branchManager.checkout(gitBranch, { force })
       printSuccess(`Switched to existing branch '${gitBranch}'`)
     } else {
       // Create branch from current HEAD
       print(`Branch '${gitBranch}' does not exist. Creating...`)
-      await branchManager.checkout(gitBranch, { create: true })
+      await branchManager.checkout(gitBranch, { create: true, force })
       printSuccess(`Created and switched to branch '${gitBranch}'`)
     }
 

@@ -330,7 +330,12 @@ function decodeArray(key: Uint8Array): unknown[] {
  */
 function decodeObject(key: Uint8Array): Record<string, unknown> {
   const json = new TextDecoder().decode(key.slice(1))
-  return JSON.parse(json) as Record<string, unknown>
+  try {
+    return JSON.parse(json) as Record<string, unknown>
+  } catch {
+    // Invalid JSON in encoded key - return empty object as fallback
+    return {}
+  }
 }
 
 // =============================================================================

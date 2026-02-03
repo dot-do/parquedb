@@ -14,7 +14,7 @@
 
 import type { UpdateInput, EntityId } from '../types'
 import type { ApplyOperatorsOptions, ApplyOperatorsResult, RelationshipOperation } from './types'
-import { compareValues, deepEqual } from '../utils'
+import { compareValues, deepEqual, asArray } from '../utils'
 
 // =============================================================================
 // Path Security
@@ -385,7 +385,7 @@ export function setField<T>(obj: T, path: string, value: unknown): T {
     if (Array.isArray(obj) && !isNaN(index)) {
       const newArr = [...obj]
       newArr[index] = value
-      return newArr as unknown as T
+      return asArray<T>(newArr)
     }
 
     return {
@@ -418,7 +418,7 @@ export function setField<T>(obj: T, path: string, value: unknown): T {
     }
 
     newArr[headIndex] = setField(nested as Record<string, unknown>, tailPath, value)
-    return newArr as unknown as T
+    return asArray<T>(newArr)
   }
 
   const currentValue = obj === null || obj === undefined

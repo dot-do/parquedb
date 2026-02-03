@@ -20,7 +20,8 @@ import type { StorageBackend, FileStat, ListResult } from '../types/storage'
 import { ReadPath, NotFoundError } from './ReadPath'
 import { ParquetReader } from '../parquet/reader'
 // Predicate pushdown from hyparquet fork
-import { parquetQuery } from 'hyparquet'
+import { parquetQuery, parquetMetadata } from 'hyparquet'
+import type { FileMetaData, RowGroup as HyparquetRowGroup, ColumnChunk as HyparquetColumnChunk } from 'hyparquet'
 // Patched LZ4 decompressor (fixes match length extension + signed integer overflow bugs)
 import { compressors } from '../parquet/compressors'
 // Index cache for secondary index lookups
@@ -32,6 +33,7 @@ import { logger } from '../utils/logger'
 import { stringToBase64 } from '../utils/base64'
 import { createSafeRegex } from '../utils/safe-regex'
 import { tryParseJson, isRecord } from '../utils/json-validation'
+import { asStorageBackend, asIndexStorageBucket, rowAsEntity } from '../types/cast'
 
 // =============================================================================
 // Types
@@ -473,10 +475,10 @@ export class QueryExecutor {
         // Create adapter that uses primary bucket only
         this.storageAdapter = new CdnR2StorageAdapter(bucket, bucket, '', r2DevUrl)
       }
-      this.parquetReader = new ParquetReader({ storage: this.storageAdapter as unknown as StorageBackend })
+      this.parquetReader = new ParquetReader({ storage: asStorageBackend(this.storageAdapter) })
 
       // Initialize index cache for secondary index lookups
-      this.indexCache = new IndexCache(createR2IndexStorageAdapter(bucket as unknown as { get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>; head(key: string): Promise<{ size: number } | null> }))
+      this.indexCache = new IndexCache(createR2IndexStorageAdapter(asIndexStorageBucket(bucket)))
     }
   }
 
@@ -613,7 +615,7 @@ export class QueryExecutor {
         let results = rows.map(row => {
           if (typeof row.data === 'string') {
             const parsed = tryParseJson<T>(row.data)
-            return parsed ?? (row as unknown as T)
+            return parsed ?? rowAsEntity<T>(row)
           }
           return (row.data ?? row) as T
         })
@@ -901,7 +903,7 @@ export class QueryExecutor {
         .map(row => {
           if (typeof row.data === 'string') {
             const parsed = tryParseJson<T>(row.data)
-            return parsed ?? (row as unknown as T)
+            return parsed ?? rowAsEntity<T>(row)
           }
           return (row.data ?? row) as T
         })
@@ -1229,13 +1231,22 @@ export class QueryExecutor {
     void _datasetId // Reserved for future use
     const path = ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`
 
-    // Read footer to get metadata length
+    // Read footer to get metadata length (last 8 bytes: 4 bytes length + 4 bytes "PAR1")
     const footer = await this.readPath.readParquetFooter(path)
     const metadataLength = this.parseMetadataLength(footer)
 
-    // Read and parse metadata
+    // Read metadata bytes (raw Thrift-encoded metadata)
     const metadataBytes = await this.readPath.readParquetMetadata(path, metadataLength)
-    const metadata = this.parseMetadata(metadataBytes)
+
+    // Combine metadata bytes with footer for hyparquet parsing
+    // hyparquet expects: [metadata bytes][4-byte length][4-byte PAR1 magic]
+    const combinedBuffer = new ArrayBuffer(metadataBytes.byteLength + 8)
+    const combinedView = new Uint8Array(combinedBuffer)
+    combinedView.set(metadataBytes, 0)
+    combinedView.set(footer, metadataBytes.byteLength)
+
+    // Parse using hyparquet and convert to our format
+    const metadata = this.parseMetadata(combinedBuffer)
 
     // Cache for future queries
     this.metadataCache.set(ns, metadata)
@@ -1892,16 +1903,102 @@ export class QueryExecutor {
   }
 
   /**
-   * Parse Parquet metadata from bytes
-   * Placeholder - actual implementation would use Thrift deserialization
+   * Parse Parquet metadata from bytes using hyparquet
+   *
+   * @param buffer - ArrayBuffer containing metadata bytes + 8-byte footer
+   * @returns Parsed ParquetMetadata in our format
    */
-  private parseMetadata(_bytes: Uint8Array): ParquetMetadata {
-    // Placeholder implementation
+  private parseMetadata(buffer: ArrayBuffer): ParquetMetadata {
+    // Parse using hyparquet's parquetMetadata
+    const hyparquetMetadata = parquetMetadata(buffer) as FileMetaData
+
+    // Convert hyparquet's format to our ParquetMetadata format
+    return this.convertHyparquetMetadata(hyparquetMetadata)
+  }
+
+  /**
+   * Convert hyparquet's FileMetaData to our ParquetMetadata format
+   */
+  private convertHyparquetMetadata(metadata: FileMetaData): ParquetMetadata {
+    // Extract column names from schema (skip root schema element)
+    const columns: ColumnMetadata[] = (metadata.schema ?? [])
+      .filter((s): s is NonNullable<typeof s> => s !== undefined && s !== null && s.type !== undefined)
+      .map(s => ({
+        name: s.name ?? '',
+        physicalType: s.type ?? 'UNKNOWN',
+        logicalType: s.converted_type ?? s.logical_type?.type,
+        encoding: 'PLAIN', // Default, actual encodings are in row group columns
+        compression: 'UNCOMPRESSED', // Default, actual compression is in row group columns
+      }))
+
+    // Convert row groups
+    const rowGroups: RowGroupMetadata[] = (metadata.row_groups ?? []).map((rg: HyparquetRowGroup, index: number) => {
+      // Build column statistics map
+      const columnStats: Record<string, ColumnStats> = {}
+      let offset = 0
+      let compressedSize = 0
+
+      for (const col of (rg.columns ?? [])) {
+        const colMeta = (col as HyparquetColumnChunk).meta_data
+        if (!colMeta) continue
+
+        const colName = colMeta.path_in_schema?.join('.') ?? ''
+
+        // Track offset and size
+        if (offset === 0 && colMeta.data_page_offset) {
+          offset = Number(colMeta.data_page_offset)
+        }
+        compressedSize += Number(colMeta.total_compressed_size ?? 0)
+
+        // Extract statistics
+        const stats = colMeta.statistics
+        columnStats[colName] = {
+          name: colName,
+          min: stats?.min_value ?? stats?.min,
+          max: stats?.max_value ?? stats?.max,
+          nullCount: stats?.null_count !== undefined ? Number(stats.null_count) : 0,
+          distinctCount: stats?.distinct_count !== undefined ? Number(stats.distinct_count) : undefined,
+          hasStats: !!(stats?.min_value !== undefined || stats?.min !== undefined ||
+                       stats?.max_value !== undefined || stats?.max !== undefined),
+        }
+      }
+
+      return {
+        index,
+        numRows: Number(rg.num_rows ?? 0),
+        offset,
+        compressedSize,
+        totalSize: Number(rg.total_byte_size ?? 0),
+        columnStats,
+      }
+    })
+
+    // Convert schema fields
+    const schemaFields: SchemaField[] = (metadata.schema ?? [])
+      .filter((s): s is NonNullable<typeof s> => s !== undefined && s !== null && s.name !== undefined && s.name !== 'schema')
+      .map(s => ({
+        name: s.name ?? '',
+        type: s.type ?? 'UNKNOWN',
+        nullable: s.repetition_type !== 'REQUIRED',
+        fields: undefined, // Nested fields would need recursive parsing
+      }))
+
+    // Convert key-value metadata
+    const keyValueMetadata: Record<string, string> = {}
+    if (metadata.key_value_metadata) {
+      for (const kv of metadata.key_value_metadata) {
+        if (kv.key && kv.value !== undefined) {
+          keyValueMetadata[kv.key] = kv.value ?? ''
+        }
+      }
+    }
+
     return {
-      numRows: 0,
-      rowGroups: [],
-      columns: [],
-      schema: { fields: [] },
+      numRows: Number(metadata.num_rows ?? 0),
+      rowGroups,
+      columns,
+      schema: { fields: schemaFields },
+      keyValueMetadata: Object.keys(keyValueMetadata).length > 0 ? keyValueMetadata : undefined,
     }
   }
 

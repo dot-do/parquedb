@@ -12,6 +12,27 @@ import type { DatasetConfig, CompactionConfig, TimeTravelOptions } from '../even
 import { DEFAULT_DATASET_CONFIG } from '../events/types'
 import { safeJsonParse, isRecord, logger } from '../utils'
 
+/**
+ * Type guard for DatasetConfigFile
+ *
+ * Validates that a parsed value has the required structure for a config file.
+ */
+function isDatasetConfigFile(value: unknown): value is DatasetConfigFile {
+  if (!isRecord(value)) return false
+  // Required fields with loose type check (version may be parsed as number or string)
+  return (
+    'version' in value &&
+    'dataset' in value &&
+    typeof value.dataset === 'string' &&
+    'events' in value &&
+    typeof value.events === 'boolean' &&
+    'createdAt' in value &&
+    typeof value.createdAt === 'number' &&
+    'updatedAt' in value &&
+    typeof value.updatedAt === 'number'
+  )
+}
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -117,8 +138,8 @@ export class DatasetConfigManager {
     if (data) {
       const json = new TextDecoder().decode(data)
       const result = safeJsonParse(json)
-      if (result.ok && isRecord(result.value)) {
-        this.config = result.value as unknown as DatasetConfigFile
+      if (result.ok && isDatasetConfigFile(result.value)) {
+        this.config = result.value
       } else {
         logger.warn(`Invalid config at ${path}, using defaults`)
         this.config = this.createDefaultConfig()
@@ -301,8 +322,8 @@ export async function isEventsEnabled(
 
   const json = new TextDecoder().decode(data)
   const result = safeJsonParse(json)
-  if (result.ok && isRecord(result.value)) {
-    return (result.value as unknown as DatasetConfigFile).events ?? false
+  if (result.ok && isDatasetConfigFile(result.value)) {
+    return result.value.events
   }
   return DEFAULT_DATASET_CONFIG.events ?? false
 }

@@ -60,6 +60,17 @@ export interface IndexCatalog {
 }
 
 /**
+ * Type guard for IndexCatalog
+ */
+function isIndexCatalog(value: unknown): value is IndexCatalog {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.version === 'number' &&
+    Array.isArray(value.indexes)
+  )
+}
+
+/**
  * Loaded index wrapper
  */
 interface LoadedIndex {
@@ -141,11 +152,11 @@ export class IndexCache {
 
       const data = await this.storage.read(catalogPath)
       const result = safeJsonParse(new TextDecoder().decode(data))
-      if (!result.ok || !isRecord(result.value)) {
+      if (!result.ok || !isIndexCatalog(result.value)) {
         logger.warn(`Invalid index catalog JSON at ${catalogPath}`)
         return []
       }
-      const catalog = result.value as unknown as IndexCatalog
+      const catalog = result.value
 
       // Validate version (support version 1, 2, and 3)
       if (catalog.version < 1 || catalog.version > 3) {
@@ -224,6 +235,8 @@ export class IndexCache {
       fields: [{ path: entry.field }],
     }
 
+    // Cast required: MemoryStorageAdapter implements StorageBackend interface methods
+    // but doesn't formally declare 'implements StorageBackend' to avoid circular imports
     const index = new FTSIndex(memoryStorage as unknown as import('../types/storage').StorageBackend, entry.name, definition)
     await index.load()
 

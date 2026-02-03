@@ -2,58 +2,67 @@ import type { StorageBackend } from '../types/storage'
 import { hashObject } from './hash'
 
 /**
+ * Collection state in a commit
+ */
+export interface CollectionState {
+  readonly dataHash: string            // SHA256 of data.parquet
+  readonly schemaHash: string          // SHA256 of schema
+  readonly rowCount: number
+}
+
+/**
+ * Relationship state in a commit
+ */
+export interface RelationshipState {
+  readonly forwardHash: string
+  readonly reverseHash: string
+}
+
+/**
+ * Event log position in a commit
+ */
+export interface EventLogPosition {
+  readonly segmentId: string
+  readonly offset: number
+}
+
+/**
+ * Database state in a commit
+ */
+export interface CommitState {
+  readonly collections: Readonly<Record<string, CollectionState>>
+  readonly relationships: RelationshipState
+  readonly eventLogPosition: EventLogPosition
+}
+
+/**
  * Represents a database commit with state snapshot
  */
 export interface DatabaseCommit {
-  hash: string                    // SHA256 of commit contents (excluding hash field)
-  parents: string[]               // Parent commit hashes (empty for initial, 2 for merge)
-  timestamp: number
-  author: string
-  message: string
-
-  state: {
-    collections: Record<string, {
-      dataHash: string            // SHA256 of data.parquet
-      schemaHash: string          // SHA256 of schema
-      rowCount: number
-    }>
-    relationships: {
-      forwardHash: string
-      reverseHash: string
-    }
-    eventLogPosition: {
-      segmentId: string
-      offset: number
-    }
-  }
+  readonly hash: string                    // SHA256 of commit contents (excluding hash field)
+  readonly parents: readonly string[]      // Parent commit hashes (empty for initial, 2 for merge)
+  readonly timestamp: number
+  readonly author: string
+  readonly message: string
+  readonly state: CommitState
 }
 
 /**
  * Options for creating a commit
  */
 export interface CommitOptions {
-  message: string
-  author?: string
-  parents?: string[]
+  readonly message: string
+  readonly author?: string
+  readonly parents?: readonly string[]
 }
 
 /**
  * Database state snapshot for commit creation
  */
 export interface DatabaseState {
-  collections: Record<string, {
-    dataHash: string
-    schemaHash: string
-    rowCount: number
-  }>
-  relationships: {
-    forwardHash: string
-    reverseHash: string
-  }
-  eventLogPosition: {
-    segmentId: string
-    offset: number
-  }
+  readonly collections: Readonly<Record<string, CollectionState>>
+  readonly relationships: RelationshipState
+  readonly eventLogPosition: EventLogPosition
 }
 
 /**
@@ -167,7 +176,12 @@ export function serializeCommit(commit: DatabaseCommit): string {
  * @throws If JSON is invalid
  */
 export function parseCommit(json: string): DatabaseCommit {
-  const commit = JSON.parse(json)
+  let commit
+  try {
+    commit = JSON.parse(json)
+  } catch {
+    throw new Error('Invalid commit: not valid JSON')
+  }
 
   // Validate required fields
   if (!commit.hash || typeof commit.hash !== 'string') {

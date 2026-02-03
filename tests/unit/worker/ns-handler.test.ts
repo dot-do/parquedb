@@ -33,9 +33,16 @@ function createContext(
   const worker = createMockWorker()
   const url = new URL(`http://localhost/ns/test${searchParams ? '?' + new URLSearchParams(searchParams).toString() : ''}`)
 
+  // Build headers - include CSRF headers for mutation methods
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
+    headers['X-Requested-With'] = 'XMLHttpRequest'
+    headers['Origin'] = 'http://localhost'
+  }
+
   const requestInit: RequestInit = {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers,
   }
 
   // For requests with a body, we need to provide it
@@ -62,10 +69,17 @@ function createContextWithInvalidJson(method: string): { context: HandlerContext
   const worker = createMockWorker()
   const url = new URL('http://localhost/ns/test')
 
+  // Build headers - include CSRF headers for mutation methods
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
+    headers['X-Requested-With'] = 'XMLHttpRequest'
+    headers['Origin'] = 'http://localhost'
+  }
+
   // Create a request with invalid JSON body
   const request = new Request(url.toString(), {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: 'this is not json{{{',
   })
 
