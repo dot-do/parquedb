@@ -61,47 +61,6 @@ export const DEFAULT_FILTER_CONFIG: Readonly<FilterConfig> = Object.freeze({
   unknownOperatorBehavior: 'ignore',
 })
 
-/**
- * Set global filter configuration
- *
- * @deprecated This function is deprecated and has no effect. Pass config directly to
- * matchesFilter/createPredicate/matchesCondition instead. This avoids issues in
- * concurrent/multi-tenant environments.
- *
- * Example:
- * ```typescript
- * // Instead of:
- * setFilterConfig({ unknownOperatorBehavior: 'warn' })
- * matchesFilter(doc, filter)
- *
- * // Use:
- * matchesFilter(doc, filter, { unknownOperatorBehavior: 'warn' })
- * ```
- */
-export function setFilterConfig(_config: FilterConfig): void {
-  logger.warn('setFilterConfig is deprecated and has no effect. Pass config directly to filter functions.')
-}
-
-/**
- * Get current filter configuration
- *
- * @deprecated This function is deprecated and always returns DEFAULT_FILTER_CONFIG.
- * Use DEFAULT_FILTER_CONFIG directly or pass config explicitly to filter functions.
- */
-export function getFilterConfig(): FilterConfig {
-  logger.warn('getFilterConfig is deprecated. Use DEFAULT_FILTER_CONFIG or pass config explicitly.')
-  return { ...DEFAULT_FILTER_CONFIG }
-}
-
-/**
- * Reset global filter configuration to defaults
- *
- * @deprecated This function is deprecated and has no effect. There is no longer any
- * global state to reset. Pass config explicitly to filter functions instead.
- */
-export function resetFilterConfig(): void {
-  // No-op: there is no global state to reset
-}
 
 /**
  * Known operators for validation

@@ -35,6 +35,7 @@ import {
   DEFAULT_HNSW_EF_SEARCH,
   DEFAULT_VECTOR_INDEX_MAX_NODES,
   DEFAULT_VECTOR_INDEX_MAX_BYTES,
+  MAX_HNSW_LEVEL,
 } from '../../constants'
 
 // =============================================================================
@@ -1615,11 +1616,13 @@ export class VectorIndex {
   }
 
   /**
-   * Generate random level for a new node
+   * Generate random level for a new node.
+   * Uses geometric distribution with probability 1/M per level.
+   * Capped at MAX_HNSW_LEVEL to prevent unbounded graph depth.
    */
   private getRandomLevel(): number {
     let level = 0
-    while (Math.random() < 1 / this.m && level < 32) {
+    while (Math.random() < 1 / this.m && level < MAX_HNSW_LEVEL) {
       level++
     }
     return level

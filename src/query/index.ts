@@ -13,14 +13,9 @@ export {
   deepEqual,
   compareValues,
   getValueType,
-  // Recommended: use DEFAULT_FILTER_CONFIG or pass config explicitly to filter functions
+  // Use DEFAULT_FILTER_CONFIG or pass config explicitly to filter functions
   DEFAULT_FILTER_CONFIG,
   type FilterConfig,
-  // Deprecated: these functions are no-ops that emit deprecation warnings
-  // Kept for backwards compatibility only - use explicit config parameter instead
-  setFilterConfig,
-  getFilterConfig,
-  resetFilterConfig,
 } from './filter'
 
 // Update operators engine

@@ -9,7 +9,7 @@
  * Relationships are always stored in ParqueDB's format regardless of entity backend.
  */
 
-import type { Entity, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
+import type { Entity, EntityData, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
 import type { Filter } from '../types/filter'
 import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions } from '../types/options'
 import type { Update } from '../types/update'
@@ -70,7 +70,7 @@ export interface EntityBackend {
   /**
    * Get a single entity by ID
    */
-  get<T = Record<string, unknown>>(
+  get<T extends EntityData = EntityData>(
     ns: string,
     id: string,
     options?: GetOptions
@@ -79,7 +79,7 @@ export interface EntityBackend {
   /**
    * Find entities matching a filter
    */
-  find<T = Record<string, unknown>>(
+  find<T extends EntityData = EntityData>(
     ns: string,
     filter?: Filter,
     options?: FindOptions
@@ -102,7 +102,7 @@ export interface EntityBackend {
   /**
    * Create a new entity
    */
-  create<T = Record<string, unknown>>(
+  create<T extends EntityData = EntityData>(
     ns: string,
     input: CreateInput<T>,
     options?: CreateOptions
@@ -763,4 +763,21 @@ export class WriteLockTimeoutError extends Error {
     super(`Write lock acquisition timed out for namespace '${ns}' after ${timeoutMs}ms. This may indicate a stalled or failed operation in the write queue.`)
     Object.setPrototypeOf(this, WriteLockTimeoutError.prototype)
   }
+}
+
+// =============================================================================
+// Variant Shredding Configuration
+// =============================================================================
+
+/**
+ * Configuration for variant column shredding
+ *
+ * Variant shredding extracts frequently-accessed fields from a Variant column
+ * into separate typed columns for better predicate pushdown and statistics.
+ */
+export interface VariantShredConfig {
+  /** Variant column name (e.g., '$index') */
+  column: string
+  /** Shredded field names */
+  fields: string[]
 }

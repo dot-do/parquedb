@@ -181,6 +181,14 @@ export const DEFAULT_HNSW_EF_CONSTRUCTION = 200
  */
 export const DEFAULT_HNSW_EF_SEARCH = 50
 
+/**
+ * Maximum level in HNSW graph hierarchy.
+ * This caps the number of layers in the graph to prevent unbounded growth.
+ * The probability of a node being assigned to level L is (1/M)^L,
+ * so level 32 has probability ~10^-39 for M=16, effectively unreachable.
+ */
+export const MAX_HNSW_LEVEL = 32
+
 // =============================================================================
 // Event Log Constants
 // =============================================================================

@@ -13,9 +13,6 @@ import {
   deepEqual,
   compareValues,
   getValueType,
-  setFilterConfig,
-  getFilterConfig,
-  resetFilterConfig,
   DEFAULT_FILTER_CONFIG,
   type FilterConfig,
 } from '../../src/query/filter'
@@ -1256,28 +1253,6 @@ describe('unknown operator validation', () => {
       expect(() => {
         (DEFAULT_FILTER_CONFIG as FilterConfig).unknownOperatorBehavior = 'error'
       }).toThrow()
-    })
-  })
-
-  describe('deprecated functions emit warnings', () => {
-    it('setFilterConfig logs deprecation warning', () => {
-      setFilterConfig({ unknownOperatorBehavior: 'warn' })
-      expect(loggerWarnSpy).toHaveBeenCalledWith(
-        'setFilterConfig is deprecated and has no effect. Pass config directly to filter functions.'
-      )
-    })
-
-    it('getFilterConfig logs deprecation warning and returns default', () => {
-      const config = getFilterConfig()
-      expect(loggerWarnSpy).toHaveBeenCalledWith(
-        'getFilterConfig is deprecated. Use DEFAULT_FILTER_CONFIG or pass config explicitly.'
-      )
-      expect(config.unknownOperatorBehavior).toBe('ignore')
-    })
-
-    it('resetFilterConfig is a no-op', () => {
-      // Should not throw and should be a no-op
-      expect(() => resetFilterConfig()).not.toThrow()
     })
   })
 

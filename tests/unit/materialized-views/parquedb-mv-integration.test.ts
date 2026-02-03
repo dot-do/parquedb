@@ -153,16 +153,12 @@ describe('ParqueDB onEvent integration', () => {
   })
 
   it('MV integration handles DELETE events', async () => {
-    const { ParqueDB } = await import('@/ParqueDB')
-    const { MemoryBackend } = await import('@/storage/MemoryBackend')
-    const { attachMVIntegration } = await import('@/materialized-views/write-path-integration')
-
     db = new ParqueDB({
       storage: new MemoryBackend(),
     })
 
     const processedEvents: Event[] = []
-    const { integration, start, stop, detach } = attachMVIntegration(db as unknown as { setEventCallback: (cb: ((event: Event) => void | Promise<void>) | null) => void })
+    const { integration, start, stop, detach } = attachMVIntegration(db)
 
     integration.engine.registerMV({
       name: 'OrderTracker',
@@ -174,11 +170,9 @@ describe('ParqueDB onEvent integration', () => {
 
     await start()
 
-    const parqueDb = db as InstanceType<typeof ParqueDB>
-
     // Create and delete
-    const order = await parqueDb.create('orders', { $type: 'Order', name: 'Order 1', total: 100 })
-    await parqueDb.delete('orders', order.$id as string)
+    const order = await db.create('orders', { $type: 'Order', name: 'Order 1', total: 100 })
+    await db.delete('orders', order.$id as string)
 
     await integration.emitter.flush()
     await integration.engine.flush()
