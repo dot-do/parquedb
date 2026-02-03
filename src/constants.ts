@@ -681,6 +681,11 @@ export const MAX_PENDING_INVALIDATIONS = 100
 export const DEFAULT_ENTITY_CACHE_SIZE = 1000
 
 /**
+ * Alias for entity cache max size (used by cache-manager.ts)
+ */
+export const ENTITY_CACHE_MAX_SIZE = DEFAULT_ENTITY_CACHE_SIZE
+
+/**
  * Event batch count threshold for WAL
  */
 export const EVENT_BATCH_COUNT_THRESHOLD = 100
@@ -694,6 +699,75 @@ export const DEFAULT_EVENT_BATCH_SIZE_BYTES = 64 * 1024
  * Bulk write threshold - entities above this count go directly to R2
  */
 export const BULK_WRITE_THRESHOLD = 5
+
+// =============================================================================
+// Flush Manager Constants
+// =============================================================================
+
+/**
+ * Default minimum events before flush
+ */
+export const DEFAULT_FLUSH_MIN_EVENTS = 100
+
+/**
+ * Default maximum flush interval in milliseconds (30 seconds)
+ */
+export const DEFAULT_FLUSH_MAX_INTERVAL_MS = 30000
+
+/**
+ * Default row group size for flush manager
+ */
+export const DEFAULT_FLUSH_ROW_GROUP_SIZE = DEFAULT_ROW_GROUP_SIZE
+
+// =============================================================================
+// WAL-Only Mode & WAL Optimizer Constants
+// =============================================================================
+
+/**
+ * Default WAL-only mode setting.
+ * When true, entity/relationship snapshot tables are skipped in DO SQLite.
+ */
+export const WAL_ONLY_MODE_DEFAULT = false
+
+/**
+ * Minimum batch count before WAL compaction is triggered (default: 10 batches)
+ */
+export const WAL_COMPACTION_MIN_BATCHES = 10
+
+/**
+ * Target batch size after compaction (default: 1000 events)
+ */
+export const WAL_COMPACTION_TARGET_EVENTS = 1000
+
+/**
+ * Maximum blob size before splitting (default: 256KB)
+ */
+export const WAL_MAX_BLOB_SIZE = 256 * 1024
+
+/**
+ * Retention period for flushed batches in ms (default: 7 days)
+ */
+export const WAL_FLUSHED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * Window size for adaptive threshold calculation in ms (default: 1 minute)
+ */
+export const WAL_ADAPTIVE_WINDOW_MS = 60 * 1000
+
+/**
+ * Minimum batch threshold (default: 10)
+ */
+export const WAL_MIN_BATCH_THRESHOLD = 10
+
+/**
+ * Maximum batch threshold (default: 1000)
+ */
+export const WAL_MAX_BATCH_THRESHOLD = 1000
+
+/**
+ * Compression savings threshold - only use compression if it saves this much (default: 0.9 = 10% savings)
+ */
+export const COMPRESSION_SAVINGS_THRESHOLD = 0.9
 
 // =============================================================================
 // Sync Token Constants
