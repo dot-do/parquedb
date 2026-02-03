@@ -17,7 +17,6 @@ import type {
 import {
   globalHookRegistry,
   createStorageContext,
-  type StorageContext,
   type StorageResult,
 } from '../observability'
 

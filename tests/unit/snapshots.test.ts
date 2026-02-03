@@ -5,7 +5,7 @@
  * Uses real FsBackend with temp directories for actual snapshot persistence.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { ParqueDB } from '../../src/ParqueDB'
 import { FsBackend } from '../../src/storage/FsBackend'
 import type {
@@ -19,8 +19,11 @@ import { join } from 'node:path'
 // Helper Functions
 // =============================================================================
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+/**
+ * Advance fake timers by specified milliseconds (use only with vi.useFakeTimers())
+ */
+function advanceTime(ms: number): void {
+  vi.advanceTimersByTime(ms)
 }
 
 // =============================================================================
@@ -33,6 +36,8 @@ describe('Snapshots', () => {
   let tempDir: string
 
   beforeEach(async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
     // Create a unique temp directory for each test
     tempDir = await mkdtemp(join(tmpdir(), 'parquedb-snapshots-'))
     storage = new FsBackend(tempDir)
@@ -40,6 +45,7 @@ describe('Snapshots', () => {
   })
 
   afterEach(async () => {
+    vi.useRealTimers()
     // Clean up the temp directory
     try {
       await rm(tempDir, { recursive: true, force: true })
@@ -284,7 +290,7 @@ describe('Snapshots', () => {
       // This avoids ambiguity in time-travel queries when multiple events
       // share the same millisecond timestamp
       for (let i = 2; i <= 50; i++) {
-        await sleep(1)
+        advanceTime(1)
         await db.update('posts', entity.$id as string, {
           $set: { title: `V${i}` },
         })
@@ -323,7 +329,7 @@ describe('Snapshots', () => {
 
       // Create some events without snapshots, with delays for unique timestamps
       for (let i = 2; i <= 10; i++) {
-        await sleep(1)
+        advanceTime(1)
         await db.update('posts', entity.$id as string, {
           $set: { title: `V${i}` },
         })
@@ -354,7 +360,9 @@ describe('Snapshots', () => {
       })
 
       // Create 100 events with snapshots at 25, 50, 75
+      // Advance time between updates to ensure unique timestamps
       for (let i = 2; i <= 100; i++) {
+        advanceTime(1) // Ensure unique timestamp for each event
         await db.update('posts', entity.$id as string, {
           $set: { title: `V${i}` },
         })

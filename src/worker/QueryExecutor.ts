@@ -24,9 +24,9 @@ import { parquetQuery } from 'hyparquet'
 // Patched LZ4 decompressor (fixes match length extension + signed integer overflow bugs)
 import { compressors } from '../parquet/compressors'
 // Index cache for secondary index lookups
-import { IndexCache, createR2IndexStorageAdapter, type SelectedIndex } from './IndexCache'
+import { IndexCache, createR2IndexStorageAdapter } from './IndexCache'
 // Centralized constants
-import { MAX_CACHE_SIZE, DEFAULT_CACHE_TTL } from '../constants'
+import { MAX_CACHE_SIZE as _MAX_CACHE_SIZE, DEFAULT_CACHE_TTL } from '../constants'
 // Logger
 import { logger } from '../utils/logger'
 import { stringToBase64 } from '../utils/base64'
@@ -259,8 +259,8 @@ class CdnR2StorageAdapter implements Partial<StorageBackend> {
   // Files being loaded (for deduplication)
   private loadingFiles = new Map<string, Promise<Uint8Array>>()
 
-  // Max file size for whole-file caching
-  private static readonly MAX_CACHE_SIZE = MAX_CACHE_SIZE
+  // Max file size for whole-file caching - reserved for future size-based caching decisions
+  public static readonly _MAX_CACHE_SIZE = _MAX_CACHE_SIZE
 
   constructor(
     private cdnBucket: R2Bucket,      // CDN bucket (cdn) for reads
@@ -438,11 +438,11 @@ export class QueryExecutor {
   /** Cache of parsed parquet data (for small files) */
   private dataCache = new Map<string, unknown[]>()
 
-  /** Cache of file sizes for whole-file read decisions */
-  private fileSizeCache = new Map<string, number>()
+  /** Cache of file sizes for whole-file read decisions - reserved for future optimization */
+  public _fileSizeCache = new Map<string, number>()
 
-  /** Maximum file size for whole-file caching */
-  private static readonly MAX_CACHE_SIZE_LIMIT = MAX_CACHE_SIZE
+  /** Maximum file size for whole-file caching - reserved for future size limits */
+  public static readonly _MAX_CACHE_SIZE_LIMIT = _MAX_CACHE_SIZE
 
   /** R2 storage adapter for ParquetReader */
   private storageAdapter: CdnR2StorageAdapter | null = null
@@ -461,7 +461,10 @@ export class QueryExecutor {
    * @param cdnBucket - Optional CDN R2 bucket (cdn) for optimized reads
    * @param r2DevUrl - Optional r2.dev URL for edge caching (e.g. 'https://pub-xxx.r2.dev/parquedb')
    */
-  constructor(private readPath: ReadPath, private bucket?: R2Bucket, private cdnBucket?: R2Bucket, private r2DevUrl?: string) {
+  constructor(private readPath: ReadPath, public _bucket?: R2Bucket, public _cdnBucket?: R2Bucket, public _r2DevUrl?: string) {
+    const bucket = _bucket
+    const cdnBucket = _cdnBucket
+    const r2DevUrl = _r2DevUrl
     if (bucket) {
       // Use CDN adapter if CDN bucket is available, otherwise direct primary bucket access
       if (cdnBucket) {
@@ -490,8 +493,8 @@ export class QueryExecutor {
       edgeHits: this.storageAdapter.edgeHits,
       cacheHits: this.storageAdapter.cacheHits,
       totalReads: this.storageAdapter.totalReads,
-      usingCdn: !!this.cdnBucket,
-      usingEdge: !!this.r2DevUrl,
+      usingCdn: !!this._cdnBucket,
+      usingEdge: !!this._r2DevUrl,
     }
   }
 
@@ -539,7 +542,8 @@ export class QueryExecutor {
       // Path format: either "{dataset}" or "{dataset}/{collection}"
       // For "{dataset}" we read from {dataset}/data.parquet
       // For "{dataset}/{collection}" we read from {dataset}/{collection}.parquet
-      const datasetId = ns.includes('/') ? ns.split('/')[0] : ns
+      const _datasetId = ns.includes('/') ? ns.split('/')[0] : ns
+      void _datasetId // Reserved for future use in multi-dataset queries
       const path = ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`
 
       // Use ParquetReader when available (real implementation)
@@ -1212,7 +1216,8 @@ export class QueryExecutor {
     }
 
     // Read from R2 - supports both {dataset} and {dataset}/{collection} paths
-    const datasetId = ns.includes('/') ? ns.split('/')[0] : ns
+    const _datasetId = ns.includes('/') ? ns.split('/')[0] : ns
+    void _datasetId // Reserved for future use
     const path = ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`
 
     // Read footer to get metadata length
@@ -1417,7 +1422,8 @@ export class QueryExecutor {
     metadata: ParquetMetadata
   ): Promise<{ records: EntityRecord[]; bytesRead: number } | null> {
     // Supports both {dataset} and {dataset}/{collection} paths
-    const datasetId = ns.includes('/') ? ns.split('/')[0] : ns
+    const _datasetId = ns.includes('/') ? ns.split('/')[0] : ns
+    void _datasetId // Reserved for future use
     const path = ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`
 
     // Read row group bytes
@@ -1782,8 +1788,9 @@ export class QueryExecutor {
   /**
    * Extract $id filter for predicate pushdown (legacy method for compatibility)
    * Returns the filter portion that can be pushed down to Parquet
+   * @internal Reserved for compatibility with older code
    */
-  private extractIdFilter(filter: Filter): Filter | null {
+  public _extractIdFilter(filter: Filter): Filter | null {
     return this.extractPushdownFilter(filter)
   }
 

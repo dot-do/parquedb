@@ -19,7 +19,7 @@ import type { ParsedArgs } from '../types'
 import { print, printError, printSuccess } from '../types'
 import { ParqueDB } from '../../ParqueDB'
 import { FsBackend } from '../../storage/FsBackend'
-import type { Filter, FindOptions, Entity } from '../../types'
+import type { FindOptions, Entity } from '../../types'
 
 // =============================================================================
 // Constants

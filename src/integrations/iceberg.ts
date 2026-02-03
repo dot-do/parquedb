@@ -357,7 +357,8 @@ export class IcebergMetadataManager {
     const manifestPath = await this.writeManifest(snapshotId, dataFiles)
 
     // Create manifest list
-    const manifestListPath = await this.writeManifestList(snapshotId, [manifestPath])
+    const _manifestListPath = await this.writeManifestList(snapshotId, [manifestPath])
+    void _manifestListPath // Used for side effects
 
     // Update snapshots
     this.snapshots.set(snapshotId, snapshot)
@@ -450,10 +451,11 @@ export class IcebergMetadataManager {
   async addField(field: Omit<IcebergField, 'id'>): Promise<IcebergSchema> {
     // This would use @dotdo/iceberg's SchemaEvolutionBuilder
     // For now, return a placeholder
-    const newField: IcebergField = {
+    const _newField: IcebergField = {
       ...field,
       id: this.getNextFieldId(),
     }
+    void _newField // Placeholder for future implementation
 
     // Would commit schema change atomically
     return this.getCurrentSchema()

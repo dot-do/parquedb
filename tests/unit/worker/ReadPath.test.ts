@@ -402,11 +402,10 @@ describe('ReadPath', () => {
 
       expect(result).toEqual(testData)
 
-      // Wait a bit for background revalidation
-      await new Promise((resolve) => setTimeout(resolve, 50))
-
-      // Background revalidation should have triggered
-      expect(bucketGetSpy).toHaveBeenCalled()
+      // Allow microtasks and pending promises to flush for background revalidation
+      await vi.waitFor(() => {
+        expect(bucketGetSpy).toHaveBeenCalled()
+      })
     })
   })
 

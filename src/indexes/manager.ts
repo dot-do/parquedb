@@ -24,6 +24,7 @@ import type {
   VectorSearchResult,
 } from './types'
 import { VectorIndex } from './vector'
+import { FTSIndex } from './fts'
 
 // =============================================================================
 // Index Manager Options
@@ -67,6 +68,8 @@ export class IndexManager {
   private loaded: boolean = false
   /** Cache for loaded VectorIndex instances */
   private vectorIndexes: Map<string, VectorIndex> = new Map()
+  /** Cache for loaded FTSIndex instances */
+  private ftsIndexes: Map<string, FTSIndex> = new Map()
   private basePath: string
   private onError?: IndexManagerErrorHandler
   private throwOnListenerError: boolean
@@ -415,13 +418,51 @@ export class IndexManager {
   ): Promise<FTSSearchResult[]> {
     await this.load()
 
-    // TODO(parquedb-poif): Wire up to FTSIndex class similar to VectorIndex
-    // For now, throw to make it clear this is not implemented
-    throw new Error(
-      `Method not implemented: ftsSearch. ` +
-      `IndexManager needs to be wired up to FTSIndex for namespace '${ns}'. ` +
-      `See vectorSearch() for reference implementation.`
+    // Find FTS index for this namespace
+    const ftsIndexDef = this.findFTSIndex(ns)
+    if (!ftsIndexDef) {
+      return []
+    }
+
+    // Get or create the FTS index instance
+    const ftsIndex = await this.getFTSIndex(ns, ftsIndexDef.name)
+    if (!ftsIndex) {
+      return []
+    }
+
+    // Execute the search
+    return ftsIndex.search(query, options)
+  }
+
+  /**
+   * Get or create an FTSIndex instance
+   */
+  private async getFTSIndex(ns: string, indexName: string): Promise<FTSIndex | null> {
+    const cacheKey = `${ns}.${indexName}`
+
+    // Return cached instance if available
+    if (this.ftsIndexes.has(cacheKey)) {
+      return this.ftsIndexes.get(cacheKey)!
+    }
+
+    // Get the index definition
+    const definition = this.indexes.get(ns)?.get(indexName)
+    if (!definition || definition.type !== 'fts') {
+      return null
+    }
+
+    // Create and load the index
+    const ftsIndex = new FTSIndex(
+      this.storage,
+      ns,
+      definition,
+      this.basePath
     )
+    await ftsIndex.load()
+
+    // Cache it
+    this.ftsIndexes.set(cacheKey, ftsIndex)
+    return ftsIndex
   }
 
   /**
@@ -513,7 +554,7 @@ export class IndexManager {
     const nsIndexes = this.indexes.get(ns)
     if (!nsIndexes) return
 
-    for (const [indexName, definition] of nsIndexes) {
+    for (const [_indexName, definition] of nsIndexes) {
       await this.addToIndex(ns, definition, docId, doc, rowGroup, rowOffset)
       this.emit({ type: 'entry_added', definition, docId })
     }
@@ -534,7 +575,7 @@ export class IndexManager {
     const nsIndexes = this.indexes.get(ns)
     if (!nsIndexes) return
 
-    for (const [indexName, definition] of nsIndexes) {
+    for (const [_indexName, definition] of nsIndexes) {
       await this.removeFromIndex(ns, definition, docId, doc)
       this.emit({ type: 'entry_removed', definition, docId })
     }
@@ -561,7 +602,7 @@ export class IndexManager {
     const nsIndexes = this.indexes.get(ns)
     if (!nsIndexes) return
 
-    for (const [indexName, definition] of nsIndexes) {
+    for (const [_indexName, definition] of nsIndexes) {
       // Check if any indexed fields changed
       const fieldsChanged = definition.fields.some(field => {
         const oldValue = this.getFieldValue(oldDoc, field.path)
@@ -742,10 +783,43 @@ export class IndexManager {
   }
 
   private async buildIndex(ns: string, definition: IndexDefinition): Promise<void> {
-    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, FTSIndex)
-    // For now, just update progress metadata without actual index building
-    // When implementing, use the build() methods on HashIndex, FTSIndex classes
     const metadata = this.metadata.get(ns)!.get(definition.name)!
+    const cacheKey = `${ns}.${definition.name}`
+
+    switch (definition.type) {
+      case 'fts': {
+        // Create and cache the FTS index
+        const ftsIndex = new FTSIndex(
+          this.storage,
+          ns,
+          definition,
+          this.basePath
+        )
+        this.ftsIndexes.set(cacheKey, ftsIndex)
+        // Note: Actual data indexing happens via onDocumentAdded or when data is provided
+        await ftsIndex.save()
+        break
+      }
+      case 'vector': {
+        // Create and cache the vector index
+        const vectorIndex = new VectorIndex(
+          this.storage,
+          ns,
+          definition,
+          this.basePath
+        )
+        this.vectorIndexes.set(cacheKey, vectorIndex)
+        // Note: Actual data indexing happens via onDocumentAdded or when data is provided
+        await vectorIndex.save()
+        break
+      }
+      case 'bloom': {
+        // Bloom filters are typically built during data ingestion
+        // The IndexBloomFilter class is used directly during writes
+        break
+      }
+    }
+
     metadata.buildProgress = 1
     metadata.building = false
     metadata.updatedAt = new Date()
@@ -759,9 +833,37 @@ export class IndexManager {
     rowGroup: number,
     rowOffset: number
   ): Promise<void> {
-    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, FTSIndex)
-    // For now, this is a no-op - index updates are handled by rebuild
-    // When implementing, follow the pattern used in getVectorIndex() for caching
+    const _cacheKey = `${ns}.${definition.name}`
+    void _cacheKey // Reserved for future caching optimization
+
+    switch (definition.type) {
+      case 'fts': {
+        const ftsIndex = await this.getFTSIndex(ns, definition.name)
+        if (ftsIndex) {
+          ftsIndex.addDocument(docId, doc)
+        }
+        break
+      }
+      case 'vector': {
+        const vectorIndex = await this.getVectorIndex(ns, definition.name)
+        if (vectorIndex) {
+          // Extract vector from document based on field path
+          const firstField = definition.fields[0]
+          if (firstField) {
+            const vector = this.getFieldValue(doc, firstField.path)
+            if (Array.isArray(vector) && vector.every(v => typeof v === 'number')) {
+              vectorIndex.insert(vector as number[], docId, rowGroup, rowOffset)
+            }
+          }
+        }
+        break
+      }
+      case 'bloom': {
+        // Bloom filters are typically managed at a different layer
+        // during Parquet file writes rather than per-document updates
+        break
+      }
+    }
   }
 
   private async removeFromIndex(
@@ -770,9 +872,26 @@ export class IndexManager {
     docId: string,
     doc: Record<string, unknown>
   ): Promise<void> {
-    // TODO(parquedb-poif): Wire up to specific index classes (HashIndex, FTSIndex)
-    // For now, this is a no-op - index updates are handled by rebuild
-    // When implementing, follow the pattern used in getVectorIndex() for caching
+    switch (definition.type) {
+      case 'fts': {
+        const ftsIndex = await this.getFTSIndex(ns, definition.name)
+        if (ftsIndex) {
+          ftsIndex.removeDocument(docId)
+        }
+        break
+      }
+      case 'vector': {
+        const vectorIndex = await this.getVectorIndex(ns, definition.name)
+        if (vectorIndex) {
+          vectorIndex.remove(docId)
+        }
+        break
+      }
+      case 'bloom': {
+        // Bloom filters don't support removal - they require rebuild
+        break
+      }
+    }
   }
 
   private findFTSIndex(ns: string): IndexDefinition | null {

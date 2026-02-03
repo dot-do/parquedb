@@ -543,7 +543,8 @@ export class DOSqliteBackend implements StorageBackend {
   async copy(source: string, dest: string): Promise<void> {
     this.ensureSchema()
     const sourceKey = this.withPrefix(source)
-    const destKey = this.withPrefix(dest)
+    const _destKey = this.withPrefix(dest)
+    void _destKey // Used in future implementation
 
     // Read source
     const sourceRow = this.sql

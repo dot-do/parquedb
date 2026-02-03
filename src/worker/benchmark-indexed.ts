@@ -9,7 +9,7 @@
 import type { Filter } from '../types/filter'
 import type { BenchmarkQuery } from './benchmark-queries'
 import { ALL_QUERIES, QUERY_STATS } from './benchmark-queries'
-import { QueryExecutor, type FindResult, type QueryStats } from './QueryExecutor'
+import { QueryExecutor, type FindResult } from './QueryExecutor'
 import { ReadPath } from './ReadPath'
 import { DEFAULT_CACHE_CONFIG } from './CacheStrategy'
 import { logger } from '../utils/logger'

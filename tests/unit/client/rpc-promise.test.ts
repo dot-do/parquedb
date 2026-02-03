@@ -163,8 +163,8 @@ describe('createRpcPromise', () => {
       // Chain should not execute immediately
       expect(fetchCalled).toBe(false)
 
-      // Wait for microtask queue to process
-      await new Promise(resolve => setTimeout(resolve, 0))
+      // Wait for microtask queue to process using queueMicrotask
+      await new Promise(resolve => queueMicrotask(resolve))
 
       // Now it should have executed
       expect(fetchCalled).toBe(true)
@@ -508,7 +508,8 @@ describe('resolvedRpcPromise', () => {
   it('should handle async map functions', async () => {
     const promise = resolvedRpcPromise([1, 2, 3])
     const mapped = promise.map(async (n: number) => {
-      await new Promise(resolve => setTimeout(resolve, 1))
+      // Use Promise.resolve() to simulate async operation without timing dependency
+      await Promise.resolve()
       return n * 2
     })
 

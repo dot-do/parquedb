@@ -585,9 +585,14 @@ describe('MetricsCollector', () => {
     })
 
     it('should track uptime', async () => {
-      await new Promise(resolve => setTimeout(resolve, 10))
-      const metrics = collector.getMetrics()
-      expect(metrics.system.uptime).toBeGreaterThanOrEqual(10)
+      vi.useFakeTimers()
+      try {
+        vi.advanceTimersByTime(10)
+        const metrics = collector.getMetrics()
+        expect(metrics.system.uptime).toBeGreaterThanOrEqual(10)
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 

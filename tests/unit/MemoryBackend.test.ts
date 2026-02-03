@@ -5,7 +5,7 @@
  * These tests follow the TDD RED phase - they will fail until implementation is complete.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   MemoryBackend,
   FileNotFoundError,
@@ -665,16 +665,24 @@ describe('MemoryBackend', () => {
     })
 
     it('should update mtime on write', async () => {
-      await backend.write('test.txt', createTestData('v1'))
-      const stat1 = await backend.stat('test.txt')
+      vi.useFakeTimers()
+      try {
+        const initialTime = new Date('2024-01-01T12:00:00Z')
+        vi.setSystemTime(initialTime)
 
-      // Wait a tiny bit to ensure different timestamp
-      await new Promise((resolve) => setTimeout(resolve, 10))
+        await backend.write('test.txt', createTestData('v1'))
+        const stat1 = await backend.stat('test.txt')
 
-      await backend.write('test.txt', createTestData('v2'))
-      const stat2 = await backend.stat('test.txt')
+        // Advance time deterministically
+        vi.advanceTimersByTime(10)
 
-      expect(stat2!.mtime.getTime()).toBeGreaterThanOrEqual(stat1!.mtime.getTime())
+        await backend.write('test.txt', createTestData('v2'))
+        const stat2 = await backend.stat('test.txt')
+
+        expect(stat2!.mtime.getTime()).toBeGreaterThanOrEqual(stat1!.mtime.getTime())
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('should return contentType from write options', async () => {

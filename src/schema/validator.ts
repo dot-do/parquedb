@@ -7,8 +7,6 @@
 
 import type {
   Schema,
-  TypeDefinition,
-  FieldDefinition,
   ParsedSchema,
   ValidationResult,
   ValidationError,
@@ -16,9 +14,9 @@ import type {
 } from '../types/schema'
 
 import {
-  parseFieldType,
-  isRelationString,
-  parseRelation,
+  parseFieldType as _parseFieldType,
+  isRelationString as _isRelationString,
+  parseRelation as _parseRelation,
 } from '../types/schema'
 
 import {

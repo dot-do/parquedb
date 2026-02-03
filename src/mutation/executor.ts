@@ -20,22 +20,16 @@ import type {
   UpdateOptions,
   DeleteOptions,
   Schema,
-  Event,
 } from '../types'
 import {
   MutationContext,
-  CreateResult,
-  UpdateResult as MutationUpdateResult,
-  DeleteResult as MutationDeleteResult,
   MutationEvent,
   MutationHooks,
   createMutationContext,
-  MutationOperationError,
-  MutationErrorCodes,
   type PreMutationHandler,
   type PostMutationHandler,
 } from './types'
-import { executeCreate, validateNamespace, normalizeNamespace, SchemaValidatorInterface } from './create'
+import { executeCreate, validateNamespace, SchemaValidatorInterface } from './create'
 import { executeUpdate, VersionConflictError } from './update'
 import { executeDelete, applySoftDelete, applyRestore } from './delete'
 import { validateUpdateOperators } from './operators'
@@ -44,8 +38,6 @@ import { entityTarget } from '../types/entity'
 import {
   globalHookRegistry,
   createMutationContext as createObservabilityMutationContext,
-  type MutationContext as ObservabilityMutationContext,
-  type MutationResult as ObservabilityMutationResult,
 } from '../observability'
 
 // =============================================================================
@@ -288,11 +280,6 @@ export class MutationExecutor {
 
       // Store updated entity
       if (result.entity) {
-        // Get the actual updated entity (not the before version if returnDocument is 'before')
-        const entityToStore = options?.returnDocument === 'before' && existingEntity
-          ? store.get(fullId) // Get from result events
-          : result.entity
-
         // Actually, we need to reconstruct from the events
         const createEvent = result.events.find(e => e.op === 'CREATE' || e.op === 'UPDATE')
         if (createEvent?.after) {

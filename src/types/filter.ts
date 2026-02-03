@@ -2,7 +2,7 @@
  * MongoDB-style filter operators for ParqueDB
  */
 
-import type { EntityId, Variant } from './entity'
+// Type imports from entity module (types used in filter definitions)
 
 // =============================================================================
 // Comparison Operators

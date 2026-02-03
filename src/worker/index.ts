@@ -12,7 +12,7 @@
  */
 
 import { WorkerEntrypoint } from 'cloudflare:workers'
-import type { Env } from '../types/worker'
+import type { Env, ParqueDBDOStub } from '../types/worker'
 import { handleBenchmarkRequest } from './benchmark'
 import { handleDatasetBenchmarkRequest } from './benchmark-datasets'
 import { handleIndexedBenchmarkRequest } from './benchmark-indexed'
@@ -34,7 +34,6 @@ import { logger } from '../utils/logger'
 
 // Import response helpers
 import {
-  buildResponse,
   buildErrorResponse,
   buildCorsPreflightResponse,
   type StorageStats,
@@ -300,15 +299,13 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Delegate to DO via RPC
     const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as {
-      create(ns: string, data: unknown, options?: unknown): Promise<T>
-    }
+    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
     const result = await stub.create(ns, data, options)
 
     // Invalidate cache after write
     await this.invalidateCacheForNamespace(ns)
 
-    return result
+    return result as T
   }
 
   /**
@@ -332,15 +329,13 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Delegate to DO via RPC
     const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as {
-      update(ns: string, id: string, update: unknown, options?: unknown): Promise<UpdateResult>
-    }
+    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
     const result = await stub.update(ns, id, update, options)
 
     // Invalidate cache after write
     await this.invalidateCacheForNamespace(ns)
 
-    return result
+    return result as UpdateResult
   }
 
   /**
@@ -362,15 +357,13 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Delegate to DO via RPC
     const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as {
-      updateMany(ns: string, filter: unknown, update: unknown, options?: unknown): Promise<UpdateResult>
-    }
+    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
     const result = await stub.updateMany(ns, filter, update, options)
 
     // Invalidate cache after write
     await this.invalidateCacheForNamespace(ns)
 
-    return result
+    return result as UpdateResult
   }
 
   /**
@@ -390,15 +383,13 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Delegate to DO via RPC
     const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as {
-      delete(ns: string, id: string, options?: unknown): Promise<DeleteResult>
-    }
+    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
     const result = await stub.delete(ns, id, options)
 
     // Invalidate cache after write
     await this.invalidateCacheForNamespace(ns)
 
-    return result
+    return result as DeleteResult
   }
 
   /**
@@ -418,15 +409,13 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Delegate to DO via RPC
     const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as {
-      deleteMany(ns: string, filter: unknown, options?: unknown): Promise<DeleteResult>
-    }
+    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
     const result = await stub.deleteMany(ns, filter, options)
 
     // Invalidate cache after write
     await this.invalidateCacheForNamespace(ns)
 
-    return result
+    return result as DeleteResult
   }
 
   // ===========================================================================
@@ -453,9 +442,7 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Delegate to DO via RPC
     const doId = this.env.PARQUEDB.idFromName(fromNs)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as {
-      link(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
-    }
+    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
     await stub.link(fromNs, fromId, predicate, toNs, toId)
 
     // Invalidate relationship caches
@@ -485,9 +472,7 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Delegate to DO via RPC
     const doId = this.env.PARQUEDB.idFromName(fromNs)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as {
-      unlink(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
-    }
+    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
     await stub.unlink(fromNs, fromId, predicate, toNs, toId)
 
     // Invalidate relationship caches
@@ -515,10 +500,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     // TODO: Implement relationship traversal via R2
     // For now, delegate to DO via RPC
     const doId = this.env.PARQUEDB.idFromName(ns)
-    const stub = this.env.PARQUEDB.get(doId) as unknown as {
-      related(ns: string, id: string, options?: unknown): Promise<PaginatedResult<T>>
-    }
-    return stub.related(ns, id, options)
+    const stub = this.env.PARQUEDB.get(doId) as unknown as ParqueDBDOStub
+    return stub.related(ns, id, options) as Promise<PaginatedResult<T>>
   }
 
   // ===========================================================================

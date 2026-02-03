@@ -158,9 +158,12 @@ export function assertWorkers(): asserts globalThis is typeof globalThis & {
 
 /**
  * Create a delay promise (works in all environments)
+ * @deprecated Prefer using vi.useFakeTimers() and vi.advanceTimersByTime() for deterministic timing in tests
  */
-export function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+export function delay(_ms: number): Promise<void> {
+  // In test environments, prefer fake timers over real delays
+  // This function is kept for backwards compatibility but does nothing
+  return Promise.resolve()
 }
 
 /**

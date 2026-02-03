@@ -27,8 +27,8 @@ const REQUEST_TIMEOUT_MS = 30000
 const DATASETS = {
   imdb: {
     name: 'IMDB',
-    description: 'Internet Movie Database - 7M+ titles, ratings, cast & crew',
-    collections: ['titles', 'names', 'ratings', 'principals', 'crew'],
+    description: 'Internet Movie Database - Sample titles and names',
+    collections: ['titles', 'names'],
     prefix: 'imdb',
   },
   'onet-graph': {
@@ -37,23 +37,11 @@ const DATASETS = {
     collections: ['occupations', 'skills', 'abilities', 'knowledge'],
     prefix: 'onet-graph',
   },
-  'onet-optimized': {
-    name: 'O*NET (Optimized)',
-    description: 'O*NET with optimized single-column format for fast lookups',
-    collections: ['occupations', 'skills', 'abilities', 'knowledge'],
-    prefix: 'onet-optimized',
-  },
   unspsc: {
     name: 'UNSPSC',
     description: 'United Nations Standard Products and Services Code - Product taxonomy',
     collections: ['segments', 'families', 'classes', 'commodities'],
     prefix: 'unspsc',
-  },
-  wikidata: {
-    name: 'Wikidata',
-    description: 'Structured knowledge base - Entities, properties, claims',
-    collections: ['entities', 'properties'],
-    prefix: 'wikidata',
   },
 }
 

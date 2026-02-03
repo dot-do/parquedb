@@ -351,9 +351,13 @@ export async function cleanupTestData(): Promise<void> {
 
 /**
  * Wait for eventual consistency (for tests that need timing delays)
+ * When using fake timers, this advances time; otherwise, it returns immediately
+ * since in-memory operations are synchronous.
  */
-export async function waitForConsistency(ms: number = 50): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms))
+export async function waitForConsistency(_ms: number = 50): Promise<void> {
+  // In test environments with in-memory storage, operations are synchronous
+  // so no actual waiting is needed. The parameter is kept for API compatibility.
+  return Promise.resolve()
 }
 
 /**

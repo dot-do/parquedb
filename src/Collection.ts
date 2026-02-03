@@ -55,11 +55,12 @@ import type {
   SortDirection,
 } from './types'
 import { normalizeSortDirection } from './types'
-import { deepClone, getNestedValue, compareValues, generateId, getValueType } from './utils'
-import { validatePath } from './utils/path-safety'
+import { deepClone, getNestedValue, compareValues, generateId } from './utils'
+import { validatePath, validateKey, validateObjectKeys, validateObjectKeysDeep } from './utils/path-safety'
 import { matchesFilter as canonicalMatchesFilter } from './query/filter'
 import { QueryBuilder } from './query/builder'
 import { executeAggregation, executeAggregationWithIndex, type AggregationStage } from './aggregation'
+import { applyOperators } from './mutation/operators'
 
 // Re-export AggregationStage for backwards compatibility
 export type { AggregationStage } from './aggregation'
@@ -192,8 +193,9 @@ export function clearEventLog(): void {
 
 /**
  * Set value at a nested path using dot notation
+ * @internal Reserved for future use
  */
-function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
+export function _setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
   validatePath(path)
   const parts = path.split('.')
   let current = obj
@@ -212,8 +214,9 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
 
 /**
  * Delete value at a nested path using dot notation
+ * @internal Reserved for future use
  */
-function deleteNestedValue(obj: Record<string, unknown>, path: string): void {
+export function _deleteNestedValue(obj: Record<string, unknown>, path: string): void {
   validatePath(path)
   const parts = path.split('.')
   let current = obj
@@ -452,10 +455,13 @@ export class Collection<T = Record<string, unknown>> {
   }
 
   /**
-   * Validate filter for invalid operators
+   * Validate filter for invalid operators and prototype pollution
    */
   private validateFilter(filter: Filter): void {
     for (const [key, value] of Object.entries(filter)) {
+      // Check for prototype pollution keys
+      validateKey(key)
+
       if (key === '$and' || key === '$or' || key === '$nor') {
         if (Array.isArray(value)) {
           value.forEach(f => this.validateFilter(f as Filter))
@@ -465,6 +471,9 @@ export class Collection<T = Record<string, unknown>> {
           this.validateFilter(value as Filter)
         }
       } else if (!key.startsWith('$') && value && typeof value === 'object' && !Array.isArray(value)) {
+        // Validate nested object keys for prototype pollution
+        validateObjectKeys(value as Record<string, unknown>)
+
         // Check for invalid operators in field conditions
         const operators = Object.keys(value as object)
         const validOperators = [
@@ -742,6 +751,9 @@ export class Collection<T = Record<string, unknown>> {
       throw new Error('name is required')
     }
 
+    // Validate data keys for prototype pollution
+    validateObjectKeysDeep(data)
+
     const now = new Date()
     // Allow custom ID via $id field, otherwise generate
     const id = (data as Record<string, unknown>).$id
@@ -810,6 +822,61 @@ export class Collection<T = Record<string, unknown>> {
   }
 
   /**
+   * Validate update object for prototype pollution attacks.
+   * Checks all field paths in update operators for dangerous keys.
+   */
+  private validateUpdateInput(update: UpdateInput<T>): void {
+    // Validate keys in each update operator
+    const operatorsWithFieldKeys = [
+      '$set',
+      '$unset',
+      '$inc',
+      '$mul',
+      '$min',
+      '$max',
+      '$push',
+      '$pull',
+      '$pullAll',
+      '$addToSet',
+      '$pop',
+      '$currentDate',
+      '$bit',
+    ]
+
+    for (const op of operatorsWithFieldKeys) {
+      const opValue = (update as Record<string, unknown>)[op]
+      if (opValue && typeof opValue === 'object') {
+        for (const key of Object.keys(opValue as Record<string, unknown>)) {
+          // Validate the path (which includes validating each segment for prototype pollution)
+          validatePath(key)
+        }
+      }
+    }
+
+    // Special handling for $rename: validate both source and target paths
+    if (update.$rename) {
+      for (const [sourcePath, targetPath] of Object.entries(update.$rename)) {
+        validatePath(sourcePath)
+        if (typeof targetPath === 'string') {
+          validatePath(targetPath)
+        }
+      }
+    }
+
+    // Validate $link and $unlink predicates
+    if (update.$link) {
+      for (const predicate of Object.keys(update.$link)) {
+        validateKey(predicate)
+      }
+    }
+    if (update.$unlink) {
+      for (const predicate of Object.keys(update.$unlink)) {
+        validateKey(predicate)
+      }
+    }
+  }
+
+  /**
    * Update entity by ID
    *
    * @param id - Entity ID
@@ -818,6 +885,9 @@ export class Collection<T = Record<string, unknown>> {
    * @returns Update result with matched/modified counts
    */
   async update(id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<UpdateResult> {
+    // Validate update object for prototype pollution
+    this.validateUpdateInput(update)
+
     const entityId = this.normalizeId(id)
     const localId = this.extractLocalId(entityId)
     const entity = this.storage.get(localId)
@@ -847,124 +917,34 @@ export class Collection<T = Record<string, unknown>> {
     const actor = options?.actor || ('system/system' as EntityId)
     // Deep clone the entity to preserve the before state
     const beforeState = deepClone(entity)
-    const updated = deepClone(entity) as Record<string, unknown>
 
-    // Apply $set operator
-    if (update.$set) {
-      for (const [key, value] of Object.entries(update.$set)) {
-        if (key.includes('.')) {
-          setNestedValue(updated, key, value)
-        } else {
-          updated[key] = value
+    // Use canonical applyOperators for document updates
+    // This handles $set, $unset, $inc, $mul, $min, $max, $push, $pull, $pullAll,
+    // $addToSet, $pop, $rename, $currentDate, $setOnInsert, $bit, $link, $unlink
+    const applyResult = applyOperators(entity as Record<string, unknown>, update, {
+      isInsert: false,
+      timestamp: now,
+    })
+
+    const updated = applyResult.document as Record<string, unknown>
+
+    // Handle relationship operations from applyOperators result
+    // These need to be stored in globalRelationships for this in-memory implementation
+    for (const relOp of applyResult.relationshipOps) {
+      if (relOp.type === 'link') {
+        if (!globalRelationships.has(this.namespace)) {
+          globalRelationships.set(this.namespace, [])
         }
-      }
-    }
-
-    // Apply $unset operator
-    if (update.$unset) {
-      for (const key of Object.keys(update.$unset)) {
-        if (key.includes('.')) {
-          deleteNestedValue(updated, key)
-        } else {
-          delete updated[key]
+        const rels = globalRelationships.get(this.namespace)!
+        for (const target of relOp.targets) {
+          rels.push({ from: entityId, predicate: relOp.predicate, to: target })
         }
-      }
-    }
-
-    // Apply $inc operator
-    if (update.$inc) {
-      for (const [key, amount] of Object.entries(update.$inc)) {
-        const current = (updated[key] as number) || 0
-        updated[key] = current + (amount as number)
-      }
-    }
-
-    // Apply $push operator
-    if (update.$push) {
-      for (const [key, value] of Object.entries(update.$push)) {
-        if (!Array.isArray(updated[key])) {
-          updated[key] = []
-        }
-        const arr = updated[key] as unknown[]
-
-        if (value && typeof value === 'object' && '$each' in (value as object)) {
-          const modifier = value as { $each: unknown[]; $position?: number; $slice?: number; $sort?: 1 | -1 }
-          const items = modifier.$each
-          const position = modifier.$position
-
-          if (position !== undefined) {
-            arr.splice(position, 0, ...items)
-          } else {
-            arr.push(...items)
-          }
-
-          // Apply $sort
-          if (modifier.$sort !== undefined) {
-            if (typeof modifier.$sort === 'number') {
-              arr.sort((a, b) => compareValuesWithDirection(a, b, modifier.$sort as 1 | -1))
-            }
-          }
-
-          // Apply $slice
-          if (modifier.$slice !== undefined) {
-            if (modifier.$slice < 0) {
-              updated[key] = arr.slice(modifier.$slice)
-            } else {
-              updated[key] = arr.slice(0, modifier.$slice)
-            }
-          }
-        } else {
-          arr.push(value)
-        }
-      }
-    }
-
-    // Apply $pull operator
-    if (update.$pull) {
-      for (const [key, condition] of Object.entries(update.$pull)) {
-        if (!Array.isArray(updated[key])) continue
-        const arr = updated[key] as unknown[]
-
-        if (condition && typeof condition === 'object' && '$in' in (condition as object)) {
-          const toRemove = (condition as { $in: unknown[] }).$in
-          updated[key] = arr.filter(item => !toRemove.includes(item))
-        } else {
-          updated[key] = arr.filter(item => item !== condition)
-        }
-      }
-    }
-
-    // Apply $link operator
-    if (update.$link) {
-      if (!globalRelationships.has(this.namespace)) {
-        globalRelationships.set(this.namespace, [])
-      }
-      const rels = globalRelationships.get(this.namespace)!
-
-      for (const [predicate, targets] of Object.entries(update.$link)) {
-        const targetArray = Array.isArray(targets) ? targets : [targets]
-        for (const target of targetArray) {
-          rels.push({ from: entityId, predicate, to: target })
-        }
-      }
-    }
-
-    // Apply $unlink operator
-    if (update.$unlink) {
-      const rels = globalRelationships.get(this.namespace) || []
-      for (const [predicate, targets] of Object.entries(update.$unlink)) {
-        const targetArray = Array.isArray(targets) ? targets : [targets]
+      } else if (relOp.type === 'unlink') {
+        const rels = globalRelationships.get(this.namespace) || []
         const filtered = rels.filter(r =>
-          !(r.from === entityId && r.predicate === predicate && targetArray.includes(r.to))
+          !(r.from === entityId && r.predicate === relOp.predicate && relOp.targets.includes(r.to))
         )
         globalRelationships.set(this.namespace, filtered)
-      }
-    }
-
-    // Apply $currentDate
-    if (update.$currentDate) {
-      for (const key of Object.keys(update.$currentDate)) {
-        updated[key] = now
       }
     }
 

@@ -5,7 +5,7 @@
  * Uses real in-memory storage (no mocks) for all CRUD operations.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Collection, type AggregationStage, clearGlobalStorage } from '../../src/Collection'
 import type {
   Entity,
@@ -743,11 +743,16 @@ describe('Collection', () => {
       })
 
       it('should update updatedAt automatically', async () => {
-        const before = await collection.get(testEntityId)
-        await new Promise(r => setTimeout(r, 10)) // Small delay
-        await collection.update(testEntityId, { $set: { title: 'Updated' } })
-        const after = await collection.get(testEntityId)
-        expect(after.updatedAt >= before.updatedAt).toBe(true)
+        vi.useFakeTimers()
+        try {
+          const before = await collection.get(testEntityId)
+          vi.advanceTimersByTime(10) // Advance time deterministically
+          await collection.update(testEntityId, { $set: { title: 'Updated' } })
+          const after = await collection.get(testEntityId)
+          expect(after.updatedAt >= before.updatedAt).toBe(true)
+        } finally {
+          vi.useRealTimers()
+        }
       })
 
       it('should return matchedCount 0 for non-existent entity', async () => {

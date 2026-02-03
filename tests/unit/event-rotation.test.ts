@@ -5,7 +5,7 @@
  * Verifies maxEvents, maxAge, and archiveOnRotation behavior.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { ParqueDB } from '../../src/ParqueDB'
 import { MemoryBackend } from '../../src/storage/MemoryBackend'
 import type { EntityId } from '../../src/types'
@@ -14,8 +14,11 @@ import type { EntityId } from '../../src/types'
 // Helper Functions
 // =============================================================================
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+/**
+ * Advance fake timers by specified milliseconds (use only with vi.useFakeTimers())
+ */
+function advanceTime(ms: number): void {
+  vi.advanceTimersByTime(ms)
 }
 
 // =============================================================================
@@ -27,11 +30,13 @@ describe('Event Log Rotation', () => {
   let storage: MemoryBackend
 
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
     storage = new MemoryBackend()
   })
 
   afterEach(() => {
-    // Clean up
+    vi.useRealTimers()
   })
 
   // ===========================================================================
@@ -146,7 +151,7 @@ describe('Event Log Rotation', () => {
           title: `Title ${i}`,
         })
         entities.push(entity)
-        await sleep(5) // Small delay to ensure different timestamps
+        advanceTime(5) // Small delay to ensure different timestamps
       }
 
       const eventLog = db.getEventLog()
@@ -218,16 +223,16 @@ describe('Event Log Rotation', () => {
 
       // Create some entities with sleep to ensure different timestamps
       await db.create('posts', { $type: 'Post', name: 'Post 1', title: 'Title 1' })
-      await sleep(5)
+      advanceTime(5)
       await db.create('posts', { $type: 'Post', name: 'Post 2', title: 'Title 2' })
 
       // Wait and capture midTime after the first two events are definitely in the past
-      await sleep(15)
+      advanceTime(15)
       const midTime = new Date()
-      await sleep(15)
+      advanceTime(15)
 
       await db.create('posts', { $type: 'Post', name: 'Post 3', title: 'Title 3' })
-      await sleep(5)
+      advanceTime(5)
       await db.create('posts', { $type: 'Post', name: 'Post 4', title: 'Title 4' })
 
       const eventLog = db.getEventLog()
@@ -305,9 +310,9 @@ describe('Event Log Rotation', () => {
       })
 
       await db.create('posts', { $type: 'Post', name: 'Post 1', title: 'Title 1' })
-      await sleep(10)
+      advanceTime(10)
       await db.create('posts', { $type: 'Post', name: 'Post 2', title: 'Title 2' })
-      await sleep(10)
+      advanceTime(10)
 
       const beforeThird = Date.now()
       await db.create('posts', { $type: 'Post', name: 'Post 3', title: 'Title 3' })
@@ -326,11 +331,11 @@ describe('Event Log Rotation', () => {
       })
 
       await db.create('posts', { $type: 'Post', name: 'Post 1', title: 'Title 1' })
-      await sleep(10)
+      advanceTime(10)
 
       const afterFirst = Date.now()
       await db.create('posts', { $type: 'Post', name: 'Post 2', title: 'Title 2' })
-      await sleep(10)
+      advanceTime(10)
       await db.create('posts', { $type: 'Post', name: 'Post 3', title: 'Title 3' })
 
       const eventLog = db.getEventLog()
@@ -410,7 +415,7 @@ describe('Event Log Rotation', () => {
       })
 
       await db.create('posts', { $type: 'Post', name: 'Post 1', title: 'Title 1' })
-      await sleep(10)
+      advanceTime(10)
 
       // Create another event to trigger rotation
       await db.create('posts', { $type: 'Post', name: 'Post 2', title: 'Title 2' })
@@ -431,7 +436,7 @@ describe('Event Log Rotation', () => {
       // Create 5 entities with small delays
       for (let i = 0; i < 5; i++) {
         await db.create('posts', { $type: 'Post', name: `Post ${i}`, title: `Title ${i}` })
-        await sleep(5)
+        advanceTime(5)
       }
 
       const eventLog = db.getEventLog()

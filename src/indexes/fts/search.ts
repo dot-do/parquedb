@@ -26,10 +26,10 @@ export class FTSIndex {
   private loaded: boolean = false
 
   constructor(
-    private storage: StorageBackend,
+    storage: StorageBackend,
     readonly namespace: string,
     readonly definition: IndexDefinition,
-    private basePath: string = ''
+    basePath: string = ''
   ) {
     this.invertedIndex = new InvertedIndex(storage, namespace, definition, basePath)
     this.scorer = new BM25Scorer()

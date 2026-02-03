@@ -62,7 +62,6 @@ import type {
   UpsertManyOptions,
   UpsertManyResult,
   SnapshotConfig,
-  VersionConflictError as VersionConflictErrorType,
 } from './types'
 
 import { DEFAULT_EVENT_LOG_CONFIG, VersionConflictError } from './types'

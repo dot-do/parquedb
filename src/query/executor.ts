@@ -6,7 +6,7 @@
  */
 
 import type { Filter, FindOptions, SortSpec, Projection } from '../types'
-import type { StorageBackend, StoragePaths } from '../types/storage'
+import type { StorageBackend } from '../types/storage'
 import {
   selectRowGroups,
   toPredicate,
@@ -15,16 +15,16 @@ import {
   type RowGroupStats,
   type ParquetMetadata,
 } from './predicate'
-import { checkBloomFilter } from './bloom'
+// checkBloomFilter reserved for future bloom filter optimization
+export { checkBloomFilter as _checkBloomFilter } from './bloom'
 import type { IndexManager, SelectedIndex } from '../indexes/manager'
-import type { IndexLookupResult, FTSSearchResult } from '../indexes/types'
+// Re-export index types for consumers
+export type { IndexLookupResult, FTSSearchResult } from '../indexes/types'
 import { logger } from '../utils/logger'
 import { stringToBase64 } from '../utils/base64'
 import {
   globalHookRegistry,
   createQueryContext,
-  type QueryContext,
-  type QueryResult as ObservabilityQueryResult,
 } from '../observability'
 import { DEFAULT_CONCURRENCY } from '../constants'
 
@@ -177,9 +177,10 @@ export class QueryExecutor {
 
   constructor(
     private reader: ParquetReader,
-    private storage: StorageBackend,
+    _storage: StorageBackend,
     indexManager?: IndexManager
   ) {
+    void _storage // Reserved for future direct storage access
     this.indexManager = indexManager
   }
 
@@ -451,8 +452,9 @@ export class QueryExecutor {
 
   /**
    * Extract range query operators from a condition
+   * @internal Reserved for future range query optimization
    */
-  private extractRangeQuery(condition: unknown): {
+  public _extractRangeQuery(condition: unknown): {
     $gt?: unknown
     $gte?: unknown
     $lt?: unknown

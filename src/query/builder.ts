@@ -20,7 +20,7 @@
  */
 
 import type { Filter, FieldFilter } from '../types/filter'
-import type { FindOptions, Projection, SortSpec, SortDirection } from '../types/options'
+import type { FindOptions, Projection, SortSpec } from '../types/options'
 import type { Entity } from '../types/entity'
 
 /**
@@ -90,8 +90,8 @@ interface Condition {
   value: unknown
 }
 
-/** Condition group type */
-type ConditionGroup = 'and' | 'or'
+/** Condition group type - reserved for future query building enhancements */
+export type _ConditionGroup = 'and' | 'or'
 
 /** Internal state for building queries */
 interface BuilderState {

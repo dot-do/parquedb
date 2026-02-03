@@ -8,14 +8,7 @@
 import type {
   Entity,
   EntityId,
-  CreateInput,
-  UpdateInput,
-  Filter,
-  CreateOptions,
-  UpdateOptions,
-  DeleteOptions,
   ValidationMode,
-  Event,
 } from '../types'
 
 // =============================================================================

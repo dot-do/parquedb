@@ -5,7 +5,7 @@
  * These tests use real ParqueDB with MemoryBackend for fast, isolated testing.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import { ParqueDB, MemoryBackend } from '../../src'
 import {
   createUserInput,
@@ -343,13 +343,18 @@ describe('Data Integrity E2E', () => {
 
     const createdAt = entity.createdAt
 
-    // Wait and update
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    vi.useFakeTimers()
+    try {
+      // Advance time deterministically
+      vi.advanceTimersByTime(10)
 
-    const updated = await db.update('items', entity.$id, { $set: { name: 'Updated Name' } })
+      const updated = await db.update('items', entity.$id, { $set: { name: 'Updated Name' } })
 
-    expect(updated!.createdAt.getTime()).toBe(createdAt.getTime())
-    expect(updated!.updatedAt.getTime()).toBeGreaterThan(createdAt.getTime())
+      expect(updated!.createdAt.getTime()).toBe(createdAt.getTime())
+      expect(updated!.updatedAt.getTime()).toBeGreaterThan(createdAt.getTime())
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('should preserve entity ID through updates', async () => {

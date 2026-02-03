@@ -13,7 +13,7 @@ import type {
   WriteResult,
   RmdirOptions,
 } from '../types/storage'
-import { validateRange, InvalidRangeError } from './validation'
+import { validateRange } from './validation'
 
 /**
  * Error thrown when a file is not found

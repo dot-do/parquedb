@@ -22,10 +22,6 @@ function createTestEvent(overrides: Partial<Event> = {}): Event {
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -231,6 +227,14 @@ describe('EventWriter', () => {
   })
 
   describe('timed flushing', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
     it('flushes periodically when timer is started', async () => {
       const fastWriter = new EventWriter({ flushIntervalMs: 50 })
       const handler = vi.fn()
@@ -240,7 +244,7 @@ describe('EventWriter', () => {
       await fastWriter.write(createTestEvent())
       expect(handler).not.toHaveBeenCalled()
 
-      await sleep(100)
+      await vi.advanceTimersByTimeAsync(100)
       expect(handler).toHaveBeenCalledTimes(1)
 
       fastWriter.stopTimer()
@@ -259,7 +263,7 @@ describe('EventWriter', () => {
 
       // Timer should be stopped, no more flushes
       await fastWriter.write(createTestEvent())
-      await sleep(100)
+      await vi.advanceTimersByTimeAsync(100)
       expect(handler).toHaveBeenCalledTimes(1) // still only 1
     })
   })
@@ -271,22 +275,31 @@ describe('EventWriter', () => {
     })
 
     it('createTimedEventWriter starts timer automatically', async () => {
-      const fastWriter = createTimedEventWriter({ flushIntervalMs: 50 })
-      const handler = vi.fn()
-      fastWriter.onFlush(handler)
+      vi.useFakeTimers()
+      try {
+        const fastWriter = createTimedEventWriter({ flushIntervalMs: 50 })
+        const handler = vi.fn()
+        fastWriter.onFlush(handler)
 
-      await fastWriter.write(createTestEvent())
-      await sleep(100)
+        await fastWriter.write(createTestEvent())
+        await vi.advanceTimersByTimeAsync(100)
 
-      expect(handler).toHaveBeenCalled()
-      fastWriter.stopTimer()
+        expect(handler).toHaveBeenCalled()
+        fastWriter.stopTimer()
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 
   describe('concurrent flush handling', () => {
     it('waits for in-progress flush before starting new one', async () => {
+      let resolveFlush: () => void
+      const flushPromise = new Promise<void>((resolve) => {
+        resolveFlush = resolve
+      })
       const slowHandler = vi.fn(async () => {
-        await sleep(50)
+        await flushPromise
       })
       writer.onFlush(slowHandler)
 
@@ -296,6 +309,8 @@ describe('EventWriter', () => {
       const flush1 = writer.flush()
       const flush2 = writer.flush()
 
+      // Resolve the slow handler to allow flushes to complete
+      resolveFlush!()
       await Promise.all([flush1, flush2])
 
       // Should only flush once since buffer is empty after first flush

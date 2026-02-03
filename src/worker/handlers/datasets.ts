@@ -6,7 +6,7 @@
 
 import { buildResponse, buildErrorResponse, type ExtendedError } from '../responses'
 import { parseQueryFilter, parseQueryOptions } from '../routing'
-import { DATASETS, type DatasetConfig } from '../datasets'
+import { DATASETS } from '../datasets'
 import type { EntityRecord } from '../../types/entity'
 import type { HandlerContext } from './types'
 

@@ -301,9 +301,9 @@ describe('FsBackend', () => {
 
       const stat1 = await backend.stat('changing.txt')
 
-      // Wait a bit to ensure mtime changes
-      await new Promise(resolve => setTimeout(resolve, 50))
-      await writeFile(filePath, 'modified')
+      // Write different content to the file (etag is based on content hash + size + mtime)
+      // Using different content length ensures the etag will be different
+      await writeFile(filePath, 'modified content with different length')
 
       const stat2 = await backend.stat('changing.txt')
 
@@ -913,11 +913,10 @@ describe('FsBackend', () => {
       await writeFile(join(tempDir, 'file.txt'), 'initial')
       const stat1 = await backend.stat('file.txt')
 
-      await new Promise(resolve => setTimeout(resolve, 50))
-
+      // Write different content to ensure etag changes
       const result = await backend.writeConditional(
         'file.txt',
-        new TextEncoder().encode('updated'),
+        new TextEncoder().encode('updated content with different length'),
         stat1!.etag!
       )
 

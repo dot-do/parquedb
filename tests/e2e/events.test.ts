@@ -5,7 +5,7 @@
  * Validates that event history and temporal queries work correctly through service bindings.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   getTestClient,
   cleanupTestData,
@@ -18,11 +18,14 @@ describe('Event Sourcing via RPC', () => {
   let client: ParqueDBClient
 
   beforeEach(async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
     await cleanupTestData()
     client = getTestClient()
   })
 
   afterEach(async () => {
+    vi.useRealTimers()
     await cleanupTestData()
   })
 
@@ -167,14 +170,14 @@ describe('Event Sourcing via RPC', () => {
       })
 
       const t1 = new Date()
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      vi.advanceTimersByTime(50)
 
       await client.Posts.update(post.$id, {
         $set: { title: 'V2' },
       })
 
       const t2 = new Date()
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      vi.advanceTimersByTime(50)
 
       await client.Posts.update(post.$id, {
         $set: { title: 'V3' },
@@ -197,7 +200,7 @@ describe('Event Sourcing via RPC', () => {
 
     it('handles asOf before entity creation', async () => {
       const beforeCreation = new Date()
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      vi.advanceTimersByTime(50)
 
       const post = await client.Posts.create({
         $type: 'Post',
@@ -224,7 +227,7 @@ describe('Event Sourcing via RPC', () => {
       })
 
       const afterCreate = new Date()
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      vi.advanceTimersByTime(50)
 
       await client.Posts.delete(post.$id)
 
@@ -268,7 +271,7 @@ describe('Event Sourcing via RPC', () => {
       })
 
       const t1 = new Date()
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      vi.advanceTimersByTime(50)
 
       // Update both posts
       await client.Posts.update(post1.$id, {
@@ -311,12 +314,12 @@ describe('Event Sourcing via RPC', () => {
       })
 
       const afterCreate = new Date()
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      vi.advanceTimersByTime(50)
 
       await client.Posts.update(post.$id, { $set: { title: 'V2' } })
 
       const afterFirstUpdate = new Date()
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      vi.advanceTimersByTime(50)
 
       await client.Posts.update(post.$id, { $set: { title: 'V3' } })
       await client.Posts.update(post.$id, { $set: { title: 'V4' } })

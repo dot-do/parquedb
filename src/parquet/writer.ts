@@ -16,14 +16,14 @@
  */
 
 import { logger } from '../utils/logger'
-import type { StorageBackend, WriteResult } from '../types/storage'
+import type { StorageBackend } from '../types/storage'
 import type {
   ParquetSchema,
   ParquetWriterOptions,
   ParquetWriteResult,
   CompressionCodec,
 } from './types'
-import { encodeVariant } from './variant'
+import { encodeVariant as _encodeVariant } from './variant'
 import { writeCompressors, compressors } from './compression'
 import {
   DEFAULT_ROW_GROUP_SIZE,
@@ -73,7 +73,8 @@ export class ParquetWriter {
   private compression: CompressionCodec
   private rowGroupSize: number
   private useDictionary: boolean
-  private pageSize: number
+  /** @internal Reserved for future page size optimization */
+  public _pageSize: number
   private enableStatistics: boolean
   private defaultMetadata: Record<string, string>
 
@@ -91,7 +92,7 @@ export class ParquetWriter {
     this.compression = COMPRESSION_MAP[options.compression ?? 'lz4'] ?? 'LZ4'
     this.rowGroupSize = options.rowGroupSize ?? DEFAULT_ROW_GROUP_SIZE
     this.useDictionary = options.dictionary ?? true
-    this.pageSize = options.pageSize ?? DEFAULT_PARQUET_PAGE_SIZE
+    this._pageSize = options.pageSize ?? DEFAULT_PARQUET_PAGE_SIZE
     this.enableStatistics = options.statistics ?? true
     this.defaultMetadata = options.metadata ?? {}
   }

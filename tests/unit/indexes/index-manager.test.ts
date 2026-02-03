@@ -254,11 +254,178 @@ describe('IndexManager', () => {
       )
     })
 
-    it('ftsSearch throws not implemented error', async () => {
+    it('ftsSearch returns empty array when no FTS index exists', async () => {
       const manager = new IndexManager(storage)
-      await expect(manager.ftsSearch('test', 'search query')).rejects.toThrow(
-        /Method not implemented: ftsSearch/
+      const results = await manager.ftsSearch('test', 'search query')
+      expect(results).toEqual([])
+    })
+
+    it('vectorSearch returns empty result when no vector index exists', async () => {
+      const manager = new IndexManager(storage)
+      const result = await manager.vectorSearch('test', 'nonexistent', [0.1, 0.2], 5)
+      expect(result.docIds).toEqual([])
+      expect(result.rowGroups).toEqual([])
+    })
+  })
+
+  describe('FTSIndex wiring', () => {
+    it('creates and uses FTSIndex when ftsSearch is called', async () => {
+      const manager = new IndexManager(storage)
+
+      // Create an FTS index
+      const definition: IndexDefinition = {
+        name: 'content_fts',
+        type: 'fts',
+        fields: [{ path: 'content' }],
+      }
+
+      await manager.createIndex('articles', definition)
+
+      // Add a document via onDocumentAdded
+      await manager.onDocumentAdded(
+        'articles',
+        'doc1',
+        { content: 'hello world test document' },
+        0,
+        0
       )
+
+      // Search should now return results
+      const results = await manager.ftsSearch('articles', 'hello')
+      expect(results.length).toBeGreaterThan(0)
+      expect(results[0]?.docId).toBe('doc1')
+    })
+
+    it('removes documents from FTS index', async () => {
+      const manager = new IndexManager(storage)
+
+      const definition: IndexDefinition = {
+        name: 'content_fts',
+        type: 'fts',
+        fields: [{ path: 'content' }],
+      }
+
+      await manager.createIndex('articles', definition)
+
+      // Add a document
+      await manager.onDocumentAdded(
+        'articles',
+        'doc1',
+        { content: 'unique searchable text' },
+        0,
+        0
+      )
+
+      // Verify it's searchable
+      let results = await manager.ftsSearch('articles', 'unique')
+      expect(results.length).toBe(1)
+
+      // Remove the document
+      await manager.onDocumentRemoved(
+        'articles',
+        'doc1',
+        { content: 'unique searchable text' }
+      )
+
+      // Should no longer be found
+      results = await manager.ftsSearch('articles', 'unique')
+      expect(results.length).toBe(0)
+    })
+  })
+
+  describe('VectorIndex wiring', () => {
+    it('creates and uses VectorIndex when vectorSearch is called', async () => {
+      const manager = new IndexManager(storage)
+
+      // Create a vector index
+      const definition: IndexDefinition = {
+        name: 'embedding_idx',
+        type: 'vector',
+        fields: [{ path: 'embedding' }],
+        vectorOptions: {
+          dimensions: 3,
+          metric: 'cosine',
+        },
+      }
+
+      await manager.createIndex('documents', definition)
+
+      // Add documents via onDocumentAdded
+      await manager.onDocumentAdded(
+        'documents',
+        'doc1',
+        { embedding: [1.0, 0.0, 0.0] },
+        0,
+        0
+      )
+      await manager.onDocumentAdded(
+        'documents',
+        'doc2',
+        { embedding: [0.0, 1.0, 0.0] },
+        0,
+        1
+      )
+
+      // Search for similar vectors
+      const result = await manager.vectorSearch(
+        'documents',
+        'embedding_idx',
+        [1.0, 0.0, 0.0],
+        5
+      )
+
+      expect(result.docIds.length).toBeGreaterThan(0)
+      expect(result.docIds[0]).toBe('doc1') // Most similar to query
+    })
+
+    it('removes documents from vector index', async () => {
+      const manager = new IndexManager(storage)
+
+      const definition: IndexDefinition = {
+        name: 'embedding_idx',
+        type: 'vector',
+        fields: [{ path: 'embedding' }],
+        vectorOptions: {
+          dimensions: 3,
+          metric: 'cosine',
+        },
+      }
+
+      await manager.createIndex('documents', definition)
+
+      // Add a document
+      await manager.onDocumentAdded(
+        'documents',
+        'doc1',
+        { embedding: [1.0, 0.0, 0.0] },
+        0,
+        0
+      )
+
+      // Verify it's searchable
+      let result = await manager.vectorSearch(
+        'documents',
+        'embedding_idx',
+        [1.0, 0.0, 0.0],
+        5
+      )
+      expect(result.docIds).toContain('doc1')
+
+      // Remove the document
+      await manager.onDocumentRemoved(
+        'documents',
+        'doc1',
+        { embedding: [1.0, 0.0, 0.0] }
+      )
+
+      // Should no longer be found
+      result = await manager.vectorSearch(
+        'documents',
+        'embedding_idx',
+        [1.0, 0.0, 0.0],
+        5
+      )
+      expect(result.docIds).not.toContain('doc1')
     })
   })
 })

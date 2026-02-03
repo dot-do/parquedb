@@ -143,18 +143,21 @@ export interface EntityRecord {
   data: Record<string, unknown>
 }
 
-/** Full entity as returned by API (includes relationships) */
-export interface Entity<TData = Record<string, unknown>> extends EntityRef, AuditFields {
-  /** Data fields merged to root */
+/**
+ * Full entity as returned by API (includes relationships)
+ *
+ * The generic parameter TData allows typing of the entity's data fields.
+ * When TData is specified (e.g., Entity<Post>), the entity's data properties
+ * are typed according to TData.
+ *
+ * @example
+ * interface Post { title: string; content: string; views: number }
+ * const post: Entity<Post> = await db.Posts.get('post-1')
+ * console.log(post.title) // string
+ */
+export type Entity<TData = Record<string, unknown>> = EntityRef & AuditFields & TData & {
+  /** Data fields and relationships - allows additional properties */
   [key: string]: unknown
-
-  // Note: Outbound predicates and inbound reverses are dynamically added
-  // based on schema and relationship queries
-}
-
-/** Entity with typed data fields */
-export type TypedEntity<T> = EntityRef & AuditFields & T & {
-  [predicate: string]: RelLink | RelSet | unknown
 }
 
 // =============================================================================

@@ -5,7 +5,7 @@
  * Uses real FsBackend storage - no mocks.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { rm, mkdir } from 'node:fs/promises'
@@ -16,8 +16,11 @@ import type { EntityId, StorageBackend } from '../../src/types'
 // Helper Functions
 // =============================================================================
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+/**
+ * Advance fake timers by specified milliseconds (use only with vi.useFakeTimers())
+ */
+function advanceTime(ms: number): void {
+  vi.advanceTimersByTime(ms)
 }
 
 function generateId(): string {
@@ -309,6 +312,8 @@ describe('Event Replay Integration', () => {
   let db: EventSourcedDB
 
   beforeEach(async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
     testDir = join(tmpdir(), `parquedb-event-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
     await mkdir(testDir, { recursive: true })
     backend = new FsBackend(testDir)
@@ -316,6 +321,7 @@ describe('Event Replay Integration', () => {
   })
 
   afterEach(async () => {
+    vi.useRealTimers()
     try {
       await rm(testDir, { recursive: true, force: true })
     } catch {
@@ -577,7 +583,7 @@ describe('Event Replay Integration', () => {
       // Simulate long-running updates with delays
       for (let i = 0; i < 5; i++) {
         await db.update('posts', id, { $set: { title: `Update ${i}` } })
-        await sleep(10)
+        advanceTime(10)
       }
 
       // All events should be recorded with correct timestamps

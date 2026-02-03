@@ -8,7 +8,7 @@
  * Uses real MemoryBackend for storage instead of mocks.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { ParqueDB } from '../../src/ParqueDB'
 import { MemoryBackend } from '../../src/storage/MemoryBackend'
 import type {
@@ -713,17 +713,22 @@ describe('Update Operations', () => {
 
       const originalUpdatedAt = entity.updatedAt
 
-      // Wait a bit to ensure timestamp differs
-      await new Promise(resolve => setTimeout(resolve, 10))
+      vi.useFakeTimers()
+      try {
+        // Advance time deterministically
+        vi.advanceTimersByTime(10)
 
-      const updated = await db.update('posts', entity.$id as string, {
-        $set: { title: 'Updated' },
-      })
+        const updated = await db.update('posts', entity.$id as string, {
+          $set: { title: 'Updated' },
+        })
 
-      expect(updated).not.toBeNull()
-      expect(updated!.updatedAt.getTime()).toBeGreaterThan(
-        originalUpdatedAt.getTime()
-      )
+        expect(updated).not.toBeNull()
+        expect(updated!.updatedAt.getTime()).toBeGreaterThan(
+          originalUpdatedAt.getTime()
+        )
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 })

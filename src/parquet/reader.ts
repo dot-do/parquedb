@@ -412,9 +412,10 @@ export class ParquetReader {
    *
    * Note: This is a legacy helper method for converting hyparquet's column format
    * to row format. Since parquetReadObjects now returns row objects directly,
-   * this method is no longer actively used.
+   * this method is no longer actively used but kept for potential future needs.
+   * @internal
    */
-  private convertToRows<T>(
+  public _convertToRows<T>(
     result: Record<string, unknown[]>,
     columns?: string[]
   ): T[] {

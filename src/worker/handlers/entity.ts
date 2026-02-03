@@ -11,7 +11,7 @@ import {
   markTiming,
   measureTiming,
 } from '../responses'
-import { DATASETS } from '../datasets'
+import { DATASETS as _DATASETS } from '../datasets'
 import { handleFileNotFoundError } from './datasets'
 import type { EntityRecord } from '../../types/entity'
 import type { HandlerContext } from './types'

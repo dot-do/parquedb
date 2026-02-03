@@ -16,7 +16,6 @@ import type {
   IndexStats,
   VectorSearchOptions,
   VectorSearchResult,
-  VectorIndexEntry,
   VectorMetric,
 } from '../types'
 import { getDistanceFunction, distanceToScore } from './distance'
@@ -35,7 +34,8 @@ const DEFAULT_M = DEFAULT_HNSW_M // Number of connections per layer
 const DEFAULT_EF_CONSTRUCTION = DEFAULT_HNSW_EF_CONSTRUCTION // Size of dynamic candidate list during construction
 const DEFAULT_EF_SEARCH = DEFAULT_HNSW_EF_SEARCH // Size of dynamic candidate list during search
 const DEFAULT_METRIC: VectorMetric = 'cosine'
-const ML = 1 / Math.log(DEFAULT_M) // Level generation factor
+/** Level generation factor for HNSW algorithm - reserved for future use */
+export const _ML = 1 / Math.log(DEFAULT_M)
 
 // File format magic and version
 const MAGIC = new Uint8Array([0x50, 0x51, 0x56, 0x49]) // "PQVI"
@@ -1011,8 +1011,9 @@ export class VectorIndex {
       )
     }
 
-    const _m = view.getUint32(offset, false)
+    const __m = view.getUint32(offset, false)
     offset += 4
+    void __m // Reserved field for future use
 
     const nodeCount = view.getUint32(offset, false)
     offset += 4
@@ -1024,8 +1025,9 @@ export class VectorIndex {
     this.maxLayerInGraph = view.getInt8(offset)
     offset += 1
 
-    const _metricCode = view.getUint8(offset)
+    const __metricCode = view.getUint8(offset)
     offset += 1
+    void __metricCode // Reserved field for future use
 
     // Read nodes
     for (let i = 0; i < nodeCount; i++) {

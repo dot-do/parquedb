@@ -9,7 +9,7 @@
  * See docs/architecture/ENTITY_STORAGE.md for full documentation.
  */
 
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import { ParqueDB } from '../../src/ParqueDB'
 import { FsBackend } from '../../src/storage/FsBackend'
 import { MemoryBackend } from '../../src/storage/MemoryBackend'
@@ -159,31 +159,36 @@ describe('Node.js Storage Architecture (globalEntityStore)', () => {
     })
 
     it('should support time-travel queries', async () => {
-      const entity = await db.create('posts', {
-        $type: 'Post',
-        name: 'Time Travel Post',
-        title: 'Original Title',
-        content: 'Original Content',
-      })
+      vi.useFakeTimers()
+      try {
+        const entity = await db.create('posts', {
+          $type: 'Post',
+          name: 'Time Travel Post',
+          title: 'Original Title',
+          content: 'Original Content',
+        })
 
-      const createdAt = new Date()
+        const createdAt = new Date()
 
-      // Wait a bit to ensure timestamps differ
-      await new Promise(resolve => setTimeout(resolve, 10))
+        // Advance time deterministically
+        vi.advanceTimersByTime(10)
 
-      // Update the entity
-      await db.update('posts', entity.$id, {
-        $set: { title: 'Updated Title' },
-      })
+        // Update the entity
+        await db.update('posts', entity.$id, {
+          $set: { title: 'Updated Title' },
+        })
 
-      // Query at creation time should show original state
-      const historicalEntity = await db.get('posts', entity.$id, {
-        asOf: createdAt,
-      })
+        // Query at creation time should show original state
+        const historicalEntity = await db.get('posts', entity.$id, {
+          asOf: createdAt,
+        })
 
-      // Note: Time travel may not be fully implemented, test documents expected behavior
-      if (historicalEntity) {
-        expect(historicalEntity.title).toBe('Original Title')
+        // Note: Time travel may not be fully implemented, test documents expected behavior
+        if (historicalEntity) {
+          expect(historicalEntity.title).toBe('Original Title')
+        }
+      } finally {
+        vi.useRealTimers()
       }
     })
   })

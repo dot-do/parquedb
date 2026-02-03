@@ -8,14 +8,11 @@
 import type {
   Entity,
   EntityId,
-  DeleteOptions,
 } from '../types'
 import {
   MutationContext,
   DeleteResult,
   MutationEvent,
-  MutationOperationError,
-  MutationErrorCodes,
 } from './types'
 import { VersionConflictError } from './update'
 import { entityTarget } from '../types/entity'

@@ -5,7 +5,7 @@
  * Uses real FsBackend with temp directories for actual event sourcing and time-travel replay.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { ParqueDB } from '../../src/ParqueDB'
 import { FsBackend } from '../../src/storage/FsBackend'
 import type {
@@ -21,8 +21,11 @@ import { join } from 'node:path'
 // Helper Functions
 // =============================================================================
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+/**
+ * Advance fake timers by specified milliseconds (use only with vi.useFakeTimers())
+ */
+function advanceTime(ms: number): void {
+  vi.advanceTimersByTime(ms)
 }
 
 // =============================================================================
@@ -35,6 +38,9 @@ describe('Time Travel Queries', () => {
   let tempDir: string
 
   beforeEach(async () => {
+    // Use fake timers for deterministic time-based tests
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
     // Create a unique temp directory for each test
     tempDir = await mkdtemp(join(tmpdir(), 'parquedb-time-travel-'))
     storage = new FsBackend(tempDir)
@@ -42,6 +48,7 @@ describe('Time Travel Queries', () => {
   })
 
   afterEach(async () => {
+    vi.useRealTimers()
     // Clean up the temp directory
     try {
       await rm(tempDir, { recursive: true, force: true })
@@ -65,7 +72,7 @@ describe('Time Travel Queries', () => {
       })
 
       const createdAt = new Date()
-      await sleep(10) // Ensure time difference
+      advanceTime(10) // Ensure time difference
 
       // Update entity
       await db.update('posts', entity.$id as string, {
@@ -73,7 +80,7 @@ describe('Time Travel Queries', () => {
       })
 
       const afterUpdate = new Date() // Capture immediately after first update
-      await sleep(10) // Ensure time difference before final update
+      advanceTime(10) // Ensure time difference before final update
 
       // Update again
       await db.update('posts', entity.$id as string, {
@@ -106,7 +113,7 @@ describe('Time Travel Queries', () => {
       })
 
       const t1 = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, {
         $set: { title: 'V2' },
@@ -114,7 +121,7 @@ describe('Time Travel Queries', () => {
       })
 
       const t2 = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, {
         $set: { title: 'V3' },
@@ -122,7 +129,7 @@ describe('Time Travel Queries', () => {
       })
 
       const t3 = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, {
         $set: { title: 'V4' },
@@ -146,7 +153,7 @@ describe('Time Travel Queries', () => {
 
     it('handles entity that did not exist yet', async () => {
       const beforeCreation = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       const entity = await db.create('posts', {
         $type: 'Post',
@@ -172,7 +179,7 @@ describe('Time Travel Queries', () => {
       })
 
       const afterCreate = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.delete('posts', entity.$id as string)
 
@@ -203,7 +210,7 @@ describe('Time Travel Queries', () => {
       })
 
       const t1 = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity1.$id as string, {
         $set: { status: 'published' },
@@ -235,13 +242,13 @@ describe('Time Travel Queries', () => {
       })
 
       const t1 = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('users', author.$id as string, {
         $set: { name: 'Updated Author Name' },
       })
 
-      await sleep(10)
+      advanceTime(10)
 
       const post = await db.create('posts', {
         $type: 'Post',
@@ -305,13 +312,13 @@ describe('Time Travel Queries', () => {
       })
 
       const t1 = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, { $set: { title: 'V2' } })
       await db.update('posts', entity.$id as string, { $set: { title: 'V3' } })
 
       const t2 = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, { $set: { title: 'V4' } })
 
@@ -451,7 +458,7 @@ describe('Time Travel Queries', () => {
       })
 
       const t1 = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, {
         $set: { title: 'New Title', content: 'New content' },
@@ -479,7 +486,7 @@ describe('Time Travel Queries', () => {
       })
 
       const t1 = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, {
         $set: { title: 'Updated Title', newField: 'added' },
@@ -504,7 +511,7 @@ describe('Time Travel Queries', () => {
       })
 
       const t1 = new Date()
-      await sleep(10)
+      advanceTime(10)
       const t2 = new Date()
 
       const diff = await db.diff(entity.$id as EntityId, t1, t2)
@@ -524,7 +531,7 @@ describe('Time Travel Queries', () => {
       })
 
       const t1 = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, {
         $set: { 'metadata.views': 100 },
@@ -549,7 +556,7 @@ describe('Time Travel Queries', () => {
       })
 
       const t1 = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, {
         $push: { tags: 'new-tag' },
@@ -579,7 +586,7 @@ describe('Time Travel Queries', () => {
       })
 
       const targetTime = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, {
         $set: { title: 'Bad Update', content: 'Unwanted content' },
@@ -605,7 +612,7 @@ describe('Time Travel Queries', () => {
       })
 
       const targetTime = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, {
         $set: { title: 'Modified' },
@@ -630,7 +637,7 @@ describe('Time Travel Queries', () => {
       })
 
       const targetTime = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, {
         $set: { title: 'Modified' },
@@ -659,7 +666,7 @@ describe('Time Travel Queries', () => {
 
     it('throws error if entity did not exist at target time', async () => {
       const beforeCreation = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       const entity = await db.create('posts', {
         $type: 'Post',
@@ -682,7 +689,7 @@ describe('Time Travel Queries', () => {
       })
 
       const targetTime = new Date()
-      await sleep(10)
+      advanceTime(10)
 
       await db.update('posts', entity.$id as string, {
         $set: { title: 'Modified' },

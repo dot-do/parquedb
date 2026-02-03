@@ -12,7 +12,7 @@
  * - Bitwise: $bit
  */
 
-import type { UpdateInput, Filter, EntityId } from '../types'
+import type { UpdateInput, EntityId } from '../types'
 import type { ApplyOperatorsOptions, ApplyOperatorsResult, RelationshipOperation } from './types'
 import { compareValues, deepEqual } from '../utils'
 
@@ -568,50 +568,74 @@ function isFilterCondition(condition: unknown): boolean {
 function matchesPullCondition(item: unknown, condition: Record<string, unknown>): boolean {
   const keys = Object.keys(condition)
 
-  // Check if it's a comparison operator condition ($lt, $gt, etc.)
+  // Check if it's a comparison operator condition ($lt, $gt, etc.) directly on item
   if (keys.some(k => k.startsWith('$'))) {
-    for (const [op, opValue] of Object.entries(condition)) {
-      switch (op) {
-        case '$lt':
-          if (typeof item === 'number' && item < (opValue as number)) return true
-          break
-        case '$lte':
-          if (typeof item === 'number' && item <= (opValue as number)) return true
-          break
-        case '$gt':
-          if (typeof item === 'number' && item > (opValue as number)) return true
-          break
-        case '$gte':
-          if (typeof item === 'number' && item >= (opValue as number)) return true
-          break
-        case '$eq':
-          if (deepEqual(item, opValue)) return true
-          break
-        case '$ne':
-          if (!deepEqual(item, opValue)) return true
-          break
-        case '$in':
-          if (Array.isArray(opValue) && opValue.some(v => deepEqual(item, v))) return true
-          break
-        case '$nin':
-          if (Array.isArray(opValue) && !opValue.some(v => deepEqual(item, v))) return true
-          break
-      }
-    }
-    return false
+    return matchesComparisonOperators(item, condition)
   }
 
-  // It's a field match condition (e.g., { spam: true })
+  // It's a field match condition (e.g., { spam: true } or { value: { $gte: 2 } })
   if (item && typeof item === 'object') {
     const itemObj = item as Record<string, unknown>
+    // All field conditions must match (AND semantics)
     for (const [field, fieldValue] of Object.entries(condition)) {
-      if (deepEqual(itemObj[field], fieldValue)) {
-        return true
+      const itemFieldValue = itemObj[field]
+
+      // If fieldValue is an object with operators, evaluate them against the item's field value
+      if (fieldValue && typeof fieldValue === 'object' && !Array.isArray(fieldValue)) {
+        const fieldKeys = Object.keys(fieldValue as Record<string, unknown>)
+        if (fieldKeys.some(k => k.startsWith('$'))) {
+          // It's a nested operator condition like { value: { $gte: 2 } }
+          if (!matchesComparisonOperators(itemFieldValue, fieldValue as Record<string, unknown>)) {
+            return false
+          }
+          continue
+        }
+      }
+
+      // Direct value comparison
+      if (!deepEqual(itemFieldValue, fieldValue)) {
+        return false
       }
     }
+    return true
   }
 
   return false
+}
+
+/**
+ * Match comparison operators against a value
+ */
+function matchesComparisonOperators(value: unknown, operators: Record<string, unknown>): boolean {
+  for (const [op, opValue] of Object.entries(operators)) {
+    switch (op) {
+      case '$lt':
+        if (typeof value !== 'number' || value >= (opValue as number)) return false
+        break
+      case '$lte':
+        if (typeof value !== 'number' || value > (opValue as number)) return false
+        break
+      case '$gt':
+        if (typeof value !== 'number' || value <= (opValue as number)) return false
+        break
+      case '$gte':
+        if (typeof value !== 'number' || value < (opValue as number)) return false
+        break
+      case '$eq':
+        if (!deepEqual(value, opValue)) return false
+        break
+      case '$ne':
+        if (deepEqual(value, opValue)) return false
+        break
+      case '$in':
+        if (!Array.isArray(opValue) || !opValue.some(v => deepEqual(value, v))) return false
+        break
+      case '$nin':
+        if (Array.isArray(opValue) && opValue.some(v => deepEqual(value, v))) return false
+        break
+    }
+  }
+  return true
 }
 
 // =============================================================================

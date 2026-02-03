@@ -1121,7 +1121,8 @@ try {
 ### Entity
 
 ```typescript
-interface Entity<TData = Record<string, unknown>> extends EntityRef, AuditFields {
+// Entity type properly uses TData for typed data fields
+type Entity<TData = Record<string, unknown>> = EntityRef & AuditFields & TData & {
   [key: string]: unknown
 }
 

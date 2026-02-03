@@ -17,7 +17,7 @@
 import type { EventSegment } from './types'
 import type { SegmentStorage } from './segment'
 import type { ManifestManager } from './manifest'
-import { logger } from '../utils/logger'
+import { logger as _logger } from '../utils/logger'
 
 // =============================================================================
 // Types

@@ -19,7 +19,7 @@ import { isRelationshipTarget, parseEntityTarget, parseRelTarget } from '../type
 import type { EventBatch, EventSegment, CompactionConfig } from './types'
 import type { SegmentStorage } from './segment'
 import type { ManifestManager } from './manifest'
-import { EventReplayer, BatchEventSource } from './replay'
+import { EventReplayer as _EventReplayer, BatchEventSource as _BatchEventSource } from './replay'
 
 // =============================================================================
 // Types
@@ -403,7 +403,7 @@ export class EventCompactor {
    * Check if compaction is needed
    */
   async needsCompaction(): Promise<{ needed: boolean; reason?: string }> {
-    const manifest = await this.options.manifest.load()
+    await this.options.manifest.load() // Ensure manifest is loaded
     const summary = await this.options.manifest.getSummary()
 
     // Check minimum events threshold

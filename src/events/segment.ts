@@ -9,7 +9,7 @@
  */
 
 import type { Event } from '../types/entity'
-import type { EventBatch, EventSegment, EventManifest } from './types'
+import type { EventBatch, EventSegment } from './types'
 import { tryParseJson, logger } from '../utils'
 
 // =============================================================================

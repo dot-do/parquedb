@@ -9,7 +9,6 @@ import type {
   Entity,
   EntityId,
   UpdateInput,
-  UpdateOptions,
   Schema,
 } from '../types'
 import {

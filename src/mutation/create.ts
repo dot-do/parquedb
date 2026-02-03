@@ -9,7 +9,6 @@ import type {
   Entity,
   EntityId,
   CreateInput,
-  CreateOptions,
   Schema,
 } from '../types'
 import {

@@ -77,6 +77,12 @@ export {
 
 export {
   UNSAFE_PATH_SEGMENTS,
+  DANGEROUS_KEYS,
   isUnsafePath,
+  isDangerousKey,
   validatePath,
+  validateKey,
+  validateObjectKeys,
+  validateObjectKeysDeep,
+  sanitizeObject,
 } from './path-safety'

@@ -7,8 +7,8 @@
  */
 
 import type { Filter } from '../types/filter'
-import { compareValues, createSafeRegex } from '../utils'
-import { matchesFilter, createPredicate as createFilterPredicate } from './filter'
+import { compareValues } from '../utils'
+import { createPredicate as createFilterPredicate } from './filter'
 
 // =============================================================================
 // Statistics Types

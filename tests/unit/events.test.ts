@@ -5,7 +5,7 @@
  * Uses real FsBackend with temp directories for actual event persistence.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { ParqueDB } from '../../src/ParqueDB'
 import { FsBackend } from '../../src/storage/FsBackend'
 import type {
@@ -22,8 +22,11 @@ import { join } from 'node:path'
 // Helper Functions
 // =============================================================================
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+/**
+ * Advance fake timers by specified milliseconds (use only with vi.useFakeTimers())
+ */
+function advanceTime(ms: number): void {
+  vi.advanceTimersByTime(ms)
 }
 
 // =============================================================================
@@ -36,6 +39,8 @@ describe('Event Log', () => {
   let tempDir: string
 
   beforeEach(async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2024-01-01T12:00:00Z'))
     // Create a unique temp directory for each test
     tempDir = await mkdtemp(join(tmpdir(), 'parquedb-events-'))
     storage = new FsBackend(tempDir)
@@ -43,6 +48,7 @@ describe('Event Log', () => {
   })
 
   afterEach(async () => {
+    vi.useRealTimers()
     // Clean up the temp directory
     try {
       await rm(tempDir, { recursive: true, force: true })
@@ -481,7 +487,7 @@ describe('Event Log', () => {
       })
 
       const midTime = new Date()
-      await sleep(10) // Ensure time difference between events
+      advanceTime(10) // Ensure time difference between events
 
       await db.create('posts', {
         $type: 'Post',

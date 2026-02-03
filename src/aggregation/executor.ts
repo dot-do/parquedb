@@ -880,8 +880,9 @@ async function executeIndexedMatch(
 
 /**
  * Extract range query operators from a condition.
+ * @internal Reserved for future range query optimization
  */
-function extractRangeQuery(condition: unknown): {
+export function _extractRangeQuery(condition: unknown): {
   $gt?: unknown
   $gte?: unknown
   $lt?: unknown

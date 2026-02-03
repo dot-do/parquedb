@@ -5,7 +5,7 @@
  * Uses S3-compatible API with credentials from .env file.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import { R2Backend, R2OperationError, R2NotFoundError } from '../../src/R2Backend'
 import type { R2Bucket, R2Object, R2ObjectBody, R2Objects, R2MultipartUpload, R2UploadedPart, R2ListOptions, R2GetOptions, R2PutOptions, R2MultipartOptions, R2HTTPMetadata } from '../types/r2'
 import { createHmac, createHash } from 'crypto'
@@ -1323,6 +1323,14 @@ function createMockBucket() {
 }
 
 describe('R2Backend Stale Upload Cleanup (Unit Tests)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('should track active upload count', async () => {
     const { mockBucket } = createMockBucket()
     const backend = new R2Backend(mockBucket)
@@ -1356,8 +1364,8 @@ describe('R2Backend Stale Upload Cleanup (Unit Tests)', () => {
     await backend.startMultipartUpload('test/stale.bin')
     expect(backend.activeUploadCount).toBe(1)
 
-    // Wait for the upload to become stale
-    await new Promise((resolve) => setTimeout(resolve, 150))
+    // Advance time past the TTL
+    vi.advanceTimersByTime(150)
 
     // Cleanup should remove it
     const cleaned = backend.cleanupStaleUploads()
@@ -1388,8 +1396,8 @@ describe('R2Backend Stale Upload Cleanup (Unit Tests)', () => {
     await backend.startMultipartUpload('test/stale.bin')
     expect(backend.activeUploadCount).toBe(1)
 
-    // Wait for it to become stale
-    await new Promise((resolve) => setTimeout(resolve, 150))
+    // Advance time past the TTL
+    vi.advanceTimersByTime(150)
 
     // Starting a new upload should trigger cleanup of the stale one
     await backend.startMultipartUpload('test/fresh.bin')
@@ -1409,8 +1417,8 @@ describe('R2Backend Stale Upload Cleanup (Unit Tests)', () => {
     await backend.startMultipartUpload('test/stale3.bin')
     expect(backend.activeUploadCount).toBe(3)
 
-    // Wait for all to become stale
-    await new Promise((resolve) => setTimeout(resolve, 150))
+    // Advance time past the TTL
+    vi.advanceTimersByTime(150)
 
     const cleaned = backend.cleanupStaleUploads()
     expect(cleaned).toBe(3)
@@ -1425,8 +1433,8 @@ describe('R2Backend Stale Upload Cleanup (Unit Tests)', () => {
     // Start first upload (will become stale)
     await backend.startMultipartUpload('test/stale.bin')
 
-    // Wait for it to become stale
-    await new Promise((resolve) => setTimeout(resolve, 150))
+    // Advance time past the TTL
+    vi.advanceTimersByTime(150)
 
     // Start a fresh upload
     const freshUploadId = await backend.startMultipartUpload('test/fresh.bin')
@@ -1485,7 +1493,8 @@ describe('R2Backend Stale Upload Cleanup (Unit Tests)', () => {
 
     await backend.startMultipartUpload('test/stale.bin')
 
-    await new Promise((resolve) => setTimeout(resolve, 150))
+    // Advance time past the TTL
+    vi.advanceTimersByTime(150)
 
     // Should not throw even though abort fails on the server
     const cleaned = backend.cleanupStaleUploads()

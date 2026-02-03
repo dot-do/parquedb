@@ -27,8 +27,8 @@ export interface DatasetConfig {
 export const DATASETS: Record<string, DatasetConfig> = {
   imdb: {
     name: 'IMDB',
-    description: 'Internet Movie Database - 7M+ titles, ratings, cast & crew',
-    collections: ['titles', 'names', 'ratings', 'principals', 'crew'],
+    description: 'Internet Movie Database - Sample titles and names',
+    collections: ['titles', 'names'],
     source: 'https://datasets.imdbws.com/',
     prefix: 'imdb',
   },
@@ -51,13 +51,8 @@ export const DATASETS: Record<string, DatasetConfig> = {
       requiredBy: 'requiredBy',
     },
   },
-  'onet-optimized': {
-    name: 'O*NET (Optimized)',
-    description: 'O*NET with optimized single-column format for fast lookups',
-    collections: ['occupations', 'skills', 'abilities', 'knowledge'],
-    source: 'https://www.onetcenter.org/database.html',
-    prefix: 'onet-optimized',
-  },
+  // 'onet-optimized' removed: ETL produces consolidated format (data.parquet, rels.parquet)
+  // but this config expected per-collection files. Use 'onet-graph' instead which works correctly.
   unspsc: {
     name: 'UNSPSC',
     description: 'United Nations Standard Products and Services Code - Product taxonomy',
@@ -65,13 +60,7 @@ export const DATASETS: Record<string, DatasetConfig> = {
     source: 'https://www.unspsc.org/',
     prefix: 'unspsc',
   },
-  wikidata: {
-    name: 'Wikidata',
-    description: 'Structured knowledge base - Entities, properties, claims',
-    collections: ['entities', 'properties'],
-    source: 'https://www.wikidata.org/',
-    prefix: 'wikidata',
-  },
+  // 'wikidata' removed: no data uploaded to R2 yet
 }
 
 /**

@@ -25,9 +25,7 @@ import { DurableObject } from 'cloudflare:workers'
 import type {
   Entity,
   EntityId,
-  EntityRecord,
   Event,
-  EventOp,
   Namespace,
   Id,
   Relationship,
@@ -36,7 +34,7 @@ import type {
   Variant,
 } from '../types'
 import { entityTarget, relTarget, parseEntityTarget, isRelationshipTarget } from '../types'
-import type { Env, FlushConfig, DEFAULT_FLUSH_CONFIG, DO_SQLITE_SCHEMA } from '../types/worker'
+import type { Env, FlushConfig } from '../types/worker'
 import { getRandom48Bit, parseStoredData } from '../utils'
 
 // =============================================================================

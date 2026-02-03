@@ -12,7 +12,7 @@
  */
 
 import type { Event, Variant } from '../types/entity'
-import { parseEntityTarget, isRelationshipTarget, entityTarget } from '../types/entity'
+import { parseEntityTarget as _parseEntityTarget, isRelationshipTarget as _isRelationshipTarget, entityTarget } from '../types/entity'
 import type { EventBatch, ReplayResult } from './types'
 
 // =============================================================================

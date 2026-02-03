@@ -5,7 +5,7 @@
  * Validates that all CRUD operations work correctly through service bindings.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   getTestClient,
   cleanupTestData,
@@ -419,14 +419,19 @@ describe('CRUD Operations via RPC', () => {
 
       const originalUpdatedAt = post.updatedAt
 
-      // Wait a bit to ensure timestamp changes
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      vi.useFakeTimers()
+      try {
+        // Advance time deterministically
+        vi.advanceTimersByTime(10)
 
-      const updated = await client.Posts.update(post.$id, {
-        $set: { title: 'Changed' },
-      })
+        const updated = await client.Posts.update(post.$id, {
+          $set: { title: 'Changed' },
+        })
 
-      expect(updated!.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime())
+        expect(updated!.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime())
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('returns null when updating non-existent entity', async () => {
