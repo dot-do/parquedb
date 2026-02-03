@@ -120,6 +120,11 @@ const post = await db.Posts.create({
 - [Queries](./queries.md) - Query operators and patterns
 - [Updates](./updates.md) - Update operators
 
+### Tools & Integrations
+
+- [ParqueDB Studio](./studio.md) - Admin UI for viewing and editing Parquet data
+- [Payload CMS Adapter](./integrations/payload.md) - Use ParqueDB as Payload's database
+
 ### Deployment
 
 - [Cloudflare Workers](./deployment/cloudflare-workers.md) - Deploy to Cloudflare with R2 and Durable Objects

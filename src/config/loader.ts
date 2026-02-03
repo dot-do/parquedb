@@ -147,6 +147,49 @@ export function defineConfig(config: ParqueDBConfig): ParqueDBConfig {
   return config
 }
 
+/**
+ * Define a schema with type safety
+ *
+ * Use this to export your schema for reuse with DB() for full type inference.
+ *
+ * @example
+ * ```typescript
+ * // parquedb.config.ts
+ * import { defineConfig, defineSchema } from 'parquedb/config'
+ *
+ * // Export schema for type inference
+ * export const schema = defineSchema({
+ *   User: {
+ *     email: 'string!#',
+ *     name: 'string',
+ *     age: 'int?'
+ *   },
+ *   Post: {
+ *     title: 'string!',
+ *     content: 'text',
+ *     author: '-> User'
+ *   }
+ * })
+ *
+ * export default defineConfig({
+ *   storage: { type: 'fs', path: './data' },
+ *   schema
+ * })
+ *
+ * // Then in your app:
+ * // src/db.ts
+ * import { DB } from 'parquedb'
+ * import { schema } from '../parquedb.config'
+ *
+ * // Fully typed!
+ * export const db = DB(schema)
+ * export const { sql } = db
+ * ```
+ */
+export function defineSchema<T extends DBSchema>(schema: T): T {
+  return schema
+}
+
 // Module-scoped cache
 let _config: ParqueDBConfig | null = null
 let _configLoaded = false

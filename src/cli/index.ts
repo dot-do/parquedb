@@ -26,6 +26,7 @@ import { importCommand } from './commands/import'
 import { exportCommand } from './commands/export'
 import { statsCommand } from './commands/stats'
 import { studioCommand } from './commands/studio'
+import { generateCommand } from './commands/generate'
 import { loginCommand, logoutCommand, whoamiCommand, authStatusCommand } from './commands/auth'
 
 // =============================================================================
@@ -78,6 +79,14 @@ registry.register({
   usage: 'parquedb studio [directory]',
   category: 'Admin',
   execute: studioCommand,
+})
+
+registry.register({
+  name: 'generate',
+  description: 'Generate typed exports from parquedb.config.ts',
+  usage: 'parquedb generate [--output path]',
+  category: 'Development',
+  execute: generateCommand,
 })
 
 // =============================================================================
@@ -137,6 +146,7 @@ COMMANDS:
   export <namespace> <file>     Export data to JSON/NDJSON/CSV file
   stats [namespace]             Show database statistics
   studio [directory]            Launch ParqueDB Studio (admin UI)
+  generate [--output path]      Generate typed exports from config
   login                         Authenticate with oauth.do
   logout                        Clear authentication tokens
   whoami                        Show current user info

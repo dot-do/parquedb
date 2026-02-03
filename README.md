@@ -64,38 +64,21 @@ npm install parquedb
 ## Quick Start
 
 ```typescript
-import { ParqueDB, MemoryBackend } from 'parquedb'
+import { DB } from 'parquedb'
 
-const db = new ParqueDB({ storage: new MemoryBackend() })
-
-// Create an entity
-const post = await db.Posts.create({
-  $type: 'Post',
-  name: 'Hello World',
-  title: 'Hello World',
-  status: 'published',
-  views: 0
+// Define your schema
+const db = DB({
+  User: { email: 'string!#', name: 'string', role: 'string' },
+  Post: { title: 'string!', content: 'text', author: '-> User' }
 })
 
-// Query with filters
-const posts = await db.Posts.find({
-  status: 'published',
-  views: { $gte: 100 }
-})
+// CRUD operations
+const user = await db.User.create({ email: 'alice@example.com', name: 'Alice' })
+const posts = await db.Post.find({ author: user.$id })
+await db.Post.update(posts[0].$id, { $set: { title: 'Updated' } })
 
-// Update with operators
-await db.Posts.update(post.$id, {
-  $set: { status: 'featured' },
-  $inc: { views: 1 }
-})
-
-// Create relationships
-await db.Posts.update(post.$id, {
-  $link: { author: 'users/nathan', categories: ['categories/tech', 'categories/db'] }
-})
-
-// Get by ID
-const retrieved = await db.Posts.get(post.$id)
+// SQL queries
+const results = await db.sql`SELECT * FROM posts WHERE author = ${user.$id}`
 ```
 
 ## Storage Backends
@@ -123,6 +106,77 @@ const db = new ParqueDB({
   storage: new R2Backend(env.BUCKET, { prefix: 'parquedb/' })
 })
 ```
+
+## Type-Safe Configuration
+
+ParqueDB supports two approaches for full TypeScript type safety:
+
+### Option 1: Schema Export
+
+```typescript
+// parquedb.config.ts
+import { defineConfig, defineSchema } from 'parquedb/config'
+
+export const schema = defineSchema({
+  User: { email: 'string!#', name: 'string' },
+  Post: { title: 'string!', author: '-> User' }
+})
+
+export default defineConfig({ storage: 'fs', schema })
+
+// src/db.ts
+import { DB } from 'parquedb'
+import { schema } from '../parquedb.config'
+export const db = DB(schema)  // Fully typed!
+```
+
+### Option 2: Generate Types
+
+```bash
+npx parquedb generate --output src/db.generated.ts
+```
+
+This reads `parquedb.config.ts` and generates typed exports.
+
+## ParqueDB Studio
+
+Launch an admin UI for your Parquet data:
+
+```bash
+npx parquedb studio
+```
+
+Configure layouts in your schema:
+
+```typescript
+const db = DB({
+  Post: {
+    title: 'string!', content: 'text', status: 'string',
+    $layout: [['title'], 'content'],           // Field arrangement
+    $sidebar: ['status', 'createdAt'],         // Sidebar fields
+    $studio: { label: 'Blog Posts', status: { options: ['draft', 'published'] } }
+  }
+})
+```
+
+See [Studio Documentation](./docs/studio.md) for details.
+
+## Payload CMS Adapter
+
+Use ParqueDB as a database backend for [Payload CMS](https://payloadcms.com/):
+
+```typescript
+import { buildConfig } from 'payload'
+import { parquedbAdapter } from 'parquedb/payload'
+import { FsBackend } from 'parquedb'
+
+export default buildConfig({
+  db: parquedbAdapter({ storage: new FsBackend('./data') }),
+  collections: [{ slug: 'posts', fields: [{ name: 'title', type: 'text' }] }]
+})
+```
+
+Deploy to Cloudflare Workers with R2 storage. See [Payload Adapter Documentation](./docs/integrations/payload.md).
 
 ## Query Operators
 
@@ -315,12 +369,12 @@ See the [examples](./examples) folder for complete examples:
 
 ## Documentation
 
+- [Getting Started](./docs/getting-started.md)
+- [ParqueDB Studio](./docs/studio.md) - Admin UI
+- [Payload CMS Adapter](./docs/integrations/payload.md)
 - [Architecture Overview](./docs/architecture)
   - [Graph-First Architecture](./docs/architecture/GRAPH_FIRST_ARCHITECTURE.md)
-  - [Graph Edge Indexing](./docs/architecture/GRAPH_EDGE_INDEXING.md)
-  - [Graph Query Patterns](./docs/architecture/GRAPH_QUERY_PATTERNS.md)
   - [Secondary Indexes](./docs/architecture/SECONDARY_INDEXES.md)
-  - [Bloom Filter Indexes](./docs/architecture/BLOOM_FILTER_INDEXES.md)
   - [Namespace Sharded Architecture](./docs/architecture/NAMESPACE_SHARDED_ARCHITECTURE.md)
 
 ## License

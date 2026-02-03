@@ -29,6 +29,7 @@ export { db, sql, initializeDB, getDB, resetDB } from './config/auto'
 // Configuration utilities
 export {
   defineConfig,
+  defineSchema,
   detectRuntime,
   isServer,
   isWorkers,

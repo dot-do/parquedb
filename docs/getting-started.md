@@ -1,21 +1,9 @@
 ---
 title: Getting Started
-description: Installation, basic usage, and common operations with ParqueDB
+description: Quick start guide for ParqueDB using the new DB() API
 ---
 
-This guide covers installation, basic usage, and common operations with ParqueDB.
-
-## Prerequisites
-
-Before getting started, make sure you have:
-
-- **Node.js 18+** or a modern browser with ES2020 support
-- **npm** or **yarn** package manager
-- Basic familiarity with TypeScript (recommended but not required)
-
-ParqueDB also runs in:
-- **Cloudflare Workers** with R2 storage
-- **Browsers** with in-memory storage for development
+Get up and running with ParqueDB in minutes.
 
 ## Installation
 
@@ -23,86 +11,152 @@ ParqueDB also runs in:
 npm install parquedb
 ```
 
-ParqueDB has minimal dependencies:
-- `hyparquet` - Parquet file reading
-- `hyparquet-writer` - Parquet file writing
+Or with pnpm:
 
-## Creating a Database
-
-```typescript
-import { ParqueDB, MemoryBackend } from 'parquedb'
-
-const db = new ParqueDB({
-  storage: new MemoryBackend()
-})
+```bash
+pnpm add parquedb
 ```
 
-For production use, see [Storage Backends](./storage-backends.md) for other options.
+## Quick Start
 
-## Basic CRUD Operations
+ParqueDB offers two modes: flexible (schema-less) and typed (with schema).
 
-### Create
+### Flexible Mode
 
-Every entity requires `$type` and `name` fields:
+The simplest way to get started - no schema required:
 
 ```typescript
+import { db } from 'parquedb'
+
+// Create entities in any collection
 const post = await db.Posts.create({
-  $type: 'Post',
-  name: 'my-first-post',
-  title: 'My First Post',
-  content: 'Hello, world!',
+  title: 'Hello World',
+  content: 'My first post!',
   tags: ['intro', 'welcome']
 })
 
-console.log(post.$id)        // 'posts/abc123'
-console.log(post.createdAt)  // Date object
-console.log(post.version)    // 1
+// Query with MongoDB-style filters
+const published = await db.Posts.find({ status: 'published' })
+
+// Get by ID
+const found = await db.Posts.get(post.$id)
 ```
 
-### Read
+### Typed Schema
 
-Get a single entity by ID:
+Define your data model upfront for validation and relationships:
 
 ```typescript
-// Full ID
-const post = await db.Posts.get('posts/abc123')
+import { DB } from 'parquedb'
 
-// Short ID (namespace is inferred)
-const post = await db.Posts.get('abc123')
+const database = DB({
+  User: {
+    email: 'string!#',     // required, indexed
+    name: 'string',
+    age: 'int?'
+  },
+  Post: {
+    title: 'string!',
+    content: 'string',
+    author: '-> User'      // relationship to User
+  }
+})
 
-// Returns null if not found
-const missing = await db.Posts.get('nonexistent')  // null
+// TypeScript knows the shape of your data
+await database.User.create({ email: 'alice@example.com', name: 'Alice' })
+await database.Post.create({ title: 'Hello', content: 'World', author: 'users/alice' })
 ```
 
-Find multiple entities:
+## Schema Notation
+
+Field types use a concise string notation:
+
+| Notation | Meaning |
+|----------|---------|
+| `string` | Optional string field |
+| `string!` | Required field |
+| `string#` | Indexed field |
+| `string!#` | Required and indexed |
+| `string?` | Explicitly optional |
+| `int`, `float`, `boolean`, `date` | Other primitive types |
+| `string[]` | Array of strings |
+| `-> Target` | Forward relationship |
+| `<- Target.field[]` | Reverse relationship |
+
+Example schema with relationships:
+
+```typescript
+const db = DB({
+  User: {
+    email: 'email!#',
+    name: 'string!',
+    posts: '<- Post.author[]'    // reverse: all posts by this user
+  },
+  Post: {
+    title: 'string!',
+    content: 'markdown',
+    author: '-> User.posts',     // forward: link to user
+    tags: '-> Tag.posts[]'       // many-to-many
+  },
+  Tag: {
+    name: 'string!#',
+    posts: '<- Post.tags[]'
+  }
+})
+```
+
+## CRUD Operations
+
+### Create
+
+```typescript
+const user = await db.Users.create({
+  email: 'alice@example.com',
+  name: 'Alice'
+})
+
+console.log(user.$id)       // 'users/abc123'
+console.log(user.createdAt) // Date object
+```
+
+### Find
 
 ```typescript
 // Find all
-const allPosts = await db.Posts.find()
+const allUsers = await db.Users.find()
 
 // With filter
-const published = await db.Posts.find({ status: 'published' })
+const active = await db.Users.find({ status: 'active' })
 
-// Returns { items: Entity[], hasMore: boolean, nextCursor?: string }
-const result = await db.Posts.find({ status: 'draft' }, { limit: 10 })
+// With options
+const page = await db.Users.find(
+  { status: 'active' },
+  { limit: 10, sort: { createdAt: -1 } }
+)
+```
+
+### Get
+
+```typescript
+// By full ID
+const user = await db.Users.get('users/abc123')
+
+// Short ID (namespace inferred)
+const user = await db.Users.get('abc123')
+
+// Returns null if not found
+const missing = await db.Users.get('nonexistent')  // null
 ```
 
 ### Update
 
-Use MongoDB-style update operators:
-
 ```typescript
 // $set - Set field values
-await db.Posts.update(post.$id, {
-  $set: { status: 'published', publishedAt: new Date() }
+await db.Users.update(user.$id, {
+  $set: { name: 'Alice Smith', status: 'verified' }
 })
 
-// $unset - Remove fields
-await db.Posts.update(post.$id, {
-  $unset: { draft: true }
-})
-
-// $inc - Increment numeric fields
+// $inc - Increment numbers
 await db.Posts.update(post.$id, {
   $inc: { viewCount: 1 }
 })
@@ -112,451 +166,187 @@ await db.Posts.update(post.$id, {
   $push: { tags: 'featured' }
 })
 
-// $pull - Remove from array
+// $link - Create relationship
 await db.Posts.update(post.$id, {
-  $pull: { tags: 'draft' }
-})
-
-// $addToSet - Add unique value to array
-await db.Posts.update(post.$id, {
-  $addToSet: { tags: 'pinned' }
+  $link: { author: user.$id }
 })
 ```
 
 ### Delete
 
-Soft delete (default):
-
 ```typescript
-// Soft delete - sets deletedAt timestamp
+// Soft delete (default)
 await db.Posts.delete(post.$id)
 
-// Entity still exists but is excluded from queries
-const post = await db.Posts.get(post.$id)  // null
-
-// Include deleted entities
-const post = await db.Posts.get(post.$id, { includeDeleted: true })
-```
-
-Hard delete (permanent):
-
-```typescript
+// Hard delete (permanent)
 await db.Posts.delete(post.$id, { hard: true })
 ```
 
-## Using Collections
+## SQL Support
 
-ParqueDB provides two ways to access collections:
-
-### Property Access
-
-Access collections as properties (PascalCase):
+ParqueDB includes a SQL template tag for familiar queries:
 
 ```typescript
-db.Posts    // Collection for 'posts' namespace
-db.Users    // Collection for 'users' namespace
-db.Comments // Collection for 'comments' namespace
+import { db } from 'parquedb'
+
+// Template literal syntax with parameter binding
+const users = await db.sql`SELECT * FROM users WHERE age > ${21}`
+
+// Complex queries
+const results = await db.sql`
+  SELECT u.name, COUNT(p.$id) as post_count
+  FROM users u
+  LEFT JOIN posts p ON p.author = u.$id
+  WHERE u.status = ${'active'}
+  GROUP BY u.name
+  ORDER BY post_count DESC
+  LIMIT ${10}
+`
 ```
 
-### Method Access
-
-Use the `collection()` method for dynamic or typed access:
+SQL can also be destructured from a DB instance:
 
 ```typescript
-// Dynamic namespace
-const posts = db.collection('posts')
-
-// With TypeScript types
-interface PostData {
-  title: string
-  content: string
-  status: 'draft' | 'published'
-}
-
-const posts = db.collection<PostData>('posts')
-const post = await posts.create({
-  $type: 'Post',
-  name: 'typed-post',
-  title: 'Type Safe',
-  content: 'This is type checked!',
-  status: 'draft'  // TypeScript ensures valid value
+const { sql } = DB({
+  User: { email: 'string!#', name: 'string' }
 })
+
+const admins = await sql`SELECT * FROM users WHERE role = ${'admin'}`
 ```
 
-## Filtering and Querying
+## Configuration File
 
-### Simple Equality
-
-```typescript
-// Single field
-const published = await db.Posts.find({ status: 'published' })
-
-// Multiple fields (AND)
-const featured = await db.Posts.find({
-  status: 'published',
-  featured: true
-})
-```
-
-### Comparison Operators
+Create `parquedb.config.ts` for persistent configuration:
 
 ```typescript
-// Greater than
-const recent = await db.Posts.find({
-  viewCount: { $gt: 100 }
-})
+import { defineConfig, defineSchema } from 'parquedb/config'
 
-// Less than or equal
-const old = await db.Posts.find({
-  createdAt: { $lte: new Date('2024-01-01') }
-})
-
-// In array
-const selected = await db.Posts.find({
-  status: { $in: ['published', 'featured'] }
-})
-
-// Not equal
-const notDraft = await db.Posts.find({
-  status: { $ne: 'draft' }
-})
-```
-
-### Logical Operators
-
-```typescript
-// OR
-const result = await db.Posts.find({
-  $or: [
-    { status: 'published' },
-    { featured: true }
-  ]
-})
-
-// AND (explicit)
-const result = await db.Posts.find({
-  $and: [
-    { status: 'published' },
-    { viewCount: { $gte: 100 } }
-  ]
-})
-
-// NOT
-const result = await db.Posts.find({
-  $not: { status: 'archived' }
-})
-```
-
-### Array Operators
-
-```typescript
-// Contains all values
-const tagged = await db.Posts.find({
-  tags: { $all: ['featured', 'pinned'] }
-})
-
-// Array size
-const multipleTags = await db.Posts.find({
-  tags: { $size: 3 }
-})
-```
-
-### Existence Operators
-
-```typescript
-// Field exists
-const withImage = await db.Posts.find({
-  coverImage: { $exists: true }
-})
-
-// Field does not exist
-const noImage = await db.Posts.find({
-  coverImage: { $exists: false }
-})
-```
-
-### String Operators
-
-```typescript
-// Regex match
-const matching = await db.Posts.find({
-  title: { $regex: /^hello/i }
-})
-```
-
-## Working with Relationships
-
-ParqueDB has first-class support for entity relationships. You can link entities together using the `$link` and `$unlink` operators.
-
-### Linking Entities
-
-Use `$link` to create relationships between entities:
-
-```typescript
-// Create a user
-const user = await db.Users.create({
-  $type: 'User',
-  name: 'alice',
-  email: 'alice@example.com',
-})
-
-// Create a post
-const post = await db.Posts.create({
-  $type: 'Post',
-  name: 'hello-world',
-  title: 'Hello World',
-  content: 'My first post!',
-})
-
-// Link the post to the user as author
-await db.Posts.update(post.$id, {
-  $link: { author: user.$id },
-})
-
-// The post now has an author relationship
-const linkedPost = await db.Posts.get(post.$id)
-console.log(linkedPost.author)  // { 'alice': 'users/abc123' }
-```
-
-### Unlinking Entities
-
-Use `$unlink` to remove relationships:
-
-```typescript
-// Remove the author relationship
-await db.Posts.update(post.$id, {
-  $unlink: { author: user.$id },
-})
-```
-
-### Multiple Relationships
-
-Link an entity to multiple targets:
-
-```typescript
-// Create categories
-const tech = await db.Categories.create({
-  $type: 'Category',
-  name: 'tech',
-  slug: 'technology',
-})
-
-const tutorial = await db.Categories.create({
-  $type: 'Category',
-  name: 'tutorials',
-  slug: 'tutorials',
-})
-
-// Link post to multiple categories
-await db.Posts.update(post.$id, {
-  $link: { categories: [tech.$id, tutorial.$id] },
-})
-```
-
-### Defining Relationships in Schema
-
-For bidirectional relationships, define them in your schema:
-
-```typescript
-const schema = {
+export const schema = defineSchema({
   User: {
-    $ns: 'users',
-    name: 'string!',
-    email: 'email!',
-    // Reverse relationship: User.posts shows all posts where Post.author = this user
-    posts: '<- Post.author[]',
+    email: 'string!#',
+    name: 'string',
+    role: 'string'
   },
   Post: {
-    $ns: 'posts',
     title: 'string!',
-    content: 'markdown!',
-    // Forward relationship: Post.author links to a User
-    author: '-> User.posts',
-    // Many-to-many: Post can have multiple categories
-    categories: '-> Category.posts[]',
-  },
-  Category: {
-    $ns: 'categories',
-    name: 'string!',
-    slug: 'string!',
-    // Reverse: all posts in this category
-    posts: '<- Post.categories[]',
-  },
-}
+    content: 'text',
+    status: 'string',
+    author: '-> User',
 
-const db = new ParqueDB({ storage, schema })
-```
-
-Relationship syntax:
-- `-> Target.reverse` - Forward relationship (stored on this entity)
-- `<- Source.predicate[]` - Reverse relationship (computed from source entities)
-- `[]` suffix indicates a to-many relationship
-
-### Combining Updates with Links
-
-You can combine `$link` with other update operators:
-
-```typescript
-await db.Posts.update(post.$id, {
-  $set: { status: 'published', publishedAt: new Date() },
-  $link: { author: user.$id },
-})
-```
-
-## Query Options
-
-### Sorting
-
-```typescript
-// Ascending
-const oldest = await db.Posts.find({}, {
-  sort: { createdAt: 1 }
-})
-
-// Descending
-const newest = await db.Posts.find({}, {
-  sort: { createdAt: -1 }
-})
-
-// Multiple fields
-const sorted = await db.Posts.find({}, {
-  sort: { status: 1, createdAt: -1 }
-})
-
-// String format
-const sorted = await db.Posts.find({}, {
-  sort: { createdAt: 'desc' }
-})
-```
-
-### Pagination
-
-```typescript
-// Limit results
-const topTen = await db.Posts.find({}, { limit: 10 })
-
-// Skip results (offset)
-const page2 = await db.Posts.find({}, { skip: 10, limit: 10 })
-
-// Cursor-based pagination (preferred for large datasets)
-const page1 = await db.Posts.find({}, { limit: 10 })
-const page2 = await db.Posts.find({}, {
-  limit: 10,
-  cursor: page1.items[page1.items.length - 1].$id
-})
-```
-
-### Projection
-
-```typescript
-// Include only specific fields
-const titles = await db.Posts.find({}, {
-  project: { title: 1, status: 1 }
-})
-
-// Exclude specific fields
-const noContent = await db.Posts.find({}, {
-  project: { content: 0 }
-})
-```
-
-## Optimistic Concurrency
-
-Use version checking to prevent lost updates:
-
-```typescript
-const post = await db.Posts.get('posts/abc123')
-
-// Update only if version matches
-await db.Posts.update(post.$id, {
-  $set: { title: 'Updated Title' }
-}, {
-  expectedVersion: post.version
-})
-
-// Throws error if version changed
-// Error: Version mismatch: expected 1, got 2
-```
-
-## Actor Tracking
-
-Track who performed operations:
-
-```typescript
-const actor = 'users/current-user-id'
-
-await db.Posts.create({
-  $type: 'Post',
-  name: 'tracked',
-  title: 'Tracked Post'
-}, {
-  actor
-})
-
-await db.Posts.update(post.$id, {
-  $set: { status: 'published' }
-}, {
-  actor
-})
-
-// Entity has createdBy and updatedBy fields
-const post = await db.Posts.get('posts/abc123')
-console.log(post.createdBy)  // 'users/current-user-id'
-console.log(post.updatedBy)  // 'users/current-user-id'
-```
-
-## Upsert
-
-Create or update in a single operation:
-
-```typescript
-// Using collection.upsert()
-const entity = await db.Posts.upsert(
-  { slug: 'my-post' },  // filter
-  {
-    $set: { title: 'My Post', content: 'Updated!' },
-    $setOnInsert: { $type: 'Post', name: 'my-post' }
+    // Studio layout configuration
+    $layout: [['title'], 'content'],
+    $sidebar: ['$id', 'status', 'createdAt'],
+    $studio: {
+      label: 'Blog Posts',
+      status: { options: ['draft', 'published'] }
+    }
   }
-)
+})
 
-// Using update with upsert option
-await db.Posts.update('new-id', {
-  $set: { title: 'New Post' }
-}, {
-  upsert: true
+export default defineConfig({
+  storage: { type: 'fs', path: './data' },
+  schema,
+  studio: {
+    port: 3000,
+    theme: 'auto'
+  }
 })
 ```
 
-## Restore Deleted Entities
+## Type-Safe Imports
 
-Restore soft-deleted entities:
+ParqueDB provides two approaches for full TypeScript type safety:
+
+### Option 1: Schema Export (Recommended)
+
+Export and reuse your schema for type inference:
 
 ```typescript
-// Soft delete
-await db.Posts.delete(post.$id)
+// parquedb.config.ts
+import { defineConfig, defineSchema } from 'parquedb/config'
 
-// Restore
-await db.restore('posts', post.$id.split('/')[1])
+export const schema = defineSchema({
+  User: { email: 'string!#', name: 'string' },
+  Post: { title: 'string!', author: '-> User' }
+})
+
+export default defineConfig({ storage: 'fs', schema })
 ```
+
+```typescript
+// src/db.ts
+import { DB } from 'parquedb'
+import { schema } from '../parquedb.config'
+
+// Fully typed - TypeScript knows your collections
+export const db = DB(schema)
+export const { sql } = db
+
+// Usage with full autocomplete
+await db.User.create({ email: 'alice@example.com', name: 'Alice' })
+await db.Post.find({ title: { $contains: 'Hello' } })
+```
+
+### Option 2: Generate Types
+
+Generate typed exports from your config file:
+
+```bash
+# Generate to default location (src/db.generated.ts)
+npx parquedb generate
+
+# Custom output path
+npx parquedb generate --output lib/database.ts
+```
+
+Then import the generated file:
+
+```typescript
+import { db, sql } from './db.generated'
+
+// Fully typed!
+await db.User.create({ email: 'bob@example.com', name: 'Bob' })
+const users = await db.User.find({ role: 'admin' })
+```
+
+## ParqueDB Studio
+
+Launch the admin interface:
+
+```bash
+# Auto-discover Parquet files
+npx parquedb studio
+
+# Specify directory
+npx parquedb studio ./data
+
+# Custom port, read-only mode
+npx parquedb studio --port 8080 --read-only
+```
+
+See [Studio Documentation](./studio.md) for layout configuration and deployment.
 
 ## Next Steps
 
-Now that you know the basics, explore these topics:
+Now that you have the basics, explore these topics:
 
-- [Schema Definition](./schema.md) - Define types, validation, and relationships
-- [Storage Backends](./storage-backends.md) - Choose the right storage for your environment
-- [Cloudflare Workers](./workers.md) - Deploy to the edge with CQRS architecture
+- [Schema Definition](./schemas.md) - Complete guide to types, validation, and relationships
+- [Query API](./queries.md) - MongoDB-style filtering, sorting, and pagination
+- [Update Operators](./updates.md) - All available update operators ($set, $inc, $push, etc.)
 
-### Architecture Deep Dives
+### Tools & Integrations
 
-- [Graph-First Architecture](./architecture/GRAPH_FIRST_ARCHITECTURE.md) - How relationships are indexed
-- [Secondary Indexes](./architecture/SECONDARY_INDEXES.md) - B-tree, hash, and full-text indexes
-- [Namespace Sharded Architecture](./architecture/NAMESPACE_SHARDED_ARCHITECTURE.md) - Multi-tenant design
+- [ParqueDB Studio](./studio.md) - Admin UI for viewing and editing data
+- [Payload CMS Adapter](./integrations/payload.md) - Use ParqueDB with Payload CMS
 
-### Example Datasets
+### Deployment Guides
 
-Check out the [examples](../examples) folder for real-world usage:
-- IMDB - Movie database with actors and directors
-- O*NET - Occupational data with skills and abilities
-- UNSPSC - Product classification hierarchy
-- Wikidata - Knowledge graph import
+- [Cloudflare Workers](./deployment/cloudflare-workers.md) - Deploy to the edge with R2 storage
+- [Node.js Standalone](./deployment/node-standalone.md) - Run as a standalone server
+- [R2 Setup](./deployment/r2-setup.md) - Configure Cloudflare R2 storage
+
+### Architecture
+
+- [Graph-First Architecture](./architecture/graph-first-architecture.md) - How relationships are indexed
+- [Secondary Indexes](./architecture/secondary-indexes.md) - B-tree, hash, and full-text indexes
+- [Bloom Filter Indexes](./architecture/bloom-filter-indexes.md) - Probabilistic existence checks

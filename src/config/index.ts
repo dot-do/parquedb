@@ -33,6 +33,7 @@ export {
 // Config file loading
 export {
   defineConfig,
+  defineSchema,
   loadConfig,
   getConfig,
   setConfig,
