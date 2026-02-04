@@ -45,7 +45,7 @@ export async function handleEntityDetail(
   try {
     const [result, rels] = await Promise.all([
       worker.find<EntityRecord>(namespace, { $id: standardId }, { limit: 1 }),
-      worker.getRelationships(datasetId, entityId),
+      worker.getRelationships(prefix, entityId),  // Use prefix (e.g., 'onet-graph') not datasetId ('onet')
     ])
 
     entityResult = result

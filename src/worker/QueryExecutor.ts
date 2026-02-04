@@ -300,7 +300,8 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   private async loadFile(path: string): Promise<Uint8Array> {
     this.totalReads++
     const cache = caches.default
-    const cacheKey = new Request(`https://parquedb.cache/${path}`)
+    // Version param for cache busting when data changes
+    const cacheKey = new Request(`https://parquedb.cache/${path}?v=3`)
 
     // Check cache first
     const cachedResponse = await cache.match(cacheKey)
@@ -337,7 +338,7 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   private async loadRange(path: string, start: number, end: number): Promise<Uint8Array> {
     this.totalReads++
     const cache = caches.default
-    const cacheKey = new Request(`https://parquedb.cache/${path}`)
+    const cacheKey = new Request(`https://parquedb.cache/${path}?v=3`)
 
     // Check if full file is cached - if so, slice from it
     const cachedResponse = await cache.match(cacheKey)
@@ -1116,59 +1117,55 @@ export class QueryExecutor {
       return []
     }
 
-    // Optimized format with shredded fields as top-level columns
-    type RelRow = {
-      from_id: string
-      // Shredded fields (top-level columns for efficient predicate pushdown)
-      match_mode?: string | null | undefined   // 'exact' | 'fuzzy'
-      similarity?: number | null | undefined   // 0.0 to 1.0
-      // Remaining data in Variant/JSON
-      data: {
-        to: string      // Target $id
-        ns: string      // Target namespace
-        name: string    // Target name
-        pred: string    // Predicate
-        rev: string     // Reverse predicate
-        importance?: number | undefined
-        level?: number | undefined
-      }
-    }
-
     try {
       // Single rels.parquet file (no sharding - doesn't scale for large datasets)
       const path = `${dataset}/rels.parquet`
 
-      // Read raw rows and parse JSON data column
-      type RawRelRow = {
+      // Flat schema format (O*NET rels.parquet uses individual columns, not nested JSON)
+      // Columns: from_ns, from_id, from_name, from_type, predicate, reverse,
+      //          to_ns, to_id, to_name, to_type, importance, level, standardError, date
+      type FlatRelRow = {
+        from_ns: string
         from_id: string
+        from_name: string
+        from_type: string
+        predicate: string
+        reverse: string
+        to_ns: string
+        to_id: string
+        to_name: string
+        to_type: string
+        importance?: number | null | undefined
+        level?: number | null | undefined
+        standardError?: number | null | undefined
+        date?: string | null | undefined
+        // Legacy nested format fields
         match_mode?: string | null | undefined
         similarity?: number | null | undefined
-        data: string | RelRow['data']
+        data?: { to: string; ns: string; name: string; pred: string; rev: string; importance?: number; level?: number } | string
+        $data?: { to: string; ns: string; name: string; pred: string; rev: string; importance?: number; level?: number } | string
       }
-      const rawRels = await this.parquetReader.read<RawRelRow>(path)
 
-      // Parse JSON data column if needed
-      const allRels: RelRow[] = rawRels.map(row => {
-        if (typeof row.$data === 'string') {
-          const parsed = tryParseJson<RelRow['data']>(row.$data)
-          return {
-            from_id: row.from_id,
-            match_mode: row.match_mode,
-            similarity: row.similarity,
-            data: parsed ?? { to: '', ns: '', name: '', pred: '', rev: '' },
-          }
-        }
-        return row as RelRow
-      })
+      // Use parquetQuery with predicate pushdown on from_id
+      // This enables row-group skipping based on min/max column statistics
+      const asyncBuffer = await this.createAsyncBuffer(path)
+      const metadata = await this.loadRawMetadata(path)
+      const rawRels = await parquetQuery({
+        file: asyncBuffer,
+        metadata,
+        filter: { from_id: fromId },  // Predicate pushdown on from_id
+        compressors,
+      }) as FlatRelRow[]
+      logger.debug(`Relationship query with pushdown: from_id=${fromId}, rows=${rawRels.length}`)
 
-      // Filter by from_id, predicate, and shredded field options
-      return allRels
+      // Map to output format, handling both flat and nested schemas
+      return rawRels
         .filter(rel => {
-          // Basic filters
-          if (rel.from_id !== fromId) return false
-          if (predicate && rel.data.pred !== predicate) return false
+          // Predicate filter (from_id already filtered by pushdown)
+          const relPredicate = rel.predicate ?? (rel.data && typeof rel.data === 'object' ? rel.data.pred : undefined)
+          if (predicate && relPredicate !== predicate) return false
 
-          // Shredded field filters (support predicate pushdown in future)
+          // Shredded field filters (for legacy format)
           if (options?.matchMode && rel.match_mode !== options.matchMode) return false
           if (options?.minSimilarity !== undefined) {
             const sim = rel.similarity ?? 0
@@ -1181,18 +1178,52 @@ export class QueryExecutor {
 
           return true
         })
-        .map(rel => ({
-          to_ns: rel.data.ns,
-          to_id: rel.data.to.split('/').pop() || rel.data.to,
-          to_name: rel.data.name,
-          to_type: rel.data.ns.charAt(0).toUpperCase() + rel.data.ns.slice(1, -1), // occupations -> Occupation
-          predicate: rel.data.pred,
-          importance: rel.data.importance ?? null,
-          level: rel.data.level ?? null,
-          // Shredded fields
-          matchMode: (rel.match_mode as 'exact' | 'fuzzy') ?? null,
-          similarity: rel.similarity ?? null,
-        }))
+        .map(rel => {
+          // Handle flat schema (O*NET format)
+          if (rel.to_ns !== undefined && rel.to_id !== undefined) {
+            return {
+              to_ns: rel.to_ns,
+              to_id: rel.to_id,
+              to_name: rel.to_name,
+              to_type: rel.to_type,
+              predicate: rel.predicate,
+              importance: rel.importance ?? null,
+              level: rel.level ?? null,
+              matchMode: (rel.match_mode as 'exact' | 'fuzzy') ?? null,
+              similarity: rel.similarity ?? null,
+            }
+          }
+
+          // Handle nested schema (legacy format with data column)
+          const dataCol = rel.$data ?? rel.data
+          const data = typeof dataCol === 'string' ? tryParseJson<FlatRelRow['data']>(dataCol) : dataCol
+          if (data && typeof data === 'object') {
+            return {
+              to_ns: data.ns,
+              to_id: data.to.split('/').pop() || data.to,
+              to_name: data.name,
+              to_type: data.ns.charAt(0).toUpperCase() + data.ns.slice(1, -1),
+              predicate: data.pred,
+              importance: data.importance ?? null,
+              level: data.level ?? null,
+              matchMode: (rel.match_mode as 'exact' | 'fuzzy') ?? null,
+              similarity: rel.similarity ?? null,
+            }
+          }
+
+          // Fallback for malformed data
+          return {
+            to_ns: 'unknown',
+            to_id: 'unknown',
+            to_name: 'unknown',
+            to_type: 'Unknown',
+            predicate: rel.predicate ?? 'unknown',
+            importance: null,
+            level: null,
+            matchMode: null,
+            similarity: null,
+          }
+        })
     } catch (error: unknown) {
       // Relationship data may not exist or may be malformed - return empty gracefully
       logger.debug('Failed to load relationships', error)
@@ -2111,7 +2142,7 @@ export class QueryExecutor {
             const objData = await this._bucket.get(path)
             if (objData) {
               const text = await objData.text()
-              const rows = tryParseJson<Array<{ $id: string; data: string }>>(text)
+              const rows = tryParseJson<Array<{ $id: string; $data: string }>>(text)
               if (rows) {
                 for (const row of rows) {
                   const parsed = tryParseJson<T>(row.$data)
