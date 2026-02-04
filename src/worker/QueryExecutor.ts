@@ -630,19 +630,22 @@ export class QueryExecutor {
           const targetRows = (options.skip ?? 0) + options.limit
           rows = await parquetQuery({
             file: asyncBuffer,
-            columns: ['$id', '$data'],
             compressors,
             rowEnd: targetRows,
           }) as DataRow[]
           stats.rowsScanned = rows.length
 
-          // Unpack data column - parse JSON if string, use directly if object
+          // Rows are returned directly with all columns
           results = rows.map(row => {
-            if (typeof row.$data === 'string') {
-              const parsed = tryParseJson<T>(row.$data)
-              return parsed ?? rowAsEntity<T>(row)
+            // If there's a $data column with the entity, unpack it
+            if (row.$data) {
+              if (typeof row.$data === 'string') {
+                return tryParseJson<T>(row.$data) ?? rowAsEntity<T>(row)
+              }
+              return row.$data as T
             }
-            return (row.$data ?? row) as T
+            // Otherwise the row IS the entity
+            return row as unknown as T
           })
         } else {
           // No filter, no limit - read all data
