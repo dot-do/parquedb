@@ -377,26 +377,53 @@ export class ParquetReader {
       rowGroups: (metadata.row_groups ?? []).map((rg: HyparquetRowGroup, index: number) => ({
         numRows: Number(rg.num_rows ?? 0),
         totalByteSize: Number(rg.total_byte_size ?? 0),
-        columns: (rg.columns ?? []).map((col: HyparquetColumnChunk) => ({
-          pathInSchema: col.meta_data?.path_in_schema ?? [],
-          totalCompressedSize: Number(col.meta_data?.total_compressed_size ?? 0),
-          totalUncompressedSize: Number(col.meta_data?.total_uncompressed_size ?? 0),
-          numValues: Number(col.meta_data?.num_values ?? 0),
-          encodings: (col.meta_data?.encodings ?? []) as EncodingType[],
-          codec: (col.meta_data?.codec ?? 'UNCOMPRESSED') as CompressionCodec,
-          statistics: col.meta_data?.statistics
-            ? {
-                min: col.meta_data.statistics.min_value,
-                max: col.meta_data.statistics.max_value,
-                nullCount: col.meta_data.statistics.null_count !== undefined
-                  ? Number(col.meta_data.statistics.null_count)
-                  : undefined,
-                distinctCount: col.meta_data.statistics.distinct_count !== undefined
-                  ? Number(col.meta_data.statistics.distinct_count)
-                  : undefined,
-              }
-            : undefined,
-        })),
+        columns: (rg.columns ?? []).map((col: HyparquetColumnChunk) => {
+          // Extract bloom filter info from hyparquet metadata
+          // hyparquet exposes bloom_filter_offset and bloom_filter_length
+          const metaData = col.meta_data as {
+            path_in_schema?: string[]
+            total_compressed_size?: number | bigint
+            total_uncompressed_size?: number | bigint
+            num_values?: number | bigint
+            encodings?: string[]
+            codec?: string
+            statistics?: {
+              min_value?: unknown
+              max_value?: unknown
+              null_count?: number | bigint
+              distinct_count?: number | bigint
+            }
+            bloom_filter_offset?: bigint
+            bloom_filter_length?: number
+          } | undefined
+
+          const hasBloomFilter = metaData?.bloom_filter_offset !== undefined &&
+                                 metaData?.bloom_filter_offset !== null
+
+          return {
+            pathInSchema: metaData?.path_in_schema ?? [],
+            totalCompressedSize: Number(metaData?.total_compressed_size ?? 0),
+            totalUncompressedSize: Number(metaData?.total_uncompressed_size ?? 0),
+            numValues: Number(metaData?.num_values ?? 0),
+            encodings: (metaData?.encodings ?? []) as EncodingType[],
+            codec: (metaData?.codec ?? 'UNCOMPRESSED') as CompressionCodec,
+            statistics: metaData?.statistics
+              ? {
+                  min: metaData.statistics.min_value,
+                  max: metaData.statistics.max_value,
+                  nullCount: metaData.statistics.null_count !== undefined
+                    ? Number(metaData.statistics.null_count)
+                    : undefined,
+                  distinctCount: metaData.statistics.distinct_count !== undefined
+                    ? Number(metaData.statistics.distinct_count)
+                    : undefined,
+                }
+              : undefined,
+            hasBloomFilter,
+            bloomFilterOffset: metaData?.bloom_filter_offset,
+            bloomFilterLength: metaData?.bloom_filter_length,
+          }
+        }),
         ordinal: index,
       })),
       keyValueMetadata: metadata.key_value_metadata?.map((kv: KeyValue) => ({

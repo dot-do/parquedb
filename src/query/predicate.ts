@@ -417,11 +417,16 @@ export function extractRowGroupStats(metadata: ParquetMetadata): RowGroupStats[]
 
 /**
  * Extract column statistics from row group metadata
+ * Supports both 'path' (legacy) and 'pathInSchema' (from ParquetReader) formats
  */
 function extractColumnStats(columns: ParquetColumnChunk[]): Map<string, ColumnStats> {
   const statsMap = new Map<string, ColumnStats>()
 
   for (const column of columns) {
+    // Support both 'path' (legacy) and 'pathInSchema' (from ParquetReader)
+    const col = column as ParquetColumnChunk & { pathInSchema?: string[] }
+    const columnPath = col.path ?? col.pathInSchema ?? []
+
     const stats: ColumnStats = {
       min: column.statistics?.min,
       max: column.statistics?.max,
@@ -429,7 +434,7 @@ function extractColumnStats(columns: ParquetColumnChunk[]): Map<string, ColumnSt
       distinctCount: column.statistics?.distinctCount,
       hasBloomFilter: column.hasBloomFilter ?? false,
     }
-    statsMap.set(column.path.join('.'), stats)
+    statsMap.set(columnPath.join('.'), stats)
   }
 
   return statsMap
@@ -463,24 +468,28 @@ export interface ParquetRowGroup {
 
 /** Column chunk metadata */
 export interface ParquetColumnChunk {
-  /** Column path (for nested columns) */
-  path: string[]
+  /** Column path (for nested columns) - legacy format */
+  path?: string[] | undefined
+  /** Column path in schema - format from ParquetReader */
+  pathInSchema?: string[] | undefined
   /** Encoding types used */
-  encodings: string[]
+  encodings?: string[] | undefined
   /** Compression codec */
-  compression: string
+  compression?: string | undefined
   /** Byte offset to column data */
-  offset: number
+  offset?: number | undefined
   /** Compressed size in bytes */
-  compressedSize: number
+  compressedSize?: number | undefined
   /** Uncompressed size in bytes */
-  uncompressedSize: number
+  uncompressedSize?: number | undefined
   /** Column statistics */
   statistics?: ParquetColumnStatistics | undefined
   /** Whether this column has a bloom filter */
   hasBloomFilter?: boolean | undefined
   /** Offset to bloom filter data */
-  bloomFilterOffset?: number | undefined
+  bloomFilterOffset?: number | bigint | undefined
+  /** Length of bloom filter data */
+  bloomFilterLength?: number | undefined
 }
 
 /** Column statistics */

@@ -29,7 +29,7 @@ import { IndexCache, createR2IndexStorageAdapter } from './IndexCache'
 // Bloom filter deserialization
 import { IndexBloomFilter } from '../indexes/bloom/bloom-filter'
 // Centralized constants
-import { MAX_CACHE_SIZE as _MAX_CACHE_SIZE, DEFAULT_CACHE_TTL } from '../constants'
+import { MAX_CACHE_SIZE as _MAX_CACHE_SIZE, DEFAULT_CACHE_TTL, DATA_CACHE_MAX_ENTRIES } from '../constants'
 // Logger
 import { logger } from '../utils/logger'
 import { stringToBase64 } from '../utils/base64'
@@ -210,6 +210,77 @@ export interface QueryPlan {
 }
 
 // =============================================================================
+// LRU Cache Implementation
+// =============================================================================
+
+/**
+ * Simple LRU (Least Recently Used) cache with configurable max entries.
+ *
+ * Uses a Map for O(1) lookups while maintaining insertion order.
+ * When the cache exceeds maxEntries, the oldest (least recently used)
+ * entries are evicted.
+ */
+class LRUCache<K, V> {
+  private cache = new Map<K, V>()
+
+  constructor(private maxEntries: number = DATA_CACHE_MAX_ENTRIES) {}
+
+  /**
+   * Get a value from the cache.
+   * Moves the entry to the end (most recently used) if found.
+   */
+  get(key: K): V | undefined {
+    const value = this.cache.get(key)
+    if (value !== undefined) {
+      // Move to end (most recently used)
+      this.cache.delete(key)
+      this.cache.set(key, value)
+    }
+    return value
+  }
+
+  /**
+   * Set a value in the cache.
+   * If the cache exceeds maxEntries, evicts the oldest entry.
+   */
+  set(key: K, value: V): void {
+    // If key exists, delete it first to update access order
+    if (this.cache.has(key)) {
+      this.cache.delete(key)
+    }
+
+    this.cache.set(key, value)
+
+    // Evict oldest entries if over limit
+    while (this.cache.size > this.maxEntries) {
+      const oldestKey = this.cache.keys().next().value as K
+      this.cache.delete(oldestKey)
+    }
+  }
+
+  /**
+   * Delete a key from the cache.
+   */
+  delete(key: K): boolean {
+    return this.cache.delete(key)
+  }
+
+  /**
+   * Clear all entries from the cache.
+   */
+  clear(): void {
+    this.cache.clear()
+  }
+
+  /**
+   * Get current cache size.
+   */
+  get size(): number {
+    return this.cache.size
+  }
+}
+
+// =============================================================================
 // QueryExecutor Implementation
 // =============================================================================
 
@@ -249,8 +320,12 @@ export interface QueryPlan {
  *
  * Implements ReadonlyStorageBackend - only read operations are supported.
  *
- * IMPORTANT: File caching uses Cloudflare Cache API instead of per-isolate Map.
- * This reduces memory usage under load since cache is shared across isolates.
+ * CACHING ARCHITECTURE (Two-tier):
+ * - L1: Sync in-memory Map<string, Uint8Array> for O(1) hot data access
+ * - L2: Cloudflare Cache API for persistence across requests/isolates
+ *
+ * This restores the fast sync cache hits lost in commit cdcbb34 while
+ * keeping Cache API for cross-isolate persistence.
  */
 class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   readonly type = 'r2-cdn-adapter'
@@ -261,8 +336,15 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   public edgeHits = 0
   public totalReads = 0
   public cacheHits = 0
+  public l1CacheHits = 0  // Track L1 vs L2 cache hits
 
-  // Cache API instance (initialized lazily)
+  // L1 Cache: Sync in-memory Map for O(1) hot data access
+  // This is per-isolate but provides fast sync access for repeated reads
+  private l1Cache = new Map<string, Uint8Array>()
+  private l1CacheSize = 0  // Track total bytes in L1 cache
+  private static readonly L1_MAX_SIZE = 50 * 1024 * 1024  // 50MB max L1 cache per isolate
+
+  // L2 Cache: Cache API instance (initialized lazily)
   private cache: Cache | null = null
   private cacheInitPromise: Promise<Cache | null> | null = null
 
@@ -287,6 +369,59 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   ) {
     this.fileCacheTtl = fileCacheTtl
   }
+
+  // ===========================================================================
+  // L1 Cache (Sync In-Memory)
+  // ===========================================================================
+
+  /**
+   * Check L1 sync cache - O(1) lookup, no async overhead
+   */
+  private getFromL1Cache(path: string): Uint8Array | null {
+    return this.l1Cache.get(path) ?? null
+  }
+
+  /**
+   * Store in L1 sync cache with LRU-style eviction
+   */
+  private putInL1Cache(path: string, data: Uint8Array): void {
+    // Skip if file is too large for L1 cache (>10MB)
+    if (data.byteLength > 10 * 1024 * 1024) {
+      return
+    }
+
+    // Evict entries if L1 cache is too large
+    while (this.l1CacheSize + data.byteLength > CdnR2StorageAdapter.L1_MAX_SIZE && this.l1Cache.size > 0) {
+      // Remove oldest entry (first key in Map iteration order)
+      const oldestKey = this.l1Cache.keys().next().value
+      if (oldestKey !== undefined) {
+        const oldData = this.l1Cache.get(oldestKey)
+        if (oldData) {
+          this.l1CacheSize -= oldData.byteLength
+        }
+        this.l1Cache.delete(oldestKey)
+      }
+    }
+
+    // Add to L1 cache
+    this.l1Cache.set(path, data)
+    this.l1CacheSize += data.byteLength
+  }
+
+  /**
+   * Invalidate L1 cache entry
+   */
+  private invalidateL1Cache(path: string): void {
+    const data = this.l1Cache.get(path)
+    if (data) {
+      this.l1CacheSize -= data.byteLength
+      this.l1Cache.delete(path)
+    }
+  }
+
+  // ===========================================================================
+  // L2 Cache (Async Cache API)
+  // ===========================================================================
 
   /**
    * Get or initialize the Cache API instance
@@ -377,11 +512,21 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   }
 
   async read(path: string): Promise<Uint8Array> {
-    // Check Cache API first
-    const cached = await this.getFromCache(path)
-    if (cached) {
+    // L1: Check sync in-memory cache first (O(1), no async overhead)
+    const l1Cached = this.getFromL1Cache(path)
+    if (l1Cached) {
       this.cacheHits++
-      return cached
+      this.l1CacheHits++
+      return l1Cached
+    }
+
+    // L2: Check Cache API (async, but persistent across isolates)
+    const l2Cached = await this.getFromCache(path)
+    if (l2Cached) {
+      this.cacheHits++
+      // Promote to L1 for faster subsequent access
+      this.putInL1Cache(path, l2Cached)
+      return l2Cached
     }
 
     // Check if file is being loaded by another request in this isolate
@@ -390,13 +535,15 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
       return loading
     }
 
-    // Load and cache
+    // Load and cache in both L1 and L2
     const loadPromise = this.loadWholeFile(path)
     this.loadingFiles.set(path, loadPromise)
 
     try {
       const data = await loadPromise
-      // Store in Cache API (non-blocking)
+      // Store in L1 (sync, immediate benefit)
+      this.putInL1Cache(path, data)
+      // Store in L2 Cache API (non-blocking, for persistence)
       this.putInCache(path, data).catch(() => {
         // Ignore cache write errors - they're logged in putInCache
       })
@@ -407,11 +554,21 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
-    // Check Cache API first - serve range from cached whole file
-    const cached = await this.getFromCache(path)
-    if (cached) {
+    // L1: Check sync in-memory cache first (O(1), no async overhead)
+    const l1Cached = this.getFromL1Cache(path)
+    if (l1Cached) {
       this.cacheHits++
-      return cached.slice(start, end)
+      this.l1CacheHits++
+      return l1Cached.slice(start, end)
+    }
+
+    // L2: Check Cache API - serve range from cached whole file
+    const l2Cached = await this.getFromCache(path)
+    if (l2Cached) {
+      this.cacheHits++
+      // Promote to L1 for faster subsequent access
+      this.putInL1Cache(path, l2Cached)
+      return l2Cached.slice(start, end)
     }
 
     // Check if file is being loaded by another request in this isolate
@@ -428,7 +585,9 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
 
     try {
       const data = await loadPromise
-      // Store in Cache API (non-blocking)
+      // Store in L1 (sync, immediate benefit)
+      this.putInL1Cache(path, data)
+      // Store in L2 Cache API (non-blocking, for persistence)
       this.putInCache(path, data).catch(() => {
         // Ignore cache write errors - they're logged in putInCache
       })
@@ -439,10 +598,14 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   }
 
   /**
-   * Invalidate cached file data
+   * Invalidate cached file data (both L1 and L2)
    * Call this after writes to ensure cache coherence
    */
   async invalidateCache(path: string): Promise<void> {
+    // Invalidate L1 (sync)
+    this.invalidateL1Cache(path)
+
+    // Invalidate L2 (async Cache API)
     const cache = await this.getCache()
     if (!cache) {
       return
@@ -556,8 +719,8 @@ export class QueryExecutor {
   /** Cache of loaded bloom filters per namespace */
   private bloomCache = new Map<string, BloomFilter>()
 
-  /** Cache of parsed parquet data (for small files) */
-  private dataCache = new Map<string, unknown[]>()
+  /** Cache of parsed parquet data (for small files) - LRU with max entries */
+  private dataCache = new LRUCache<string, unknown[]>(DATA_CACHE_MAX_ENTRIES)
 
   /** R2 storage adapter for ParquetReader */
   private storageAdapter: CdnR2StorageAdapter | null = null
@@ -598,15 +761,16 @@ export class QueryExecutor {
   /**
    * Get storage stats for debugging
    */
-  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; cacheHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean; usingCacheApi: boolean } {
+  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; cacheHits: number; l1CacheHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean; usingCacheApi: boolean } {
     if (!this.storageAdapter) {
-      return { cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false, usingCacheApi: false }
+      return { cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, l1CacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false, usingCacheApi: false }
     }
     return {
       cdnHits: this.storageAdapter.cdnHits,
       primaryHits: this.storageAdapter.primaryHits,
       edgeHits: this.storageAdapter.edgeHits,
       cacheHits: this.storageAdapter.cacheHits,
+      l1CacheHits: this.storageAdapter.l1CacheHits,  // Track sync cache hits
       totalReads: this.storageAdapter.totalReads,
       usingCdn: !!this._cdnBucket,
       usingEdge: !!this._r2DevUrl,

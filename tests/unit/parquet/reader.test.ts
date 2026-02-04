@@ -706,3 +706,46 @@ describe('ParquetReader with Default Options', () => {
     expect(data[0].name).toBe('Alice')
   })
 })
+
+// =============================================================================
+// Bloom Filter Metadata Extraction Tests
+// =============================================================================
+
+describe('Bloom Filter Metadata', () => {
+  let storage: MemoryBackend
+  let writer: ParquetWriter
+
+  beforeEach(async () => {
+    storage = new MemoryBackend()
+    writer = new ParquetWriter(storage, { compression: 'none' })
+    await writer.write('data/test.parquet', TEST_DATA, TEST_SCHEMA)
+  })
+
+  it('should include hasBloomFilter field in column metadata', async () => {
+    const reader = new ParquetReader({ storage })
+    const metadata = await reader.readMetadata('data/test.parquet')
+
+    // Each column should have hasBloomFilter defined (may be true or false)
+    for (const rowGroup of metadata.rowGroups) {
+      for (const column of rowGroup.columns) {
+        expect(typeof column.hasBloomFilter).toBe('boolean')
+      }
+    }
+  })
+
+  it('should extract bloom filter offset when present', async () => {
+    const reader = new ParquetReader({ storage })
+    const metadata = await reader.readMetadata('data/test.parquet')
+
+    // For files without bloom filters, offset should be undefined
+    // For files with bloom filters, offset should be a bigint
+    for (const rowGroup of metadata.rowGroups) {
+      for (const column of rowGroup.columns) {
+        if (column.hasBloomFilter) {
+          expect(typeof column.bloomFilterOffset).toBe('bigint')
+          expect(typeof column.bloomFilterLength).toBe('number')
+        }
+      }
+    }
+  })
+})

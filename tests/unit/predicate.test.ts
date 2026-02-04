@@ -865,3 +865,120 @@ describe('Predicate Pushdown', () => {
     })
   })
 })
+
+// =============================================================================
+// extractRowGroupStats Tests (from ParquetReader metadata format)
+// =============================================================================
+
+import { extractRowGroupStats, type ParquetMetadata as PredicateParquetMetadata } from '../../src/query/predicate'
+
+describe('extractRowGroupStats', () => {
+  it('extracts stats from metadata with pathInSchema format', () => {
+    // Simulate metadata from ParquetReader which uses pathInSchema
+    const metadata = {
+      schema: [],
+      numRows: 100,
+      rowGroups: [
+        {
+          columns: [
+            {
+              pathInSchema: ['$id'],
+              encodings: ['PLAIN'],
+              compression: 'SNAPPY',
+              statistics: { min: 'a', max: 'z', nullCount: 0 },
+              hasBloomFilter: true,
+              bloomFilterOffset: 12345n,
+              bloomFilterLength: 1024,
+            },
+            {
+              pathInSchema: ['data'],
+              encodings: ['PLAIN'],
+              compression: 'SNAPPY',
+              statistics: { min: null, max: null, nullCount: 100 },
+              hasBloomFilter: false,
+            },
+          ],
+          totalByteSize: 1000,
+          numRows: 100,
+        },
+      ],
+    } as unknown as PredicateParquetMetadata
+
+    const stats = extractRowGroupStats(metadata)
+
+    expect(stats).toHaveLength(1)
+    expect(stats[0]?.rowGroup).toBe(0)
+    expect(stats[0]?.rowCount).toBe(100)
+
+    // Check $id column stats
+    const idStats = stats[0]?.columns.get('$id')
+    expect(idStats).toBeDefined()
+    expect(idStats?.min).toBe('a')
+    expect(idStats?.max).toBe('z')
+    expect(idStats?.hasBloomFilter).toBe(true)
+
+    // Check data column stats
+    const dataStats = stats[0]?.columns.get('data')
+    expect(dataStats).toBeDefined()
+    expect(dataStats?.hasBloomFilter).toBe(false)
+  })
+
+  it('extracts stats from metadata with legacy path format', () => {
+    // Legacy format using path instead of pathInSchema
+    const metadata = {
+      schema: [],
+      numRows: 50,
+      rowGroups: [
+        {
+          columns: [
+            {
+              path: ['name'],
+              encodings: ['PLAIN'],
+              compression: 'UNCOMPRESSED',
+              statistics: { min: 'Alice', max: 'Zoe' },
+              hasBloomFilter: false,
+            },
+          ],
+          totalByteSize: 500,
+          numRows: 50,
+        },
+      ],
+    } as unknown as PredicateParquetMetadata
+
+    const stats = extractRowGroupStats(metadata)
+
+    expect(stats).toHaveLength(1)
+    const nameStats = stats[0]?.columns.get('name')
+    expect(nameStats).toBeDefined()
+    expect(nameStats?.min).toBe('Alice')
+    expect(nameStats?.max).toBe('Zoe')
+  })
+
+  it('handles nested column paths correctly', () => {
+    const metadata = {
+      schema: [],
+      numRows: 25,
+      rowGroups: [
+        {
+          columns: [
+            {
+              pathInSchema: ['user', 'profile', 'name'],
+              encodings: ['PLAIN'],
+              compression: 'SNAPPY',
+              statistics: { min: 'A', max: 'Z' },
+            },
+          ],
+          totalByteSize: 200,
+          numRows: 25,
+        },
+      ],
+    } as unknown as PredicateParquetMetadata
+
+    const stats = extractRowGroupStats(metadata)
+
+    // Nested path should be joined with dots
+    const nestedStats = stats[0]?.columns.get('user.profile.name')
+    expect(nestedStats).toBeDefined()
+    expect(nestedStats?.min).toBe('A')
+  })
+})

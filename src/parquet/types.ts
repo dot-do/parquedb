@@ -103,6 +103,12 @@ export interface ColumnChunkMetadata {
   codec: CompressionCodec
   /** Statistics for the column */
   statistics?: ColumnStatistics | undefined
+  /** Whether this column chunk has a bloom filter */
+  hasBloomFilter?: boolean | undefined
+  /** Offset to bloom filter data in the file (if present) */
+  bloomFilterOffset?: bigint | undefined
+  /** Length of bloom filter data in bytes (if present) */
+  bloomFilterLength?: number | undefined
 }
 
 /** Column statistics */
