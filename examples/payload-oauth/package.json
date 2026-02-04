@@ -1,0 +1,41 @@
+{
+  "name": "payload-parquedb-oauth-example",
+  "version": "1.0.0",
+  "description": "Example Payload CMS app using ParqueDB with oauth.do authentication",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "build:workers": "opennextjs-cloudflare build",
+    "preview": "opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare deploy",
+    "payload": "payload",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed"
+  },
+  "dependencies": {
+    "@payloadcms/next": "^3.0.0",
+    "@payloadcms/richtext-lexical": "^3.0.0",
+    "@payloadcms/storage-r2": "^3.0.0",
+    "next": "^15.0.0",
+    "parquedb": "file:../..",
+    "payload": "^3.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "@opennextjs/cloudflare": "^0.6.0",
+    "@playwright/test": "^1.50.0",
+    "@types/node": "^25.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "dotenv": "^16.4.0",
+    "jose": "^5.2.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^3.99.0"
+  }
+}

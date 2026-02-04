@@ -26,56 +26,29 @@ export async function handleEntityDetail(
   collectionId: string,
   entityId: string
 ): Promise<Response> {
-  const { request, url, baseUrl, startTime, worker, ctx } = context
+  const { request, url, baseUrl, startTime, worker } = context
   const timing = createTimingContext()
 
-  // Check Cache API for cached data response (bypasses all data processing)
-  markTiming(timing, 'cache_check_start')
-  const cache = await caches.open('parquedb-responses')
-  const cacheKey = new Request(`https://parquedb/entity/${datasetId}/${collectionId}/${entityId}`)
-  const cachedResponse = await cache.match(cacheKey)
-  measureTiming(timing, 'cache_check', 'cache_check_start')
+  // Standard $id format is {collection}/{entityId}
+  // e.g., "occupations/11-1011.00" or "titles/tt0000001"
+  const standardId = `${collectionId}/${entityId}`
 
-  if (cachedResponse) {
-    // Return cached response with updated timing info
-    const cachedData = await cachedResponse.json() as { api: unknown; links: unknown; data: unknown; relationships: unknown }
-    return buildResponse(request, cachedData as Parameters<typeof buildResponse>[1], timing, worker.getStorageStats())
-  }
-
-  // Construct possible $id formats (data may use : or / as separator)
-  // e.g., "title:tt0000000" or "knowledge/2.C.2.b"
-  // Note: collectionId is plural (titles) but data often uses singular (title)
-  const singularType = collectionId.endsWith('s') ? collectionId.slice(0, -1) : collectionId
-  const idFormats = [
-    `${singularType}:${entityId}`,   // title:tt0000000 (singular with colon)
-    `${collectionId}:${entityId}`,   // titles:tt0000000 (plural with colon)
-    `${collectionId}/${entityId}`,   // titles/tt0000000
-    entityId,                         // Just the raw ID
-  ]
-
-  // PARALLEL: Fetch entity (trying multiple ID formats) and relationships simultaneously
-  markTiming(timing, 'parallel_start')
-  let entityResult
-  let allRels
   // Namespace uses dataset prefix (e.g., "onet" -> "onet-graph") + collection
   const dataset = DATASETS[datasetId]
   const prefix = dataset?.prefix ?? datasetId
   const namespace = `${prefix}/${collectionId}`
+
+  // PARALLEL: Fetch entity and relationships simultaneously
+  markTiming(timing, 'parallel_start')
+  let entityResult
+  let allRels
   try {
-    // Try to find entity with any of the ID formats
-    const [result1, result2, result3, result4, rels] = await Promise.all([
-      worker.find<EntityRecord>(namespace, { $id: idFormats[0] }, { limit: 1 }),
-      worker.find<EntityRecord>(namespace, { $id: idFormats[1] }, { limit: 1 }),
-      worker.find<EntityRecord>(namespace, { $id: idFormats[2] }, { limit: 1 }),
-      worker.find<EntityRecord>(namespace, { $id: idFormats[3] }, { limit: 1 }),
+    const [result, rels] = await Promise.all([
+      worker.find<EntityRecord>(namespace, { $id: standardId }, { limit: 1 }),
       worker.getRelationships(datasetId, entityId),
     ])
 
-    // Use the first result that found something
-    entityResult = result1.items.length > 0 ? result1 :
-                   result2.items.length > 0 ? result2 :
-                   result3.items.length > 0 ? result3 :
-                   result4
+    entityResult = result
     allRels = rels
   } catch (error) {
     // Handle "File not found" errors with 404 instead of 500
@@ -163,13 +136,6 @@ export async function handleEntityDetail(
       ? (useArrays ? relationships : relWithItems)
       : undefined,
   }
-
-  // Cache the response data for 1 hour (without user-specific info)
-  ctx.waitUntil(
-    cache.put(cacheKey, Response.json(responseData, {
-      headers: { 'Cache-Control': 'public, max-age=3600' }
-    }))
-  )
 
   return buildResponse(request, responseData, timing, worker.getStorageStats())
 }
