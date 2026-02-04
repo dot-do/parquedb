@@ -11,6 +11,7 @@ import type {
   CreateInput,
   PaginatedResult,
   DeleteResult,
+  UpdateResult,
   Filter,
   UpdateInput,
   FindOptions,
@@ -441,6 +442,15 @@ export interface Collection<T extends EntityData = EntityData> {
    * @returns Delete result
    */
   delete(id: string, options?: DeleteOptions): Promise<DeleteResult>
+
+  /**
+   * Update multiple entities matching a filter
+   * @param filter - MongoDB-style filter
+   * @param update - Update operations
+   * @param options - Update options
+   * @returns Update result with matched/modified counts
+   */
+  updateMany(filter: Filter, update: UpdateInput<T>, options?: UpdateOptions): Promise<UpdateResult>
 
   /**
    * Delete multiple entities matching a filter

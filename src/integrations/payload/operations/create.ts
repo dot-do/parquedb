@@ -143,20 +143,13 @@ export async function createVersion(
   const actor = getActor(req, config)
   const parentId = String(parent)
 
-  // Mark previous versions as not latest (batch update to avoid N+1 query)
-  const existingVersions = await db.find(versionsCollection, {
-    parent: parentId,
-    latest: true,
-  })
-
-  if (existingVersions.items.length > 0) {
-    await Promise.all(
-      existingVersions.items.map((existing) => {
-        const localId = existing.$id.split('/')[1]!
-        return db.update(versionsCollection, localId, { $set: { latest: false } }, { actor })
-      })
-    )
-  }
+  // Mark previous versions as not latest using batched updateMany
+  // instead of N+1 individual updates (find + update per item)
+  await db.collection(versionsCollection).updateMany(
+    { parent: parentId, latest: true },
+    { $set: { latest: false } },
+    { actor }
+  )
 
   // Create the version
   // Note: We use 'versionData' as the field name to avoid collision with
@@ -225,20 +218,13 @@ export async function createGlobalVersion(
   const actor = getActor(req, config)
   const parentId = String(parent)
 
-  // Mark previous versions as not latest (batch update to avoid N+1 query)
-  const existingVersions = await db.find(versionsCollection, {
-    globalSlug: slug,
-    latest: true,
-  })
-
-  if (existingVersions.items.length > 0) {
-    await Promise.all(
-      existingVersions.items.map((existing) => {
-        const localId = existing.$id.split('/')[1]!
-        return db.update(versionsCollection, localId, { $set: { latest: false } }, { actor })
-      })
-    )
-  }
+  // Mark previous versions as not latest using batched updateMany
+  // instead of N+1 individual updates (find + update per item)
+  await db.collection(versionsCollection).updateMany(
+    { globalSlug: slug, latest: true },
+    { $set: { latest: false } },
+    { actor }
+  )
 
   // Create the version
   // Note: We use 'versionData' as the field name to avoid collision with
