@@ -474,7 +474,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
 // Run CLI if this is the main module
 // @ts-ignore - import.meta.url check for ESM
-if (process.argv[1]?.endsWith('/cli/index.js') || process.argv[1]?.endsWith('/cli/index.ts')) {
+if (
+  process.argv[1]?.endsWith('/cli/index.js') ||
+  process.argv[1]?.endsWith('/cli/index.ts') ||
+  process.argv[1]?.endsWith('/cli-bundle.js')
+) {
   main().then(code => process.exit(code))
 }
 

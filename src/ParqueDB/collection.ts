@@ -18,6 +18,7 @@ import type {
   CreateOptions,
   UpdateOptions,
   DeleteOptions,
+  CollectionCreateInput,
 } from '../types'
 
 import type {
@@ -32,6 +33,11 @@ import type {
   HybridSearchOptionsCollection,
 } from './types'
 
+import type {
+  GetRelatedOptions,
+  GetRelatedResult,
+} from './types'
+
 /**
  * Interface for the database methods used by CollectionImpl.
  * This avoids circular dependencies with ParqueDBImpl while providing type safety.
@@ -39,6 +45,7 @@ import type {
 interface ParqueDBMethods {
   find<T extends EntityData>(namespace: string, filter?: Filter, options?: FindOptions<T>): Promise<PaginatedResult<Entity<T>>>
   get<T extends EntityData>(namespace: string, id: string, options?: GetOptions<T>): Promise<Entity<T> | null>
+  getRelated<T extends EntityData>(namespace: string, id: string, relationField: string, options?: GetRelatedOptions): Promise<GetRelatedResult<T>>
   create<T extends EntityData>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
   update<T extends EntityData>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
   updateMany<T extends EntityData>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: UpdateOptions): Promise<UpdateResult>
@@ -156,6 +163,50 @@ export class CollectionImpl<T extends EntityData = EntityData> implements Collec
   }
 
   /**
+   * Gets related entities for an entity via a relationship field.
+   *
+   * Traverses relationships defined in the schema (both forward `->`
+   * and reverse `<-` relationships) to return related entities with
+   * pagination, filtering, and sorting support.
+   *
+   * @param id - The entity ID. Can be a full EntityId (namespace/id) or just the id part.
+   *             When using a schema with `$id` directive, use the short ID.
+   * @param relationship - The relationship field name as defined in the schema.
+   * @param options - Optional options for pagination, filtering, and sorting.
+   * @returns A promise resolving to a paginated result containing related entities.
+   *
+   * @throws {RelationshipError} When the entity does not exist.
+   * @throws {RelationshipError} When the relationship is not defined in schema.
+   *
+   * @example
+   * ```typescript
+   * // Get related via reverse relationship
+   * const posts = await collection.getRelated('alice@example.com', 'posts')
+   *
+   * // Get related via forward relationship
+   * const author = await collection.getRelated('my-post', 'author')
+   *
+   * // With pagination
+   * const page1 = await collection.getRelated('alice@example.com', 'posts', {
+   *   limit: 10
+   * })
+   * const page2 = await collection.getRelated('alice@example.com', 'posts', {
+   *   limit: 10,
+   *   cursor: page1.nextCursor
+   * })
+   *
+   * // With filtering and sorting
+   * const publishedPosts = await collection.getRelated('alice@example.com', 'posts', {
+   *   filter: { status: 'published' },
+   *   sort: { views: -1 }
+   * })
+   * ```
+   */
+  async getRelated(id: string, relationship: string, options?: GetRelatedOptions): Promise<GetRelatedResult<T>> {
+    return this.db.getRelated<T>(this.namespace, id, relationship, options)
+  }
+
+  /**
    * Creates a new entity in the collection.
    *
    * Automatically generates a ULID for the entity's $id, sets audit fields
@@ -191,8 +242,10 @@ export class CollectionImpl<T extends EntityData = EntityData> implements Collec
    * )
    * ```
    */
-  async create(data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>> {
-    return this.db.create<T>(this.namespace, data, options)
+  async create(data: CollectionCreateInput<T>, options?: CreateOptions): Promise<Entity<T>> {
+    // Cast through unknown since CollectionCreateInput allows optional $type/name
+    // but the underlying db.create will derive them if missing
+    return this.db.create<T>(this.namespace, data as unknown as CreateInput<T>, options)
   }
 
   /**

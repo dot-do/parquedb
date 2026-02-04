@@ -38,7 +38,7 @@ import {
   type RemoveAction,
   type ProtocolAction,
   type MetadataAction,
-} from '../delta-utils'
+} from '../delta-helpers'
 import { ParquetWriter } from '../parquet/writer'
 
 // =============================================================================

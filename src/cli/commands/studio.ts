@@ -51,8 +51,9 @@ export async function studioCommand(args: ParsedArgs): Promise<number> {
     const storage = new FsBackend(config.dataDir)
 
     // Discover collections from Parquet files
+    // Note: storage is already rooted at config.dataDir, so we pass '.' to scan from root
     print(`Scanning for Parquet files in ${config.dataDir}...`)
-    const collections = await discoverCollections(storage, config.dataDir)
+    const collections = await discoverCollections(storage, '.')
 
     if (collections.length === 0) {
       print('')
@@ -140,10 +141,8 @@ function parseStudioArgs(args: ParsedArgs, fileConfig: ParqueDBConfig | null): S
     config.dataDir = findDataDirectory()
   }
 
-  // Options from generic parser
-  if (args.options.directory) {
-    config.dataDir = args.options.directory
-  }
+  // Note: args.options.directory defaults to cwd, so we don't use it here
+  // The -d/--directory flag is handled in the rawArgs parsing below
 
   // Parse additional flags from raw args
   const rawArgs = process.argv.slice(2)
@@ -167,6 +166,8 @@ function parseStudioArgs(args: ParsedArgs, fileConfig: ParqueDBConfig | null): S
       }
     } else if (arg === '--metadata-dir' || arg === '-m') {
       config.metadataDir = rawArgs[++i] ?? '.studio'
+    } else if (arg === '--directory' || arg === '-d') {
+      config.dataDir = rawArgs[++i] ?? config.dataDir
     } else if (arg === '--admin-email') {
       config.adminEmail = rawArgs[++i]
     } else if (arg === '--admin-password') {

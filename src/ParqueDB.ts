@@ -80,6 +80,7 @@ import type {
   CreateInput,
   PaginatedResult,
   DeleteResult,
+  UpdateResult,
   Filter,
   UpdateInput,
   FindOptions,
@@ -177,6 +178,13 @@ export interface IParqueDB {
     items: UpsertManyItem<T>[],
     options?: UpsertManyOptions | undefined
   ): Promise<UpsertManyResult>
+
+  updateMany<T extends EntityData = EntityData>(
+    namespace: string,
+    filter: Filter,
+    update: UpdateInput<T>,
+    options?: UpdateOptions | undefined
+  ): Promise<UpdateResult>
 
   deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
 
@@ -312,6 +320,7 @@ export class ParqueDB {
       // Bulk Operations
       upsert: impl.upsert.bind(impl),
       upsertMany: impl.upsertMany.bind(impl),
+      updateMany: impl.updateMany.bind(impl),
       deleteMany: impl.deleteMany.bind(impl),
       restore: impl.restore.bind(impl),
       ingestStream: impl.ingestStream.bind(impl),

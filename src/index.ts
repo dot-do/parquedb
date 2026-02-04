@@ -55,6 +55,9 @@ export {
   type DBConfig,
   type DBInput,
   type DBInstance,
+  // Type inference (compile-time schema -> TypeScript)
+  type DBSchemaInput,
+  type TypedDBInstance,
   // Collection options helpers
   DEFAULT_COLLECTION_OPTIONS,
   /**
@@ -1315,6 +1318,14 @@ export {
    * @returns Configured SyncEngine instance
    */
   createSyncEngine,
+  // Branch management
+  /**
+   * Manages database branches for git-style version control.
+   * Create, switch, and merge branches of your database.
+   */
+  BranchManager,
+  type BranchManagerOptions,
+  createBranchManager,
   // Types
   type SyncManifest,
   type SyncFileEntry,

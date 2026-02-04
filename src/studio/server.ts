@@ -35,7 +35,8 @@ export async function createStudioServer(
   // Discovery function
   const discover = async () => {
     // Discover collections
-    collections = await discoverCollections(storage, config.dataDir)
+    // Note: storage is already rooted at config.dataDir, so we scan from '.'
+    collections = await discoverCollections(storage, '.')
 
     // Load existing metadata
     const existingMetadata = await loadMetadata(storage, config.metadataDir)

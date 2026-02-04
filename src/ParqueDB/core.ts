@@ -12,6 +12,7 @@ import type {
   CreateInput,
   PaginatedResult,
   DeleteResult,
+  UpdateResult,
   Filter,
   UpdateInput,
   FindOptions,
@@ -745,6 +746,31 @@ export class ParqueDBImpl {
     }
 
     return result
+  }
+
+  async updateMany<T extends EntityData = EntityData>(
+    namespace: string,
+    filter: Filter,
+    update: UpdateInput<T>,
+    options?: UpdateOptions
+  ): Promise<UpdateResult> {
+    validateNamespace(namespace)
+    validateFilter(filter)
+    validateUpdateOperators(update)
+
+    const result = await this.find<T>(namespace, filter)
+    let matchedCount = 0
+    let modifiedCount = 0
+
+    for (const entity of result.items) {
+      matchedCount++
+      const updateResult = await this.update<T>(namespace, entity.$id as string, update, options)
+      if (updateResult) {
+        modifiedCount++
+      }
+    }
+
+    return { matchedCount, modifiedCount }
   }
 
   async delete(

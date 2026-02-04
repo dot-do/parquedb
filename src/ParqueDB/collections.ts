@@ -12,6 +12,7 @@ import type {
   EntityData,
   PaginatedResult,
   DeleteResult,
+  UpdateResult,
   Filter,
   UpdateInput,
   FindOptions,
@@ -44,6 +45,7 @@ export interface CollectionManagerContext {
   get<T extends EntityData>(namespace: string, id: string, options?: GetOptions<T>): Promise<Entity<T> | null>
   create<T extends EntityData>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
   update<T extends EntityData>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
+  updateMany<T extends EntityData>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: UpdateOptions): Promise<UpdateResult>
   delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
   deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
   upsert<T extends EntityData>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: { returnDocument?: 'before' | 'after' | undefined }): Promise<Entity<T> | null>
