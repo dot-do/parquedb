@@ -3,7 +3,8 @@ name: E2E Production Monitoring
 on:
   # Health checks every 15 minutes
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/15 * * * *'  # Every 15 minutes (health checks)
+    - cron: '5 * * * *'     # Hourly at :05 (full benchmarks, offset to avoid collision)
   # Allow manual trigger
   workflow_dispatch:
     inputs:
@@ -118,8 +119,10 @@ jobs:
     name: Full Benchmark (Hourly)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Only run on the hour OR when manually triggered with run_full_benchmark=true
-    if: github.event.schedule == '0 * * * *' || github.event.inputs.run_full_benchmark == 'true'
+    # Only run on hourly schedule (5 * * * *) OR when manually triggered with run_full_benchmark=true
+    if: >-
+      github.event.inputs.run_full_benchmark == 'true' ||
+      github.event.schedule == '5 * * * *'
     needs: health-check
 
     steps:
