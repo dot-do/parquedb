@@ -1112,7 +1112,10 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
     batchNumber: number
   ): Promise<WriteResult> {
     const retryConfig = this.config.retry ?? DEFAULT_CONFIG.retry
-    const { maxAttempts, initialDelayMs, maxDelayMs, backoffMultiplier } = retryConfig
+    const maxAttempts = retryConfig.maxAttempts ?? DEFAULT_CONFIG.retry.maxAttempts
+    const initialDelayMs = retryConfig.initialDelayMs ?? DEFAULT_CONFIG.retry.initialDelayMs
+    const maxDelayMs = retryConfig.maxDelayMs ?? DEFAULT_CONFIG.retry.maxDelayMs
+    const backoffMultiplier = retryConfig.backoffMultiplier ?? DEFAULT_CONFIG.retry.backoffMultiplier
     let lastError: Error | null = null
     let delay = initialDelayMs
 
@@ -1453,7 +1456,7 @@ export class MVStreamProcessor<T extends Record<string, unknown> = Record<string
   private updateMetadataOnBatch: boolean
   private onBatchWritten?: ((result: MVBatchWriteResult) => void) | undefined
   private onStateChange?: ((newState: ViewState, oldState: ViewState) => void) | undefined
-  private onError?: ((context: MVErrorContext<T>) => void) | undefined
+  private onError?: ((error: Error, context: MVErrorContext<T>) => void) | undefined
 
   private buffer: T[] = []
   private running = false
