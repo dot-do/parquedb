@@ -30,6 +30,7 @@ import type {
 import { entityTarget, relTarget } from '../types'
 import { SchemaValidator } from '../schema/validator'
 import { IndexManager } from '../indexes/manager'
+import { EventSourcedBackend, type EventSourcedConfig } from '../storage/EventSourcedBackend'
 import type { IndexDefinition, IndexMetadata, IndexStats } from '../indexes/types'
 import { asRelEventPayload, asCreateInput } from '../types/cast'
 import { DEFAULT_MAX_INBOUND } from '../constants'
@@ -77,6 +78,7 @@ import {
   getEntityCacheStats,
   type EntityStoreConfig,
 } from './store'
+import { globalFireAndForgetMetrics } from '../utils/fire-and-forget'
 import type { IStorageRouter, StorageMode } from '../storage/router'
 import type { CollectionOptions } from '../types/collection-options'
 import type { EmbeddingProvider } from '../embeddings/provider'
@@ -153,6 +155,7 @@ import {
   computeDiff,
   revertEntity,
   type EventOperationsContext,
+  type CircuitBreakerState,
 } from './event-operations'
 
 import {
@@ -192,6 +195,15 @@ export class ParqueDBImpl {
   private _embeddingProvider: EmbeddingProvider | null = null
   private _snapshotManager: SnapshotManagerImpl | null = null
   private _onEvent: ((event: Event) => void | Promise<void>) | null = null
+  private _circuitBreakerState: CircuitBreakerState = {
+    failureCount: 0,
+    trippedAt: null,
+    isDisabled: false,
+  }
+  /** EventSourcedBackend for unified event-sourced writes (default write path) */
+  private _eventSourcedBackend: EventSourcedBackend | null = null
+  /** Whether event sourcing is enabled (default: true) */
+  private _useEventSourcing = true
 
   constructor(config: ParqueDBConfig) {
     if (!config.storage) {
@@ -242,6 +254,21 @@ export class ParqueDBImpl {
 
     if (config.onEvent) {
       this._onEvent = config.onEvent
+    }
+
+    // Initialize EventSourcedBackend as default write path
+    // Can be disabled with disableEventSourcing: true for testing legacy behavior
+    const disableEventSourcing = (config as { disableEventSourcing?: boolean }).disableEventSourcing
+    this._useEventSourcing = !disableEventSourcing
+    if (this._useEventSourcing) {
+      const userConfig = (config as { eventSourcedConfig?: EventSourcedConfig }).eventSourcedConfig
+      // Default to immediate flush (maxBufferedEvents: 1) for strong consistency
+      // This ensures events are persisted before create/update/delete returns
+      const eventSourcedConfig: EventSourcedConfig = {
+        maxBufferedEvents: 1,
+        ...userConfig,
+      }
+      this._eventSourcedBackend = new EventSourcedBackend(config.storage, eventSourcedConfig)
     }
   }
 
@@ -303,6 +330,7 @@ export class ParqueDBImpl {
       setPendingEvents: (events) => { this.pendingEvents = events },
       getSnapshotManager: () => this.getSnapshotManager(),
       onEvent: this._onEvent ?? undefined,
+      circuitBreakerState: this._circuitBreakerState,
     }
   }
 
@@ -352,7 +380,7 @@ export class ParqueDBImpl {
     }
   }
 
-  private recordEventInternal(
+  private async recordEventInternal(
     op: EventOp,
     target: string,
     before: Entity | null,
@@ -360,7 +388,23 @@ export class ParqueDBImpl {
     actor?: EntityId,
     meta?: Record<string, unknown>
   ): Promise<void> {
-    return recordEvent(this.getEventContext(), op, target, before, after, actor, meta)
+    // Record to in-memory event log for time-travel queries and MV integration
+    await recordEvent(this.getEventContext(), op, target, before, after, actor, meta)
+
+    // If event sourcing is enabled, also persist via EventSourcedBackend
+    if (this._useEventSourcing && this._eventSourcedBackend) {
+      const event: Event = {
+        id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        ts: Date.now(),
+        op,
+        target,
+        before: before as import('../types').Variant | undefined,
+        after: after as import('../types').Variant | undefined,
+        actor: actor as string | undefined,
+        metadata: meta as import('../types').Variant | undefined,
+      }
+      await this._eventSourcedBackend.appendEvent(event)
+    }
   }
 
   private reconstructEntityAtTimeInternal(fullId: string, asOf: Date): Entity | null {
@@ -440,6 +484,11 @@ export class ParqueDBImpl {
         break
       }
     }
+
+    // Also flush EventSourcedBackend if enabled
+    if (this._useEventSourcing && this._eventSourcedBackend) {
+      await this._eventSourcedBackend.flush()
+    }
   }
 
   /**
@@ -463,6 +512,9 @@ export class ParqueDBImpl {
     this.reverseRelIndex.clear()
     this.entityEventIndex.clear()
     this.reconstructionCache.clear()
+
+    // Reset global fire-and-forget metrics to prevent memory leaks
+    globalFireAndForgetMetrics.reset()
   }
 
   /**
@@ -470,6 +522,13 @@ export class ParqueDBImpl {
    */
   async disposeAsync(): Promise<void> {
     await this.flush()
+
+    // Dispose EventSourcedBackend if enabled
+    if (this._useEventSourcing && this._eventSourcedBackend) {
+      await this._eventSourcedBackend.dispose()
+      this._eventSourcedBackend = null
+    }
+
     this.dispose()
   }
 
@@ -564,10 +623,33 @@ export class ParqueDBImpl {
     id: string,
     options?: GetOptions<T>
   ): Promise<Entity<T> | null> {
+    const fullId = toFullId(namespace, id)
+
+    // When event sourcing is enabled, reconstruct from events first
+    if (this._useEventSourcing && this._eventSourcedBackend) {
+      const [ns, ...idParts] = fullId.split('/')
+      const entityIdPart = idParts.join('/')
+      const entity = await this._eventSourcedBackend.reconstructEntity(ns!, entityIdPart)
+      if (!entity) return null
+      if (entity.deletedAt && !options?.includeDeleted) return null
+
+      if (options?.maxInbound !== undefined) {
+        const resultEntity = applyMaxInboundToEntity(this.getRelationshipContext(), entity as Entity<T>, options.maxInbound)
+        if (options?.hydrate && options.hydrate.length > 0) {
+          return hydrateEntity(this.getRelationshipContext(), resultEntity, fullId, options.hydrate, options.maxInbound)
+        }
+        return resultEntity
+      }
+      if (options?.hydrate && options.hydrate.length > 0) {
+        const maxInbound = options.maxInbound ?? DEFAULT_MAX_INBOUND
+        return hydrateEntity(this.getRelationshipContext(), entity as Entity<T>, fullId, options.hydrate, maxInbound)
+      }
+      return entity as Entity<T>
+    }
+
+    // Legacy path: read from globalEntityStore
     const entity = await getEntity<T>(this.getEntityContext(), namespace, id, options)
     if (!entity) return null
-
-    const fullId = toFullId(namespace, id)
 
     // Handle maxInbound for reverse relationship fields
     if (options?.maxInbound !== undefined) {

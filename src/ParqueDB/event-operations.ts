@@ -93,6 +93,19 @@ export interface EventArchivalContext extends EventFlushContext {
 }
 
 /**
+ * Circuit breaker state for async callback error handling.
+ * Tracks failure counts and disables frequently failing callbacks.
+ */
+export interface CircuitBreakerState {
+  /** Number of consecutive failures */
+  failureCount: number
+  /** Timestamp when the circuit breaker tripped */
+  trippedAt: number | null
+  /** Whether the callback is currently disabled */
+  isDisabled: boolean
+}
+
+/**
  * Context for event recording operations.
  * Used by functions that write events.
  */
@@ -105,6 +118,11 @@ export interface EventRecordingContext extends EventArchivalContext {
    * Used for materialized view integration to emit events to the MV system.
    */
   onEvent?: ((event: Event) => void | Promise<void>) | undefined
+  /**
+   * Circuit breaker state for the event callback.
+   * Managed externally to persist across calls.
+   */
+  circuitBreakerState?: CircuitBreakerState | undefined
 }
 
 /**
@@ -117,6 +135,153 @@ export interface EventRecordingContext extends EventArchivalContext {
 export interface EventOperationsContext extends EventRecordingContext {
   // All properties are inherited from EventRecordingContext
   // This interface exists for backward compatibility
+}
+
+// =============================================================================
+// Circuit Breaker Constants
+// =============================================================================
+
+/** Number of consecutive failures before disabling callback */
+const CIRCUIT_BREAKER_THRESHOLD = 5
+
+/** Cooldown period in milliseconds before re-enabling callback */
+const CIRCUIT_BREAKER_COOLDOWN_MS = 100
+
+// =============================================================================
+// Async Callback Error Handling
+// =============================================================================
+
+/**
+ * Handle errors from async event callbacks with circuit breaker protection.
+ *
+ * - Logs errors with full context (event type, namespace, entity ID)
+ * - Tracks consecutive failures
+ * - Disables callback after threshold failures (circuit breaker)
+ */
+function handleCallbackError(
+  ctx: EventRecordingContext,
+  error: unknown,
+  event: Event,
+  target: string
+): void {
+  // Initialize circuit breaker state if not present
+  if (!ctx.circuitBreakerState) {
+    ctx.circuitBreakerState = {
+      failureCount: 0,
+      trippedAt: null,
+      isDisabled: false,
+    }
+  }
+
+  ctx.circuitBreakerState.failureCount++
+
+  // Extract context from target for logging
+  let namespace = ''
+  let entityId = ''
+  if (!isRelationshipTarget(target)) {
+    const info = parseEntityTarget(target)
+    namespace = info.ns
+    entityId = info.id
+  }
+
+  // Extract predicate for relationship events
+  let predicate = ''
+  if (isRelationshipTarget(target)) {
+    // Target format: rel:{from}:{predicate}:{to}
+    const parts = target.split(':')
+    if (parts.length >= 3) {
+      predicate = parts[2] ?? ''
+    }
+  }
+
+  // Build context string for logging
+  const contextParts: string[] = []
+  contextParts.push(`op=${event.op}`)
+  if (namespace) contextParts.push(`ns=${namespace}`)
+  if (entityId) contextParts.push(`id=${entityId}`)
+  if (predicate) contextParts.push(`predicate=${predicate}`)
+  contextParts.push(`target=${target}`)
+
+  const errorMessage = error instanceof Error ? error.message : String(error)
+  const contextStr = contextParts.join(', ')
+
+  logger.warn(
+    `[ParqueDB] Event callback error (${contextStr}): ${errorMessage}`,
+    error instanceof Error ? error : new Error(errorMessage)
+  )
+
+  // Check if circuit breaker should trip
+  if (ctx.circuitBreakerState.failureCount >= CIRCUIT_BREAKER_THRESHOLD && !ctx.circuitBreakerState.isDisabled) {
+    ctx.circuitBreakerState.isDisabled = true
+    ctx.circuitBreakerState.trippedAt = Date.now()
+    logger.warn(
+      `[ParqueDB] Event callback circuit breaker tripped after ${ctx.circuitBreakerState.failureCount} failures - callback disabled`
+    )
+  }
+}
+
+/**
+ * Check if circuit breaker should be reset after cooldown.
+ */
+function maybeResetCircuitBreaker(ctx: EventRecordingContext): void {
+  if (!ctx.circuitBreakerState?.isDisabled) return
+  if (!ctx.circuitBreakerState.trippedAt) return
+
+  const elapsed = Date.now() - ctx.circuitBreakerState.trippedAt
+  if (elapsed >= CIRCUIT_BREAKER_COOLDOWN_MS) {
+    ctx.circuitBreakerState.isDisabled = false
+    ctx.circuitBreakerState.failureCount = 0
+    ctx.circuitBreakerState.trippedAt = null
+  }
+}
+
+/**
+ * Invoke the event callback with error handling and circuit breaker protection.
+ *
+ * - Catches both sync throws and async rejections
+ * - Logs errors with context (event type, namespace, entity ID)
+ * - Implements circuit breaker to disable frequently failing callbacks
+ */
+function invokeEventCallback(
+  ctx: EventRecordingContext,
+  event: Event,
+  target: string
+): void {
+  if (!ctx.onEvent) return
+
+  // Check if circuit breaker should be reset
+  maybeResetCircuitBreaker(ctx)
+
+  // Skip if circuit breaker is tripped
+  if (ctx.circuitBreakerState?.isDisabled) return
+
+  try {
+    // Call the callback - may return a promise
+    const result = ctx.onEvent(event)
+
+    if (result instanceof Promise) {
+      // Don't await - fire and forget for MV updates
+      // But catch rejections to prevent unhandled promise rejections
+      result
+        .then(() => {
+          // On success, reset failure count
+          if (ctx.circuitBreakerState) {
+            ctx.circuitBreakerState.failureCount = 0
+          }
+        })
+        .catch((err) => {
+          handleCallbackError(ctx, err, event, target)
+        })
+    } else {
+      // Synchronous success - reset failure count
+      if (ctx.circuitBreakerState) {
+        ctx.circuitBreakerState.failureCount = 0
+      }
+    }
+  } catch (err) {
+    // Handle synchronous throws
+    handleCallbackError(ctx, err, event, target)
+  }
 }
 
 // =============================================================================
@@ -300,10 +465,13 @@ export async function flushEvents(ctx: EventFlushContext): Promise<void> {
     }
 
     // Only clear the events that were successfully flushed
-    ctx.setPendingEvents(ctx.pendingEvents.slice(eventsToFlush.length))
+    // IMPORTANT: Compute remaining events BEFORE calling setPendingEvents
+    // because ctx.pendingEvents is a captured reference that won't update
+    const remainingEvents = ctx.pendingEvents.slice(eventsToFlush.length)
+    ctx.setPendingEvents(remainingEvents)
 
     // Schedule another flush if more events arrived
-    if (ctx.pendingEvents.length > 0) {
+    if (remainingEvents.length > 0) {
       ctx.setFlushPromise(Promise.resolve().then(() => flushEvents(ctx)))
     } else {
       ctx.setFlushPromise(null)
@@ -327,9 +495,12 @@ export async function flushEvents(ctx: EventFlushContext): Promise<void> {
       }
     }
 
-    ctx.setPendingEvents(ctx.pendingEvents.filter(e => !eventsToFlush.includes(e)))
+    // IMPORTANT: Compute remaining events BEFORE calling setPendingEvents
+    // because ctx.pendingEvents is a captured reference that won't update
+    const remainingEventsOnError = ctx.pendingEvents.filter(e => !eventsToFlush.includes(e))
+    ctx.setPendingEvents(remainingEventsOnError)
 
-    if (ctx.pendingEvents.length > 0) {
+    if (remainingEventsOnError.length > 0) {
       ctx.setFlushPromise(Promise.resolve().then(() => flushEvents(ctx)))
     } else {
       ctx.setFlushPromise(null)

@@ -553,6 +553,9 @@ export class EventSourcedBackend implements EventSourcedOperations {
       lastSeq: buffer.lastSeq,
       sizeBytes: 0,
     })
+
+    // Also persist sequence metadata for consistency
+    await this.persistSequenceMetadata()
   }
 
   /**
