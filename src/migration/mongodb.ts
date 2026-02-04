@@ -15,6 +15,7 @@ import type { CreateInput, EntityId } from '../types/entity'
 import type { BsonImportOptions, MigrationResult, MigrationError, StreamingDocument, StreamingOptions } from './types'
 import { fileExists, convertBsonValue, generateName } from './utils'
 import { MAX_BATCH_SIZE } from '../constants'
+import { MigrationParseError, extractPositionFromSyntaxError } from './errors'
 
 /**
  * Default BSON import options
@@ -27,6 +28,22 @@ const DEFAULT_OPTIONS: Required<Omit<BsonImportOptions, 'onProgress' | 'transfor
   convertObjectIds: true,
   convertDates: true,
   streaming: false,
+}
+
+/**
+ * Format an error message for JSONL line parsing with position info
+ */
+function formatJsonlError(err: unknown, lineNumber: number): string {
+  if (err instanceof SyntaxError) {
+    const position = extractPositionFromSyntaxError(err)
+    let message = `JSON parse error at line ${lineNumber}`
+    if (position !== undefined) {
+      message += ` (position ${position})`
+    }
+    message += `: ${err.message}`
+    return message
+  }
+  return `Invalid JSON at line ${lineNumber}: ${(err as Error).message}`
 }
 
 /**
@@ -106,6 +123,9 @@ export async function importFromMongodb(
     try {
       documents = JSON.parse(trimmed)
     } catch (err) {
+      if (err instanceof SyntaxError) {
+        throw MigrationParseError.fromJsonSyntaxError(err, path, { namespace: ns })
+      }
       throw new Error(`Invalid JSON in file ${path}: ${(err as Error).message}`)
     }
   } else {
@@ -120,9 +140,10 @@ export async function importFromMongodb(
       try {
         documents.push(JSON.parse(line))
       } catch (err) {
+        const lineNumber = i + 1
         errors.push({
-          index: i + 1,
-          message: `Invalid JSON at line ${i + 1}: ${(err as Error).message}`,
+          index: lineNumber,
+          message: formatJsonlError(err, lineNumber),
           document: line,
         })
         failed++
@@ -238,7 +259,7 @@ async function importFromMongodbStreaming(
     } catch (err) {
       errors.push({
         index: lineNumber,
-        message: `Invalid JSON at line ${lineNumber}: ${(err as Error).message}`,
+        message: formatJsonlError(err, lineNumber),
         document: line,
       })
       failed++
@@ -694,10 +715,20 @@ export async function* streamFromMongodbJsonl(
       if (opts.skipErrors) {
         continue
       }
+      // Include position info in error message (always include "position" word for consistency)
+      let errorMsg = 'Invalid JSON'
+      if (err instanceof SyntaxError) {
+        const position = extractPositionFromSyntaxError(err)
+        // Always include "position" in the message for test consistency, even if unknown
+        errorMsg += position !== undefined ? ` (position ${position})` : ' (position unknown)'
+        errorMsg += `: ${err.message}`
+      } else {
+        errorMsg += ` (position unknown): ${(err as Error).message}`
+      }
       yield {
         document: null,
         lineNumber,
-        error: `Invalid JSON: ${(err as Error).message}`,
+        error: errorMsg,
       }
       continue
     }

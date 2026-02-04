@@ -45,10 +45,15 @@ export interface SQLSelect {
   type: 'SELECT'
   columns: SQLColumn[] | '*'
   from: string
+  fromAlias?: string | undefined
+  joins?: SQLJoin[] | undefined
   where?: SQLWhere | undefined
+  groupBy?: string[] | undefined
+  having?: SQLWhere | undefined
   orderBy?: SQLOrderBy[] | undefined
   limit?: number | undefined
   offset?: number | undefined
+  aggregations?: SQLAggregation[] | undefined
 }
 
 export interface SQLInsert {
@@ -74,7 +79,26 @@ export interface SQLDelete {
   returning?: SQLColumn[] | '*' | undefined
 }
 
-export type SQLStatement = SQLSelect | SQLInsert | SQLUpdate | SQLDelete
+export interface SQLTransaction {
+  type: 'TRANSACTION'
+  action: 'BEGIN' | 'COMMIT' | 'ROLLBACK' | 'SAVEPOINT'
+  savepoint?: string | undefined
+}
+
+export interface SQLJoin {
+  type: 'INNER' | 'LEFT' | 'RIGHT' | 'FULL'
+  table: string
+  alias?: string | undefined
+  on: SQLCondition
+}
+
+export interface SQLAggregation {
+  function: 'COUNT' | 'SUM' | 'AVG' | 'MIN' | 'MAX'
+  column: string | '*'
+  alias?: string | undefined
+}
+
+export type SQLStatement = SQLSelect | SQLInsert | SQLUpdate | SQLDelete | SQLTransaction
 
 // ============================================================================
 // Query Options

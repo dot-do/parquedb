@@ -20,6 +20,7 @@
 import type { Entity, StorageBackend, Event } from '../types'
 import type { Snapshot, SnapshotQueryStats } from './types'
 import { LRUCache } from '../utils/ttl-cache'
+import { globalFireAndForgetMetrics } from '../utils/fire-and-forget'
 
 // =============================================================================
 // Entity Store Configuration
@@ -718,4 +719,7 @@ export function clearGlobalState(storage: StorageBackend): void {
   globalReverseRelIndex.delete(storage)
   globalEntityEventIndex.delete(storage)
   globalReconstructionCache.delete(storage)
+
+  // Reset global fire-and-forget metrics to prevent memory leaks
+  globalFireAndForgetMetrics.reset()
 }

@@ -14,6 +14,7 @@
 import type { ParqueDB } from '../ParqueDB'
 import type { CreateInput, EntityId } from '../types/entity'
 import type { JsonImportOptions, MigrationResult, MigrationError, StreamingDocument, StreamingOptions } from './types'
+import { MigrationParseError, extractPositionFromSyntaxError } from './errors'
 import { getNestedValue, fileExists } from './utils'
 import { MAX_BATCH_SIZE } from '../constants'
 
@@ -79,7 +80,7 @@ export async function importFromJson(
   try {
     data = JSON.parse(content)
   } catch (err) {
-    throw new Error(`Invalid JSON in file ${path}: ${(err as Error).message}`)
+    throw MigrationParseError.fromJsonSyntaxError(err as SyntaxError, path, { namespace: ns })
   }
 
   // Extract array from data
@@ -234,9 +235,12 @@ export async function importFromJsonl(
     try {
       doc = JSON.parse(line)
     } catch (err) {
+      const syntaxErr = err as SyntaxError
+      const position = extractPositionFromSyntaxError(syntaxErr)
+      const positionInfo = position !== undefined ? ` at position ${position}` : ''
       errors.push({
         index: lineNumber,
-        message: `Invalid JSON at line ${lineNumber}: ${(err as Error).message}`,
+        message: `Invalid JSON at line ${lineNumber}${positionInfo}: ${syntaxErr.message}`,
         document: line,
       })
       failed++
@@ -474,10 +478,14 @@ export async function* streamFromJsonl(
       if (opts.skipErrors) {
         continue
       }
+      const syntaxErr = err as SyntaxError
+      const position = extractPositionFromSyntaxError(syntaxErr)
+      // Always include "position" in the message for consistency, even if unknown
+      const positionInfo = position !== undefined ? ` at position ${position}` : ' (position unknown)'
       yield {
         document: null,
         lineNumber,
-        error: `Invalid JSON: ${(err as Error).message}`,
+        error: `Invalid JSON${positionInfo}: ${syntaxErr.message}`,
       }
       continue
     }
@@ -550,7 +558,7 @@ export async function* streamFromJson(
   try {
     data = JSON.parse(content)
   } catch (err) {
-    throw new Error(`Invalid JSON in file ${path}: ${(err as Error).message}`)
+    throw MigrationParseError.fromJsonSyntaxError(err as SyntaxError, path)
   }
 
   // Extract array from data

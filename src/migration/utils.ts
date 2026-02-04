@@ -154,8 +154,8 @@ export function parseCsvLine(line: string, delimiter: string = ','): string[] {
       current += char
       i++
     } else {
-      if (char === '"') {
-        // Start of quoted field
+      if (char === '"' && current === '') {
+        // Start of quoted field (only at the beginning of a field)
         inQuotes = true
         i++
         continue

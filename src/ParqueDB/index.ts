@@ -398,3 +398,35 @@ export {
   getReverseRelationshipFields,
   type SchemaOperationsContext,
 } from './schema-operations'
+
+// Re-export read path operations
+/**
+ * Read operations module providing find, get, and query functions.
+ * @see findEntities - Find entities matching a filter
+ * @see getEntity - Get a single entity by ID
+ * @see queryEntities - Query entities with advanced options
+ */
+export {
+  findEntities as findEntitiesFromReadPath,
+  getEntity as getEntityFromReadPath,
+  queryEntities,
+  type ReadPathContext,
+} from './read-path'
+
+// Re-export write path operations
+/**
+ * Write operations module providing create, update, delete, and restore functions.
+ * @see createEntity - Create a new entity
+ * @see updateEntity - Update an existing entity
+ * @see deleteEntity - Delete an entity
+ * @see deleteManyEntities - Delete multiple entities
+ * @see restoreEntity - Restore a soft-deleted entity
+ */
+export {
+  createEntity as createEntityFromWritePath,
+  updateEntity as updateEntityFromWritePath,
+  deleteEntity as deleteEntityFromWritePath,
+  deleteManyEntities as deleteManyEntitiesFromWritePath,
+  restoreEntity as restoreEntityFromWritePath,
+  type WritePathContext,
+} from './write-path'

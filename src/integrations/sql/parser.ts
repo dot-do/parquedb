@@ -20,6 +20,9 @@ import type {
   SQLValue,
   SQLOrderBy,
   SQLOperator,
+  SQLTransaction,
+  SQLJoin,
+  SQLAggregation,
 } from './types.js'
 
 // ============================================================================
@@ -41,6 +44,33 @@ export function parseSQL(sql: string): SQLStatement {
     return parseUpdate(normalized)
   } else if (upperSQL.startsWith('DELETE')) {
     return parseDelete(normalized)
+  } else if (upperSQL === 'BEGIN' || upperSQL.startsWith('BEGIN ')) {
+    return { type: 'TRANSACTION', action: 'BEGIN' } as SQLTransaction
+  } else if (upperSQL === 'COMMIT' || upperSQL.startsWith('COMMIT ')) {
+    return { type: 'TRANSACTION', action: 'COMMIT' } as SQLTransaction
+  } else if (upperSQL === 'ROLLBACK' || upperSQL.startsWith('ROLLBACK ')) {
+    // Handle ROLLBACK TO SAVEPOINT - use normalized to preserve case
+    const savepointMatch = normalized.match(
+      /ROLLBACK\s+TO\s+(?:SAVEPOINT\s+)?(\w+)/i
+    )
+    if (savepointMatch && savepointMatch[1]) {
+      return {
+        type: 'TRANSACTION',
+        action: 'ROLLBACK',
+        savepoint: savepointMatch[1],
+      } as SQLTransaction
+    }
+    return { type: 'TRANSACTION', action: 'ROLLBACK' } as SQLTransaction
+  } else if (upperSQL.startsWith('SAVEPOINT ')) {
+    const match = normalized.match(/SAVEPOINT\s+(\w+)/i)
+    if (match && match[1]) {
+      return {
+        type: 'TRANSACTION',
+        action: 'SAVEPOINT',
+        savepoint: match[1],
+      } as SQLTransaction
+    }
+    throw new Error(`Invalid SAVEPOINT statement: ${sql}`)
   }
 
   throw new Error(`Unsupported SQL statement: ${sql.slice(0, 50)}...`)
@@ -67,24 +97,69 @@ function parseSelect(sql: string): SQLSelect {
   if (columnsStr === '*') {
     result.columns = '*'
   } else {
-    result.columns = parseColumnList(columnsStr)
+    // Parse columns and detect aggregations
+    const { columns, aggregations } = parseColumnsWithAggregations(columnsStr)
+    result.columns = columns
+    if (aggregations.length > 0) {
+      result.aggregations = aggregations
+    }
   }
 
-  // Extract table: FROM table
-  const fromMatch = sql.match(/FROM\s+["']?(\w+)["']?/i)
+  // Extract table with optional alias: FROM table [alias]
+  // Handle JOINs by matching only up to JOIN keyword
+  const fromMatch = sql.match(
+    /FROM\s+["']?(\w+)["']?(?:\s+(?:AS\s+)?["']?(\w+)["']?)?(?=\s+(?:INNER|LEFT|RIGHT|FULL|CROSS|JOIN|WHERE|GROUP|HAVING|ORDER|LIMIT|OFFSET|$)|\s*$)/i
+  )
   if (!fromMatch || !fromMatch[1]) {
-    throw new Error(`Missing FROM clause: ${sql}`)
+    // Try simpler match
+    const simpleFromMatch = sql.match(/FROM\s+["']?(\w+)["']?/i)
+    if (!simpleFromMatch || !simpleFromMatch[1]) {
+      throw new Error(`Missing FROM clause: ${sql}`)
+    }
+    result.from = simpleFromMatch[1]
+  } else {
+    result.from = fromMatch[1]
+    if (fromMatch[2]) {
+      result.fromAlias = fromMatch[2]
+    }
   }
-  result.from = fromMatch[1]
 
-  // Extract WHERE clause
-  const whereMatch = sql.match(/WHERE\s+(.+?)(?:\s+ORDER\s+BY|\s+LIMIT|\s+OFFSET|\s*$)/i)
+  // Extract JOINs
+  const joins = parseJoins(sql)
+  if (joins.length > 0) {
+    result.joins = joins
+  }
+
+  // Extract WHERE clause (stop at GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET)
+  const whereMatch = sql.match(
+    /WHERE\s+(.+?)(?:\s+GROUP\s+BY|\s+HAVING|\s+ORDER\s+BY|\s+LIMIT|\s+OFFSET|\s*$)/i
+  )
   if (whereMatch && whereMatch[1]) {
     result.where = parseWhere(whereMatch[1])
   }
 
+  // Extract GROUP BY
+  const groupByMatch = sql.match(
+    /GROUP\s+BY\s+(.+?)(?:\s+HAVING|\s+ORDER\s+BY|\s+LIMIT|\s+OFFSET|\s*$)/i
+  )
+  if (groupByMatch && groupByMatch[1]) {
+    result.groupBy = groupByMatch[1]
+      .split(',')
+      .map((g) => g.trim().replace(/["']/g, ''))
+  }
+
+  // Extract HAVING
+  const havingMatch = sql.match(
+    /HAVING\s+(.+?)(?:\s+ORDER\s+BY|\s+LIMIT|\s+OFFSET|\s*$)/i
+  )
+  if (havingMatch && havingMatch[1]) {
+    result.having = parseWhere(havingMatch[1])
+  }
+
   // Extract ORDER BY
-  const orderMatch = sql.match(/ORDER\s+BY\s+(.+?)(?:\s+LIMIT|\s+OFFSET|\s*$)/i)
+  const orderMatch = sql.match(
+    /ORDER\s+BY\s+(.+?)(?:\s+LIMIT|\s+OFFSET|\s*$)/i
+  )
   if (orderMatch && orderMatch[1]) {
     result.orderBy = parseOrderBy(orderMatch[1])
   }
@@ -102,6 +177,80 @@ function parseSelect(sql: string): SQLSelect {
   }
 
   return result
+}
+
+/**
+ * Parse columns and extract aggregation functions
+ */
+function parseColumnsWithAggregations(columnsStr: string): {
+  columns: SQLColumn[] | '*'
+  aggregations: SQLAggregation[]
+} {
+  const aggregations: SQLAggregation[] = []
+  const columns: SQLColumn[] = []
+
+  const parts = splitColumns(columnsStr)
+  for (const part of parts) {
+    const trimmed = part.trim()
+
+    // Check for aggregation function: COUNT(*), SUM(col), AVG(col), MIN(col), MAX(col)
+    const aggMatch = trimmed.match(
+      /^(COUNT|SUM|AVG|MIN|MAX)\s*\(\s*(\*|[\w.$]+)\s*\)(?:\s+(?:AS\s+)?["']?(\w+)["']?)?$/i
+    )
+    if (aggMatch && aggMatch[1] && aggMatch[2]) {
+      aggregations.push({
+        function: aggMatch[1].toUpperCase() as SQLAggregation['function'],
+        column: aggMatch[2],
+        alias: aggMatch[3],
+      })
+      // Also add as column for result mapping
+      columns.push({
+        name: aggMatch[3] || `${aggMatch[1].toLowerCase()}_${aggMatch[2]}`,
+        alias: aggMatch[3],
+      })
+    } else {
+      // Regular column
+      const colList = parseColumnList(trimmed)
+      columns.push(...colList)
+    }
+  }
+
+  return { columns: columns.length > 0 ? columns : '*', aggregations }
+}
+
+/**
+ * Parse JOIN clauses from SQL
+ */
+function parseJoins(sql: string): SQLJoin[] {
+  const joins: SQLJoin[] = []
+
+  // Match all JOIN clauses
+  const joinRegex =
+    /(INNER|LEFT|RIGHT|FULL|CROSS)?\s*JOIN\s+["']?(\w+)["']?(?:\s+(?:AS\s+)?["']?(\w+)["']?)?\s+ON\s+(.+?)(?=\s+(?:INNER|LEFT|RIGHT|FULL|CROSS|JOIN|WHERE|GROUP|HAVING|ORDER|LIMIT|OFFSET)|\s*$)/gi
+  let match
+
+  while ((match = joinRegex.exec(sql)) !== null) {
+    const joinType = (match[1]?.toUpperCase() || 'INNER') as SQLJoin['type']
+    const table = match[2]
+    const alias = match[3]
+    const onClause = match[4]?.trim()
+
+    if (table && onClause) {
+      try {
+        const condition = parseCondition(onClause)
+        joins.push({
+          type: joinType,
+          table,
+          alias,
+          on: condition,
+        })
+      } catch {
+        // If we can't parse the ON clause, skip this join
+      }
+    }
+  }
+
+  return joins
 }
 
 // ============================================================================
@@ -126,7 +275,9 @@ function parseInsert(sql: string): SQLInsert {
   // Extract columns: (col1, col2, ...)
   const columnsMatch = sql.match(/\(([^)]+)\)\s+VALUES/i)
   if (columnsMatch && columnsMatch[1]) {
-    result.columns = columnsMatch[1].split(',').map((c) => c.trim().replace(/["']/g, ''))
+    result.columns = columnsMatch[1]
+      .split(',')
+      .map((c) => c.trim().replace(/["']/g, ''))
   }
 
   // Extract values: VALUES (v1, v2, ...)
@@ -265,9 +416,10 @@ function parseCondition(condStr: string): SQLCondition {
   const trimmed = condStr.trim()
 
   // Remove outer parentheses if present
-  const unwrapped = trimmed.startsWith('(') && trimmed.endsWith(')')
-    ? trimmed.slice(1, -1).trim()
-    : trimmed
+  const unwrapped =
+    trimmed.startsWith('(') && trimmed.endsWith(')')
+      ? trimmed.slice(1, -1).trim()
+      : trimmed
 
   // Handle IN / NOT IN
   const inMatch = unwrapped.match(/^(.+?)\s+(NOT\s+)?IN\s*\((.+)\)$/i)
@@ -293,7 +445,9 @@ function parseCondition(condStr: string): SQLCondition {
   }
 
   // Handle comparison operators: =, !=, <>, >, >=, <, <=, LIKE, ILIKE
-  const opMatch = unwrapped.match(/^(.+?)\s*(!=|<>|>=|<=|=|>|<|ILIKE|LIKE)\s*(.+)$/i)
+  const opMatch = unwrapped.match(
+    /^(.+?)\s*(!=|<>|>=|<=|=|>|<|ILIKE|LIKE)\s*(.+)$/i
+  )
   if (opMatch && opMatch[1] && opMatch[2] && opMatch[3]) {
     const left = parseColumnOrValue(opMatch[1].trim())
     const operator = normalizeOperator(opMatch[2].trim().toUpperCase())
@@ -380,8 +534,10 @@ function parseValue(valStr: string): SQLValue {
   }
 
   // String: 'value' or "value"
-  if ((trimmed.startsWith("'") && trimmed.endsWith("'")) ||
-      (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+  if (
+    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+  ) {
     return { type: 'string', value: trimmed.slice(1, -1) }
   }
 
@@ -399,9 +555,13 @@ function parseColumnOrValue(str: string): SQLColumn | SQLValue {
   const trimmed = str.trim()
 
   // Check if it's a value (string, number, param)
-  if (trimmed.startsWith("'") || trimmed.startsWith('"') ||
-      trimmed.startsWith('$') || trimmed === '?' ||
-      !isNaN(Number(trimmed))) {
+  if (
+    trimmed.startsWith("'") ||
+    trimmed.startsWith('"') ||
+    trimmed.startsWith('$') ||
+    trimmed === '?' ||
+    !isNaN(Number(trimmed))
+  ) {
     return parseValue(trimmed)
   }
 
@@ -431,7 +591,9 @@ function splitLogical(str: string, keyword: 'AND' | 'OR'): string[] {
     // Check for keyword at depth 0
     if (depth === 0) {
       const remaining = str.slice(i)
-      const keywordMatch = remaining.match(new RegExp(`^\\s+${keyword}\\s+`, 'i'))
+      const keywordMatch = remaining.match(
+        new RegExp(`^\\s+${keyword}\\s+`, 'i')
+      )
       if (keywordMatch) {
         parts.push(str.slice(lastIndex, i).trim())
         i += keywordMatch[0].length - 1

@@ -143,3 +143,14 @@ export {
   tryParseEntityId,
   userActorId,
 } from './entity-id'
+
+export {
+  type MaybeAsyncCallback,
+  type SafeCallbackErrorHandler,
+  type SafeCallbackSuccessHandler,
+  type SafeCallbackOptions,
+  type SafeCallbackResult,
+  safeCallback,
+  createSafeCallback,
+  safeCallbackIfDefined,
+} from './safe-callback'

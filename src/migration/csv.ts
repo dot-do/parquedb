@@ -14,6 +14,15 @@ import type { CreateInput, EntityId } from '../types/entity'
 import type { CsvImportOptions, MigrationResult, MigrationError, StreamingDocument, CsvStreamingOptions } from './types'
 import { fileExists, parseCsvLine, inferType } from './utils'
 import { MAX_BATCH_SIZE } from '../constants'
+import { extractPositionFromSyntaxError } from './errors'
+
+/**
+ * Result of converting a value with potential JSON error
+ */
+interface ConversionResult {
+  value: unknown
+  error?: { column: string; message: string } | undefined
+}
 
 /**
  * Default CSV import options
@@ -121,6 +130,7 @@ export async function importFromCsv(
 
     // Convert row to document
     let doc: Record<string, unknown> = {}
+    let jsonColumnError: { column: string; message: string } | undefined
 
     for (let i = 0; i < fields.length; i++) {
       const header = headers[i] || `column${i + 1}`
@@ -128,12 +138,27 @@ export async function importFromCsv(
 
       // Apply type conversion
       if (opts.columnTypes && header in opts.columnTypes) {
-        value = convertToType(fields[i] || '', opts.columnTypes[header]!)
+        const result = convertToType(fields[i] || '', opts.columnTypes[header]!, header)
+        value = result.value
+        if (result.error && !jsonColumnError) {
+          jsonColumnError = result.error
+        }
       } else if (opts.inferTypes) {
         value = inferType(fields[i] || '')
       }
 
       doc[header] = value
+    }
+
+    // Check for JSON column parse errors
+    if (jsonColumnError) {
+      errors.push({
+        index: lineNumber,
+        message: `${jsonColumnError.message} at line ${lineNumber}`,
+        document: doc,
+      })
+      failed++
+      continue
     }
 
     // Apply transform
@@ -217,42 +242,56 @@ function normalizeHeader(header: string): string {
 
 /**
  * Convert a string value to a specific type
+ * For JSON type, returns error info instead of silently returning null
  */
-function convertToType(value: string, type: 'string' | 'number' | 'boolean' | 'date' | 'json'): unknown {
+function convertToType(
+  value: string,
+  type: 'string' | 'number' | 'boolean' | 'date' | 'json',
+  column: string
+): ConversionResult {
   const trimmed = value.trim()
 
   if (trimmed === '' || trimmed.toLowerCase() === 'null') {
-    return null
+    return { value: null }
   }
 
   switch (type) {
     case 'string':
-      return trimmed
+      return { value: trimmed }
 
     case 'number':
       const num = parseFloat(trimmed)
-      return isNaN(num) ? null : num
+      return { value: isNaN(num) ? null : num }
 
     case 'boolean':
       const lower = trimmed.toLowerCase()
-      if (lower === 'true' || lower === '1' || lower === 'yes') return true
-      if (lower === 'false' || lower === '0' || lower === 'no') return false
-      return null
+      if (lower === 'true' || lower === '1' || lower === 'yes') return { value: true }
+      if (lower === 'false' || lower === '0' || lower === 'no') return { value: false }
+      return { value: null }
 
     case 'date':
       const date = new Date(trimmed)
-      return isNaN(date.getTime()) ? null : date
+      return { value: isNaN(date.getTime()) ? null : date }
 
     case 'json':
       try {
-        return JSON.parse(trimmed)
-      } catch {
-        // Intentionally ignored: not valid JSON, return null to indicate parse failure
-        return null
+        return { value: JSON.parse(trimmed) }
+      } catch (err) {
+        // Return error context for JSON column parse failures
+        if (err instanceof SyntaxError) {
+          const position = extractPositionFromSyntaxError(err)
+          let message = `JSON parse error in column '${column}'`
+          if (position !== undefined) {
+            message += ` (position ${position})`
+          }
+          message += `: ${err.message}`
+          return { value: null, error: { column, message } }
+        }
+        return { value: null, error: { column, message: `JSON parse error in column '${column}': ${(err as Error).message}` } }
       }
 
     default:
-      return trimmed
+      return { value: trimmed }
   }
 }
 
@@ -411,10 +450,11 @@ export async function* streamFromCsv(
   // Determine headers
   let headers: string[] = []
   let isFirstDataLine = true
-  let lineNumber = 0
+  // Track file line number (1-indexed, including header)
+  let fileLineNumber = 0
 
   for await (const line of readLines(path)) {
-    lineNumber++
+    fileLineNumber++
 
     // Skip empty lines
     if (opts.skipEmptyLines && !line.trim()) {
@@ -446,8 +486,12 @@ export async function* streamFromCsv(
       continue
     }
 
+    // Current line number for reporting (file line number)
+    const lineNumber = fileLineNumber
+
     // Convert row to document
     let doc: Record<string, unknown> = {}
+    let jsonColumnError: { column: string; message: string } | undefined
 
     for (let i = 0; i < fields.length; i++) {
       const header = headers[i] || `column${i + 1}`
@@ -455,12 +499,29 @@ export async function* streamFromCsv(
 
       // Apply type conversion
       if (opts.columnTypes && header in opts.columnTypes) {
-        value = convertToType(fields[i] || '', opts.columnTypes[header]!)
+        const result = convertToType(fields[i] || '', opts.columnTypes[header]!, header)
+        value = result.value
+        if (result.error && !jsonColumnError) {
+          jsonColumnError = result.error
+        }
       } else if (opts.inferTypes) {
         value = inferType(fields[i] || '')
       }
 
       doc[header] = value
+    }
+
+    // Check for JSON column parse errors
+    if (jsonColumnError) {
+      if (opts.skipErrors) {
+        continue
+      }
+      yield {
+        document: null,
+        lineNumber,
+        error: jsonColumnError.message,
+      }
+      continue
     }
 
     // Apply transform

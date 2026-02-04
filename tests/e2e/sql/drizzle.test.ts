@@ -19,15 +19,8 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ParqueDB } from '../../../src/ParqueDB'
+import { MemoryBackend } from '../../../src/storage/MemoryBackend'
 import { createDrizzleProxy } from '../../../src/integrations/sql/index'
-import {
-  createTestDB,
-  disposeTestDB,
-  seedTestData,
-  getColumnValue,
-  measureTime,
-  type SeededTestData,
-} from './fixtures'
 
 // =============================================================================
 // Test Configuration
@@ -38,6 +31,114 @@ const TEST_TIMEOUT = 5000
 
 /** Maximum time for bulk operations */
 const BULK_OPERATION_TIMEOUT = 10000
+
+// =============================================================================
+// Test Helpers (inline)
+// =============================================================================
+
+function createTestDB(): ParqueDB {
+  const backend = new MemoryBackend()
+  return new ParqueDB({ storage: backend })
+}
+
+function disposeTestDB(db: ParqueDB | null): void {
+  if (db && typeof (db as unknown as { dispose?: () => void }).dispose === 'function') {
+    (db as unknown as { dispose: () => void }).dispose()
+  }
+}
+
+async function seedTestData(db: ParqueDB) {
+  const users = db.collection('users')
+  const posts = db.collection('posts')
+  const comments = db.collection('comments')
+
+  const alice = await users.create({
+    $type: 'User',
+    name: 'Alice',
+    email: 'alice@example.com',
+    age: 30,
+    status: 'active',
+  })
+
+  const bob = await users.create({
+    $type: 'User',
+    name: 'Bob',
+    email: 'bob@example.com',
+    age: 25,
+    status: 'active',
+  })
+
+  const charlie = await users.create({
+    $type: 'User',
+    name: 'Charlie',
+    email: 'charlie@example.com',
+    age: 35,
+    status: 'inactive',
+  })
+
+  const post1 = await posts.create({
+    $type: 'Post',
+    name: 'First Post',
+    title: 'Hello World',
+    content: 'This is my first post',
+    authorId: alice.$id,
+    views: 100,
+    status: 'published',
+  })
+
+  const post2 = await posts.create({
+    $type: 'Post',
+    name: 'Second Post',
+    title: 'Learning TypeScript',
+    content: 'TypeScript is great',
+    authorId: alice.$id,
+    views: 250,
+    status: 'published',
+  })
+
+  const post3 = await posts.create({
+    $type: 'Post',
+    name: 'Third Post',
+    title: 'My Draft',
+    content: 'Work in progress',
+    authorId: bob.$id,
+    views: 10,
+    status: 'draft',
+  })
+
+  await comments.create({
+    $type: 'Comment',
+    name: 'Comment 1',
+    text: 'Great post!',
+    postId: post1.$id,
+    authorId: bob.$id,
+  })
+
+  await comments.create({
+    $type: 'Comment',
+    name: 'Comment 2',
+    text: 'Thanks for sharing',
+    postId: post1.$id,
+    authorId: charlie.$id,
+  })
+
+  await comments.create({
+    $type: 'Comment',
+    name: 'Comment 3',
+    text: 'Very informative',
+    postId: post2.$id,
+    authorId: bob.$id,
+  })
+
+  return { alice, bob, charlie, post1, post2, post3 }
+}
+
+async function measureTime<T>(operation: () => Promise<T>): Promise<{ result: T; elapsed: number }> {
+  const start = Date.now()
+  const result = await operation()
+  const elapsed = Date.now() - start
+  return { result, elapsed }
+}
 
 // =============================================================================
 // Drizzle ORM Integration Tests
@@ -148,10 +249,8 @@ describe('Drizzle ORM Integration', () => {
   // ===========================================================================
 
   describe('Query Builder - SELECT', () => {
-    let seededData: SeededTestData
-
     beforeEach(async () => {
-      seededData = await seedTestData(db)
+      await seedTestData(db)
     })
 
     describe('Basic Queries', () => {
@@ -403,10 +502,8 @@ describe('Drizzle ORM Integration', () => {
   // ===========================================================================
 
   describe('Query Builder - UPDATE', () => {
-    let seededData: SeededTestData
-
     beforeEach(async () => {
-      seededData = await seedTestData(db)
+      await seedTestData(db)
     })
 
     it('should execute basic update()', async () => {
@@ -775,11 +872,8 @@ describe('Drizzle ORM Integration', () => {
   // ===========================================================================
   // 8. Transactions
   // ===========================================================================
-  // NOTE: SQL-level transactions require parser support for BEGIN/COMMIT/ROLLBACK.
-  // ParqueDB supports transactions via db.beginTransaction() API instead.
-  // Tracked in: parquedb-k59x - Drizzle ORM full integration (future work)
 
-  describe.skip('Transactions', () => {
+  describe('Transactions', () => {
     it('should support transaction commit', async () => {
       const proxy = createDrizzleProxy(db)
 

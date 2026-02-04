@@ -391,8 +391,9 @@ export class ParqueDBImpl {
     // Record to in-memory event log for time-travel queries and MV integration
     await recordEvent(this.getEventContext(), op, target, before, after, actor, meta)
 
-    // If event sourcing is enabled, also persist via EventSourcedBackend
-    if (this._useEventSourcing && this._eventSourcedBackend) {
+    // If event sourcing is enabled and NOT in a transaction, persist via EventSourcedBackend
+    // During transactions, events are only persisted on commit to support rollback
+    if (this._useEventSourcing && this._eventSourcedBackend && !this.inTransaction) {
       const event: Event = {
         id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         ts: Date.now(),
@@ -625,8 +626,9 @@ export class ParqueDBImpl {
   ): Promise<Entity<T> | null> {
     const fullId = toFullId(namespace, id)
 
-    // When event sourcing is enabled, reconstruct from events first
-    if (this._useEventSourcing && this._eventSourcedBackend) {
+    // When event sourcing is enabled and NOT in a transaction, reconstruct from events first
+    // During transactions, we read from globalEntityStore since events aren't persisted yet
+    if (this._useEventSourcing && this._eventSourcedBackend && !this.inTransaction) {
       const [ns, ...idParts] = fullId.split('/')
       const entityIdPart = idParts.join('/')
       const entity = await this._eventSourcedBackend.reconstructEntity(ns!, entityIdPart)
@@ -647,7 +649,7 @@ export class ParqueDBImpl {
       return entity as Entity<T>
     }
 
-    // Legacy path: read from globalEntityStore
+    // Legacy path or transaction: read from globalEntityStore
     const entity = await getEntity<T>(this.getEntityContext(), namespace, id, options)
     if (!entity) return null
 
@@ -913,6 +915,56 @@ export class ParqueDBImpl {
       async commit(): Promise<void> {
         self.inTransaction = false
         await flushEvents(self.getEventContext())
+
+        // Persist events via EventSourcedBackend now that transaction is committed
+        if (self._useEventSourcing && self._eventSourcedBackend) {
+          // Get the in-memory events that were recorded during the transaction
+          // and persist them to storage
+          for (const op of pendingOps) {
+            // Determine fullId from entity or from namespace/id
+            let fullId: string
+            if (op.entity?.$id) {
+              fullId = op.entity.$id as string
+            } else if (op.id) {
+              fullId = toFullId(op.namespace, op.id)
+            } else if (op.beforeState?.$id) {
+              fullId = op.beforeState.$id as string
+            } else {
+              continue // Skip if we can't determine the entity ID
+            }
+
+            const [ns, ...idParts] = fullId.split('/')
+            const target = entityTarget(ns ?? '', idParts.join('/'))
+
+            let eventOp: EventOp
+            let before: Entity | null = null
+            let after: Entity | null = null
+
+            if (op.type === 'create') {
+              eventOp = 'CREATE'
+              after = op.entity ?? null
+            } else if (op.type === 'update') {
+              eventOp = 'UPDATE'
+              before = op.beforeState ?? null
+              after = op.entity ?? null
+            } else {
+              eventOp = 'DELETE'
+              before = op.beforeState ?? null
+            }
+
+            const event: Event = {
+              id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              ts: Date.now(),
+              op: eventOp,
+              target,
+              before: before as import('../types').Variant | undefined,
+              after: after as import('../types').Variant | undefined,
+            }
+            await self._eventSourcedBackend.appendEvent(event)
+          }
+          await self._eventSourcedBackend.flush()
+        }
+
         pendingOps.length = 0
       },
 

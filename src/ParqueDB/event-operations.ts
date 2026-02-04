@@ -355,20 +355,8 @@ export function recordEvent(
 
   // Emit event to MV system if callback is configured
   // This is fire-and-forget - we don't want MV processing to block writes
-  if (ctx.onEvent) {
-    try {
-      // Call asynchronously to avoid blocking the write path
-      const result = ctx.onEvent(event)
-      if (result instanceof Promise) {
-        // Don't await - fire and forget for MV updates
-        result.catch((err) => {
-          logger.warn('[ParqueDB] MV event callback error:', err)
-        })
-      }
-    } catch (err) {
-      logger.warn('[ParqueDB] MV event callback error:', err)
-    }
-  }
+  // Uses invokeEventCallback for proper error handling and circuit breaker
+  invokeEventCallback(ctx, event, target)
 
   // Add to pending events buffer
   ctx.pendingEvents.push(event)

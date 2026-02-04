@@ -2,8 +2,6 @@
  * ParqueDB Write Path Module
  *
  * Contains write operations for entities: create, update, delete, deleteMany, restore.
- * These functions operate on entity state through a context object for dependency injection.
- *
  * @module ParqueDB/write-path
  */
 
@@ -25,40 +23,34 @@ import type {
 import { entityTarget } from '../types'
 import { generateId, deepClone } from '../utils'
 import { applyOperators } from '../mutation/operators'
-import { parseFieldType, isRelationString } from '../types/schema'
-import pluralize from 'pluralize'
 
 import type { SchemaValidator } from '../schema/validator'
-
-import type {
-  SnapshotConfig,
-} from './types'
-
-import {
-  VersionConflictError,
-  ValidationError,
-} from './types'
-
+import type { SnapshotConfig } from './types'
+import { VersionConflictError } from './types'
 import { validateNamespace, validateFilter, validateUpdateOperators, toFullId } from './validation'
 import { findEntities, type ReadPathContext } from './read-path'
+
+// Import helper functions from entity-operations (canonical source)
+import {
+  deriveTypeFromNamespace,
+  isFieldRequired,
+  hasDefault,
+  validateFieldType,
+  applySchemaDefaults,
+} from './entity-operations'
+
+// Re-export helpers for backward compatibility
+export { deriveTypeFromNamespace, isFieldRequired, hasDefault, validateFieldType, applySchemaDefaults }
 
 // =============================================================================
 // Types
 // =============================================================================
 
-/**
- * Context for write/mutation operations.
- *
- * Extends ReadPathContext with additional dependencies needed for mutations.
- */
+/** Context for write/mutation operations. Extends ReadPathContext. */
 export interface WritePathContext extends ReadPathContext {
-  /** Schema definitions for validation */
   schema: Schema
-  /** Schema validator instance (if schema validation is enabled) */
   schemaValidator: SchemaValidator | null
-  /** Configuration for automatic snapshots */
   snapshotConfig: SnapshotConfig
-  /** Function to record events to the event log */
   recordEvent: (
     op: import('../types').EventOp,
     target: string,
@@ -67,11 +59,8 @@ export interface WritePathContext extends ReadPathContext {
     actor?: EntityId | undefined,
     meta?: Record<string, unknown> | undefined
   ) => Promise<void>
-  /** Function to index relationships for an entity */
   indexRelationshipsForEntity: (sourceId: string, entity: Entity) => void
-  /** Function to remove relationship indexes for an entity */
   unindexRelationshipsForEntity: (sourceId: string, entity: Entity) => void
-  /** Function to apply $link/$unlink operators */
   applyRelationshipOperators: <T extends Record<string, unknown> = Record<string, unknown>>(
     entity: Entity,
     fullId: string,
@@ -80,246 +69,10 @@ export interface WritePathContext extends ReadPathContext {
 }
 
 // =============================================================================
-// Helper Functions
-// =============================================================================
-
-/**
- * Derive entity type from namespace/collection name.
- *
- * Converts a plural namespace to a singular PascalCase type name.
- *
- * @param namespace - The namespace (e.g., 'posts', 'users', 'categories')
- * @returns The derived type name (e.g., 'Post', 'User', 'Category')
- *
- * @example
- * ```typescript
- * deriveTypeFromNamespace('posts')     // 'Post'
- * deriveTypeFromNamespace('users')     // 'User'
- * deriveTypeFromNamespace('categories') // 'Category'
- * ```
- */
-export function deriveTypeFromNamespace(namespace: string): string {
-  const singular = pluralize.singular(namespace)
-  return singular.charAt(0).toUpperCase() + singular.slice(1)
-}
-
-/**
- * Check if a field is required based on its schema definition.
- *
- * @param fieldDef - The field definition from schema
- * @returns True if the field is required (has '!' modifier or required: true)
- */
-export function isFieldRequired(fieldDef: unknown): boolean {
-  if (typeof fieldDef === 'string') {
-    return fieldDef.includes('!')
-  }
-
-  if (typeof fieldDef === 'object' && fieldDef !== null) {
-    const def = fieldDef as { type?: string | undefined; required?: boolean | undefined }
-    if (def.required) return true
-    if (def.type && def.type.includes('!')) return true
-  }
-
-  return false
-}
-
-/**
- * Check if a field has a default value defined in its schema.
- *
- * @param fieldDef - The field definition from schema
- * @returns True if the field has a default value
- */
-export function hasDefault(fieldDef: unknown): boolean {
-  if (typeof fieldDef === 'string') {
-    return fieldDef.includes('=')
-  }
-
-  if (typeof fieldDef === 'object' && fieldDef !== null) {
-    return 'default' in (fieldDef as object)
-  }
-
-  return false
-}
-
-/**
- * Validate a field value against its type definition from the schema.
- *
- * @param fieldName - The field name for error messages
- * @param value - The value to validate
- * @param fieldDef - The field definition from schema
- * @param typeName - The type name for error messages
- * @throws {ValidationError} If the value doesn't match the expected type
- */
-export function validateFieldType(
-  fieldName: string,
-  value: unknown,
-  fieldDef: unknown,
-  typeName: string
-): void {
-  let expectedType: string | undefined
-
-  if (typeof fieldDef === 'string') {
-    // Skip relationship definitions
-    if (isRelationString(fieldDef)) {
-      // Validate relationship reference format
-      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-        for (const [, refValue] of Object.entries(value)) {
-          if (typeof refValue !== 'string' || !refValue.includes('/')) {
-            throw new ValidationError(
-              'validation',
-              typeName,
-              'Invalid relationship reference format (must be "ns/id")',
-              { fieldName }
-            )
-          }
-        }
-      }
-      return
-    }
-    const parsed = parseFieldType(fieldDef)
-    expectedType = parsed.type
-  } else if (typeof fieldDef === 'object' && fieldDef !== null) {
-    const def = fieldDef as { type?: string | undefined }
-    if (def.type && !isRelationString(def.type)) {
-      const parsed = parseFieldType(def.type)
-      expectedType = parsed.type
-    }
-  }
-
-  if (!expectedType) return
-
-  // Basic type validation
-  const actualType = typeof value
-  switch (expectedType) {
-    case 'string':
-    case 'text':
-    case 'markdown':
-    case 'email':
-    case 'url':
-    case 'uuid':
-      if (actualType !== 'string') {
-        throw new ValidationError('validation', typeName, 'Type mismatch', {
-          fieldName,
-          expectedType: 'string',
-          actualType,
-        })
-      }
-      break
-    case 'number':
-    case 'int':
-    case 'float':
-    case 'double':
-      if (actualType !== 'number') {
-        throw new ValidationError('validation', typeName, 'Type mismatch', {
-          fieldName,
-          expectedType: 'number',
-          actualType,
-        })
-      }
-      break
-    case 'boolean':
-      if (actualType !== 'boolean') {
-        throw new ValidationError('validation', typeName, 'Type mismatch', {
-          fieldName,
-          expectedType: 'boolean',
-          actualType,
-        })
-      }
-      break
-    case 'date':
-    case 'datetime':
-    case 'timestamp':
-      if (!(value instanceof Date) && actualType !== 'string') {
-        throw new ValidationError('validation', typeName, 'Type mismatch', {
-          fieldName,
-          expectedType: 'date',
-          actualType,
-        })
-      }
-      break
-  }
-}
-
-/**
- * Apply default values from the schema to create input data.
- *
- * @param data - The create input data
- * @param schema - The schema definitions
- * @returns The data with defaults applied
- */
-export function applySchemaDefaults<T extends EntityData = EntityData>(
-  data: CreateInput<T>,
-  schema: Schema
-): CreateInput<T> {
-  const typeName = data.$type
-  if (!typeName) return data
-
-  const typeDef = schema[typeName]
-  if (!typeDef) return data
-
-  const result: Record<string, unknown> = { ...data }
-
-  for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
-    if (fieldName.startsWith('$')) continue
-    if (result[fieldName] !== undefined) continue
-
-    // Extract default value
-    let defaultValue: unknown
-
-    if (typeof fieldDef === 'string') {
-      const match = fieldDef.match(/=\s*(.+)$/)
-      if (match && match[1]) {
-        defaultValue = match[1].trim()
-        // Try to parse as JSON
-        try {
-          defaultValue = JSON.parse(defaultValue as string)
-        } catch {
-          // Intentionally ignored: value is not valid JSON, keep as raw string
-        }
-      }
-    } else if (typeof fieldDef === 'object' && fieldDef !== null) {
-      const def = fieldDef as { default?: unknown | undefined }
-      defaultValue = def.default
-    }
-
-    if (defaultValue !== undefined) {
-      result[fieldName] = defaultValue
-    }
-  }
-
-  return result as CreateInput<T>
-}
-
-// =============================================================================
 // Write Operations
 // =============================================================================
 
-/**
- * Create a new entity in a namespace.
- *
- * @param ctx - Write context with required dependencies
- * @param namespace - Collection/namespace to create in
- * @param data - Entity data (can include $id for custom IDs)
- * @param options - Create options (actor, validation settings)
- * @param validateAgainstSchema - Optional function to validate against schema
- * @returns The created entity with system fields populated
- *
- * @example
- * ```typescript
- * // Basic create
- * const post = await createEntity(ctx, 'posts', {
- *   title: 'Hello World',
- *   content: 'This is my first post'
- * })
- *
- * // With custom ID
- * const user = await createEntity(ctx, 'users', {
- *   $id: 'admin',
- *   name: 'Admin User',
- *   email: 'admin@example.com'
- * })
- * ```
- */
+/** Create a new entity in a namespace. */
 export async function createEntity<T extends EntityData = EntityData>(
   ctx: WritePathContext,
   namespace: string,
@@ -395,32 +148,7 @@ export async function createEntity<T extends EntityData = EntityData>(
   return entity
 }
 
-/**
- * Update an existing entity.
- *
- * @param ctx - Write context with required dependencies
- * @param namespace - Collection/namespace
- * @param id - Entity ID
- * @param update - Update operators ($set, $inc, $push, $link, etc.)
- * @param options - Update options (actor, upsert, expectedVersion)
- * @returns The updated entity or null if not found
- *
- * @example
- * ```typescript
- * // Basic update
- * const updated = await updateEntity(ctx, 'posts', 'post-123', {
- *   $set: { title: 'Updated Title' },
- *   $inc: { viewCount: 1 }
- * })
- *
- * // With optimistic concurrency
- * const updated = await updateEntity(ctx, 'posts', 'post-123', {
- *   $set: { status: 'published' }
- * }, {
- *   expectedVersion: 3
- * })
- * ```
- */
+/** Update an existing entity. Supports $set, $inc, $push, $link, etc. */
 export async function updateEntity<T extends EntityData = EntityData>(
   ctx: WritePathContext,
   namespace: string,
@@ -530,26 +258,7 @@ export async function updateEntity<T extends EntityData = EntityData>(
   return (options?.returnDocument === 'before' ? beforeEntity : entity) as Entity<T>
 }
 
-/**
- * Delete an entity.
- *
- * By default performs a soft delete (sets deletedAt). Use hard: true for permanent deletion.
- *
- * @param ctx - Write context with required dependencies
- * @param namespace - Collection/namespace
- * @param id - Entity ID
- * @param options - Delete options (hard, actor, expectedVersion)
- * @returns Result with deletedCount
- *
- * @example
- * ```typescript
- * // Soft delete
- * const result = await deleteEntity(ctx, 'posts', 'post-123')
- *
- * // Hard delete
- * const result = await deleteEntity(ctx, 'posts', 'post-123', { hard: true })
- * ```
- */
+/** Delete an entity. Soft delete by default, use hard: true for permanent deletion. */
 export async function deleteEntity(
   ctx: WritePathContext,
   namespace: string,
@@ -629,26 +338,7 @@ export async function deleteEntity(
   return { deletedCount: 1 }
 }
 
-/**
- * Delete multiple entities matching a filter.
- *
- * @param ctx - Write context with required dependencies
- * @param namespace - Collection/namespace
- * @param filter - MongoDB-style filter to match entities
- * @param options - Delete options (hard, actor)
- * @returns Result with total deletedCount
- *
- * @example
- * ```typescript
- * // Delete all draft posts
- * const result = await deleteManyEntities(ctx, 'posts', { status: 'draft' })
- *
- * // Hard delete old entries
- * const result = await deleteManyEntities(ctx, 'logs', {
- *   createdAt: { $lt: thirtyDaysAgo }
- * }, { hard: true })
- * ```
- */
+/** Delete multiple entities matching a filter. */
 export async function deleteManyEntities(
   ctx: WritePathContext,
   namespace: string,
@@ -669,22 +359,7 @@ export async function deleteManyEntities(
   return { deletedCount }
 }
 
-/**
- * Restore a soft-deleted entity.
- *
- * Removes the deletedAt and deletedBy fields, making the entity active again.
- *
- * @param ctx - Write context with required dependencies
- * @param namespace - Collection/namespace
- * @param id - Entity ID
- * @param options - Restore options (actor)
- * @returns The restored entity or null if not found
- *
- * @example
- * ```typescript
- * const restored = await restoreEntity(ctx, 'posts', 'post-123')
- * ```
- */
+/** Restore a soft-deleted entity. */
 export async function restoreEntity<T extends EntityData = EntityData>(
   ctx: WritePathContext,
   namespace: string,
