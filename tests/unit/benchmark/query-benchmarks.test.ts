@@ -21,7 +21,8 @@ import type {
   BenchmarkResult,
   BenchmarkConfig,
   BenchmarkExecutor,
-} from '../../scripts/benchmark/types'
+} from '../../../scripts/benchmark/types'
+import { QueryBenchmarkRunner, createQueryBenchmarkRunner } from '../../../scripts/benchmark/query-runner'
 
 // =============================================================================
 // Mock Types and Interfaces
@@ -60,110 +61,13 @@ interface MockBenchmarkResponse {
   data?: unknown[]
 }
 
-/**
- * Query benchmark runner interface (to be implemented)
- */
-interface QueryBenchmarkRunner {
-  /**
-   * Run a full scan benchmark
-   */
-  runFullScan(options: {
-    dataset: string
-    collection: string
-    iterations: number
-  }): Promise<BenchmarkResult>
-
-  /**
-   * Run a column projection benchmark
-   */
-  runColumnProjection(options: {
-    dataset: string
-    collection: string
-    columns: string[]
-    iterations: number
-  }): Promise<BenchmarkResult>
-
-  /**
-   * Run a point lookup benchmark
-   */
-  runPointLookup(options: {
-    dataset: string
-    collection: string
-    id: string
-    iterations: number
-  }): Promise<BenchmarkResult>
-
-  /**
-   * Run a filtered query benchmark
-   */
-  runFilteredQuery(options: {
-    dataset: string
-    collection: string
-    filter: Record<string, unknown>
-    iterations: number
-  }): Promise<BenchmarkResult>
-
-  /**
-   * Run a range query benchmark
-   */
-  runRangeQuery(options: {
-    dataset: string
-    collection: string
-    field: string
-    min: number | string
-    max: number | string
-    iterations: number
-  }): Promise<BenchmarkResult>
-
-  /**
-   * Run a COUNT aggregation benchmark
-   */
-  runCountAggregation(options: {
-    dataset: string
-    collection: string
-    filter?: Record<string, unknown>
-    iterations: number
-  }): Promise<BenchmarkResult & { count: number }>
-
-  /**
-   * Run a SUM aggregation benchmark
-   */
-  runSumAggregation(options: {
-    dataset: string
-    collection: string
-    field: string
-    filter?: Record<string, unknown>
-    iterations: number
-  }): Promise<BenchmarkResult & { sum: number }>
-
-  /**
-   * Run a GROUP BY benchmark
-   */
-  runGroupBy(options: {
-    dataset: string
-    collection: string
-    groupByField: string
-    aggregations: Array<{ field: string; op: 'count' | 'sum' | 'avg' | 'min' | 'max' }>
-    iterations: number
-  }): Promise<BenchmarkResult & { groups: Array<{ _id: unknown; [key: string]: unknown }> }>
-
-  /**
-   * Run a TOP-K benchmark
-   */
-  runTopK(options: {
-    dataset: string
-    collection: string
-    orderBy: { field: string; direction: 'asc' | 'desc' }
-    limit: number
-    iterations: number
-  }): Promise<BenchmarkResult & { results: unknown[] }>
-}
+// QueryBenchmarkRunner is now imported from query-runner.ts
 
 // =============================================================================
 // Mock Setup
 // =============================================================================
 
-// The benchmark runner that will be implemented in GREEN phase
+// The benchmark runner instance
 let benchmarkRunner: QueryBenchmarkRunner
 
 // Mock fetch for unit tests
@@ -173,6 +77,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   // Reset the mock fetch
   global.fetch = mockFetch as unknown as typeof fetch
+  // Create the benchmark runner instance
+  benchmarkRunner = createQueryBenchmarkRunner('https://parquedb.workers.do')
 })
 
 afterEach(() => {

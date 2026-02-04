@@ -29,6 +29,14 @@ on:
         type: boolean
         required: false
         default: false
+  # Trigger on /benchmark PR comment
+  issue_comment:
+    types: [created]
+
+# Prevent duplicate runs
+concurrency:
+  group: e2e-benchmark-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
 
 env:
   WORKER_URL: ${{ github.event.inputs.url || 'https://parquedb.workers.do' }}
@@ -40,6 +48,13 @@ jobs:
     name: E2E Benchmark
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Run on schedule, workflow_dispatch, or when PR comment contains /benchmark
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '/benchmark'))
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -229,3 +244,50 @@ jobs:
               }' \
               ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
           fi
+
+      - name: Post results to PR comment
+        if: always() && github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## E2E Benchmark Results\n\n';
+
+            if (fs.existsSync('results.json')) {
+              const results = JSON.parse(fs.readFileSync('results.json', 'utf8'));
+              const r = results.results || results;
+
+              body += `**Environment:** ${{ env.ENVIRONMENT }}\n`;
+              body += `**Worker URL:** ${{ env.WORKER_URL }}\n`;
+              body += `**Run ID:** ${results.runId || 'N/A'}\n`;
+              body += `**Commit:** ${{ github.sha }}\n\n`;
+
+              if (r.summary) {
+                body += '### Summary\n';
+                body += '| Metric | Value |\n';
+                body += '|--------|-------|\n';
+                body += `| Total Tests | ${r.summary.totalTests} |\n`;
+                body += `| Passed | ${r.summary.passedTests} |\n`;
+                body += `| Failed | ${r.summary.failedTests} |\n`;
+                body += `| Avg Latency | ${r.summary.avgLatencyMs?.toFixed(1)}ms |\n`;
+                body += `| P95 Latency | ${r.summary.p95LatencyMs?.toFixed(1)}ms |\n\n`;
+              }
+
+              if (r.regression) {
+                const status = r.regression.hasRegression ? ':x: REGRESSION DETECTED' : ':white_check_mark: No regression';
+                body += '### Regression Analysis\n';
+                body += `- **Status:** ${status}\n`;
+                body += `- **Severity:** ${r.regression.severity}\n\n`;
+              }
+            } else {
+              body += ':warning: No results file found\n';
+            }
+
+            body += `\n[View full run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });

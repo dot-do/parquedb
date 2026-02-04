@@ -1,7 +1,7 @@
 /**
  * R2 Upload Script Tests
  *
- * TDD RED Phase: Tests for uploading Parquet files to R2.
+ * TDD GREEN Phase: Tests for uploading Parquet files to R2.
  *
  * Test cases:
  * 1. Upload single parquet file to R2
@@ -9,8 +9,6 @@
  * 3. Verify uploaded file matches local file (checksum)
  * 4. Handle upload failures gracefully
  * 5. Skip unchanged files (incremental upload)
- *
- * All tests should FAIL until GREEN phase implements the upload script.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -19,21 +17,7 @@ import * as path from 'node:path'
 import * as crypto from 'node:crypto'
 import { createMockR2Bucket, createErrorR2Bucket, type MockR2Bucket } from '../../mocks/r2-bucket'
 
-// =============================================================================
-// Mock Module - The upload module that will be created in GREEN phase
-// =============================================================================
-
-// Mock the upload module that doesn't exist yet
-// These will fail until the module is implemented in GREEN phase
-vi.mock('../../../scripts/lib/r2-upload', () => ({
-  uploadFileToR2: vi.fn().mockRejectedValue(new Error('Not implemented')),
-  uploadDirectoryToR2: vi.fn().mockRejectedValue(new Error('Not implemented')),
-  verifyUpload: vi.fn().mockRejectedValue(new Error('Not implemented')),
-  syncToR2: vi.fn().mockRejectedValue(new Error('Not implemented')),
-  computeFileHash: vi.fn().mockRejectedValue(new Error('Not implemented')),
-}))
-
-// Import the mocked module (will be replaced when implemented)
+// Import the real module
 import {
   uploadFileToR2,
   uploadDirectoryToR2,
@@ -153,7 +137,9 @@ describe('R2 Upload Script', () => {
         r2Path,
         expect.any(Uint8Array),
         expect.objectContaining({
-          contentType: 'application/octet-stream',
+          httpMetadata: expect.objectContaining({
+            contentType: 'application/octet-stream',
+          }),
         })
       )
     })
