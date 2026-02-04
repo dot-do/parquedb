@@ -104,7 +104,7 @@ describe('Relationships Parquet File Creation', () => {
     }
   })
 
-  it('should create data.parquet with lean schema ($id, $type, name, $data)', async () => {
+  it('should create data.parquet with lean schema ($id, $type, $name, $data)', async () => {
     // Create an entity
     await db.create('posts', {
       $type: 'Post',
@@ -145,10 +145,10 @@ describe('Relationships Parquet File Creation', () => {
 
     console.log('Data.parquet schema columns:', schemaNames)
 
-    // data.parquet should have lean schema: $id, $type, name, $data
+    // data.parquet should have lean schema: $id, $type, $name, $data
     expect(schemaNames).toContain('$id')
     expect(schemaNames).toContain('$type')
-    expect(schemaNames).toContain('name')
+    expect(schemaNames).toContain('$name')
     expect(schemaNames).toContain('$data')
 
     // Audit fields should NOT be separate columns (they're in $data)

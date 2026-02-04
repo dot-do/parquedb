@@ -55,7 +55,7 @@ export function entityToRow<T>(entity: Entity<T>, options?: EntityToRowOptions):
   const {
     $id,
     $type,
-    name,
+    name: $name,
     ...allOtherFields
   } = entity as Entity<T> & { deletedAt?: Date | undefined; deletedBy?: string | undefined }
 
@@ -98,7 +98,7 @@ export function entityToRow<T>(entity: Entity<T>, options?: EntityToRowOptions):
   return {
     $id,
     $type,
-    name,
+    $name,
     $data,
     ...shreddedColumns,
   }
@@ -118,7 +118,7 @@ export function rowToEntity<T>(row: Record<string, unknown>, options?: RowToEnti
   const {
     $id,
     $type,
-    name,
+    $name,
     $data,
     ...otherColumns
   } = row
@@ -167,7 +167,7 @@ export function rowToEntity<T>(row: Record<string, unknown>, options?: RowToEnti
   return {
     $id: $id as EntityId,
     $type: $type as string,
-    name: name as string,
+    name: $name as string,
     createdAt: typeof createdAt === 'string' ? new Date(createdAt) : (createdAt as Date) ?? new Date(),
     createdBy: (createdBy as EntityId) ?? ('' as EntityId),
     updatedAt: typeof updatedAt === 'string' ? new Date(updatedAt) : (updatedAt as Date) ?? new Date(),
@@ -187,7 +187,7 @@ export function rowToEntity<T>(row: Record<string, unknown>, options?: RowToEnti
  * Build the standard ParquetSchema for entity storage
  *
  * Schema includes:
- * - $id, $type, name: Core identity fields
+ * - $id, $type, $name: Core identity fields (all prefixed with $ for consistency)
  * - $data: Base64-encoded Variant for flexible data (including audit fields)
  *
  * NOTE: Audit fields (createdAt, createdBy, updatedAt, updatedBy, deletedAt, deletedBy, version)
@@ -200,7 +200,7 @@ export function buildEntityParquetSchema(): ParquetSchema {
   return {
     $id: { type: 'STRING', optional: false },
     $type: { type: 'STRING', optional: false },
-    name: { type: 'STRING', optional: false },
+    $name: { type: 'STRING', optional: false },
     $data: { type: 'STRING', optional: true }, // Base64-encoded Variant (includes audit fields)
   }
 }
