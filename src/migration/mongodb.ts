@@ -345,7 +345,6 @@ export async function importFromBson(
   let BSON: BsonModule
   try {
     // Dynamic import - bson is an optional dependency
-    // @ts-expect-error - bson is an optional dependency that may not be installed
     BSON = await import('bson')
   } catch {
     // Intentionally ignored: dynamic import failure means the optional dependency is not installed

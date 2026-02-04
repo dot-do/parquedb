@@ -31,7 +31,7 @@ import {
   type BackendStats,
   type SchemaFieldType,
 } from './types'
-import type { Entity, EntityId, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
+import type { Entity, EntityId, EntityData, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
 import type { Filter } from '../types/filter'
 import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions } from '../types/options'
 import type { Update } from '../types/update'
@@ -54,7 +54,6 @@ import {
   applyUpdate,
   createDefaultEntity,
   sortEntities,
-  compareValues,
   applyPagination,
 } from './entity-utils'
 
@@ -190,7 +189,7 @@ export class IcebergBackend implements EntityBackend {
   // Read Operations
   // ===========================================================================
 
-  async get<T = Record<string, unknown>>(
+  async get<T extends EntityData = EntityData>(
     ns: string,
     id: string,
     options?: GetOptions
@@ -199,7 +198,7 @@ export class IcebergBackend implements EntityBackend {
     return entities[0] ?? null
   }
 
-  async find<T = Record<string, unknown>>(
+  async find<T extends EntityData = EntityData>(
     ns: string,
     filter?: Filter,
     options?: FindOptions
@@ -259,7 +258,7 @@ export class IcebergBackend implements EntityBackend {
   // Write Operations
   // ===========================================================================
 
-  async create<T = Record<string, unknown>>(
+  async create<T extends EntityData = EntityData>(
     ns: string,
     input: CreateInput<T>,
     options?: CreateOptions
@@ -291,7 +290,7 @@ export class IcebergBackend implements EntityBackend {
     return entity
   }
 
-  async update<T = Record<string, unknown>>(
+  async update<T extends EntityData = EntityData>(
     ns: string,
     id: string,
     update: Update,
@@ -365,7 +364,7 @@ export class IcebergBackend implements EntityBackend {
   // Batch Operations
   // ===========================================================================
 
-  async bulkCreate<T = Record<string, unknown>>(
+  async bulkCreate<T extends EntityData = EntityData>(
     ns: string,
     inputs: CreateInput<T>[],
     options?: CreateOptions
@@ -1064,7 +1063,7 @@ export class IcebergBackend implements EntityBackend {
   /**
    * Public accessor for reading entities from a snapshot (used by IcebergSnapshotBackend)
    */
-  async readEntitiesFromSnapshotPublic<T>(
+  async readEntitiesFromSnapshotPublic<T extends EntityData = EntityData>(
     ns: string,
     snapshot: Snapshot,
     filter?: Filter,
@@ -1872,7 +1871,7 @@ export class IcebergBackend implements EntityBackend {
    * Read entities from a snapshot.
    * Orchestrates reading manifest files, collecting data/deletes, and applying filters.
    */
-  private async readEntitiesFromSnapshot<T>(
+  private async readEntitiesFromSnapshot<T extends EntityData = EntityData>(
     _ns: string,
     _metadata: TableMetadata,
     snapshot: Snapshot,
@@ -2108,7 +2107,7 @@ class IcebergSnapshotBackend implements EntityBackend {
   async initialize(): Promise<void> {}
   async close(): Promise<void> {}
 
-  async get<T = Record<string, unknown>>(
+  async get<T extends EntityData = EntityData>(
     ns: string,
     id: string,
     _options?: GetOptions
@@ -2120,7 +2119,7 @@ class IcebergSnapshotBackend implements EntityBackend {
     return entities[0] ?? null
   }
 
-  async find<T = Record<string, unknown>>(
+  async find<T extends EntityData = EntityData>(
     ns: string,
     filter?: Filter,
     options?: FindOptions

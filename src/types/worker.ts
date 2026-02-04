@@ -289,6 +289,32 @@ export interface DORelatedOptions {
 }
 
 /**
+ * Logical operators for DOFilter
+ * Separated from field filters to avoid index signature conflicts
+ */
+export interface DOFilterLogicalOperators {
+  /** Logical AND */
+  $and?: DOFilter[] | undefined
+
+  /** Logical OR */
+  $or?: DOFilter[] | undefined
+
+  /** Logical NOT */
+  $not?: DOFilter | undefined
+
+  /** Logical NOR */
+  $nor?: DOFilter[] | undefined
+}
+
+/**
+ * Field-level filters for DOFilter (indexed by field name)
+ */
+export interface DOFilterFields {
+  /** Field filters - key is field name, value is filter condition */
+  [field: string]: DOFieldFilter | undefined
+}
+
+/**
  * MongoDB-style filter for DO operations
  *
  * Simplified filter type for DO context. Supports basic comparison
@@ -306,22 +332,7 @@ export interface DORelatedOptions {
  * { $or: [{ status: 'published' }, { featured: true }] }
  * ```
  */
-export interface DOFilter {
-  /** Field filters - key is field name, value is filter condition */
-  [field: string]: DOFieldFilter | undefined
-
-  /** Logical AND */
-  $and?: DOFilter[] | undefined
-
-  /** Logical OR */
-  $or?: DOFilter[] | undefined
-
-  /** Logical NOT */
-  $not?: DOFilter | undefined
-
-  /** Logical NOR */
-  $nor?: DOFilter[] | undefined
-}
+export type DOFilter = DOFilterLogicalOperators & DOFilterFields
 
 /**
  * Field-level filter value for DO operations

@@ -1739,7 +1739,7 @@ export class DeltaBackend implements EntityBackend {
   /**
    * Read entities at a specific version
    */
-  private async readEntitiesAtVersion<T>(
+  private async readEntitiesAtVersion<T extends EntityData = EntityData>(
     ns: string,
     version: number,
     filter?: Filter,
@@ -1916,7 +1916,7 @@ export class DeltaBackend implements EntityBackend {
    * Read entities at version (for snapshot backend)
    * @internal
    */
-  async _readEntitiesAtVersion<T>(
+  async _readEntitiesAtVersion<T extends EntityData = EntityData>(
     ns: string,
     version: number,
     filter?: Filter,

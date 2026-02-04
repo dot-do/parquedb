@@ -101,23 +101,23 @@ export class LRUEntityCache implements Map<string, Entity> {
 
   forEach(callback: (value: Entity, key: string, map: Map<string, Entity>) => void, thisArg?: unknown): void {
     for (const [key, value] of this.cache.entries()) {
-      callback.call(thisArg, value, key, this)
+      callback.call(thisArg, value, key, this as unknown as Map<string, Entity>)
     }
   }
 
-  *entries(): IterableIterator<[string, Entity]> {
-    yield* this.cache.entries()
+  entries(): MapIterator<[string, Entity]> {
+    return this.cache.entries() as MapIterator<[string, Entity]>
   }
 
-  *keys(): IterableIterator<string> {
-    yield* this.cache.keys()
+  keys(): MapIterator<string> {
+    return this.cache.keys() as MapIterator<string>
   }
 
-  *values(): IterableIterator<Entity> {
-    yield* this.cache.values()
+  values(): MapIterator<Entity> {
+    return this.cache.values() as MapIterator<Entity>
   }
 
-  [Symbol.iterator](): IterableIterator<[string, Entity]> {
+  [Symbol.iterator](): MapIterator<[string, Entity]> {
     return this.entries()
   }
 
@@ -306,7 +306,7 @@ export function getEntityStore(storage: StorageBackend, config?: EntityStoreConf
     store = new LRUEntityCache(finalConfig)
     globalEntityStore.set(storage, store)
   }
-  return store
+  return store as unknown as Map<string, Entity>
 }
 
 /**

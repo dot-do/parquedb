@@ -18,13 +18,10 @@
 
 // Import individual decompressors (avoiding the problematic index.js that imports hysnappy)
 import { decompress as decompressZstd } from 'fzstd'
-// @ts-expect-error - hyparquet-compressors does not have type declarations
 import { decompressBrotli } from 'hyparquet-compressors/src/brotli.js'
-// @ts-expect-error - hyparquet-compressors does not have type declarations
 import { gunzip } from 'hyparquet-compressors/src/gzip.js'
 
 // Pure JavaScript Snappy (no WebAssembly - works everywhere)
-// @ts-expect-error - snappyjs does not have type declarations
 import { uncompress as snappyUncompress } from 'snappyjs'
 
 // Patched LZ4 that fixes match length extension bug

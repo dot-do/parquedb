@@ -5,7 +5,7 @@
  * Provides entity serialization, filter matching, ID generation, and data field extraction.
  */
 
-import type { Entity, EntityId, CreateInput } from '../types/entity'
+import type { Entity, EntityId, EntityData, CreateInput } from '../types/entity'
 import type { Filter } from '../types/filter'
 import type { ParquetSchema } from '../parquet/types'
 import { encodeVariant, decodeVariant } from '../parquet/variant'
@@ -352,10 +352,10 @@ export function generateEntityId(): string {
  * @param input - The CreateInput object
  * @returns Object containing only user data fields
  */
-export function extractDataFields<T>(input: CreateInput<T>): Partial<T> {
+export function extractDataFields<T extends EntityData = EntityData>(input: CreateInput<T>): Partial<T> {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { $type, name, ...data } = input
-  return data as Partial<T>
+  return data as unknown as Partial<T>
 }
 
 // =============================================================================

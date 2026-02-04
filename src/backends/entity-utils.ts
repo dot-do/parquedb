@@ -5,10 +5,10 @@
  * Extracts duplicate code for update operations, sorting, pagination, and entity creation.
  */
 
-import type { Entity, EntityId, EntityData } from '../types/entity'
+import type { Entity, EntityData } from '../types/entity'
 import { entityId, SYSTEM_ACTOR } from '../types/entity'
 import type { Update } from '../types/update'
-import type { SortSpec, SortDirection } from '../types/options'
+import type { SortSpec } from '../types/options'
 import { normalizeSortDirection } from '../types/options'
 
 // Import update operators

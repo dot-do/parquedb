@@ -24,7 +24,7 @@ import type {
   BackendStats,
 } from './types'
 import { ReadOnlyError } from './types'
-import type { Entity, EntityId, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
+import type { Entity, EntityId, EntityData, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
 import type { Filter } from '../types/filter'
 import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions } from '../types/options'
 import type { Update } from '../types/update'
@@ -114,7 +114,7 @@ export class NativeBackend implements EntityBackend {
   // Read Operations
   // ===========================================================================
 
-  async get<T = Record<string, unknown>>(
+  async get<T extends EntityData = EntityData>(
     ns: string,
     id: string,
     options?: GetOptions
@@ -123,7 +123,7 @@ export class NativeBackend implements EntityBackend {
     return entities[0] ?? null
   }
 
-  async find<T = Record<string, unknown>>(
+  async find<T extends EntityData = EntityData>(
     ns: string,
     filter?: Filter,
     options?: FindOptions
@@ -165,7 +165,7 @@ export class NativeBackend implements EntityBackend {
   // Write Operations
   // ===========================================================================
 
-  async create<T = Record<string, unknown>>(
+  async create<T extends EntityData = EntityData>(
     ns: string,
     input: CreateInput<T>,
     options?: CreateOptions
@@ -198,7 +198,7 @@ export class NativeBackend implements EntityBackend {
     return entity
   }
 
-  async update<T = Record<string, unknown>>(
+  async update<T extends EntityData = EntityData>(
     ns: string,
     id: string,
     update: Update,
@@ -275,7 +275,7 @@ export class NativeBackend implements EntityBackend {
   // Batch Operations
   // ===========================================================================
 
-  async bulkCreate<T = Record<string, unknown>>(
+  async bulkCreate<T extends EntityData = EntityData>(
     ns: string,
     inputs: CreateInput<T>[],
     options?: CreateOptions

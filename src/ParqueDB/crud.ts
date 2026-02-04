@@ -55,7 +55,7 @@ export function deriveTypeFromNamespace(namespace: string): string {
 /**
  * Apply default values from schema
  */
-export function applySchemaDefaults<T>(data: CreateInput<T>, schema: Schema): CreateInput<T> {
+export function applySchemaDefaults<T extends EntityData = EntityData>(data: CreateInput<T>, schema: Schema): CreateInput<T> {
   const typeName = data.$type
   if (!typeName) return data
 
@@ -275,7 +275,7 @@ export interface CRUDContext {
 /**
  * Create a new entity
  */
-export async function createEntity<T = Record<string, unknown>>(
+export async function createEntity<T extends EntityData = EntityData>(
   namespace: string,
   data: CreateInput<T>,
   options: CreateOptions | undefined,
@@ -326,7 +326,7 @@ export async function createEntity<T = Record<string, unknown>>(
     )
   }
 
-  const entity: Entity<T> = {
+  const entity = {
     ...dataWithDefaults,
     $id: fullId,
     $type: derivedType,
@@ -336,7 +336,7 @@ export async function createEntity<T = Record<string, unknown>>(
     updatedAt: now,
     updatedBy: actor,
     version: 1,
-  } as Entity<T>
+  } as unknown as Entity<T>
 
   // Store in memory
   ctx.entities.set(fullId, entity as Entity)
@@ -651,7 +651,7 @@ export async function deleteEntity(
 /**
  * Restore a soft-deleted entity
  */
-export async function restoreEntity<T = Record<string, unknown>>(
+export async function restoreEntity<T extends EntityData = EntityData>(
   namespace: string,
   id: string,
   options: { actor?: EntityId | undefined } | undefined,

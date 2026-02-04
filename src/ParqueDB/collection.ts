@@ -9,6 +9,7 @@ import type {
   EntityData,
   PaginatedResult,
   DeleteResult,
+  UpdateResult,
   Filter,
   UpdateInput,
   FindOptions,
@@ -40,6 +41,7 @@ interface ParqueDBMethods {
   get<T extends EntityData>(namespace: string, id: string, options?: GetOptions<T>): Promise<Entity<T> | null>
   create<T extends EntityData>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
   update<T extends EntityData>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
+  updateMany<T extends EntityData>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: UpdateOptions): Promise<UpdateResult>
   delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
   deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
   upsert<T extends EntityData>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: { returnDocument?: 'before' | 'after' | undefined }): Promise<Entity<T> | null>
@@ -233,6 +235,39 @@ export class CollectionImpl<T extends EntityData = EntityData> implements Collec
    */
   async update(id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null> {
     return this.db.update<T>(this.namespace, id, update, options)
+  }
+
+  /**
+   * Updates multiple entities matching the specified filter.
+   *
+   * Applies the update operations to all entities matching the filter.
+   * Supports MongoDB-style update operators ($set, $inc, $push, etc.).
+   *
+   * @param filter - MongoDB-style filter to match entities for update.
+   * @param update - Update operations to apply to matched entities.
+   * @param options - Optional update options.
+   * @returns A promise resolving to the update result with matched/modified counts.
+   *
+   * @throws {ValidationError} When update data fails schema validation.
+   *
+   * @example
+   * ```typescript
+   * // Update all draft posts to published
+   * const result = await collection.updateMany(
+   *   { status: 'draft' },
+   *   { $set: { status: 'published', publishedAt: new Date() } }
+   * )
+   * console.log(`Updated ${result.modifiedCount} of ${result.matchedCount} posts`)
+   *
+   * // Increment view count for multiple posts
+   * await collection.updateMany(
+   *   { category: 'featured' },
+   *   { $inc: { viewCount: 1 } }
+   * )
+   * ```
+   */
+  async updateMany(filter: Filter, update: UpdateInput<T>, options?: UpdateOptions): Promise<UpdateResult> {
+    return this.db.updateMany<T>(this.namespace, filter, update, options)
   }
 
   /**

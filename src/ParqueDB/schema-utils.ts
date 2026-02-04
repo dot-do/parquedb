@@ -5,7 +5,7 @@
  * These functions are used by both crud.ts and entity-operations.ts.
  */
 
-import type { CreateInput, Schema } from '../types'
+import type { CreateInput, Schema, EntityData } from '../types'
 import { parseFieldType, isRelationString } from '../types/schema'
 import { ValidationError } from './types'
 import pluralize from 'pluralize'
@@ -147,7 +147,7 @@ export function validateFieldType(
 /**
  * Apply default values from the schema to create input data.
  */
-export function applySchemaDefaults<T>(
+export function applySchemaDefaults<T extends EntityData = EntityData>(
   data: CreateInput<T>,
   schema: Schema
 ): CreateInput<T> {

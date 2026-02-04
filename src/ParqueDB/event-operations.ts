@@ -139,7 +139,7 @@ export function recordEvent(
   meta?: Record<string, unknown>
 ): Promise<void> {
   // Check backpressure limit before adding event
-  const maxPendingEvents = ctx.eventLogConfig.maxPendingEvents
+  const maxPendingEvents = ctx.eventLogConfig.maxPendingEvents ?? 0
   if (maxPendingEvents > 0 && ctx.pendingEvents.length >= maxPendingEvents) {
     // Extract namespace from target for error context
     let namespace: string | undefined

@@ -512,7 +512,7 @@ export abstract class BaseEntityBackend implements EntityBackend {
    *
    * Delegates to shared entity-utils for consistent behavior across backends.
    */
-  protected applyUpdate<T>(entity: Entity<T>, update: Update): Entity<T> {
+  protected applyUpdate<T extends EntityData = EntityData>(entity: Entity<T>, update: Update): Entity<T> {
     return applyUpdateUtil(entity, update)
   }
 
@@ -521,7 +521,7 @@ export abstract class BaseEntityBackend implements EntityBackend {
    *
    * Delegates to shared entity-utils for consistent behavior across backends.
    */
-  protected createDefaultEntity<T>(ns: string, id: string): Entity<T> {
+  protected createDefaultEntity<T extends EntityData = EntityData>(ns: string, id: string): Entity<T> {
     return createDefaultEntityUtil<T>(ns, id)
   }
 
@@ -531,7 +531,7 @@ export abstract class BaseEntityBackend implements EntityBackend {
    * Handles null/undefined values (sorted to end), strings, numbers, and dates.
    * Delegates to shared entity-utils for consistent behavior across backends.
    */
-  protected sortEntities<T>(
+  protected sortEntities<T extends EntityData = EntityData>(
     entities: Entity<T>[],
     sort: Record<string, 1 | -1>
   ): Entity<T>[] {
@@ -543,7 +543,7 @@ export abstract class BaseEntityBackend implements EntityBackend {
    *
    * Delegates to shared entity-utils for consistent behavior across backends.
    */
-  protected applyPagination<T>(
+  protected applyPagination<T extends EntityData = EntityData>(
     entities: Entity<T>[],
     options?: { skip?: number | undefined; limit?: number | undefined }
   ): Entity<T>[] {

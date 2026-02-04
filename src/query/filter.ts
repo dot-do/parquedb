@@ -34,7 +34,7 @@
  */
 
 import type { Filter } from '../types/filter'
-import { deepEqual, compareValues, getNestedValue, getValueType, createSafeRegex, UnsafeRegexError, safeRegexTest, RegexTimeoutError, logger, isNullish } from '../utils'
+import { deepEqual, compareValues, getNestedValue, getValueType, createSafeRegex, UnsafeRegexError, safeRegexTest, logger, isNullish } from '../utils'
 
 // =============================================================================
 // Configuration

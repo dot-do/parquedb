@@ -8,6 +8,7 @@
 import type {
   Entity,
   EntityId,
+  EntityData,
   CreateInput,
   Schema,
 } from '../types'
@@ -55,7 +56,7 @@ export interface SchemaValidatorInterface {
  * @param options - Create operation options
  * @returns Create result with entity and events
  */
-export function executeCreate<T = Record<string, unknown>>(
+export function executeCreate<T extends EntityData = EntityData>(
   context: MutationContext,
   data: CreateInput<T>,
   options?: CreateOperationOptions
@@ -91,7 +92,7 @@ export function executeCreate<T = Record<string, unknown>>(
   const fullId = `${context.namespace}/${id}` as EntityId
 
   // Build entity
-  const entity: Entity<T> = {
+  const entity = {
     ...dataWithDefaults,
     $id: fullId,
     $type: dataWithDefaults.$type,
@@ -101,7 +102,7 @@ export function executeCreate<T = Record<string, unknown>>(
     updatedAt: context.timestamp,
     updatedBy: context.actor,
     version: 1,
-  } as Entity<T>
+  } as unknown as Entity<T>
 
   // Generate CREATE event
   const event: MutationEvent = {
@@ -170,7 +171,7 @@ export function validateCreateInput(
 /**
  * Apply default values from schema
  */
-export function applySchemaDefaults<T>(
+export function applySchemaDefaults<T extends EntityData = EntityData>(
   data: CreateInput<T>,
   schema: Schema
 ): CreateInput<T> {

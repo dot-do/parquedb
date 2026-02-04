@@ -251,7 +251,7 @@ export function validateFieldType(
 /**
  * Apply default values from the schema to create input data.
  */
-export function applySchemaDefaults<T>(
+export function applySchemaDefaults<T extends EntityData = EntityData>(
   data: CreateInput<T>,
   schema: Schema
 ): CreateInput<T> {
@@ -303,7 +303,7 @@ export function applySchemaDefaults<T>(
  *
  * Uses EntityQueryContext - only requires query-related dependencies.
  */
-export async function findEntities<T = Record<string, unknown>>(
+export async function findEntities<T extends EntityData = EntityData>(
   ctx: EntityQueryContext,
   namespace: string,
   filter?: Filter,
@@ -466,7 +466,7 @@ export async function findEntities<T = Record<string, unknown>>(
  *
  * Uses EntityQueryContext - only requires query-related dependencies.
  */
-export async function getEntity<T = Record<string, unknown>>(
+export async function getEntity<T extends EntityData = EntityData>(
   ctx: EntityQueryContext,
   namespace: string,
   id: string,
@@ -550,7 +550,7 @@ export async function getEntity<T = Record<string, unknown>>(
  *
  * Uses EntityMutationContext - requires mutation-related dependencies.
  */
-export async function createEntity<T = Record<string, unknown>>(
+export async function createEntity<T extends EntityData = EntityData>(
   ctx: EntityMutationContext,
   namespace: string,
   data: CreateInput<T>,
@@ -598,7 +598,7 @@ export async function createEntity<T = Record<string, unknown>>(
     validateAgainstSchema(namespace, { ...dataWithDefaults, $type: derivedType }, options?.validateOnWrite)
   }
 
-  const entity: Entity<T> = {
+  const entity = {
     ...dataWithDefaults,
     $id: fullId,
     $type: derivedType,
@@ -608,7 +608,7 @@ export async function createEntity<T = Record<string, unknown>>(
     updatedAt: now,
     updatedBy: actor,
     version: 1,
-  } as Entity<T>
+  } as unknown as Entity<T>
 
   // Store in memory
   ctx.entities.set(fullId, entity as Entity)
@@ -854,7 +854,7 @@ export async function deleteManyEntities(
  *
  * Uses EntityMutationContext - requires mutation-related dependencies.
  */
-export async function restoreEntity<T = Record<string, unknown>>(
+export async function restoreEntity<T extends EntityData = EntityData>(
   ctx: EntityMutationContext,
   namespace: string,
   id: string,

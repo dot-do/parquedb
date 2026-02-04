@@ -140,7 +140,7 @@ export class MutationExecutor {
    * @param options - Create options
    * @returns Created entity
    */
-  async create<T = Record<string, unknown>>(
+  async create<T extends EntityData = EntityData>(
     namespace: string,
     data: CreateInput<T>,
     store: EntityStore,
@@ -161,7 +161,7 @@ export class MutationExecutor {
       'create',
       namespace,
       undefined,
-      data as CreateInput<unknown>
+      data as CreateInput<EntityData>
     )
 
     // Dispatch observability hook: mutation start
@@ -414,7 +414,7 @@ export class MutationExecutor {
    * @param options - Options with actor
    * @returns Restored entity or null
    */
-  async restore<T = Record<string, unknown>>(
+  async restore<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     store: EntityStore,
