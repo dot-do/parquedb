@@ -6,7 +6,6 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "generate": "parquedb generate",
     "seed": "tsx scripts/seed.ts"
   },
   "dependencies": {

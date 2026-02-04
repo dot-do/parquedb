@@ -1,65 +1,51 @@
 # ParqueDB Next.js Example
 
-A blog using ParqueDB with Next.js App Router.
-
 ## Setup
 
 ```bash
 pnpm install
-pnpm generate   # Generate typed exports
 pnpm seed
 pnpm dev
 ```
 
-## Type-Safe Setup
-
-### 1. Define schema in `parquedb.config.ts`
+## Type-Safe Schema
 
 ```ts
-import { defineConfig } from 'parquedb/config'
+// lib/db.ts
+import { DB } from 'parquedb'
 
-export default defineConfig({
-  schema: {
-    User: {
-      $id: 'email',
-      $name: 'name',
-      email: 'string!#',
-      name: 'string!',
-      posts: '<- Post.author[]'
-    },
-    Post: {
-      $id: 'slug',
-      $name: 'title',
-      slug: 'string!#',
-      title: 'string!',
-      author: '-> User'
-    }
+export const db = DB({
+  User: {
+    $id: 'email',
+    $name: 'name',
+    email: 'string!#',
+    name: 'string!',
+    posts: '<- Post.author[]'
+  },
+  Post: {
+    $id: 'slug',
+    $name: 'title',
+    slug: 'string!#',
+    title: 'string!',
+    author: '-> User'
   }
 })
 ```
 
-### 2. Generate typed exports
-
-```bash
-npx parquedb generate
-# Creates src/db.generated.ts with full TypeScript types
-```
-
-### 3. Import and use
-
 ```tsx
-import { db } from './db.generated'
+// app/posts/page.tsx
+import { db } from '@/lib/db'
 
-// Fully typed!
-const posts = await db.Post.find({ status: 'published' })
-const post = await db.Post.get('hello-world')
-console.log(post.author?.name)  // Auto-hydrated!
+export default async function PostsPage() {
+  const posts = await db.Post.find({ status: 'published' })
+  // posts is typed, post.author?.name is auto-hydrated
+}
 ```
 
 ## Pages
 
-- `/posts` - List published posts
-- `/posts/[slug]` - Single post with author
-- `/posts/new` - Create new post (Server Action)
-- `/users/[email]` - User profile with their posts
-- `/api/posts` - REST API endpoint
+- `/posts` - List posts
+- `/posts/[slug]` - Single post
+- `/posts/new` - Create post (Server Action)
+- `/users/[email]` - User profile
+- `/api/posts` - REST API

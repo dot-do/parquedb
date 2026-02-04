@@ -1,49 +1,23 @@
-/**
- * User profile page - Reverse relationships auto-hydrated
- */
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { db } from '../../../src/db.generated'
+import { db } from '@/lib/db'
 
-interface Props {
-  params: Promise<{ email: string }>
-}
-
-export default async function UserPage({ params }: Props) {
+export default async function UserPage({ params }: { params: Promise<{ email: string }> }) {
   const { email } = await params
   const user = await db.User.get(decodeURIComponent(email))
 
-  if (!user) {
-    notFound()
-  }
-
-  const posts = user.posts ?? []
+  if (!user) notFound()
 
   return (
     <main>
       <h1>{user.name}</h1>
-      <p>{user.email}</p>
-      <p>Role: {user.role}</p>
-
-      <h2>Posts ({posts.$total})</h2>
+      <p>{user.email} ({user.role})</p>
+      <h2>Posts ({user.posts?.$total})</h2>
       <ul>
-        {posts.map(post => (
-          <li key={post.$id}>
-            <Link href={`/posts/${post.slug}`}>
-              {post.title}
-            </Link>
-            <span> ({post.status})</span>
-          </li>
+        {user.posts?.map(p => (
+          <li key={p.$id}><Link href={`/posts/${p.slug}`}>{p.title}</Link></li>
         ))}
       </ul>
-
-      {posts.$next && (
-        <p>
-          <Link href={`/users/${email}?cursor=${posts.$next}`}>
-            Load more posts
-          </Link>
-        </p>
-      )}
     </main>
   )
 }
