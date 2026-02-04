@@ -32,6 +32,26 @@ export const DATASETS: Record<string, DatasetConfig> = {
     source: 'https://datasets.imdbws.com/',
     prefix: 'imdb',
   },
+  // Alias: 'onet' provides simpler URL (uses same data as onet-graph)
+  onet: {
+    name: 'O*NET',
+    description: 'Occupational Information Network - 1,016 occupations with skills, abilities, knowledge relationships',
+    collections: ['occupations', 'skills', 'abilities', 'knowledge'],
+    source: 'https://www.onetcenter.org/database.html',
+    prefix: 'onet-graph',
+    predicates: {
+      occupations: ['skills', 'abilities', 'knowledge'],
+      skills: ['requiredBy'],
+      abilities: ['requiredBy'],
+      knowledge: ['requiredBy'],
+    },
+    singular: {
+      skills: 'skill',
+      abilities: 'ability',
+      knowledge: 'knowledge',
+      requiredBy: 'requiredBy',
+    },
+  },
   'onet-graph': {
     name: 'O*NET',
     description: 'Occupational Information Network - 1,016 occupations with skills, abilities, knowledge relationships',

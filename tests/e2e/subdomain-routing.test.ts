@@ -16,6 +16,24 @@ const DOMAINS = {
 }
 
 describe('Subdomain Routing E2E', () => {
+  describe('Dataset Aliases', () => {
+    it('should support onet alias at /datasets/onet', async () => {
+      const res = await fetch(`${DOMAINS.benchmarks}/datasets/onet`)
+      expect(res.status).toBe(200)
+      const data = await res.json() as { api: { id: string }; links: { occupations: string } }
+      expect(data.api.id).toBe('onet')
+      expect(data.links.occupations).toContain('/datasets/onet/occupations')
+    })
+
+    it('should return full URLs in error responses', async () => {
+      const res = await fetch(`${DOMAINS.benchmarks}/datasets/nonexistent`)
+      expect(res.status).toBe(404)
+      const data = await res.json() as { links: { home: string; datasets: string } }
+      expect(data.links.home).toBe('https://benchmarks.parquedb.com')
+      expect(data.links.datasets).toBe('https://benchmarks.parquedb.com/datasets')
+    })
+  })
+
   describe('api.parquedb.com', () => {
     it('should return healthy status on /health', async () => {
       const res = await fetch(`${DOMAINS.api}/health`)

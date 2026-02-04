@@ -229,6 +229,9 @@ export function buildErrorResponse(
   // Extract extended error properties if present
   const extError = error as ExtendedError
 
+  // Derive base URL from request for full URL links
+  const base = new URL(request.url).origin
+
   return Response.json({
     api: {
       error: true,
@@ -238,8 +241,8 @@ export function buildErrorResponse(
       status,
     },
     links: {
-      home: '/',
-      datasets: '/datasets',
+      home: base,
+      datasets: `${base}/datasets`,
     },
     user: {
       ip,
