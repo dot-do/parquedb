@@ -5,7 +5,7 @@
  * Provides entity serialization, filter matching, ID generation, and data field extraction.
  */
 
-import type { Entity, EntityId, EntityData, CreateInput } from '../types/entity'
+import type { Entity, EntityId, EntityData, CreateInput, Event } from '../types/entity'
 import type { Filter } from '../types/filter'
 import type { ParquetSchema } from '../parquet/types'
 import { encodeVariant, decodeVariant } from '../parquet/variant'
@@ -40,8 +40,8 @@ export interface RowToEntityOptions {
 /**
  * Convert an entity to a Parquet row
  *
- * Extracts core fields ($id, $type, name, audit fields) into separate columns
- * and encodes remaining data fields as a base64-encoded Variant in $data.
+ * Extracts only core identity fields ($id, $type, name) into separate columns.
+ * All other fields (including audit fields) are encoded in $data variant.
  *
  * If shredFields is provided, those fields will be extracted into separate
  * top-level columns for predicate pushdown support.
@@ -51,26 +51,22 @@ export interface RowToEntityOptions {
  * @returns A row object suitable for Parquet writing
  */
 export function entityToRow<T>(entity: Entity<T>, options?: EntityToRowOptions): Record<string, unknown> {
-  // Extract core fields
+  // Extract only identity fields - everything else goes in $data
   const {
     $id,
     $type,
     name,
-    createdAt,
-    createdBy,
-    updatedAt,
-    updatedBy,
-    deletedAt,
-    deletedBy,
-    version,
-    ...dataFields
+    ...allOtherFields
   } = entity as Entity<T> & { deletedAt?: Date | undefined; deletedBy?: string | undefined }
 
-  // Filter out undefined values (null should be preserved)
-  const filteredDataFields: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(dataFields)) {
-    if (value !== undefined) {
-      filteredDataFields[key] = value
+  // Convert Date objects to ISO strings for serialization
+  const dataFields: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(allOtherFields)) {
+    if (value === undefined) continue
+    if (value instanceof Date) {
+      dataFields[key] = value.toISOString()
+    } else {
+      dataFields[key] = value
     }
   }
 
@@ -79,7 +75,7 @@ export function entityToRow<T>(entity: Entity<T>, options?: EntityToRowOptions):
   const shreddedColumns: Record<string, unknown> = {}
   const remainingDataFields: Record<string, unknown> = {}
 
-  for (const [key, value] of Object.entries(filteredDataFields)) {
+  for (const [key, value] of Object.entries(dataFields)) {
     if (shredFields.includes(key)) {
       // Extract to shredded column (preserve null values)
       shreddedColumns[key] = value
@@ -89,7 +85,6 @@ export function entityToRow<T>(entity: Entity<T>, options?: EntityToRowOptions):
   }
 
   // Also check for null values explicitly set on shredded fields
-  // (they may have been filtered above but we want to preserve nulls)
   for (const field of shredFields) {
     if (field in dataFields && dataFields[field] === null) {
       shreddedColumns[field] = null
@@ -104,13 +99,6 @@ export function entityToRow<T>(entity: Entity<T>, options?: EntityToRowOptions):
     $id,
     $type,
     name,
-    createdAt: createdAt.toISOString(),
-    createdBy,
-    updatedAt: updatedAt.toISOString(),
-    updatedBy,
-    deletedAt: deletedAt?.toISOString() ?? null,
-    deletedBy: deletedBy ?? null,
-    version,
     $data,
     ...shreddedColumns,
   }
@@ -119,7 +107,7 @@ export function entityToRow<T>(entity: Entity<T>, options?: EntityToRowOptions):
 /**
  * Convert a Parquet row back to an Entity
  *
- * Decodes the $data Variant column and merges with core fields.
+ * Decodes the $data Variant column which contains all fields except $id, $type, name.
  * If shredFields is provided, those columns take precedence over $data values.
  *
  * @param row - The row from Parquet reader
@@ -131,13 +119,6 @@ export function rowToEntity<T>(row: Record<string, unknown>, options?: RowToEnti
     $id,
     $type,
     name,
-    createdAt,
-    createdBy,
-    updatedAt,
-    updatedBy,
-    deletedAt,
-    deletedBy,
-    version,
     $data,
     ...otherColumns
   } = row
@@ -171,18 +152,30 @@ export function rowToEntity<T>(row: Record<string, unknown>, options?: RowToEnti
     }
   }
 
+  // Extract audit fields from dataFields (they were stored in $data)
+  const {
+    createdAt,
+    createdBy,
+    updatedAt,
+    updatedBy,
+    deletedAt,
+    deletedBy,
+    version,
+    ...userDataFields
+  } = dataFields
+
   return {
     $id: $id as EntityId,
     $type: $type as string,
     name: name as string,
-    createdAt: typeof createdAt === 'string' ? new Date(createdAt) : createdAt as Date,
-    createdBy: createdBy as EntityId,
-    updatedAt: typeof updatedAt === 'string' ? new Date(updatedAt) : updatedAt as Date,
-    updatedBy: updatedBy as EntityId,
+    createdAt: typeof createdAt === 'string' ? new Date(createdAt) : (createdAt as Date) ?? new Date(),
+    createdBy: (createdBy as EntityId) ?? ('' as EntityId),
+    updatedAt: typeof updatedAt === 'string' ? new Date(updatedAt) : (updatedAt as Date) ?? new Date(),
+    updatedBy: (updatedBy as EntityId) ?? ('' as EntityId),
     ...(deletedAt ? { deletedAt: typeof deletedAt === 'string' ? new Date(deletedAt) : deletedAt as Date } : {}),
     ...(deletedBy ? { deletedBy: deletedBy as EntityId } : {}),
-    version: version as number,
-    ...dataFields,
+    version: (version as number) ?? 1,
+    ...userDataFields,
   } as Entity<T>
 }
 
@@ -195,10 +188,11 @@ export function rowToEntity<T>(row: Record<string, unknown>, options?: RowToEnti
  *
  * Schema includes:
  * - $id, $type, name: Core identity fields
- * - createdAt, createdBy, updatedAt, updatedBy: Audit fields
- * - deletedAt, deletedBy: Soft delete fields
- * - version: Optimistic concurrency version
- * - $data: Base64-encoded Variant for flexible data
+ * - $data: Base64-encoded Variant for flexible data (including audit fields)
+ *
+ * NOTE: Audit fields (createdAt, createdBy, updatedAt, updatedBy, deletedAt, deletedBy, version)
+ * are stored in $data variant, NOT as separate columns. This keeps the schema lean and
+ * audit information is primarily tracked in events.parquet where it naturally belongs.
  *
  * @returns ParquetSchema for entity storage
  */
@@ -207,15 +201,181 @@ export function buildEntityParquetSchema(): ParquetSchema {
     $id: { type: 'STRING', optional: false },
     $type: { type: 'STRING', optional: false },
     name: { type: 'STRING', optional: false },
-    createdAt: { type: 'STRING', optional: false }, // ISO timestamp string
-    createdBy: { type: 'STRING', optional: false },
-    updatedAt: { type: 'STRING', optional: false },
-    updatedBy: { type: 'STRING', optional: false },
-    deletedAt: { type: 'STRING', optional: true },
-    deletedBy: { type: 'STRING', optional: true },
-    version: { type: 'INT32', optional: false },
-    $data: { type: 'STRING', optional: true }, // Base64-encoded Variant
+    $data: { type: 'STRING', optional: true }, // Base64-encoded Variant (includes audit fields)
   }
+}
+
+/**
+ * Build the standard ParquetSchema for event storage
+ *
+ * Schema includes:
+ * - id: Event ID (ULID)
+ * - ts: Timestamp (ms since epoch)
+ * - op: Operation type (CREATE, UPDATE, DELETE)
+ * - target: Entity or relationship target string
+ * - before: Base64-encoded Variant for state before change
+ * - after: Base64-encoded Variant for state after change
+ * - actor: Who made the change
+ * - metadata: Base64-encoded Variant for additional metadata
+ *
+ * @returns ParquetSchema for event storage
+ */
+export function buildEventParquetSchema(): ParquetSchema {
+  return {
+    id: { type: 'STRING', optional: false },
+    ts: { type: 'INT64', optional: false },
+    op: { type: 'STRING', optional: false },
+    target: { type: 'STRING', optional: false },
+    before: { type: 'STRING', optional: true }, // Base64-encoded Variant
+    after: { type: 'STRING', optional: true }, // Base64-encoded Variant
+    actor: { type: 'STRING', optional: true },
+    metadata: { type: 'STRING', optional: true }, // Base64-encoded Variant
+  }
+}
+
+/**
+ * Convert an event to a Parquet row
+ *
+ * Encodes Variant fields (before, after, metadata) as base64-encoded binary.
+ *
+ * @param event - The event to convert
+ * @returns A row object suitable for Parquet writing
+ */
+export function eventToRow(event: Event): Record<string, unknown> {
+  return {
+    id: event.id,
+    ts: BigInt(event.ts),
+    op: event.op,
+    target: event.target,
+    before: event.before !== undefined ? btoa(String.fromCharCode(...encodeVariant(event.before))) : null,
+    after: event.after !== undefined ? btoa(String.fromCharCode(...encodeVariant(event.after))) : null,
+    actor: event.actor ?? null,
+    metadata: event.metadata !== undefined ? btoa(String.fromCharCode(...encodeVariant(event.metadata))) : null,
+  }
+}
+
+/**
+ * Convert a Parquet row back to an event
+ *
+ * @param row - The Parquet row to convert
+ * @returns The reconstructed event
+ */
+export function rowToEvent(row: Record<string, unknown>): {
+  id: string
+  ts: number
+  op: string
+  target: string
+  before?: unknown | undefined
+  after?: unknown | undefined
+  actor?: string | undefined
+  metadata?: unknown | undefined
+} {
+  const { id, ts, op, target, before, after, actor, metadata } = row
+
+  const event: {
+    id: string
+    ts: number
+    op: string
+    target: string
+    before?: unknown | undefined
+    after?: unknown | undefined
+    actor?: string | undefined
+    metadata?: unknown | undefined
+  } = {
+    id: id as string,
+    ts: typeof ts === 'bigint' ? Number(ts) : ts as number,
+    op: op as string,
+    target: target as string,
+  }
+
+  if (before && typeof before === 'string') {
+    const bytes = Uint8Array.from(atob(before), c => c.charCodeAt(0))
+    event.before = decodeVariant(bytes)
+  }
+  if (after && typeof after === 'string') {
+    const bytes = Uint8Array.from(atob(after), c => c.charCodeAt(0))
+    event.after = decodeVariant(bytes)
+  }
+  if (actor) {
+    event.actor = actor as string
+  }
+  if (metadata && typeof metadata === 'string') {
+    const bytes = Uint8Array.from(atob(metadata), c => c.charCodeAt(0))
+    event.metadata = decodeVariant(bytes)
+  }
+
+  return event
+}
+
+// =============================================================================
+// Relationship Serialization
+// =============================================================================
+
+/**
+ * Build the standard ParquetSchema for relationship storage
+ *
+ * Schema includes:
+ * - sourceId: The entity that has the relationship
+ * - sourceField: The field name on the source entity
+ * - targetId: The entity being referenced
+ * - createdAt: When the relationship was created
+ *
+ * @returns ParquetSchema for relationship storage
+ */
+export function buildRelationshipParquetSchema(): ParquetSchema {
+  return {
+    sourceId: { type: 'STRING', optional: false },
+    sourceField: { type: 'STRING', optional: false },
+    targetId: { type: 'STRING', optional: false },
+    createdAt: { type: 'STRING', optional: false },
+  }
+}
+
+/**
+ * Convert a relationship to a Parquet row
+ */
+export function relationshipToRow(rel: {
+  sourceId: string
+  sourceField: string
+  targetId: string
+  createdAt?: string | undefined
+}): Record<string, unknown> {
+  return {
+    sourceId: rel.sourceId,
+    sourceField: rel.sourceField,
+    targetId: rel.targetId,
+    createdAt: rel.createdAt ?? new Date().toISOString(),
+  }
+}
+
+/**
+ * Convert relationships from the reverse index to rows for Parquet
+ *
+ * @param reverseRelIndex - Map<targetId, Map<sourceKey, Set<sourceId>>>
+ * @returns Array of relationship rows
+ */
+export function reverseRelIndexToRows(
+  reverseRelIndex: Map<string, Map<string, Set<string>>>
+): Array<{ sourceId: string; sourceField: string; targetId: string; createdAt: string }> {
+  const rows: Array<{ sourceId: string; sourceField: string; targetId: string; createdAt: string }> = []
+  const now = new Date().toISOString()
+
+  for (const [targetId, sourceMap] of reverseRelIndex) {
+    for (const [sourceKey, sourceIds] of sourceMap) {
+      // sourceKey is "namespace.fieldName", extract just the fieldName
+      const sourceField = sourceKey.includes('.') ? sourceKey.split('.').slice(1).join('.') : sourceKey
+      for (const sourceId of sourceIds) {
+        rows.push({
+          sourceId,
+          sourceField,
+          targetId,
+          createdAt: now,
+        })
+      }
+    }
+  }
+
+  return rows
 }
 
 // =============================================================================

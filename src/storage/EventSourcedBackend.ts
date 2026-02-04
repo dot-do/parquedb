@@ -23,7 +23,13 @@
 
 import type { StorageBackend } from '../types/storage'
 import type { Entity, EntityId, Event, Variant } from '../types'
-import { generateId } from '../utils'
+import { ParquetWriter } from '../parquet/writer'
+import {
+  buildEventParquetSchema,
+  buildRelationshipParquetSchema,
+  eventToRow,
+  rowToEvent,
+} from '../backends/parquet-utils'
 
 // =============================================================================
 // Types
@@ -171,6 +177,12 @@ export class EventSourcedBackend implements EventSourcedOperations {
   /** Snapshot cache */
   private snapshotCache: Map<string, EntitySnapshot> = new Map()
 
+  /** Relationship index: targetId -> Map<sourceField, Set<sourceId>> */
+  private relIndex: Map<string, Map<string, Set<string>>> = new Map()
+
+  /** Whether relationships have been modified since last flush */
+  private relsDirty = false
+
   /** Whether sequences have been initialized from storage */
   private initialized = false
 
@@ -237,6 +249,14 @@ export class EventSourcedBackend implements EventSourcedOperations {
 
     // Invalidate entity cache
     this.invalidateEntityCache(event.target)
+
+    // Track relationship changes from entity events
+    if (event.op === 'CREATE' || event.op === 'UPDATE') {
+      if (event.after && typeof event.after === 'object') {
+        const afterEntity = event.after as Entity
+        this.updateRelationshipsFromEntity(afterEntity, event.target)
+      }
+    }
 
     // Auto-flush if thresholds exceeded
     if (
@@ -428,6 +448,131 @@ export class EventSourcedBackend implements EventSourcedOperations {
   }
 
   /**
+   * Reconstruct all entities from stored events
+   *
+   * This method reads all events from storage and reconstructs the current
+   * state of all entities. Used to populate the in-memory store on startup.
+   *
+   * @returns Map of entity ID (ns/id format) to reconstructed Entity
+   */
+  async reconstructAllEntities(): Promise<Map<string, Entity>> {
+    await this.ensureInitialized()
+
+    const entities = new Map<string, Entity>()
+
+    try {
+      // Read all events from storage
+      const allEvents = await this.readAllStoredEvents()
+
+      // Group events by entity target
+      const eventsByEntity = new Map<string, Event[]>()
+      for (const event of allEvents) {
+        const target = event.target
+        // Skip relationship events
+        if (target.split(':').length > 2) continue
+
+        const existing = eventsByEntity.get(target) || []
+        existing.push(event)
+        eventsByEntity.set(target, existing)
+      }
+
+      // Reconstruct each entity
+      for (const [target, events] of eventsByEntity) {
+        // Sort events by timestamp
+        events.sort((a, b) => a.ts - b.ts)
+
+        // Apply events in sequence
+        let entity: Entity | null = null
+        for (const event of events) {
+          entity = this.applyEvent(entity, event)
+        }
+
+        // If entity exists and isn't deleted, add to result
+        if (entity && !entity.deletedAt) {
+          // Convert target (ns:id) to fullId (ns/id)
+          const [ns, id] = target.split(':')
+          const fullId = `${ns}/${id}`
+          entities.set(fullId, entity)
+
+          // Also index relationships from this entity
+          this.updateRelationshipsFromEntity(entity, target)
+        }
+      }
+    } catch {
+      // Ignore read errors - return empty map
+    }
+
+    return entities
+  }
+
+  /**
+   * Read all stored events (not filtered by namespace)
+   */
+  private async readAllStoredEvents(): Promise<Event[]> {
+    const events: Event[] = []
+
+    try {
+      // Read from flat events.parquet file
+      const exists = await this.storage.exists('events.parquet')
+      if (!exists) return events
+
+      const data = await this.storage.read('events.parquet')
+
+      // Parse Parquet file using hyparquet
+      const { parquetRead, parquetMetadataAsync } = await import('hyparquet')
+      const { compressors } = await import('../parquet/compression')
+
+      const asyncBuffer = {
+        byteLength: data.length,
+        slice: async (start: number, end?: number): Promise<ArrayBuffer> => {
+          const sliced = data.slice(start, end ?? data.length)
+          const buffer = new ArrayBuffer(sliced.byteLength)
+          new Uint8Array(buffer).set(sliced)
+          return buffer
+        },
+      }
+
+      // Get metadata to extract column names
+      const metadata = await parquetMetadataAsync(asyncBuffer)
+      const schema = (metadata.schema || []) as Array<{ name?: string }>
+      const columnNames: string[] = schema
+        .filter((el) => el.name && el.name !== 'root')
+        .map((el) => el.name!)
+
+      // Use onComplete callback to get data (parquetRead returns void)
+      let rows: unknown[][] = []
+      await parquetRead({
+        file: asyncBuffer,
+        compressors,
+        onComplete: (data: unknown[][]) => {
+          rows = data
+        },
+      })
+
+      // Convert rows back to Event objects
+      for (const rowArray of rows) {
+        const row: Record<string, unknown> = {}
+        for (let i = 0; i < columnNames.length; i++) {
+          const colName = columnNames[i]
+          if (colName) {
+            row[colName] = rowArray[i]
+          }
+        }
+        const eventData = rowToEvent(row)
+        events.push(eventData as Event)
+      }
+
+      // Sort by timestamp
+      events.sort((a, b) => a.ts - b.ts)
+    } catch (err) {
+      // Log read errors for debugging
+      console.error('[EventSourcedBackend] Error reading events.parquet:', err)
+    }
+
+    return events
+  }
+
+  /**
    * Apply an event to entity state (event sourcing reducer)
    */
   private applyEvent(entity: Entity | null, event: Event): Entity | null {
@@ -522,26 +667,107 @@ export class EventSourcedBackend implements EventSourcedOperations {
   }
 
   /**
+   * Update relationship index from entity data
+   */
+  private updateRelationshipsFromEntity(entity: Entity, target: string): void {
+    const parts = target.split(':')
+    const ns = parts[0] || ''
+    const id = parts[1] || ''
+    const sourceId = `${ns}/${id}`
+
+    // Look for relationship fields in entity data
+    for (const [key, value] of Object.entries(entity)) {
+      // Skip meta fields
+      if (key.startsWith('$') || ['name', 'version', 'createdAt', 'createdBy', 'updatedAt', 'updatedBy', 'deletedAt', 'deletedBy'].includes(key)) {
+        continue
+      }
+
+      // Check if value looks like entity references
+      const refs = this.extractEntityRefs(value)
+      for (const targetId of refs) {
+        this.addRelationship(sourceId, key, targetId)
+      }
+    }
+  }
+
+  /**
+   * Extract entity references from a value
+   */
+  private extractEntityRefs(value: unknown): string[] {
+    const refs: string[] = []
+
+    if (typeof value === 'string' && value.includes('/') && !value.startsWith('/')) {
+      // Looks like an entity ID (ns/id format)
+      refs.push(value)
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        refs.push(...this.extractEntityRefs(item))
+      }
+    } else if (value && typeof value === 'object') {
+      // Check for $id field (entity reference object)
+      const obj = value as Record<string, unknown>
+      if (typeof obj.$id === 'string') {
+        refs.push(obj.$id)
+      }
+    }
+
+    return refs
+  }
+
+  /**
+   * Add a relationship to the index
+   */
+  private addRelationship(sourceId: string, sourceField: string, targetId: string): void {
+    let targetMap = this.relIndex.get(targetId)
+    if (!targetMap) {
+      targetMap = new Map()
+      this.relIndex.set(targetId, targetMap)
+    }
+
+    let sourceSet = targetMap.get(sourceField)
+    if (!sourceSet) {
+      sourceSet = new Set()
+      targetMap.set(sourceField, sourceSet)
+    }
+
+    if (!sourceSet.has(sourceId)) {
+      sourceSet.add(sourceId)
+      this.relsDirty = true
+    }
+  }
+
+  /**
    * Flush events for a single namespace
+   *
+   * Writes events to a single flat `events.parquet` file using Parquet format
+   * with Variant-encoded binary JSON for efficiency.
    */
   private async flushNamespace(ns: string): Promise<void> {
     const buffer = this.eventBuffers.get(ns)
     if (!buffer || buffer.events.length === 0) return
 
-    // Create event batch
-    const batch: EventBatch = {
-      id: generateId(),
-      ns,
-      firstSeq: buffer.firstSeq,
-      lastSeq: buffer.lastSeq,
-      events: buffer.events,
-      createdAt: new Date().toISOString(),
-    }
+    // Read ALL existing events from storage (not just this namespace)
+    // This is critical because we write to a single events.parquet file
+    const existingEvents = await this.readAllStoredEvents()
 
-    // Write to storage
-    const batchPath = `data/${ns}/events/${batch.id}.json`
-    const data = new TextEncoder().encode(JSON.stringify(batch))
-    await this.storage.write(batchPath, data)
+    // Combine with new events from this namespace's buffer
+    const allEvents = [...existingEvents, ...buffer.events]
+
+    // Convert events to Parquet rows
+    const eventRows = allEvents.map((event) => eventToRow(event))
+
+    // Build Parquet schema and write
+    const eventSchema = buildEventParquetSchema()
+    const writer = new ParquetWriter(this.storage, { compression: 'lz4' })
+
+    // Write to flat events.parquet file (not namespace subfolders)
+    await writer.write('events.parquet', eventRows, eventSchema)
+
+    // Write rels.parquet if relationships have changed
+    if (this.relsDirty) {
+      await this.writeRelsParquet(writer)
+      this.relsDirty = false
+    }
 
     // Update sequence
     this.sequences.set(ns, buffer.lastSeq + 1)
@@ -559,28 +785,101 @@ export class EventSourcedBackend implements EventSourcedOperations {
   }
 
   /**
-   * Read stored events for a namespace
+   * Read stored events for a namespace from flat events.parquet file
    */
   private async readStoredEvents(ns: string): Promise<Event[]> {
     const events: Event[] = []
 
     try {
-      const eventsPrefix = `data/${ns}/events/`
-      const result = await this.storage.list(eventsPrefix)
+      // Read from flat events.parquet file
+      const exists = await this.storage.exists('events.parquet')
+      if (!exists) return events
 
-      for (const file of result.files) {
-        const data = await this.storage.read(file)
-        const batch = JSON.parse(new TextDecoder().decode(data)) as EventBatch
-        events.push(...batch.events)
+      const data = await this.storage.read('events.parquet')
+
+      // Parse Parquet file using hyparquet
+      const { parquetRead, parquetMetadataAsync } = await import('hyparquet')
+      const { compressors } = await import('../parquet/compression')
+
+      const asyncBuffer = {
+        byteLength: data.length,
+        slice: async (start: number, end?: number): Promise<ArrayBuffer> => {
+          const sliced = data.slice(start, end ?? data.length)
+          const buffer = new ArrayBuffer(sliced.byteLength)
+          new Uint8Array(buffer).set(sliced)
+          return buffer
+        },
+      }
+
+      // Get metadata to extract column names
+      const metadata = await parquetMetadataAsync(asyncBuffer)
+      const schema = (metadata.schema || []) as Array<{ name?: string }>
+      const columnNames: string[] = schema
+        .filter((el) => el.name && el.name !== 'root')
+        .map((el) => el.name!)
+
+      // Use onComplete callback to get data (parquetRead returns void)
+      let rows: unknown[][] = []
+      await parquetRead({
+        file: asyncBuffer,
+        compressors,
+        onComplete: (data: unknown[][]) => {
+          rows = data
+        },
+      })
+
+      // Convert rows back to Event objects, filtering by namespace
+      for (const rowArray of rows) {
+        const row: Record<string, unknown> = {}
+        for (let i = 0; i < columnNames.length; i++) {
+          const colName = columnNames[i]
+          if (colName) {
+            row[colName] = rowArray[i]
+          }
+        }
+        const eventData = rowToEvent(row)
+        // Cast to Event type (rowToEvent returns compatible structure)
+        const event = eventData as Event
+        // Filter by namespace if needed
+        const eventNs = this.parseNamespace(event.target)
+        if (eventNs === ns) {
+          events.push(event)
+        }
       }
 
       // Sort by timestamp
       events.sort((a, b) => a.ts - b.ts)
     } catch {
-      // Ignore read errors
+      // Ignore read errors - file may not exist yet
     }
 
     return events
+  }
+
+  /**
+   * Write relationships to rels.parquet
+   */
+  private async writeRelsParquet(writer: ParquetWriter): Promise<void> {
+    const rows: Array<{ sourceId: string; sourceField: string; targetId: string; createdAt: string }> = []
+    const now = new Date().toISOString()
+
+    for (const [targetId, sourceMap] of this.relIndex) {
+      for (const [sourceField, sourceIds] of sourceMap) {
+        for (const sourceId of sourceIds) {
+          rows.push({
+            sourceId,
+            sourceField,
+            targetId,
+            createdAt: now,
+          })
+        }
+      }
+    }
+
+    if (rows.length > 0) {
+      const relSchema = buildRelationshipParquetSchema()
+      await writer.write('rels.parquet', rows, relSchema)
+    }
   }
 
   /**
@@ -631,6 +930,8 @@ export class EventSourcedBackend implements EventSourcedOperations {
     this.eventBuffers.clear()
     this.entityCache.clear()
     this.snapshotCache.clear()
+    this.relIndex.clear()
+    this.relsDirty = false
   }
 
   /**
