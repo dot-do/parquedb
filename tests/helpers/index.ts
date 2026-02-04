@@ -10,6 +10,7 @@
  *   createTestR2Backend,
  *   cleanupTestStorage,
  *   registerAutoCleanup,
+ *   createTestContext,
  * } from '../helpers'
  * ```
  */
@@ -38,3 +39,20 @@ export {
   // Types
   type TestStorageConfig,
 } from './storage'
+
+// Temp directory utilities (preferred for tests with ParqueDB instances)
+export {
+  createTestContext,
+  createMultipleTestContexts,
+  cleanupAllTestContexts,
+  createIsolatedTempDir,
+  cleanupTempDir,
+  createIsolatedStorage,
+  getActiveContextCount,
+
+  // Types
+  type TestContext,
+  type TestContextOptions,
+  type AsyncDisposable,
+  type SyncDisposable,
+} from './temp-dir'

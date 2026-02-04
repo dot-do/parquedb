@@ -153,6 +153,7 @@ export class StreamingRefreshEngine {
   private batchTimer: ReturnType<typeof setTimeout> | null = null
   private processingPromise: Promise<void> | null = null
   private _flushing = false // Mutex flag to prevent concurrent flush operations
+  private _flushCompleteResolvers: Array<() => void> = [] // Waiters for flush completion
   private _warningEmitted80 = false // Track if 80% warning already emitted
 
   private errorHandlers: ErrorHandler[] = []
@@ -337,17 +338,16 @@ export class StreamingRefreshEngine {
    * Flush all buffered events immediately
    *
    * Uses the mutex flag to coordinate with maybeFlush() and prevent
-   * concurrent flush operations.
+   * concurrent flush operations. Waiters are notified via a promise-based
+   * signaling mechanism instead of busy-wait polling.
    */
   async flush(): Promise<void> {
-    // Wait for any in-flight flushing operation to complete
-    while (this._flushing) {
-      if (this.processingPromise) {
-        await this.processingPromise
-      } else {
-        // Brief yield if flushing but no promise yet
-        await new Promise(resolve => setTimeout(resolve, 1))
-      }
+    // If already flushing, wait for the current flush to complete
+    if (this._flushing) {
+      await new Promise<void>(resolve => {
+        this._flushCompleteResolvers.push(resolve)
+      })
+      return
     }
 
     // Acquire flush lock
@@ -369,6 +369,12 @@ export class StreamingRefreshEngine {
       this._warningEmitted80 = false
     } finally {
       this._flushing = false
+      // Notify all waiters that flush is complete
+      const resolvers = this._flushCompleteResolvers
+      this._flushCompleteResolvers = []
+      for (const resolve of resolvers) {
+        resolve()
+      }
     }
   }
 
@@ -613,6 +619,12 @@ export class StreamingRefreshEngine {
       }
     } finally {
       this._flushing = false
+      // Notify any waiters that flush is complete
+      const resolvers = this._flushCompleteResolvers
+      this._flushCompleteResolvers = []
+      for (const resolve of resolvers) {
+        resolve()
+      }
     }
   }
 
@@ -637,6 +649,12 @@ export class StreamingRefreshEngine {
       this.processingPromise.finally(() => {
         this.processingPromise = null
         this._flushing = false
+        // Notify any waiters that flush is complete
+        const resolvers = this._flushCompleteResolvers
+        this._flushCompleteResolvers = []
+        for (const resolve of resolvers) {
+          resolve()
+        }
       })
     }, this.config.batchTimeoutMs)
   }

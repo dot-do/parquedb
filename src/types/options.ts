@@ -2,7 +2,7 @@
  * Query and operation options for ParqueDB
  */
 
-import type { EntityId } from './entity'
+import type { AuditFields, EntityId, EntityRef } from './entity'
 import type { Filter } from './filter'
 
 // =============================================================================
@@ -12,9 +12,35 @@ import type { Filter } from './filter'
 /** Sort direction */
 export type SortDirection = 1 | -1 | 'asc' | 'desc'
 
-/** Sort specification */
+/**
+ * Sort specification (untyped version for backward compatibility)
+ */
 export interface SortSpec {
   [field: string]: SortDirection
+}
+
+/**
+ * Typed sort specification that constrains fields to known entity properties.
+ *
+ * When a type parameter T is provided, only valid field names from T
+ * (plus standard entity fields) can be used as sort keys.
+ *
+ * @typeParam T - The entity data shape
+ *
+ * @example
+ * ```typescript
+ * interface Post { title: string; views: number; createdAt: Date }
+ *
+ * // Valid sort specs
+ * const sort1: TypedSortSpec<Post> = { views: -1 }
+ * const sort2: TypedSortSpec<Post> = { createdAt: 'desc', title: 'asc' }
+ *
+ * // TypeScript error: 'invalid' is not a key of Post
+ * const sortBad: TypedSortSpec<Post> = { invalid: -1 }
+ * ```
+ */
+export type TypedSortSpec<T> = {
+  [K in keyof T | keyof EntityRef | keyof AuditFields]?: SortDirection
 }
 
 /** Normalize sort direction to 1 or -1 */
@@ -28,9 +54,36 @@ export function normalizeSortDirection(dir: SortDirection): 1 | -1 {
 // Projection Options
 // =============================================================================
 
-/** Field projection - include (1) or exclude (0) */
+/**
+ * Field projection (untyped version for backward compatibility)
+ * Include (1/true) or exclude (0/false) fields
+ */
 export interface Projection {
   [field: string]: 0 | 1 | boolean
+}
+
+/**
+ * Typed projection that constrains fields to known entity properties.
+ *
+ * When a type parameter T is provided, only valid field names from T
+ * (plus standard entity fields) can be used as projection keys.
+ *
+ * @typeParam T - The entity data shape
+ *
+ * @example
+ * ```typescript
+ * interface Post { title: string; content: string; views: number }
+ *
+ * // Valid projections
+ * const proj1: TypedProjection<Post> = { title: 1, content: 1 }
+ * const proj2: TypedProjection<Post> = { views: 0 }  // Exclude views
+ *
+ * // TypeScript error: 'invalid' is not a key of Post
+ * const projBad: TypedProjection<Post> = { invalid: 1 }
+ * ```
+ */
+export type TypedProjection<T> = {
+  [K in keyof T | keyof EntityRef | keyof AuditFields]?: 0 | 1 | boolean
 }
 
 // =============================================================================
@@ -61,38 +114,11 @@ export type PopulateSpec =
 // =============================================================================
 
 /**
- * Options for find operations
+ * Base find options interface (untyped, for backward compatibility)
  *
- * @example
- * // Simple find with limit
- * { limit: 20 }
- *
- * @example
- * // With sort and pagination
- * { sort: { createdAt: -1 }, limit: 20, cursor: 'abc...' }
- *
- * @example
- * // With projection
- * { project: { title: 1, content: 1, author: 1 } }
- *
- * @example
- * // With populate
- * { populate: ['author'], limit: 20 }
- *
- * @example
- * // Full options
- * {
- *   filter: { status: 'published' },
- *   sort: { createdAt: -1 },
- *   limit: 20,
- *   skip: 0,
- *   project: { title: 1, content: 1 },
- *   populate: { author: true, comments: { limit: 5 } },
- *   includeDeleted: false,
- *   asOf: new Date('2024-01-01')
- * }
+ * @internal
  */
-export interface FindOptions<_T = unknown> {
+export interface FindOptionsBase {
   /** Filter (alternative to passing filter as first arg) */
   filter?: Filter | undefined
 
@@ -129,6 +155,90 @@ export interface FindOptions<_T = unknown> {
   /** Maximum time in milliseconds */
   maxTimeMs?: number | undefined
 }
+
+/**
+ * Options for find operations with typed sort and projection fields.
+ *
+ * When a type parameter T is provided, the sort and project options are
+ * constrained to only allow valid field names from T (plus standard entity fields).
+ * This provides autocomplete support and catches typos at compile time.
+ *
+ * @typeParam T - The entity data shape. When provided, enables typed sort/project.
+ *               Defaults to unknown for backward compatibility.
+ *
+ * @example
+ * ```typescript
+ * // Simple find with limit
+ * { limit: 20 }
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Typed find with autocomplete for sort/project
+ * interface Post { title: string; content: string; views: number }
+ *
+ * const options: FindOptions<Post> = {
+ *   sort: { views: -1, createdAt: 'desc' },  // Autocomplete works!
+ *   project: { title: 1, content: 1 },       // Only valid fields allowed
+ *   limit: 20
+ * }
+ *
+ * // TypeScript error: 'invalid' does not exist on Post
+ * const badOptions: FindOptions<Post> = {
+ *   sort: { invalid: -1 }  // Error!
+ * }
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Untyped (backward compatible)
+ * const options: FindOptions = {
+ *   sort: { anyField: -1 },  // No type checking
+ *   limit: 20
+ * }
+ * ```
+ */
+export type FindOptions<T = unknown> =
+  // For unknown/any, use untyped version for backward compatibility
+  unknown extends T
+    ? FindOptionsBase
+    : {
+        /** Filter (alternative to passing filter as first arg) */
+        filter?: Filter | undefined
+
+        /** Sort order - constrained to valid fields of T */
+        sort?: TypedSortSpec<T> | undefined
+
+        /** Maximum number of results */
+        limit?: number | undefined
+
+        /** Number of results to skip (offset) */
+        skip?: number | undefined
+
+        /** Cursor for pagination (alternative to skip) */
+        cursor?: string | undefined
+
+        /** Field projection - constrained to valid fields of T */
+        project?: TypedProjection<T> | undefined
+
+        /** Populate related entities */
+        populate?: PopulateSpec | undefined
+
+        /** Include soft-deleted entities */
+        includeDeleted?: boolean | undefined
+
+        /** Time-travel: query as of specific time */
+        asOf?: Date | undefined
+
+        /** Explain query plan without executing */
+        explain?: boolean | undefined
+
+        /** Hint for index to use */
+        hint?: string | TypedSortSpec<T> | undefined
+
+        /** Maximum time in milliseconds */
+        maxTimeMs?: number | undefined
+      }
 
 // =============================================================================
 // Get Options

@@ -15,16 +15,20 @@
  *   Users: { email: 'string!', name: 'string' }
  * })
  *
- * // Create and start MCP server
- * const mcpServer = createParqueDBMCPServer(db)
+ * // Create MCP server handle
+ * const handle = createParqueDBMCPServer(db)
  * const transport = new StdioServerTransport()
- * await mcpServer.connect(transport)
+ * await handle.server.connect(transport)
+ *
+ * // When done, clean up resources
+ * await handle.server.close()
+ * await handle.dispose()
  *
  * // For read-only access
- * const readOnlyServer = createParqueDBMCPServer(db, { readOnly: true })
+ * const readOnlyHandle = createParqueDBMCPServer(db, { readOnly: true })
  *
  * // With custom configuration
- * const customServer = createParqueDBMCPServer(db, {
+ * const customHandle = createParqueDBMCPServer(db, {
  *   name: 'my-database',
  *   version: '1.0.0',
  *   instructions: 'Custom instructions for AI agents',
@@ -42,6 +46,7 @@ export { ValidationError } from './validation'
 
 export type {
   ParqueDBMCPOptions,
+  ParqueDBMCPServerHandle,
   ToolResult,
   CollectionInfo,
   FindToolParams,

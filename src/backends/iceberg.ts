@@ -50,8 +50,14 @@ import {
   extractDataFields,
 } from './parquet-utils'
 
-// Import update operators
-import { applyOperators } from '../mutation/operators'
+// Import shared entity utilities
+import {
+  applyUpdate,
+  createDefaultEntity,
+  sortEntities,
+  compareValues,
+  applyPagination,
+} from './entity-utils'
 
 // Import from @dotdo/iceberg
 import {
@@ -1776,61 +1782,6 @@ export class IcebergBackend implements EntityBackend {
   }
 
   /**
-   * Sort entities based on the provided sort options.
-   */
-  private sortEntities<T>(entities: Entity<T>[], sort?: SortSpec): void {
-    if (!sort) return
-
-    const sortFields = Object.entries(sort)
-    entities.sort((a, b) => {
-      for (const [field, direction] of sortFields) {
-        const aVal = (a as Record<string, unknown>)[field]
-        const bVal = (b as Record<string, unknown>)[field]
-
-        const cmp = this.compareValues(aVal, bVal)
-        if (cmp !== 0) {
-          const normalizedDir = normalizeSortDirection(direction)
-          return normalizedDir === -1 ? -cmp : cmp
-        }
-      }
-      return 0
-    })
-  }
-
-  /**
-   * Compare two values for sorting (handles null, undefined, strings, numbers, dates).
-   */
-  private compareValues(aVal: unknown, bVal: unknown): number {
-    if (aVal === bVal) return 0
-    if (aVal === null || aVal === undefined) return 1
-    if (bVal === null || bVal === undefined) return -1
-    if (typeof aVal === 'string' && typeof bVal === 'string') {
-      return aVal.localeCompare(bVal)
-    }
-    if (typeof aVal === 'number' && typeof bVal === 'number') {
-      return aVal - bVal
-    }
-    if (aVal instanceof Date && bVal instanceof Date) {
-      return aVal.getTime() - bVal.getTime()
-    }
-    return String(aVal).localeCompare(String(bVal))
-  }
-
-  /**
-   * Apply pagination (skip and limit) to entities.
-   */
-  private applyPagination<T>(entities: Entity<T>[], skip?: number, limit?: number): Entity<T>[] {
-    let result = entities
-    if (skip) {
-      result = result.slice(skip)
-    }
-    if (limit) {
-      result = result.slice(0, limit)
-    }
-    return result
-  }
-
-  /**
    * Read entities from a snapshot.
    * Orchestrates reading manifest files, collecting data/deletes, and applying filters.
    */
@@ -1854,43 +1805,11 @@ export class IcebergBackend implements EntityBackend {
     // Filter entities
     const entities = this.filterEntities(entityMap, filter)
 
-    // Sort entities
-    this.sortEntities(entities, options?.sort)
+    // Sort entities (using shared utility)
+    sortEntities(entities, options?.sort)
 
-    // Apply pagination
-    return this.applyPagination(entities, options?.skip, options?.limit)
-  }
-
-  /**
-   * Apply update operators to an entity
-   *
-   * Supports all MongoDB-style operators via the mutation/operators module:
-   * - Field: $set, $unset, $rename, $setOnInsert
-   * - Numeric: $inc, $mul, $min, $max
-   * - Array: $push, $pull, $pullAll, $addToSet, $pop
-   * - Date: $currentDate
-   * - Bitwise: $bit
-   */
-  private applyUpdate<T>(entity: Entity<T>, update: Update): Entity<T> {
-    const result = applyOperators(entity as Record<string, unknown>, update)
-    return result.document as Entity<T>
-  }
-
-  /**
-   * Create a default entity for upsert
-   */
-  private createDefaultEntity<T>(ns: string, id: string): Entity<T> {
-    const now = new Date()
-    return {
-      $id: `${ns}/${id}` as EntityId,
-      $type: 'unknown',
-      name: id,
-      createdAt: now,
-      createdBy: 'system/parquedb' as EntityId,
-      updatedAt: now,
-      updatedBy: 'system/parquedb' as EntityId,
-      version: 0,
-    } as Entity<T>
+    // Apply pagination (using shared utility)
+    return applyPagination(entities, options?.skip, options?.limit)
   }
 
   /**

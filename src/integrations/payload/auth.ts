@@ -31,6 +31,7 @@ import {
   JWKS_CACHE_TTL as IMPORTED_JWKS_CACHE_TTL,
   JWKS_FETCH_TIMEOUT_MS as IMPORTED_JWKS_FETCH_TIMEOUT_MS,
 } from '../../constants'
+import { LRUCache } from '../../utils/ttl-cache'
 
 // =============================================================================
 // Types
@@ -188,16 +189,43 @@ export function extractToken(
 
 /**
  * Parse cookie header into key-value pairs
+ *
+ * Handles:
+ * - URL-encoded values (decodeURIComponent)
+ * - Quoted string values per RFC 6265
+ * - Values containing equals signs
  */
-function parseCookies(cookieHeader: string): Record<string, string> {
+export function parseCookies(cookieHeader: string): Record<string, string> {
   const cookies: Record<string, string> = {}
   const pairs = cookieHeader.split(';')
 
   for (const pair of pairs) {
-    const [key, ...valueParts] = pair.trim().split('=')
-    if (key) {
-      cookies[key] = valueParts.join('=')
+    const trimmedPair = pair.trim()
+    if (!trimmedPair) continue
+
+    const equalsIndex = trimmedPair.indexOf('=')
+    if (equalsIndex === -1) continue
+
+    const key = trimmedPair.slice(0, equalsIndex).trim()
+    if (!key) continue
+
+    let value = trimmedPair.slice(equalsIndex + 1)
+
+    // Handle quoted strings per RFC 6265
+    // Quoted values are wrapped in double quotes
+    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+      value = value.slice(1, -1)
     }
+
+    // Decode URL-encoded values
+    try {
+      value = decodeURIComponent(value)
+    } catch {
+      // If decoding fails, use the raw value
+      // This handles malformed percent-encoding gracefully
+    }
+
+    cookies[key] = value
   }
 
   return cookies
@@ -208,9 +236,16 @@ function parseCookies(cookieHeader: string): Record<string, string> {
 // =============================================================================
 
 // JWKS cache to avoid fetching on every request
-const jwksCache = new Map<string, { jwks: ReturnType<typeof createRemoteJWKSet>; expiresAt: number }>()
+// Uses LRU cache with max 100 entries to prevent memory exhaustion
+const JWKS_CACHE_MAX_ENTRIES = 100
 const JWKS_CACHE_TTL = IMPORTED_JWKS_CACHE_TTL
 const JWKS_FETCH_TIMEOUT_MS = IMPORTED_JWKS_FETCH_TIMEOUT_MS
+
+const jwksCache = new LRUCache<string, ReturnType<typeof createRemoteJWKSet>>({
+  maxEntries: JWKS_CACHE_MAX_ENTRIES,
+  ttlMs: JWKS_CACHE_TTL,
+  cacheId: 'jwks-cache',
+})
 
 // Import jose for JWT verification
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyResult, type JWTPayload, type JWTVerifyOptions } from 'jose'
@@ -227,16 +262,36 @@ export class JWKSFetchTimeoutError extends Error {
 
 function getJWKS(jwksUri: string) {
   const cached = jwksCache.get(jwksUri)
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.jwks
+  if (cached) {
+    return cached
   }
 
   const jwks = createRemoteJWKSet(new URL(jwksUri), {
     timeoutDuration: JWKS_FETCH_TIMEOUT_MS,
   })
-  jwksCache.set(jwksUri, { jwks, expiresAt: Date.now() + JWKS_CACHE_TTL })
+  jwksCache.set(jwksUri, jwks)
   return jwks
 }
+
+/**
+ * Get JWKS cache statistics for monitoring and testing.
+ * Returns hit rate, eviction count, and current size.
+ */
+export function getJWKSCacheStats() {
+  return jwksCache.getStats()
+}
+
+/**
+ * Clear the JWKS cache. Useful for testing or when JWKS keys are rotated.
+ */
+export function clearJWKSCache() {
+  jwksCache.clear()
+}
+
+/**
+ * Get the maximum number of entries allowed in the JWKS cache.
+ */
+export const JWKS_CACHE_MAX_ENTRIES_VALUE = JWKS_CACHE_MAX_ENTRIES
 
 /**
  * Race a promise against an AbortController timeout.

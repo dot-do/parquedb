@@ -1085,6 +1085,29 @@ describe('FsBackend', () => {
       await expect(backend.read('%2e%2e/outside.txt')).rejects.toThrow(PathTraversalError)
       await expect(backend.read('..%2f..%2f..%2fetc/passwd')).rejects.toThrow(PathTraversalError)
     })
+
+    it('should reject double-encoded path traversal attempts', async () => {
+      // Double-encoded .. (%252e%252e decodes to %2e%2e, which decodes to ..)
+      await expect(backend.read('%252e%252e/outside.txt')).rejects.toThrow(PathTraversalError)
+      await expect(backend.read('subdir/%252e%252e/%252e%252e/etc/passwd')).rejects.toThrow(PathTraversalError)
+    })
+
+    it('should reject triple-encoded path traversal attempts', async () => {
+      // Triple-encoded .. (%25252e%25252e decodes to %252e%252e, then %2e%2e, then ..)
+      await expect(backend.read('%25252e%25252e/outside.txt')).rejects.toThrow(PathTraversalError)
+    })
+
+    it('should reject mixed encoding path traversal attempts', async () => {
+      // Mix of single and double encoding
+      await expect(backend.read('%2e%252e/outside.txt')).rejects.toThrow(PathTraversalError)
+      await expect(backend.read('%252e%2e/outside.txt')).rejects.toThrow(PathTraversalError)
+    })
+
+    it('should reject raw .. before any decoding', async () => {
+      // Raw .. should be caught before URL decoding
+      await expect(backend.read('../outside.txt')).rejects.toThrow(PathTraversalError)
+      await expect(backend.read('subdir/../../etc/passwd')).rejects.toThrow(PathTraversalError)
+    })
   })
 
   // ===========================================================================

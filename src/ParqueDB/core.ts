@@ -73,6 +73,9 @@ import {
   getEntityEventIndex,
   getReconstructionCache,
   clearGlobalState,
+  configureEntityStore,
+  getEntityCacheStats,
+  type EntityStoreConfig,
 } from './store'
 import type { IStorageRouter, StorageMode } from '../storage/router'
 import type { CollectionOptions } from '../types/collection-options'
@@ -90,6 +93,45 @@ import {
   restoreEntity,
   type EntityOperationsContext,
 } from './entity-operations'
+
+// =============================================================================
+// Parquet Corruption Detection Constants
+// =============================================================================
+
+/**
+ * Number of bytes to check at the end of a Parquet file for corruption detection.
+ *
+ * Parquet files have a specific footer structure:
+ * - 4 bytes: Footer length (little-endian)
+ * - N bytes: Footer metadata (Thrift-encoded)
+ * - 4 bytes: Magic bytes "PAR1"
+ *
+ * We check the last 12 bytes to capture the footer length, potential corruption
+ * in the footer, and the magic bytes. This provides a reasonable window to detect
+ * incomplete writes or corrupted data without scanning the entire file.
+ */
+const PARQUET_FOOTER_CHECK_SIZE = 12
+
+/**
+ * Byte value that indicates corrupted or unwritten data in storage.
+ *
+ * When storage systems (like R2 or S3) have incomplete writes or corruption,
+ * the affected bytes are often filled with 0xFF. This is because:
+ * - Flash storage cells default to 0xFF when erased
+ * - Some filesystems use 0xFF to mark unallocated space
+ * - Incomplete write operations may leave trailing 0xFF bytes
+ */
+const CORRUPTION_INDICATOR_BYTE = 0xFF
+
+/**
+ * Minimum number of corruption indicator bytes required to flag a file as corrupted.
+ *
+ * We use a threshold of 2 rather than 1 to reduce false positives, as a single
+ * 0xFF byte could legitimately appear in valid Parquet footer metadata. However,
+ * multiple consecutive 0xFF bytes in the footer region strongly indicates
+ * incomplete writes or data corruption.
+ */
+const CORRUPTION_THRESHOLD = 2
 
 import {
   indexRelationshipsForEntity,
@@ -159,6 +201,19 @@ export class ParqueDBImpl {
     this.storage = config.storage
     this.snapshotConfig = config.snapshotConfig || {}
     this.eventLogConfig = { ...DEFAULT_EVENT_LOG_CONFIG, ...config.eventLogConfig }
+
+    // Configure entity cache with size limits before getting the store
+    if (config.maxCacheSize !== undefined || config.onCacheEvict !== undefined) {
+      const entityStoreConfig: EntityStoreConfig = {}
+      if (config.maxCacheSize !== undefined) {
+        entityStoreConfig.maxEntities = config.maxCacheSize
+      }
+      if (config.onCacheEvict) {
+        entityStoreConfig.onEvict = config.onCacheEvict
+      }
+      configureEntityStore(config.storage, entityStoreConfig)
+    }
+
     this.entities = getEntityStore(config.storage)
     this.events = getEventStore(config.storage)
     this.archivedEvents = getArchivedEventStore(config.storage)
@@ -264,18 +319,34 @@ export class ParqueDBImpl {
   // Internal Helper Methods
   // ===========================================================================
 
+  /**
+   * Detects corruption in Parquet file data by checking the footer region.
+   *
+   * Parquet files have a well-defined footer structure that ends with the magic
+   * bytes "PAR1". This method checks the last few bytes of the file for signs
+   * of corruption, such as incomplete writes that leave 0xFF bytes.
+   *
+   * @param data - The raw Parquet file data as a Uint8Array
+   * @param _filePath - The file path (unused, kept for logging context)
+   * @throws Error if corruption is detected in the Parquet footer
+   */
   private detectParquetCorruption(data: Uint8Array, _filePath: string): void {
     if (!data || data.length === 0) return
 
+    // Parquet files must have at least a 4-byte magic header/footer
     if (data.length >= 4) {
-      const lastBytes = data.slice(-12)
+      // Check the footer region for corruption indicators
+      const lastBytes = data.slice(-PARQUET_FOOTER_CHECK_SIZE)
       let invalidByteCount = 0
+
       for (let i = 0; i < lastBytes.length; i++) {
-        if (lastBytes[i] === 0xFF) {
+        if (lastBytes[i] === CORRUPTION_INDICATOR_BYTE) {
           invalidByteCount++
         }
       }
-      if (invalidByteCount >= 2) {
+
+      // If we find multiple corruption indicator bytes, the file is likely corrupted
+      if (invalidByteCount >= CORRUPTION_THRESHOLD) {
         throw new Error(`Event log corruption detected: invalid checksum in parquet file`)
       }
     }
@@ -753,19 +824,32 @@ export class ParqueDBImpl {
           const expectedTarget = entityTarget(targetNs ?? '', targetIdParts.join('/'))
 
           if (op.type === 'create' && op.entity) {
+            // Unindex relationships before removing the entity
+            self.unindexRelationshipsForEntityInternal(fullId, op.entity)
             self.entities.delete(fullId)
             const idx = self.events.findIndex(
               e => e.op === 'CREATE' && e.target === expectedTarget
             )
             if (idx >= 0) self.events.splice(idx, 1)
           } else if (op.type === 'update' && op.beforeState) {
+            // Unindex relationships from the current (updated) state
+            const currentEntity = self.entities.get(fullId)
+            if (currentEntity) {
+              self.unindexRelationshipsForEntityInternal(fullId, currentEntity)
+            }
+            // Restore the previous state
             self.entities.set(fullId, op.beforeState)
+            // Reindex relationships from the restored state
+            self.indexRelationshipsForEntityInternal(fullId, op.beforeState)
             const idx = self.events.findIndex(
               e => e.op === 'UPDATE' && e.target === expectedTarget
             )
             if (idx >= 0) self.events.splice(idx, 1)
           } else if (op.type === 'delete' && op.beforeState) {
+            // Restore the entity
             self.entities.set(fullId, op.beforeState)
+            // Reindex relationships from the restored entity
+            self.indexRelationshipsForEntityInternal(fullId, op.beforeState)
             const idx = self.events.findIndex(
               e => e.op === 'DELETE' && e.target === expectedTarget
             )

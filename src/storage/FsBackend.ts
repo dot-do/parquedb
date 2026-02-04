@@ -52,6 +52,26 @@ export class FsBackend implements StorageBackend {
   }
 
   /**
+   * Recursively decode a path until no more decoding is possible.
+   * This catches double-encoding, triple-encoding, etc. attacks.
+   */
+  private fullyDecode(path: string): string {
+    let decoded = path
+    let prev = ''
+    // Keep decoding until the string stops changing (max 10 iterations to prevent infinite loops)
+    for (let i = 0; i < 10 && decoded !== prev; i++) {
+      prev = decoded
+      try {
+        decoded = decodeURIComponent(decoded)
+      } catch {
+        // Invalid encoding sequences - stop decoding
+        break
+      }
+    }
+    return decoded
+  }
+
+  /**
    * Resolve and validate a path, preventing path traversal attacks
    */
   private resolvePath(path: string): string {
@@ -60,9 +80,15 @@ export class FsBackend implements StorageBackend {
       throw new PathTraversalError(path)
     }
 
-    // Check for URL-encoded traversal attempts
-    const decodedPath = decodeURIComponent(path)
-    if (decodedPath.includes('..')) {
+    // SECURITY: Check for '..' BEFORE any decoding to catch raw traversal attempts
+    if (path.includes('..')) {
+      throw new PathTraversalError(path)
+    }
+
+    // SECURITY: Recursively decode to catch double/triple-encoded attacks
+    // e.g., %252e%252e -> %2e%2e -> ..
+    const fullyDecodedPath = this.fullyDecode(path)
+    if (fullyDecodedPath.includes('..')) {
       throw new PathTraversalError(path)
     }
 

@@ -91,7 +91,8 @@ function createMockCollection() {
         results = results.slice(0, options.limit)
       }
 
-      return results
+      // Return PaginatedResult format with items property
+      return { items: results, total: results.length }
     }),
     update: vi.fn(async (id: string, update: { $set: Record<string, unknown> }) => {
       const fullId = `generated_content/${id}`

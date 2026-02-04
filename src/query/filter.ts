@@ -34,7 +34,7 @@
  */
 
 import type { Filter } from '../types/filter'
-import { deepEqual, compareValues, getNestedValue, getValueType, createSafeRegex, UnsafeRegexError, logger, isNullish } from '../utils'
+import { deepEqual, compareValues, getNestedValue, getValueType, createSafeRegex, UnsafeRegexError, safeRegexTest, RegexTimeoutError, logger, isNullish } from '../utils'
 
 // =============================================================================
 // Configuration
@@ -438,10 +438,14 @@ function evaluateOperators(value: unknown, operators: Record<string, unknown>, c
         const flags = operators.$options !== undefined ? String(operators.$options) : undefined
         try {
           const pattern = createSafeRegex(opValue, flags)
-          if (!pattern.test(value)) return false
+          // Use safeRegexTest for runtime protection against ReDoS attacks
+          // This provides defense-in-depth beyond static pattern analysis
+          if (!safeRegexTest(pattern, value)) return false
         } catch (err) {
           // Re-throw UnsafeRegexError (security concern - must not silently accept)
           if (err instanceof UnsafeRegexError) throw err
+          // Re-throw RegexTimeoutError (execution took too long or estimated to be dangerous)
+          if (err instanceof RegexTimeoutError) throw err
           // Other errors (e.g., SyntaxError) - treat as no match
           return false
         }

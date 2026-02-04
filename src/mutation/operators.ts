@@ -189,9 +189,7 @@ export function applyOperators<T extends Record<string, unknown>>(
     for (const [key, values] of Object.entries(update.$pullAll)) {
       const arr = toUnknownArray(getField(result, key))
       const valuesToRemove = toUnknownArray(values)
-      const filtered = arr.filter(
-        (item) => !valuesToRemove.some((v) => deepEqual(item, v))
-      )
+      const filtered = filterWithPullAllSet(arr, valuesToRemove)
       result = setField(result, key, filtered)
       modifiedFields.push(key)
     }
@@ -557,6 +555,90 @@ function applySlice(arr: unknown[], slice: number): void {
       arr.splice(0, arr.length - keep)
     }
   }
+}
+
+// =============================================================================
+// PullAll Optimization Helpers
+// =============================================================================
+
+/**
+ * Check if a value is a primitive type that can be used directly in a Set
+ */
+function isPrimitive(value: unknown): value is string | number | boolean | null | undefined {
+  return value === null || value === undefined ||
+         typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+}
+
+/**
+ * Filter an array by removing all values in the valuesToRemove array.
+ * Uses Set-based lookup for O(n) complexity instead of O(n*m).
+ *
+ * For primitive values: Uses a Set for O(1) lookup
+ * For objects/arrays: Uses JSON.stringify as a key in a Set for O(1) lookup,
+ *                     with deepEqual fallback for special cases like Date objects
+ *
+ * @param arr - The array to filter
+ * @param valuesToRemove - Values to remove from the array
+ * @returns New array with matching values removed
+ */
+function filterWithPullAllSet(arr: unknown[], valuesToRemove: unknown[]): unknown[] {
+  if (valuesToRemove.length === 0) return arr
+
+  // Separate primitives and complex values
+  const primitiveSet = new Set<unknown>()
+  const complexSet = new Set<string>()
+  const complexValues: unknown[] = [] // For deepEqual fallback (Dates, etc.)
+  let hasNullish = false // Track if null or undefined is in removal set (they're equal per deepEqual)
+
+  for (const v of valuesToRemove) {
+    if (isPrimitive(v)) {
+      // Track null/undefined specially since deepEqual treats them as equal
+      if (v === null || v === undefined) {
+        hasNullish = true
+      }
+      primitiveSet.add(v)
+    } else if (v instanceof Date) {
+      // Dates need special handling - store for deepEqual comparison
+      complexValues.push(v)
+    } else {
+      // Objects and arrays - use JSON.stringify as key
+      try {
+        complexSet.add(JSON.stringify(v))
+      } catch {
+        // If JSON.stringify fails (circular reference), fall back to deepEqual
+        complexValues.push(v)
+      }
+    }
+  }
+
+  return arr.filter((item) => {
+    // Check primitives first (O(1) lookup)
+    if (isPrimitive(item)) {
+      // Handle null/undefined equivalence (deepEqual treats them as equal)
+      if ((item === null || item === undefined) && hasNullish) {
+        return false
+      }
+      return !primitiveSet.has(item)
+    }
+
+    // Check Dates and other special values that need deepEqual
+    if (item instanceof Date) {
+      return !complexValues.some((v) => deepEqual(item, v))
+    }
+
+    // Check complex values using JSON.stringify (O(1) lookup)
+    try {
+      const key = JSON.stringify(item)
+      if (complexSet.has(key)) {
+        return false
+      }
+    } catch {
+      // JSON.stringify failed, use deepEqual fallback
+    }
+
+    // Fallback to deepEqual for edge cases
+    return !complexValues.some((v) => deepEqual(item, v))
+  })
 }
 
 // =============================================================================

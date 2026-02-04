@@ -675,30 +675,13 @@ export type StrictEntity<TData extends EntityData> = Entity<StrictEntityData<TDa
 // =============================================================================
 
 /**
- * Input for creating a new entity
+ * Base input shape for creating entities (untyped version).
  *
- * CreateInput defines the shape of data passed to create() or insert() operations.
- * The $type and name fields are required; all other fields are user-defined.
+ * Use this when the entity data shape is not known at compile time.
  *
- * @typeParam T - Optional type parameter for strongly-typed data fields
- *
- * @example
- * ```typescript
- * // Create a new post
- * const input: CreateInput = {
- *   $type: 'Post',
- *   name: 'My First Post',
- *   title: 'Hello World',
- *   content: 'Welcome to my blog!',
- *   status: 'draft',
- *   // Relationships can be specified inline
- *   author: { 'Nathan': 'users/nathan-123' }
- * }
- *
- * const post = await db.Posts.create(input)
- * ```
+ * @internal
  */
-export interface CreateInput<_T = EntityData> {
+export interface CreateInputBase {
   /**
    * Entity type name (required)
    * Must match a type defined in the schema if schema validation is enabled
@@ -719,27 +702,91 @@ export interface CreateInput<_T = EntityData> {
 }
 
 /**
+ * Input for creating a new entity with strong typing.
+ *
+ * CreateInput defines the shape of data passed to create() or insert() operations.
+ * The $type and name fields are required; all other fields come from the generic type T.
+ *
+ * When T extends EntityData, the input is constrained to include all required fields
+ * from T (with optional fields remaining optional), plus the required $type and name.
+ *
+ * @typeParam T - The entity data shape. When provided, constrains input to match T's structure.
+ *               Defaults to EntityData (Record<string, unknown>) for maximum flexibility.
+ *
+ * @example
+ * ```typescript
+ * // Strongly-typed create input
+ * interface Post { title: string; content: string; views?: number }
+ *
+ * const input: CreateInput<Post> = {
+ *   $type: 'Post',
+ *   name: 'My First Post',
+ *   title: 'Hello World',      // Required - TypeScript enforces this
+ *   content: 'Welcome!',       // Required - TypeScript enforces this
+ *   views: 0,                  // Optional - matches Post interface
+ * }
+ *
+ * // TypeScript error: Property 'title' is missing
+ * const invalid: CreateInput<Post> = {
+ *   $type: 'Post',
+ *   name: 'Test',
+ *   content: 'Missing title',  // Error!
+ * }
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Untyped create input (backward compatible)
+ * const input: CreateInput = {
+ *   $type: 'Post',
+ *   name: 'My First Post',
+ *   title: 'Hello World',
+ *   anyField: 'allowed',
+ * }
+ * ```
+ */
+export type CreateInput<T extends EntityData = EntityData> =
+  // For the default EntityData case, use the base interface for backward compatibility
+  T extends Record<string, unknown>
+    ? unknown extends T[keyof T]
+      ? CreateInputBase
+      : {
+          /**
+           * Entity type name (required)
+           */
+          $type: string
+
+          /**
+           * Human-readable display name (required)
+           */
+          name: string
+        } & StrictEntityData<T>
+    : CreateInputBase
+
+/**
  * Input for replacing an entity entirely
  *
  * ReplaceInput extends CreateInput with an optional version for optimistic concurrency.
  * Unlike UpdateInput (which uses operators), ReplaceInput completely overwrites the entity.
  *
- * @typeParam T - Optional type parameter for strongly-typed data fields
+ * @typeParam T - The entity data shape. Constrains the input to match T's structure.
  *
  * @example
  * ```typescript
- * const replacement: ReplaceInput = {
+ * interface Post { title: string; content: string }
+ *
+ * const replacement: ReplaceInput<Post> = {
  *   $type: 'Post',
  *   name: 'Updated Post Title',
- *   title: 'New Title',
- *   content: 'Completely new content',
+ *   title: 'New Title',        // Required
+ *   content: 'New content',    // Required
  *   version: 5 // Fails if entity version !== 5
  * }
  *
  * await db.Posts.replace('post-1', replacement)
  * ```
  */
-export interface ReplaceInput<T = EntityData> extends CreateInput<T> {
+export type ReplaceInput<T extends EntityData = EntityData> = CreateInput<T> & {
   /**
    * Expected version for optimistic concurrency control
    * If specified and doesn't match current version, the operation fails

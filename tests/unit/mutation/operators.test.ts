@@ -279,6 +279,91 @@ describe('applyOperators', () => {
       const result = applyOperators(doc, { $pullAll: { tags: ['a', 'b'] } })
       expect(result.document.tags).toEqual(['c'])
     })
+
+    it('removes numeric values', () => {
+      const doc = { scores: [1, 2, 3, 4, 5, 2, 3] }
+      const result = applyOperators(doc, { $pullAll: { scores: [2, 4] } })
+      expect(result.document.scores).toEqual([1, 3, 5, 3])
+    })
+
+    it('removes boolean values', () => {
+      const doc = { flags: [true, false, true, false] }
+      const result = applyOperators(doc, { $pullAll: { flags: [false] } })
+      expect(result.document.flags).toEqual([true, true])
+    })
+
+    it('removes null and undefined values', () => {
+      const doc = { items: [1, null, 2, undefined, 3, null] }
+      const result = applyOperators(doc, { $pullAll: { items: [null] } })
+      // deepEqual treats null and undefined as equal
+      expect(result.document.items).toEqual([1, 2, 3])
+    })
+
+    it('removes object values', () => {
+      const doc = {
+        items: [
+          { id: 1, name: 'a' },
+          { id: 2, name: 'b' },
+          { id: 1, name: 'a' },
+          { id: 3, name: 'c' },
+        ],
+      }
+      const result = applyOperators(doc, { $pullAll: { items: [{ id: 1, name: 'a' }] } })
+      expect(result.document.items).toEqual([
+        { id: 2, name: 'b' },
+        { id: 3, name: 'c' },
+      ])
+    })
+
+    it('removes nested array values', () => {
+      const doc = { matrix: [[1, 2], [3, 4], [1, 2], [5, 6]] }
+      const result = applyOperators(doc, { $pullAll: { matrix: [[1, 2]] } })
+      expect(result.document.matrix).toEqual([[3, 4], [5, 6]])
+    })
+
+    it('removes Date values', () => {
+      const date1 = new Date('2024-01-01')
+      const date2 = new Date('2024-06-01')
+      const date3 = new Date('2024-12-01')
+      const doc = { dates: [date1, date2, date3, new Date('2024-01-01')] }
+      const result = applyOperators(doc, { $pullAll: { dates: [new Date('2024-01-01')] } })
+      expect(result.document.dates).toHaveLength(2)
+      expect((result.document.dates as Date[])[0].getTime()).toBe(date2.getTime())
+      expect((result.document.dates as Date[])[1].getTime()).toBe(date3.getTime())
+    })
+
+    it('handles empty values to remove', () => {
+      const doc = { tags: ['a', 'b', 'c'] }
+      const result = applyOperators(doc, { $pullAll: { tags: [] } })
+      expect(result.document.tags).toEqual(['a', 'b', 'c'])
+    })
+
+    it('handles mixed primitive types', () => {
+      const doc = { mixed: [1, 'a', true, 2, 'b', false] }
+      const result = applyOperators(doc, { $pullAll: { mixed: [1, 'b', true] } })
+      expect(result.document.mixed).toEqual(['a', 2, false])
+    })
+
+    it('handles large arrays efficiently', () => {
+      // Generate large arrays for performance testing
+      const arraySize = 10000
+      const removeSize = 1000
+      const arr = Array.from({ length: arraySize }, (_, i) => i)
+      const valuesToRemove = Array.from({ length: removeSize }, (_, i) => i * 2) // Even numbers
+
+      const doc = { items: arr }
+      const startTime = performance.now()
+      const result = applyOperators(doc, { $pullAll: { items: valuesToRemove } })
+      const endTime = performance.now()
+
+      // Should have removed all even numbers from 0 to 1998
+      const expectedLength = arraySize - removeSize
+      expect((result.document.items as number[]).length).toBe(expectedLength)
+
+      // Performance check: should complete in reasonable time (< 100ms)
+      // O(n*m) would be slow, O(n) should be fast
+      expect(endTime - startTime).toBeLessThan(100)
+    })
   })
 
   describe('$addToSet operator', () => {

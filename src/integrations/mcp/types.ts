@@ -4,7 +4,20 @@
  * Type definitions for the ParqueDB MCP (Model Context Protocol) server.
  */
 
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Filter, UpdateInput } from '../../types'
+
+/**
+ * Handle returned by createParqueDBMCPServer for resource management
+ */
+export interface ParqueDBMCPServerHandle {
+  /** The underlying MCP server instance */
+  server: McpServer
+  /** Whether the handle has been disposed */
+  isDisposed: boolean
+  /** Dispose of all resources held by the server */
+  dispose: () => Promise<void>
+}
 
 /**
  * Configuration options for the ParqueDB MCP server

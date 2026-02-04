@@ -25,6 +25,7 @@ import type { ParqueDB } from '../../ParqueDB'
 import type { PaginatedResult, Entity } from '../../types'
 import type {
   ParqueDBMCPOptions,
+  ParqueDBMCPServerHandle,
   ToolResult,
   CollectionInfo,
 } from './types'
@@ -97,16 +98,28 @@ Updates use MongoDB-style operators:
 `.trim()
 
 /**
- * Create a ParqueDB MCP server instance
+ * Create a ParqueDB MCP server instance with resource management
  *
  * @param db - ParqueDB instance to expose via MCP
  * @param options - Server configuration options
- * @returns Configured McpServer instance
+ * @returns Handle containing the server and dispose method for cleanup
+ *
+ * @example
+ * ```typescript
+ * const handle = createParqueDBMCPServer(db)
+ *
+ * // Use the server
+ * await handle.server.connect(transport)
+ *
+ * // When done, clean up resources
+ * await handle.server.close()
+ * await handle.dispose()
+ * ```
  */
 export function createParqueDBMCPServer(
   db: ParqueDB,
   options: ParqueDBMCPOptions = {}
-): McpServer {
+): ParqueDBMCPServerHandle {
   const {
     name = 'parquedb',
     version = DEFAULT_VERSION,
@@ -672,7 +685,32 @@ export function createParqueDBMCPServer(
     }
   )
 
-  return server
+  // Track disposal state
+  let isDisposed = false
+
+  // Create the handle with dispose method
+  const handle: ParqueDBMCPServerHandle = {
+    server,
+    get isDisposed() {
+      return isDisposed
+    },
+    async dispose(): Promise<void> {
+      // Idempotent - safe to call multiple times
+      if (isDisposed) {
+        return
+      }
+
+      isDisposed = true
+
+      // Note: The McpServer itself manages its own cleanup via close().
+      // This dispose method is for any additional resources we might track
+      // in the future (e.g., event listeners, timers, subscriptions).
+      // Currently, the main cleanup is marking the handle as disposed
+      // to prevent further use and allow garbage collection.
+    },
+  }
+
+  return handle
 }
 
 /**

@@ -16,10 +16,37 @@
  * - If any operation fails during commit, all successfully applied changes are rolled back
  * - The storage is restored to its original pre-commit state on failure
  *
- * Limitations:
+ * ============================================================================
+ * IMPORTANT LIMITATION - ROLLBACK FAILURE HANDLING
+ * ============================================================================
+ *
+ * When a commit fails partway through and triggers a rollback, the rollback
+ * itself may also fail (e.g., due to storage unavailability, network issues,
+ * or permission problems). This is an inherent limitation of any transactional
+ * system that doesn't use a persistent write-ahead log (WAL).
+ *
+ * What happens when rollback fails:
+ * 1. TransactionRollbackFailureError is thrown with detailed recovery info
+ * 2. An event is emitted via the transactionEventEmitter (if listeners exist)
+ * 3. Metrics are incremented for monitoring (rollbackFailures counter)
+ * 4. Detailed logs are written for manual recovery
+ *
+ * The error contains:
+ * - affectedPaths: List of paths that may be in inconsistent state
+ * - originalStates: Map of path -> original data (for manual restoration)
+ * - partiallyApplied: List of operations that were applied before failure
+ * - recoveryInstructions: Human-readable recovery steps
+ *
+ * For critical systems, consider:
+ * - Implementing a WAL-based transaction system
+ * - Using storage backends with built-in transaction support
+ * - Running periodic consistency checks
+ * - Setting up alerts on rollback failure metrics
+ *
+ * Other Limitations:
  * - No multi-transaction isolation (reads see globally committed state)
  * - No deadlock detection or timeout on transactions
- * - Rollback during commit failure is best-effort (cannot guarantee if storage itself fails)
+ * ============================================================================
  */
 
 import type {
@@ -34,6 +61,140 @@ import type {
   RmdirOptions,
 } from '../types/storage'
 import { NotFoundError } from './errors'
+import { logger } from '../utils/logger'
+import { EventEmitter } from 'events'
+
+// =============================================================================
+// Transaction Events
+// =============================================================================
+
+/**
+ * Event types emitted by the transactional backend
+ */
+export type TransactionEventType =
+  | 'transaction:start'
+  | 'transaction:commit'
+  | 'transaction:rollback'
+  | 'transaction:commit_failure'
+  | 'transaction:rollback_failure'
+
+/**
+ * Base event data for all transaction events
+ */
+export interface TransactionEventBase {
+  /** Transaction ID */
+  transactionId: string
+  /** Timestamp of the event */
+  timestamp: Date
+  /** Backend type */
+  backendType: string
+}
+
+/**
+ * Event emitted when a rollback fails during commit recovery
+ *
+ * This is a critical event that indicates the database may be in an
+ * inconsistent state and requires manual intervention.
+ */
+export interface RollbackFailureEvent extends TransactionEventBase {
+  type: 'transaction:rollback_failure'
+  /** The original error that caused the commit to fail */
+  commitError: Error
+  /** Errors that occurred during rollback */
+  rollbackErrors: Error[]
+  /** Paths that may be in inconsistent state */
+  affectedPaths: string[]
+  /** Original states of affected files (for recovery) */
+  originalStates: Map<string, { existed: boolean; data: Uint8Array | null }>
+  /** Operations that were partially applied before failure */
+  partiallyAppliedOperations: Array<{
+    type: 'write' | 'delete'
+    path: string
+  }>
+}
+
+/**
+ * Event emitted when a commit fails (before rollback attempt)
+ */
+export interface CommitFailureEvent extends TransactionEventBase {
+  type: 'transaction:commit_failure'
+  /** The error that caused the commit to fail */
+  error: Error
+  /** Number of operations that were successfully applied */
+  appliedOperationCount: number
+  /** Total operations in the transaction */
+  totalOperationCount: number
+}
+
+/**
+ * Global event emitter for transaction events
+ *
+ * Subscribe to receive notifications about transaction failures:
+ *
+ * @example
+ * ```typescript
+ * import { transactionEventEmitter } from './TransactionalBackend'
+ *
+ * transactionEventEmitter.on('transaction:rollback_failure', (event) => {
+ *   console.error('CRITICAL: Rollback failed', event)
+ *   // Send alert, trigger recovery process, etc.
+ * })
+ * ```
+ */
+export const transactionEventEmitter = new EventEmitter()
+
+// =============================================================================
+// Transaction Metrics
+// =============================================================================
+
+/**
+ * Simple metrics for transaction operations
+ *
+ * These can be scraped by Prometheus or other monitoring systems.
+ * Access via `getTransactionMetrics()`.
+ */
+export interface TransactionMetrics {
+  /** Total number of transactions started */
+  transactionsStarted: number
+  /** Total number of successful commits */
+  commitsSucceeded: number
+  /** Total number of failed commits */
+  commitsFailed: number
+  /** Total number of successful rollbacks (manual or during commit recovery) */
+  rollbacksSucceeded: number
+  /** Total number of failed rollbacks (CRITICAL - indicates potential inconsistency) */
+  rollbacksFailed: number
+  /** Timestamp of last rollback failure */
+  lastRollbackFailure: Date | null
+}
+
+const metrics: TransactionMetrics = {
+  transactionsStarted: 0,
+  commitsSucceeded: 0,
+  commitsFailed: 0,
+  rollbacksSucceeded: 0,
+  rollbacksFailed: 0,
+  lastRollbackFailure: null,
+}
+
+/**
+ * Get current transaction metrics
+ */
+export function getTransactionMetrics(): Readonly<TransactionMetrics> {
+  return { ...metrics }
+}
+
+/**
+ * Reset transaction metrics (useful for testing)
+ */
+export function resetTransactionMetrics(): void {
+  metrics.transactionsStarted = 0
+  metrics.commitsSucceeded = 0
+  metrics.commitsFailed = 0
+  metrics.rollbacksSucceeded = 0
+  metrics.rollbacksFailed = 0
+  metrics.lastRollbackFailure = null
+}
 
 // =============================================================================
 // Configuration

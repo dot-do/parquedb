@@ -19,6 +19,152 @@
 
 import type { Entity, StorageBackend, Event } from '../types'
 import type { Snapshot, SnapshotQueryStats } from './types'
+import { LRUCache } from '../utils/ttl-cache'
+
+// =============================================================================
+// Entity Store Configuration
+// =============================================================================
+
+/** Default maximum number of entities to keep in memory */
+export const DEFAULT_MAX_ENTITIES = 10000
+
+/**
+ * Configuration for the entity store cache
+ */
+export interface EntityStoreConfig {
+  /** Maximum number of entities to cache (default: 10000) */
+  maxEntities?: number | undefined
+  /** Callback when an entity is evicted from cache */
+  onEvict?: ((key: string, entity: Entity) => void) | undefined
+}
+
+/** Global configuration for entity stores by storage backend */
+const globalEntityStoreConfig = new WeakMap<StorageBackend, EntityStoreConfig>()
+
+// =============================================================================
+// LRU Entity Cache
+// =============================================================================
+
+/**
+ * LRU-based entity cache that implements the Map interface.
+ *
+ * This wraps the generic LRUCache to provide a Map-compatible interface
+ * while adding LRU eviction when the cache exceeds its size limit.
+ *
+ * @example
+ * ```typescript
+ * const cache = new LRUEntityCache({ maxEntities: 1000 })
+ * cache.set('posts/abc', entity)
+ * const e = cache.get('posts/abc') // Marks as recently used
+ * ```
+ */
+export class LRUEntityCache implements Map<string, Entity> {
+  private readonly cache: LRUCache<string, Entity>
+  private readonly config: EntityStoreConfig
+
+  constructor(config: EntityStoreConfig = {}) {
+    this.config = config
+    const maxEntries = config.maxEntities ?? DEFAULT_MAX_ENTITIES
+    this.cache = new LRUCache<string, Entity>({
+      maxEntries: maxEntries > 0 ? maxEntries : undefined,
+      onEvict: config.onEvict,
+      cacheId: 'entity-store',
+    })
+  }
+
+  // Map interface implementation
+
+  get size(): number {
+    return this.cache.size
+  }
+
+  get(key: string): Entity | undefined {
+    return this.cache.get(key)
+  }
+
+  set(key: string, value: Entity): this {
+    this.cache.set(key, value)
+    return this
+  }
+
+  has(key: string): boolean {
+    return this.cache.has(key)
+  }
+
+  delete(key: string): boolean {
+    return this.cache.delete(key)
+  }
+
+  clear(): void {
+    this.cache.clear()
+  }
+
+  forEach(callback: (value: Entity, key: string, map: Map<string, Entity>) => void, thisArg?: unknown): void {
+    for (const [key, value] of this.cache.entries()) {
+      callback.call(thisArg, value, key, this)
+    }
+  }
+
+  *entries(): IterableIterator<[string, Entity]> {
+    yield* this.cache.entries()
+  }
+
+  *keys(): IterableIterator<string> {
+    yield* this.cache.keys()
+  }
+
+  *values(): IterableIterator<Entity> {
+    yield* this.cache.values()
+  }
+
+  [Symbol.iterator](): IterableIterator<[string, Entity]> {
+    return this.entries()
+  }
+
+  get [Symbol.toStringTag](): string {
+    return 'LRUEntityCache'
+  }
+
+  // Additional methods for cache management
+
+  /**
+   * Get the current cache configuration
+   */
+  getConfig(): EntityStoreConfig {
+    return { ...this.config }
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getStats(): {
+    size: number
+    maxEntries: number
+    hits: number
+    misses: number
+    evictions: number
+    hitRate: number
+  } {
+    const stats = this.cache.getStats()
+    return {
+      size: stats.size,
+      maxEntries: stats.maxEntries,
+      hits: stats.hits,
+      misses: stats.misses,
+      evictions: stats.evictions,
+      hitRate: stats.hitRate,
+    }
+  }
+
+  /**
+   * Invalidate all entries with keys starting with a prefix
+   * @param prefix - Key prefix to match (e.g., "posts/" for all posts)
+   * @returns Number of entries invalidated
+   */
+  invalidateByPrefix(prefix: string): number {
+    return this.cache.invalidateByPrefix(prefix)
+  }
+}
 
 // =============================================================================
 // Global Shared State
@@ -33,6 +179,10 @@ import type { Snapshot, SnapshotQueryStats } from './types'
  * are no longer referenced, preventing memory leaks from orphaned state.
  * Call dispose() for explicit cleanup when a ParqueDB instance is no longer needed.
  *
+ * The entity store now uses an LRU cache with configurable size limits to prevent
+ * unbounded memory growth. When the limit is reached, least recently used entities
+ * are evicted automatically.
+ *
  * @deprecated This in-memory store is intended for Node.js/testing use only.
  * For Cloudflare Workers, use ParqueDBDO (SQLite) as the source of truth for writes
  * and R2 (via QueryExecutor/ReadPath) for reads. See docs/architecture/ENTITY_STORAGE.md
@@ -45,7 +195,7 @@ import type { Snapshot, SnapshotQueryStats } from './types'
  *
  * Future plans: Consolidate to always read/write through storage backend abstractions.
  */
-const globalEntityStore = new WeakMap<StorageBackend, Map<string, Entity>>()
+const globalEntityStore = new WeakMap<StorageBackend, LRUEntityCache>()
 const globalEventStore = new WeakMap<StorageBackend, Event[]>()
 const globalArchivedEventStore = new WeakMap<StorageBackend, Event[]>()
 const globalSnapshotStore = new WeakMap<StorageBackend, Snapshot[]>()
@@ -99,15 +249,78 @@ const RECONSTRUCTION_CACHE_MAX_AGE = 5 * 60 * 1000
 // =============================================================================
 
 /**
- * Get or create the entity store for a storage backend
+ * Configure the entity store for a storage backend before first use.
+ *
+ * This should be called before getEntityStore() if you want to customize
+ * the cache behavior. If not called, defaults will be used.
+ *
+ * @param storage - The storage backend to configure
+ * @param config - Cache configuration options
+ *
+ * @example
+ * ```typescript
+ * // Configure with custom limit
+ * configureEntityStore(storage, { maxEntities: 5000 })
+ *
+ * // Configure with eviction callback
+ * configureEntityStore(storage, {
+ *   maxEntities: 10000,
+ *   onEvict: (key, entity) => console.log(`Evicted: ${key}`)
+ * })
+ * ```
  */
-export function getEntityStore(storage: StorageBackend): Map<string, Entity> {
+export function configureEntityStore(storage: StorageBackend, config: EntityStoreConfig): void {
+  globalEntityStoreConfig.set(storage, config)
+
+  // If store already exists, we need to create a new one with the updated config
+  const existingStore = globalEntityStore.get(storage)
+  if (existingStore) {
+    // Create new cache with new config and migrate entries
+    const newStore = new LRUEntityCache(config)
+
+    // Copy entries from old store (this may trigger evictions if new limit is lower)
+    for (const [key, value] of existingStore.entries()) {
+      newStore.set(key, value)
+    }
+
+    globalEntityStore.set(storage, newStore)
+  }
+}
+
+/**
+ * Get or create the entity store for a storage backend.
+ *
+ * The store is an LRU cache with configurable size limits to prevent
+ * unbounded memory growth. Configure the cache before first use with
+ * configureEntityStore() or pass config through ParqueDBConfig.maxCacheSize.
+ *
+ * @param storage - The storage backend to get the store for
+ * @param config - Optional cache configuration (used only when creating new store)
+ * @returns Map-compatible LRU cache for entities
+ */
+export function getEntityStore(storage: StorageBackend, config?: EntityStoreConfig): Map<string, Entity> {
   let store = globalEntityStore.get(storage)
   if (!store) {
-    store = new Map()
+    // Use provided config, stored config, or defaults
+    const finalConfig = config ?? globalEntityStoreConfig.get(storage) ?? {}
+    store = new LRUEntityCache(finalConfig)
     globalEntityStore.set(storage, store)
   }
   return store
+}
+
+/**
+ * Get the LRU entity cache directly for access to cache-specific methods.
+ *
+ * @param storage - The storage backend
+ * @returns The LRUEntityCache instance, or undefined if not created yet
+ */
+export function getEntityCacheStats(storage: StorageBackend): ReturnType<LRUEntityCache['getStats']> | undefined {
+  const store = globalEntityStore.get(storage)
+  if (store) {
+    return store.getStats()
+  }
+  return undefined
 }
 
 /**

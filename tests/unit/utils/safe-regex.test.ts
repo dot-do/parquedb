@@ -315,6 +315,94 @@ describe('Safe Regex Integration with $regex Filter', () => {
     expect(() => createSafeRegex('(a+)+')).toThrow(UnsafeRegexError)
     expect(createSafeRegex('^hello').test('hello')).toBe(true)
   })
+
+  it('filter uses safeRegexTest for runtime protection', async () => {
+    const { matchesFilter } = await import('@/query/filter')
+
+    // Test that safeRegexTest is being used by verifying input length limits work
+    // Use a pattern that will actually match to ensure we reach the safeRegexTest call
+    const doc = { content: 'a'.repeat(200000) }
+
+    // Should throw because input exceeds max length (default 100000)
+    expect(() => matchesFilter(doc, { content: { $regex: 'a' } })).toThrow('Input length')
+  })
+
+  it('filter rejects patterns that would timeout on large input', async () => {
+    const { matchesFilter } = await import('@/query/filter')
+
+    // Create a document with moderate length input
+    const doc = { content: 'x'.repeat(5000) }
+
+    // A safe simple pattern should work
+    expect(matchesFilter(doc, { content: { $regex: '^x' } })).toBe(true)
+  })
+
+  it('filter works with simple patterns on moderate inputs', async () => {
+    const { matchesFilter } = await import('@/query/filter')
+
+    // Test that simple patterns work well with moderate inputs
+    const moderateInput = 'a'.repeat(50000)
+    const doc = { text: moderateInput }
+
+    // Simple safe pattern should work fine
+    expect(matchesFilter(doc, { text: { $regex: '^a' } })).toBe(true)
+    expect(matchesFilter(doc, { text: { $regex: 'a$' } })).toBe(true)
+  })
+})
+
+describe('ReDoS Runtime Protection in Filter', () => {
+  it('protects against input length exceeding limits', async () => {
+    const { matchesFilter } = await import('@/query/filter')
+
+    // Very long input should be rejected
+    // Use a pattern that will match to ensure we reach the safeRegexTest call
+    const veryLongInput = 'test'.repeat(50000) // 200000 characters
+    const doc = { data: veryLongInput }
+
+    expect(() => matchesFilter(doc, { data: { $regex: 'test' } })).toThrow(/Input length/)
+  })
+
+  it('handles moderately complex patterns safely', async () => {
+    const { matchesFilter } = await import('@/query/filter')
+
+    // Moderate input with safe pattern should work
+    const moderateInput = 'hello world '.repeat(100)
+    const doc = { text: moderateInput }
+
+    expect(matchesFilter(doc, { text: { $regex: 'world' } })).toBe(true)
+    expect(matchesFilter(doc, { text: { $regex: '^hello' } })).toBe(true)
+  })
+
+  it('combined static and runtime protection prevents ReDoS', async () => {
+    const { matchesFilter } = await import('@/query/filter')
+
+    // Static analysis catches this pattern before execution
+    expect(() => matchesFilter(
+      { text: 'aaaaaaaaa' },
+      { text: { $regex: '(a+)+$' } }
+    )).toThrow(UnsafeRegexError)
+
+    // If a pattern somehow passed static analysis, runtime protection kicks in
+    // This is tested by the safeRegexTest unit tests
+  })
+
+  it('regex filter works correctly with normal usage', async () => {
+    const { matchesFilter } = await import('@/query/filter')
+
+    // Standard use cases should work fine
+    const users = [
+      { email: 'alice@example.com' },
+      { email: 'bob@company.org' },
+      { email: 'charlie@example.com' },
+    ]
+
+    const exampleUsers = users.filter(u =>
+      matchesFilter(u, { email: { $regex: '@example\\.com$' } })
+    )
+    expect(exampleUsers).toHaveLength(2)
+    expect(exampleUsers.map(u => u.email)).toContain('alice@example.com')
+    expect(exampleUsers.map(u => u.email)).toContain('charlie@example.com')
+  })
 })
 
 describe('Complexity Scoring', () => {

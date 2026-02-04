@@ -784,7 +784,7 @@ export class GeneratedContentMV {
       sort: { [sortField]: sortOrder },
     })
 
-    return results as unknown as GeneratedContentRecord[]
+    return results.items as unknown as GeneratedContentRecord[]
   }
 
   /**
@@ -1074,7 +1074,7 @@ export class GeneratedContentMV {
   async findByHash(contentHash: string): Promise<GeneratedContentRecord[]> {
     const collection = this.db.collection(this.config.collection)
     const results = await collection.find({ contentHash }, { limit: 100 })
-    return results as unknown as GeneratedContentRecord[]
+    return results.items as unknown as GeneratedContentRecord[]
   }
 
   /**

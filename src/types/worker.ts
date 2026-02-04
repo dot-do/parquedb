@@ -11,16 +11,94 @@ import type { AIBinding } from '../embeddings/workers-ai'
 /**
  * Durable Object interface for write operations
  * This is a forward declaration - the actual implementation is in ParqueDBDO
+ *
+ * @typeParam TEntity - Entity type returned from operations. Must satisfy DOEntityConstraint.
+ *                      Defaults to DOEntity for flexibility.
+ * @typeParam TRelationship - Relationship type returned from related(). Must satisfy
+ *                            DORelationshipConstraint. Defaults to DORelationship.
+ * @typeParam TData - Custom data type for create/update inputs. Must extend DOEntityData.
+ *                    Defaults to DOEntityData (Record<string, unknown>).
  */
-export interface ParqueDBDOInterface {
-  create(ns: string, data: unknown, options?: unknown): Promise<unknown>
-  update(ns: string, id: string, update: unknown, options?: unknown): Promise<unknown>
-  updateMany(ns: string, filter: unknown, update: unknown, options?: unknown): Promise<unknown>
-  delete(ns: string, id: string, options?: unknown): Promise<unknown>
-  deleteMany(ns: string, filter: unknown, options?: unknown): Promise<unknown>
+export interface ParqueDBDOInterface<
+  TEntity extends DOEntityConstraint = DOEntity,
+  TRelationship extends DORelationshipConstraint = DORelationship,
+  TData extends DOEntityData = DOEntityData
+> {
+  /**
+   * Create a new entity
+   * @param ns - Namespace (collection name)
+   * @param data - Entity data with required $type and name
+   * @param options - Create options
+   * @returns Created entity
+   */
+  create(ns: string, data: DOCreateInput<TData>, options?: DOCreateOptions): Promise<TEntity>
+
+  /**
+   * Update an existing entity
+   * @param ns - Namespace (collection name)
+   * @param id - Entity ID to update
+   * @param update - Update operators
+   * @param options - Update options
+   * @returns Updated entity
+   */
+  update(ns: string, id: string, update: DOUpdateInput, options?: DOUpdateOptions): Promise<TEntity>
+
+  /**
+   * Update multiple entities matching a filter
+   * @param ns - Namespace (collection name)
+   * @param filter - MongoDB-style filter to match entities
+   * @param update - Update operators to apply
+   * @param options - Update options
+   * @returns Update result with matched and modified counts
+   */
+  updateMany(ns: string, filter: DOFilter, update: DOUpdateInput, options?: DOUpdateOptions): Promise<DOUpdateManyResult>
+
+  /**
+   * Delete an entity (soft delete by default)
+   * @param ns - Namespace (collection name)
+   * @param id - Entity ID to delete
+   * @param options - Delete options
+   * @returns Delete result with count
+   */
+  delete(ns: string, id: string, options?: DODeleteOptions): Promise<DODeleteResult>
+
+  /**
+   * Delete multiple entities matching a filter
+   * @param ns - Namespace (collection name)
+   * @param filter - MongoDB-style filter to match entities
+   * @param options - Delete options
+   * @returns Delete result with total count
+   */
+  deleteMany(ns: string, filter: DOFilter, options?: DODeleteOptions): Promise<DODeleteResult>
+
+  /**
+   * Create a relationship between two entities (legacy 5-arg signature)
+   * @param fromNs - Source entity namespace
+   * @param fromId - Source entity ID
+   * @param predicate - Outbound relationship name
+   * @param toNs - Target entity namespace
+   * @param toId - Target entity ID
+   */
   link(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
+
+  /**
+   * Remove a relationship between two entities (legacy 5-arg signature)
+   * @param fromNs - Source entity namespace
+   * @param fromId - Source entity ID
+   * @param predicate - Outbound relationship name
+   * @param toNs - Target entity namespace
+   * @param toId - Target entity ID
+   */
   unlink(fromNs: string, fromId: string, predicate: string, toNs: string, toId: string): Promise<void>
-  related(ns: string, id: string, options?: unknown): Promise<unknown>
+
+  /**
+   * Get relationships for an entity
+   * @param ns - Namespace (collection name)
+   * @param id - Entity ID
+   * @param options - Related query options
+   * @returns Array of relationships
+   */
+  related(ns: string, id: string, options?: DORelatedOptions): Promise<TRelationship[]>
 }
 
 /**
@@ -188,6 +266,141 @@ export interface DOLinkOptions {
   similarity?: number | undefined
   /** Edge data (remaining metadata in Variant) */
   data?: Record<string, unknown> | undefined
+}
+
+/**
+ * Options for DO related() queries
+ *
+ * Controls how relationships are traversed and filtered.
+ */
+export interface DORelatedOptions {
+  /** Predicate name for outbound relationships */
+  predicate?: string | undefined
+  /** Reverse name for inbound relationships */
+  reverse?: string | undefined
+  /** Direction of traversal */
+  direction?: 'outbound' | 'inbound' | undefined
+  /** Maximum number of relationships to return */
+  limit?: number | undefined
+  /** Cursor for pagination */
+  cursor?: string | undefined
+  /** Include soft-deleted relationships */
+  includeDeleted?: boolean | undefined
+}
+
+/**
+ * MongoDB-style filter for DO operations
+ *
+ * Simplified filter type for DO context. Supports basic comparison
+ * and logical operators.
+ *
+ * @example
+ * ```typescript
+ * // Simple equality
+ * { status: 'published' }
+ *
+ * // Comparison operators
+ * { views: { $gt: 100 } }
+ *
+ * // Logical operators
+ * { $or: [{ status: 'published' }, { featured: true }] }
+ * ```
+ */
+export interface DOFilter {
+  /** Field filters - key is field name, value is filter condition */
+  [field: string]: DOFieldFilter | undefined
+
+  /** Logical AND */
+  $and?: DOFilter[] | undefined
+
+  /** Logical OR */
+  $or?: DOFilter[] | undefined
+
+  /** Logical NOT */
+  $not?: DOFilter | undefined
+
+  /** Logical NOR */
+  $nor?: DOFilter[] | undefined
+}
+
+/**
+ * Field-level filter value for DO operations
+ *
+ * Can be a direct value for equality or an operator object.
+ */
+export type DOFieldFilter =
+  | string
+  | number
+  | boolean
+  | null
+  | Date
+  | DOComparisonOperator
+  | DOStringOperator
+  | DOArrayOperator
+  | DOExistenceOperator
+
+/**
+ * Comparison operators for DO filters
+ */
+export interface DOComparisonOperator {
+  /** Equal to */
+  $eq?: unknown | undefined
+  /** Not equal to */
+  $ne?: unknown | undefined
+  /** Greater than */
+  $gt?: unknown | undefined
+  /** Greater than or equal */
+  $gte?: unknown | undefined
+  /** Less than */
+  $lt?: unknown | undefined
+  /** Less than or equal */
+  $lte?: unknown | undefined
+  /** In array */
+  $in?: unknown[] | undefined
+  /** Not in array */
+  $nin?: unknown[] | undefined
+}
+
+/**
+ * String operators for DO filters
+ */
+export interface DOStringOperator {
+  /** Regular expression match */
+  $regex?: string | RegExp | undefined
+  /** Regex options (i, m, s) */
+  $options?: string | undefined
+}
+
+/**
+ * Array operators for DO filters
+ */
+export interface DOArrayOperator {
+  /** Array contains all values */
+  $all?: unknown[] | undefined
+  /** Array element matches filter */
+  $elemMatch?: DOFilter | undefined
+  /** Array has exact size */
+  $size?: number | undefined
+}
+
+/**
+ * Existence operators for DO filters
+ */
+export interface DOExistenceOperator {
+  /** Field exists */
+  $exists?: boolean | undefined
+  /** Field type */
+  $type?: 'null' | 'boolean' | 'number' | 'string' | 'array' | 'object' | 'date' | undefined
+}
+
+/**
+ * Result of updateMany operations in DO context
+ */
+export interface DOUpdateManyResult {
+  /** Number of documents that matched the filter */
+  matchedCount: number
+  /** Number of documents that were actually modified */
+  modifiedCount: number
 }
 
 /**

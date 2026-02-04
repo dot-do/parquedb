@@ -279,6 +279,44 @@ export interface ParqueDBConfig {
   collectionOptions?: Map<string, CollectionOptions> | undefined
 
   /**
+   * Maximum number of entities to cache in memory (default: 10000)
+   *
+   * The in-memory entity cache uses LRU (Least Recently Used) eviction
+   * to prevent unbounded memory growth. When the cache exceeds this limit,
+   * the least recently accessed entities are evicted automatically.
+   *
+   * Set to 0 to disable the cache limit (not recommended for production).
+   *
+   * @example
+   * ```typescript
+   * const db = new ParqueDB({
+   *   storage,
+   *   maxCacheSize: 5000, // Cache up to 5000 entities
+   * })
+   * ```
+   */
+  maxCacheSize?: number | undefined
+
+  /**
+   * Callback invoked when an entity is evicted from the cache due to LRU limits.
+   *
+   * This is useful for logging, metrics, or implementing write-through caching.
+   *
+   * @example
+   * ```typescript
+   * const db = new ParqueDB({
+   *   storage,
+   *   maxCacheSize: 1000,
+   *   onCacheEvict: (key, entity) => {
+   *     console.log(`Entity evicted: ${key}`)
+   *     metrics.increment('cache.evictions')
+   *   }
+   * })
+   * ```
+   */
+  onCacheEvict?: ((key: string, entity: Entity) => void) | undefined
+
+  /**
    * Embedding provider for query-time text-to-vector conversion
    *
    * When configured, enables automatic embedding of text queries in $vector filters:

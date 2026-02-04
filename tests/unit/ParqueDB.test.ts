@@ -7,10 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest'
 import { ParqueDB, type ParqueDBConfig, type Collection } from '../../src/ParqueDB'
-import { FsBackend } from '../../src/storage/FsBackend'
-import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { createTestContext, cleanupAllTestContexts, type TestContext } from '../helpers/temp-dir'
 import type {
   StorageBackend,
   Schema,
@@ -29,33 +26,24 @@ import type {
 // Test Utilities
 // =============================================================================
 
-/** Track all created temp directories for cleanup */
-const tempDirs: string[] = []
+/**
+ * Shared test context for tests that need ParqueDB instances.
+ * This ensures proper async cleanup before temp directories are deleted.
+ */
+let testCtx: TestContext
 
 /**
- * Create a real FsBackend with a unique temporary directory
+ * Create a real storage backend using the current test context.
+ * Use this instead of creating FsBackend directly.
  */
-async function createRealStorage(): Promise<FsBackend> {
-  const tempDir = join(tmpdir(), `parquedb-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
-  await fs.mkdir(tempDir, { recursive: true })
-  tempDirs.push(tempDir)
-  return new FsBackend(tempDir)
+async function createRealStorage(): Promise<StorageBackend> {
+  // The storage is already created by the test context
+  return testCtx.storage
 }
 
-/**
- * Clean up a temporary directory
- */
-async function cleanupTempDir(dir: string): Promise<void> {
-  try {
-    await fs.rm(dir, { recursive: true, force: true })
-  } catch {
-    // Ignore cleanup errors
-  }
-}
-
-// Clean up all temp directories after all tests
+// Ensure proper cleanup even if tests fail
 afterAll(async () => {
-  await Promise.all(tempDirs.map(cleanupTempDir))
+  await cleanupAllTestContexts()
 })
 
 /**

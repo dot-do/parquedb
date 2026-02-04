@@ -37,10 +37,15 @@ export {
 
 export {
   type SafeRegexOptions,
+  type RegexExecOptions,
   UnsafeRegexError,
+  RegexTimeoutError,
   validateRegexPattern,
   createSafeRegex,
   isRegexSafe,
+  safeRegexTest,
+  safeRegexMatch,
+  safeRegexExec,
 } from './safe-regex'
 
 export {
