@@ -235,8 +235,10 @@ export interface GlobalStorageConfig {
   cleanupIntervalMs?: number | undefined
 }
 
+type ResolvedGlobalStorageConfig = { [K in keyof GlobalStorageConfig]-?: NonNullable<GlobalStorageConfig[K]> }
+
 // Current configuration (can be updated via configureGlobalStorage)
-let storageConfig: Required<GlobalStorageConfig> = {
+let storageConfig: ResolvedGlobalStorageConfig = {
   maxNamespaces: DEFAULT_GLOBAL_STORAGE_MAX_NAMESPACES,
   maxEntitiesPerNs: DEFAULT_GLOBAL_STORAGE_MAX_ENTITIES_PER_NS,
   maxRelsPerNs: DEFAULT_GLOBAL_STORAGE_MAX_RELS_PER_NS,
@@ -275,7 +277,7 @@ let cleanupTimer: ReturnType<typeof setInterval> | null = null
  * })
  */
 export function configureGlobalStorage(config: GlobalStorageConfig): void {
-  storageConfig = { ...storageConfig, ...config }
+  storageConfig = { ...storageConfig, ...config } as ResolvedGlobalStorageConfig
 
   // Note: This only affects new namespaces, not existing ones
   // To apply to existing, call clearGlobalStorage() first

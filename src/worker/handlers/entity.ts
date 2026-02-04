@@ -68,7 +68,10 @@ export async function handleEntityDetail(
   }
 
   const entity = entityResult.items[0]
-  const entityRaw = entityAsRecord(entity)
+  if (!entity) {
+    return buildErrorResponse(request, new Error(`Entity '${fullId}' not found in ${datasetId}`), 404, startTime)
+  }
+  const entityRaw = entityAsRecord(entity as unknown as Record<string, unknown>)
 
   // Group relationships by predicate
   const relationships: Record<string, {

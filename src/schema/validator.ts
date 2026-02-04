@@ -295,7 +295,7 @@ export class SchemaValidator {
     const errors: ValidationError[] = []
 
     // Check custom validators first
-    if (this.options.customValidators.has(type)) {
+    if (this.options.customValidators?.has(type)) {
       const validator = this.options.customValidators.get(type)!
       if (!validator(value)) {
         errors.push({
@@ -556,7 +556,7 @@ export class SchemaValidator {
       if (!Array.isArray(value)) {
         // Could be a single relation object for a to-many relationship
         if (typeof value === 'object' && value !== null) {
-          return this.validateRelationshipObject(fieldName, value, field)
+          return this.validateRelationshipObject(fieldName, value as Record<string, unknown>, field)
         }
         errors.push({
           path: fieldName,
@@ -598,7 +598,7 @@ export class SchemaValidator {
         })
       }
     } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-      return this.validateRelationshipObject(path, value, field)
+      return this.validateRelationshipObject(path, value as Record<string, unknown>, field)
     } else {
       errors.push({
         path,

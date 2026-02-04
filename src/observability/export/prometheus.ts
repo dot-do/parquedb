@@ -15,6 +15,40 @@ import type { AIUsageAggregate } from '../ai/types'
 import type { CompactionMetrics } from '../compaction/types'
 
 // =============================================================================
+// Types
+// =============================================================================
+
+/**
+ * AI requests statistics for Prometheus export
+ */
+export interface AIRequestsStats {
+  totalRequests: number
+  successCount: number
+  errorCount: number
+  errorRate: number
+  cacheHitRatio: number
+  byModel: Record<string, { count: number; cost: number; avgLatency: number }>
+  byProvider: Record<string, { count: number; cost: number; avgLatency: number }>
+  tokens: {
+    totalPromptTokens: number
+    totalCompletionTokens: number
+    totalTokens: number
+  }
+  cost: {
+    totalCost: number
+    cacheSavings: number
+  }
+  latency: {
+    p50: number
+    p95: number
+    p99: number
+    min: number
+    max: number
+    avg: number
+  }
+}
+
+// =============================================================================
 // Constants
 // =============================================================================
 

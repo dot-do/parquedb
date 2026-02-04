@@ -180,12 +180,12 @@ export async function measureColdStart(
 
   // Cache initialization
   const cacheStart = performance.now()
-  const _cache = await caches.open(`benchmark-${Date.now()}`)
+  await caches.open(`benchmark-${Date.now()}`)
   const cacheInitMs = Math.round(performance.now() - cacheStart)
 
   // First query - check if benchmark data exists
   const queryStart = performance.now()
-  const _list = await bucket.list({ prefix: 'benchmark-data/', limit: 1 })
+  await bucket.list({ prefix: 'benchmark-data/', limit: 1 })
   const firstQueryMs = Math.round(performance.now() - queryStart)
 
   // Extract colo from request

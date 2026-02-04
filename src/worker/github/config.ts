@@ -225,7 +225,7 @@ export function parseTTL(ttl: string): number {
     throw new Error(`Invalid TTL format: "${ttl}". Expected format like 24h, 7d, or 30m`)
   }
 
-  const value = parseInt(match[1], 10)
+  const value = parseInt(match[1] ?? '0', 10)
   const unit = match[2] || 'h' // Default to hours
 
   switch (unit) {
@@ -389,7 +389,8 @@ function matchTokens(tokens: GlobToken[], str: string): boolean {
 
   // Handle leading ** tokens (they can match empty string)
   for (let i = 0; i < n; i++) {
-    if (tokens[i].type === 'doubleStar') {
+    const t = tokens[i]
+    if (t && t.type === 'doubleStar') {
       prev[0] = true
     } else {
       break
@@ -398,6 +399,7 @@ function matchTokens(tokens: GlobToken[], str: string): boolean {
 
   for (let i = 1; i <= n; i++) {
     const token = tokens[i - 1]
+    if (!token) continue
     curr.fill(false)
 
     if (token.type === 'literal') {

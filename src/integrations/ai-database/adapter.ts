@@ -8,7 +8,7 @@
  */
 
 import type { ParqueDB } from '../../ParqueDB'
-import type { Entity, Filter, UpdateInput } from '../../types'
+import type { Entity, EntityId, Filter, UpdateInput } from '../../types'
 import { RelationshipBatchLoader, type BatchLoaderOptions, type BatchLoaderDB } from '../../relationships/batch-loader'
 import type { EmbeddingProvider } from '../../embeddings/provider'
 
@@ -688,10 +688,11 @@ export class ParqueDBAdapter implements DBProviderExtended {
     const toLocalId = stripNamespace(toId)
 
     // Use $link operator to create relationship
+    const targetId = `${toNamespace}/${toLocalId}` as EntityId
     const linkOp: UpdateInput = {
       $link: {
-        [relation]: `${toNamespace}/${toLocalId}`,
-      },
+        [relation]: targetId,
+      } as Record<string, EntityId>,
     }
 
     // If metadata provided, store it in a separate field
@@ -719,10 +720,11 @@ export class ParqueDBAdapter implements DBProviderExtended {
     const toLocalId = stripNamespace(toId)
 
     // Use $unlink operator to remove relationship
+    const unlinkTargetId = `${toNamespace}/${toLocalId}` as EntityId
     const unlinkOp: UpdateInput = {
       $unlink: {
-        [relation]: `${toNamespace}/${toLocalId}`,
-      },
+        [relation]: unlinkTargetId,
+      } as Record<string, EntityId | EntityId[] | '$all'>,
     }
 
     await this.db.update(fromNamespace, fromLocalId, unlinkOp)
@@ -827,10 +829,11 @@ export class ParqueDBAdapter implements DBProviderExtended {
         const toLocalId = stripNamespace(toId)
 
         // Use $link operator to create relationship
+        const txTargetId = `${toNamespace}/${toLocalId}` as EntityId
         const linkOp: UpdateInput = {
           $link: {
-            [relation]: `${toNamespace}/${toLocalId}`,
-          },
+            [relation]: txTargetId,
+          } as Record<string, EntityId>,
         }
 
         // If metadata provided, store it in a separate field
@@ -1007,6 +1010,11 @@ export class ParqueDBAdapter implements DBProviderExtended {
     // Build the filter with the actual vector (not text)
     const filter: Filter = {
       $vector: {
+        query: queryVector,
+        field: 'embedding',
+        topK: limit,
+        ...(options?.minScore ? { minScore: options.minScore } : {}),
+        // Legacy format for backward compatibility
         $near: queryVector,
         $k: limit,
         ...(options?.minScore ? { $minScore: options.minScore } : {}),
@@ -1534,8 +1542,9 @@ export class ParqueDBAdapter implements DBProviderExtended {
     if (existing) {
       // Update existing
       const result = await this.db.find(artifactsNamespace, { url, type }, { limit: 1 })
-      if (result.items.length > 0) {
-        await this.db.update(artifactsNamespace, result.items[0].$id, {
+      const firstItem = result.items[0]
+      if (firstItem && firstItem.$id) {
+        await this.db.update(artifactsNamespace, firstItem.$id, {
           $set: artifactData,
         })
       }

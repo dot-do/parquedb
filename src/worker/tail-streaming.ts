@@ -80,7 +80,9 @@ export interface StreamingTailConfig {
 /**
  * Default configuration
  */
-export const DEFAULT_STREAMING_CONFIG: Required<StreamingTailConfig> = {
+type ResolvedStreamingTailConfig = { [K in keyof StreamingTailConfig]-?: NonNullable<StreamingTailConfig[K]> }
+
+export const DEFAULT_STREAMING_CONFIG: ResolvedStreamingTailConfig = {
   validation: {
     skipInvalidItems: true,
     maxItems: 10000,
@@ -274,7 +276,12 @@ async function sendEvents(
  * Create a streaming tail handler
  */
 export function createStreamingTailHandler(config: StreamingTailConfig = {}) {
-  const cfg = { ...DEFAULT_STREAMING_CONFIG, ...config }
+  const cfg: ResolvedStreamingTailConfig = {
+    validation: config.validation ?? DEFAULT_STREAMING_CONFIG.validation,
+    batchSize: config.batchSize ?? DEFAULT_STREAMING_CONFIG.batchSize,
+    batchWaitMs: config.batchWaitMs ?? DEFAULT_STREAMING_CONFIG.batchWaitMs,
+    doIdStrategy: config.doIdStrategy ?? DEFAULT_STREAMING_CONFIG.doIdStrategy,
+  }
   const instanceId = generateInstanceId()
 
   // Local batch buffer

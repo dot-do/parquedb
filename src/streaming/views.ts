@@ -923,8 +923,8 @@ export function isConsoleSink(sink: OutputSink): sink is ConsoleSink {
 export function defineStreamView<TInput = unknown, TOutput = unknown>(
   definition: StreamViewDefinition<TInput, TOutput>
 ): StreamViewDefinition<TInput, TOutput> {
-  // Validate the definition
-  const validation = validateStreamViewDefinition(definition)
+  // Validate the definition (cast to base type for validation)
+  const validation = validateStreamViewDefinition(definition as StreamViewDefinition)
   if (!validation.valid) {
     throw new Error(`Invalid stream view definition: ${validation.errors.join(', ')}`)
   }

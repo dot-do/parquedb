@@ -133,7 +133,7 @@ export interface BatchRelatedRequest {
 /**
  * Collection interface for CRUD operations
  */
-export interface RPCCollection<T extends object = Record<string, unknown>> {
+export interface RPCCollection<T extends Record<string, unknown> = Record<string, unknown>> {
   /** Find entities matching a filter */
   find(filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
 
@@ -167,7 +167,7 @@ export interface RPCCollection<T extends object = Record<string, unknown>> {
  */
 export interface ParqueDBRPCClient {
   /** Get a collection by name */
-  collection<T extends object = Record<string, unknown>>(name: string): RPCCollection<T>
+  collection<T extends Record<string, unknown> = Record<string, unknown>>(name: string): RPCCollection<T>
 
   /**
    * Batch load related entities for multiple source entities.
@@ -193,7 +193,7 @@ export interface ParqueDBRPCClient {
    * const users = await client.batchGet('users', ['id-1', 'id-2', 'id-3'])
    * ```
    */
-  batchGet<T extends object = Record<string, unknown>>(type: string, ids: string[]): Promise<Array<Entity<T> | null>>
+  batchGet<T extends Record<string, unknown> = Record<string, unknown>>(type: string, ids: string[]): Promise<Array<Entity<T> | null>>
 
   /** Close the client and clean up resources */
   close(): void
@@ -429,7 +429,7 @@ function createHttpTransport(options: ParqueDBRPCClientOptions): Transport {
 /**
  * Create a collection client for a specific namespace
  */
-function createCollection<T extends object = Record<string, unknown>>(
+function createCollection<T extends Record<string, unknown> = Record<string, unknown>>(
   transport: Transport,
   name: string
 ): RPCCollection<T> {
@@ -518,12 +518,12 @@ export function createParqueDBRPCClient(options: ParqueDBRPCClientOptions): Parq
     : baseTransport
 
   // Collection cache - use object to satisfy generic type constraints
-  const collections = new Map<string, RPCCollection<object>>()
+  const collections = new Map<string, RPCCollection<Record<string, unknown>>>()
 
   return {
-    collection<T extends object = Record<string, unknown>>(name: string): RPCCollection<T> {
+    collection<T extends Record<string, unknown> = Record<string, unknown>>(name: string): RPCCollection<T> {
       if (!collections.has(name)) {
-        collections.set(name, createCollection(transport, name) as RPCCollection<object>)
+        collections.set(name, createCollection(transport, name) as RPCCollection<Record<string, unknown>>)
       }
       return collections.get(name) as RPCCollection<T>
     },
@@ -536,7 +536,7 @@ export function createParqueDBRPCClient(options: ParqueDBRPCClientOptions): Parq
       )
     },
 
-    async batchGet<T extends object = Record<string, unknown>>(type: string, ids: string[]): Promise<Array<Entity<T> | null>> {
+    async batchGet<T extends Record<string, unknown> = Record<string, unknown>>(type: string, ids: string[]): Promise<Array<Entity<T> | null>> {
       // Single batched call for efficiency
       return transport.call('db.batchGet', [type, ids]) as Promise<Array<Entity<T> | null>>
     },

@@ -293,10 +293,11 @@ export function fireAndForget(
   // Build the execution promise
   const execute = async (): Promise<void> => {
     if (config.enableRetry) {
-      const retryConfig: RetryConfig = {
+      const retryConfig = {
         ...DEFAULT_FIRE_AND_FORGET_RETRY_CONFIG,
         ...config.retryConfig,
-        onRetry: (info) => {
+        returnMetrics: false as const,
+        onRetry: (info: { attempt: number; error: Error; delay: number }) => {
           metrics.recordRetry(operation)
           log.debug(
             `[ParqueDB] Retrying ${operation} (attempt ${info.attempt}): ${info.error.message}`,

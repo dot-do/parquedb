@@ -162,8 +162,8 @@ export async function importFromCsv(
     batch.push(createInput)
 
     // Process batch when full
-    if (batch.length >= opts.batchSize) {
-      const batchResult = await processBatch(collection, batch, opts, errors, lineNumber - batch.length)
+    if (batch.length >= (opts.batchSize ?? MAX_BATCH_SIZE)) {
+      const batchResult = await processBatch(collection, batch, { skipValidation: opts.skipValidation ?? false, actor: opts.actor ?? 'system/migration' }, errors, lineNumber - batch.length)
       imported += batchResult.imported
       failed += batchResult.failed
       batch.length = 0
@@ -177,7 +177,7 @@ export async function importFromCsv(
 
   // Process remaining batch
   if (batch.length > 0) {
-    const batchResult = await processBatch(collection, batch, opts, errors, lineNumber - batch.length)
+    const batchResult = await processBatch(collection, batch, { skipValidation: opts.skipValidation ?? false, actor: opts.actor ?? 'system/migration' }, errors, lineNumber - batch.length)
     imported += batchResult.imported
     failed += batchResult.failed
 

@@ -8,7 +8,7 @@
  * Never use simple base64 decoding without signature verification for auth.
  */
 
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose'
+import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyResult as JoseJWTVerifyResult } from 'jose'
 import type { Env } from '../types/worker'
 import { JWKS_CACHE_TTL as IMPORTED_JWKS_CACHE_TTL, JWKS_FETCH_TIMEOUT_MS as IMPORTED_JWKS_FETCH_TIMEOUT_MS } from '../constants'
 
@@ -100,23 +100,28 @@ async function withAbortTimeout<T>(
 async function verifyJWTWithTimeout(
   token: string,
   jwks: ReturnType<typeof createRemoteJWKSet>,
-  options: { clockTolerance?: number | undefined },
+  options: { clockTolerance?: number },
   timeoutMs: number = JWKS_FETCH_TIMEOUT_MS
-): Promise<Awaited<ReturnType<typeof jwtVerify>>> {
+): Promise<JoseJWTVerifyResult<JWTPayload>> {
   return withAbortTimeout(
     async (signal) => {
-      // Create a promise that rejects on abort
-      const abortPromise = new Promise<never>((_, reject) => {
-        signal.addEventListener('abort', () => {
-          reject(new JWKSFetchTimeoutError(timeoutMs))
-        }, { once: true })
+      // Create a promise that rejects on abort - never resolves, only rejects
+      let abortReject: (reason: Error) => void = () => {}
+      const abortPromise = new Promise<JoseJWTVerifyResult<JWTPayload>>((_, reject) => {
+        abortReject = reject
       })
+      signal.addEventListener('abort', () => {
+        abortReject(new JWKSFetchTimeoutError(timeoutMs))
+      }, { once: true })
 
       // Race the verification against the abort signal
-      return Promise.race([
-        jwtVerify(token, jwks, options),
-        abortPromise,
-      ])
+      // Build options object conditionally to satisfy exactOptionalPropertyTypes
+      const verifyOptions: { clockTolerance?: number } = {}
+      if (options.clockTolerance !== undefined) {
+        verifyOptions.clockTolerance = options.clockTolerance
+      }
+      const verifyPromise = jwtVerify(token, jwks, verifyOptions) as Promise<JoseJWTVerifyResult<JWTPayload>>
+      return Promise.race([verifyPromise, abortPromise])
     },
     timeoutMs
   )

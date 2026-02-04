@@ -361,6 +361,14 @@ export interface Collection<T extends EntityData = EntityData> {
   find(filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
 
   /**
+   * Find a single entity matching a filter
+   * @param filter - MongoDB-style filter
+   * @param options - Query options
+   * @returns Single entity or null if not found
+   */
+  findOne(filter?: Filter, options?: FindOptions): Promise<Entity<T> | null>
+
+  /**
    * Get a single entity by ID
    * @param id - Entity ID (can be full EntityId or just the id part)
    * @param options - Get options
@@ -392,6 +400,14 @@ export interface Collection<T extends EntityData = EntityData> {
    * @returns Delete result
    */
   delete(id: string, options?: DeleteOptions): Promise<DeleteResult>
+
+  /**
+   * Delete multiple entities matching a filter
+   * @param filter - MongoDB-style filter
+   * @param options - Delete options
+   * @returns Delete result with count
+   */
+  deleteMany(filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
 
   /**
    * Semantic search using vector similarity

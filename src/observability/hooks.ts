@@ -7,7 +7,7 @@
  * @module observability/hooks
  */
 
-import type { Filter, FindOptions, UpdateInput, CreateInput, Metadata } from '../types'
+import type { Filter, FindOptions, UpdateInput, CreateInput, Metadata, EntityData } from '../types'
 
 // =============================================================================
 // Hook Context Types
@@ -50,7 +50,7 @@ export interface MutationContext extends HookContext {
   /** Entity ID(s) being mutated */
   entityId?: string | string[] | undefined
   /** Create/update data */
-  data?: CreateInput<unknown> | UpdateInput<unknown> | undefined
+  data?: CreateInput<EntityData> | UpdateInput<EntityData> | undefined
   /** Delete options */
   hard?: boolean | undefined
 }
@@ -808,7 +808,7 @@ export function createMutationContext(
   operationType: MutationContext['operationType'],
   namespace?: string,
   entityId?: string | string[],
-  data?: CreateInput<unknown> | UpdateInput<unknown>
+  data?: CreateInput<EntityData> | UpdateInput<EntityData>
 ): MutationContext {
   return {
     operationId: generateOperationId(),

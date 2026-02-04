@@ -40,6 +40,7 @@
 
 import type { ParqueDB } from '../../ParqueDB'
 import type { TimeGranularity } from '../ai/types'
+import type { Filter } from '../../types'
 import { MAX_BATCH_SIZE, MS_PER_HOUR } from '../../constants'
 import { logger } from '../../utils/logger'
 
@@ -222,25 +223,6 @@ function resolveConfig(config: RetentionManagerConfig): ResolvedRetentionConfig 
   }
 }
 
-/**
- * Get retention policy for a specific granularity
- */
-function _getPolicyForGranularity(
-  policies: TieredRetentionPolicies,
-  granularity: TimeGranularity | undefined
-): RetentionPolicy | null {
-  if (!granularity) {
-    return policies.default ?? null
-  }
-
-  const policy = policies[granularity]
-  if (policy && policy.enabled !== false) {
-    return policy
-  }
-
-  return policies.default ?? null
-}
-
 // =============================================================================
 // RetentionManager Class
 // =============================================================================
@@ -292,10 +274,20 @@ export class RetentionManager {
       // Process each granularity
       const granularities: (TimeGranularity | 'default')[] = ['hour', 'day', 'week', 'month', 'default']
 
+      // Map TimeGranularity to TieredRetentionPolicies keys
+      const granularityToPolicyKey: Record<TimeGranularity | 'default', keyof TieredRetentionPolicies | 'default'> = {
+        hour: 'hourly',
+        day: 'daily',
+        week: 'weekly',
+        month: 'monthly',
+        default: 'default',
+      }
+
       for (const granularity of granularities) {
-        const policy = granularity === 'default'
+        const policyKey = granularityToPolicyKey[granularity]
+        const policy = policyKey === 'default'
           ? this.config.policies.default
-          : this.config.policies[granularity]
+          : this.config.policies[policyKey]
 
         if (!policy || policy.enabled === false) {
           continue
@@ -326,16 +318,17 @@ export class RetentionManager {
           elapsedMs: Date.now() - startTime,
         })
 
-        // Count total to delete for this granularity
-        const countResult = await collection.count(filter)
+        // Count total to delete for this granularity using find
+        const countResult = await collection.find(filter as Filter, { limit: 1 })
+        const hasRecordsToDelete = countResult.items.length > 0
 
-        if (countResult === 0) {
+        if (!hasRecordsToDelete) {
           byGranularity[granularity] = 0
           continue
         }
 
         if (this.config.debug) {
-          logger.info(`[RetentionManager] Found ${countResult} ${granularity} records to delete`)
+          logger.info(`[RetentionManager] Found records for ${granularity} granularity to delete`)
         }
 
         // Delete in batches
@@ -344,25 +337,25 @@ export class RetentionManager {
 
         while (hasMore) {
           // Find batch of records to delete
-          const batch = await collection.find(filter, {
+          const batch = await collection.find(filter as Filter, {
             limit: this.config.batchSize,
           })
 
-          if (batch.length === 0) {
+          if (batch.items.length === 0) {
             hasMore = false
             break
           }
 
           // Use deleteMany with filter for efficient batch deletion
-          const deleteResult = await collection.deleteMany(filter, { hard: true })
+          const deleteResult = await this.db.deleteMany(this.config.collection, filter as Filter, { hard: true })
           deletedForGranularity += deleteResult.deletedCount
           totalDeleted += deleteResult.deletedCount
 
           // Report progress
-          const percentage = Math.min(100, Math.round((totalDeleted / (totalDeleted + batch.length)) * 100))
+          const percentage = Math.min(100, Math.round((totalDeleted / (totalDeleted + batch.items.length)) * 100))
           onProgress?.({
             phase: 'deleting',
-            totalToDelete: totalDeleted + batch.length,
+            totalToDelete: totalDeleted + batch.items.length,
             deletedSoFar: totalDeleted,
             percentage,
             currentGranularity: granularity,
@@ -411,13 +404,11 @@ export class RetentionManager {
    * @returns Number of deleted records
    */
   async cleanupBefore(cutoffDate: Date): Promise<number> {
-    const collection = this.db.collection(this.config.collection)
-
-    const filter = {
+    const filter: Filter = {
       [this.config.timestampField]: { $lt: cutoffDate },
     }
 
-    const result = await collection.deleteMany(filter, { hard: true })
+    const result = await this.db.deleteMany(this.config.collection, filter, { hard: true })
     return result.deletedCount
   }
 
@@ -516,14 +507,24 @@ export class RetentionManager {
     const now = new Date()
     const byGranularity: Record<string, { count: number; oldestTimestamp: Date | null; eligibleForDeletion: number }> = {}
 
+    // Map TimeGranularity to TieredRetentionPolicies keys
+    const granularityToPolicyKey: Record<TimeGranularity | 'default', keyof TieredRetentionPolicies | 'default'> = {
+      hour: 'hourly',
+      day: 'daily',
+      week: 'weekly',
+      month: 'monthly',
+      default: 'default',
+    }
+
     const granularities: (TimeGranularity | 'default')[] = ['hour', 'day', 'week', 'month', 'default']
     let totalRecords = 0
     let totalEligibleForDeletion = 0
 
     for (const granularity of granularities) {
-      const policy = granularity === 'default'
+      const policyKey = granularityToPolicyKey[granularity]
+      const policy = policyKey === 'default'
         ? this.config.policies.default
-        : this.config.policies[granularity]
+        : this.config.policies[policyKey]
 
       // Build filter for this granularity
       const baseFilter: Record<string, unknown> = {}
@@ -533,28 +534,30 @@ export class RetentionManager {
         baseFilter[this.config.granularityField] = { $exists: false }
       }
 
-      // Get count
-      const count = await collection.count(baseFilter)
+      // Get count by finding all records (use pagination)
+      const countResult = await collection.find(baseFilter as Filter, { limit: 10000 })
+      const count = countResult.items.length
       totalRecords += count
 
       // Get oldest timestamp
-      const oldest = await collection.find(baseFilter, {
+      const oldest = await collection.find(baseFilter as Filter, {
         limit: 1,
         sort: { [this.config.timestampField]: 1 },
       })
-      const oldestTimestamp = oldest.length > 0
-        ? new Date((oldest[0] as Record<string, unknown>)[this.config.timestampField] as string | Date)
+      const oldestTimestamp = oldest.items.length > 0
+        ? new Date((oldest.items[0] as Record<string, unknown>)[this.config.timestampField] as string | Date)
         : null
 
       // Count eligible for deletion
       let eligibleForDeletion = 0
       if (policy && policy.enabled !== false) {
         const cutoffDate = new Date(now.getTime() - policy.maxAgeMs)
-        const eligibleFilter = {
+        const eligibleFilter: Filter = {
           ...baseFilter,
           [this.config.timestampField]: { $lt: cutoffDate },
         }
-        eligibleForDeletion = await collection.count(eligibleFilter)
+        const eligibleResult = await collection.find(eligibleFilter, { limit: 10000 })
+        eligibleForDeletion = eligibleResult.items.length
         totalEligibleForDeletion += eligibleForDeletion
       }
 

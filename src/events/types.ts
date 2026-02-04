@@ -130,19 +130,29 @@ export interface WalRow {
  */
 export interface EventWriterConfig {
   /** Maximum events to buffer before flush (default: 1000) */
-  maxBufferSize?: number | undefined
+  maxBufferSize?: number
   /** Maximum bytes to buffer before flush (default: 1MB) */
-  maxBufferBytes?: number | undefined
+  maxBufferBytes?: number
   /** Maximum time to buffer before flush in ms (default: 5000) */
-  flushIntervalMs?: number | undefined
+  flushIntervalMs?: number
   /** Size threshold for writing directly to R2 vs SQLite (default: 512KB) */
-  r2ThresholdBytes?: number | undefined
+  r2ThresholdBytes?: number
+}
+
+/**
+ * Resolved writer configuration with all values defined
+ */
+export interface ResolvedEventWriterConfig {
+  maxBufferSize: number
+  maxBufferBytes: number
+  flushIntervalMs: number
+  r2ThresholdBytes: number
 }
 
 /**
  * Default writer configuration
  */
-export const DEFAULT_WRITER_CONFIG: Required<EventWriterConfig> = {
+export const DEFAULT_WRITER_CONFIG: ResolvedEventWriterConfig = {
   maxBufferSize: DEFAULT_EVENT_BUFFER_SIZE,
   maxBufferBytes: DEFAULT_EVENT_BUFFER_BYTES,
   flushIntervalMs: DEFAULT_FLUSH_INTERVAL_MS,

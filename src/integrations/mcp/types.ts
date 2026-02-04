@@ -81,7 +81,7 @@ export interface UpdateToolParams {
   /** Entity ID to update */
   id: string
   /** MongoDB-style update operations */
-  update: UpdateInput<unknown>
+  update: UpdateInput<Record<string, unknown>>
 }
 
 /**

@@ -7,7 +7,7 @@
  */
 
 import type { Event } from '../types/entity'
-import type { EventBatch, EventWriterConfig } from './types'
+import type { EventBatch, EventWriterConfig, ResolvedEventWriterConfig } from './types'
 import { DEFAULT_WRITER_CONFIG } from './types'
 import { logger } from '../utils/logger'
 import { getGlobalTelemetry } from '../observability/telemetry'
@@ -67,7 +67,7 @@ export class EventWriter {
   private minTs: number | null = null
   private maxTs: number | null = null
 
-  private config: Required<EventWriterConfig>
+  private config: ResolvedEventWriterConfig
   private flushHandlers: FlushHandler[] = []
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private flushPromise: Promise<void> | null = null
@@ -77,7 +77,12 @@ export class EventWriter {
   private lastFlushAt: number | null = null
 
   constructor(config: EventWriterConfig = {}) {
-    this.config = { ...DEFAULT_WRITER_CONFIG, ...config }
+    this.config = {
+      maxBufferSize: config.maxBufferSize ?? DEFAULT_WRITER_CONFIG.maxBufferSize,
+      maxBufferBytes: config.maxBufferBytes ?? DEFAULT_WRITER_CONFIG.maxBufferBytes,
+      flushIntervalMs: config.flushIntervalMs ?? DEFAULT_WRITER_CONFIG.flushIntervalMs,
+      r2ThresholdBytes: config.r2ThresholdBytes ?? DEFAULT_WRITER_CONFIG.r2ThresholdBytes,
+    }
   }
 
   // ===========================================================================

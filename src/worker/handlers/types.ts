@@ -6,7 +6,8 @@
  */
 
 import type { Filter } from '../../types/filter'
-import type { FindOptions, FindResult, GetOptions, CreateOptions, UpdateOptions, DeleteOptions, UpdateResult, DeleteResult } from '../../types/options'
+import type { FindOptions, FindResult, GetOptions, CreateOptions, UpdateOptions, DeleteOptions } from '../../types/options'
+import type { UpdateResult, DeleteResult } from '../../types/entity'
 import type { EntityRecord } from '../../types/entity'
 import type { Update } from '../../types/update'
 import type { StorageStats } from '../../types/storage'
@@ -33,12 +34,24 @@ export interface WorkerReadInterface {
     ns: string,
     entityId: string,
     predicate?: string | undefined,
-    options?: { direction?: 'outbound' | 'inbound' | 'both' | undefined; limit?: number | undefined; offset?: number | undefined } | undefined
+    options?: {
+      direction?: 'outbound' | 'inbound' | 'both' | undefined
+      limit?: number | undefined
+      offset?: number | undefined
+      matchMode?: 'exact' | 'fuzzy' | undefined
+      minSimilarity?: number | undefined
+      maxSimilarity?: number | undefined
+    } | undefined
   ): Promise<Array<{
+    to_ns: string
+    to_id: string
+    to_name: string
+    to_type: string
     predicate: string
-    reverse?: string | undefined
-    target: { $id: string; $type: string; name?: string | undefined }
-    direction: 'outbound' | 'inbound'
+    importance: number | null
+    level: number | null
+    matchMode: 'exact' | 'fuzzy' | null
+    similarity: number | null
   }>>
   /** Get storage statistics */
   getStorageStats(): StorageStats
@@ -57,6 +70,15 @@ export interface WorkerWriteInterface extends WorkerReadInterface {
   delete(ns: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
 }
 
+/** Cache statistics */
+export interface CacheStats {
+  hits: number
+  misses: number
+  hitRatio: number
+  cachedBytes: number
+  fetchedBytes: number
+}
+
 /**
  * Full worker interface for handlers that need all capabilities.
  *
@@ -64,7 +86,8 @@ export interface WorkerWriteInterface extends WorkerReadInterface {
  * to make handler dependencies explicit.
  */
 export interface WorkerInterface extends WorkerWriteInterface {
-  // All capabilities inherited from WorkerWriteInterface
+  /** Get cache statistics */
+  getCacheStats(): Promise<CacheStats>
 }
 
 // =============================================================================

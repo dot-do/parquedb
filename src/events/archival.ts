@@ -29,9 +29,17 @@ import { DEFAULT_ARCHIVE_AFTER_DAYS, DEFAULT_RETENTION_DAYS } from '../constants
  */
 export interface ArchivalPolicy {
   /** Days after which segments are eligible for archival (default: 7) */
-  archiveAfterDays?: number | undefined
+  archiveAfterDays?: number
   /** Days to retain archived segments before purging (default: 365) */
-  retentionDays?: number | undefined
+  retentionDays?: number
+}
+
+/**
+ * Resolved archival policy with all values defined
+ */
+interface ResolvedArchivalPolicy {
+  archiveAfterDays: number
+  retentionDays: number
 }
 
 /**
@@ -148,7 +156,7 @@ export class EventArchiver {
   private dataset: string
   private storage: SegmentStorage
   private manifest: ManifestManager
-  private policy: Required<ArchivalPolicy>
+  private policy: ResolvedArchivalPolicy
   private prefix: string
 
   constructor(options: ArchiverOptions) {
@@ -156,8 +164,8 @@ export class EventArchiver {
     this.storage = options.storage
     this.manifest = options.manifest
     this.policy = {
-      ...DEFAULT_POLICY,
-      ...options.policy,
+      archiveAfterDays: options.policy?.archiveAfterDays ?? DEFAULT_POLICY.archiveAfterDays,
+      retentionDays: options.policy?.retentionDays ?? DEFAULT_POLICY.retentionDays,
     }
     this.prefix = options.prefix ?? DEFAULT_OPTIONS.prefix
   }

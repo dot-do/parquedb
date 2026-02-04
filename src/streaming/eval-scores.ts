@@ -128,7 +128,17 @@ export interface EvalScoresConfig {
   distributionBuckets?: number | undefined
 }
 
-const DEFAULT_CONFIG: Required<EvalScoresConfig> = {
+/**
+ * Resolved configuration with all defaults applied
+ */
+interface ResolvedEvalScoresConfig {
+  maxScores: number
+  statsWindowMs: number
+  sourceNamespaces: string[]
+  distributionBuckets: number
+}
+
+const DEFAULT_CONFIG: ResolvedEvalScoresConfig = {
   maxScores: 50000,
   statsWindowMs: 3600000, // 1 hour
   sourceNamespaces: ['evalite_scores', 'scores'],
@@ -151,7 +161,7 @@ export class EvalScoresMV implements MVHandler {
   readonly name = 'EvalScores'
   readonly sourceNamespaces: string[]
 
-  private readonly config: Required<EvalScoresConfig>
+  private readonly config: ResolvedEvalScoresConfig
 
   // Score storage
   private scores: EvalScoreRecord[] = []
@@ -169,8 +179,13 @@ export class EvalScoresMV implements MVHandler {
   private readonly statsCacheTtlMs = 1000 // 1 second TTL
 
   constructor(config: EvalScoresConfig = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config }
-    this.sourceNamespaces = this.config.sourceNamespaces
+    this.config = {
+      maxScores: config.maxScores ?? DEFAULT_CONFIG.maxScores,
+      statsWindowMs: config.statsWindowMs ?? DEFAULT_CONFIG.statsWindowMs,
+      sourceNamespaces: config.sourceNamespaces ?? DEFAULT_CONFIG.sourceNamespaces,
+      distributionBuckets: config.distributionBuckets ?? DEFAULT_CONFIG.distributionBuckets,
+    }
+    this.sourceNamespaces = [...this.config.sourceNamespaces]
   }
 
   // ===========================================================================
@@ -605,14 +620,15 @@ export class EvalScoresMV implements MVHandler {
     const stdDev = Math.sqrt(avgSquaredDiff)
 
     // Calculate distribution
-    const distribution = new Array(this.config.distributionBuckets).fill(0)
+    const distribution: number[] = new Array(this.config.distributionBuckets).fill(0) as number[]
     const bucketSize = 1 / this.config.distributionBuckets
+    const maxBucketIndex = this.config.distributionBuckets - 1
     for (const score of scores) {
       const bucketIndex = Math.min(
         Math.floor(score / bucketSize),
-        this.config.distributionBuckets - 1
+        maxBucketIndex
       )
-      distribution[bucketIndex]++
+      distribution[bucketIndex]!++
     }
 
     return {

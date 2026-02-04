@@ -88,6 +88,8 @@ export interface VectorIndexOptions {
   m?: number | undefined
   /** HNSW efConstruction parameter - size of dynamic candidate list during construction (default: 200) */
   efConstruction?: number | undefined
+  /** Vector storage precision - float32 (4 bytes) or float64 (8 bytes, default) */
+  precision?: 'float32' | 'float64' | undefined
 }
 
 /**

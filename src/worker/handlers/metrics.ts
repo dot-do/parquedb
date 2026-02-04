@@ -156,7 +156,7 @@ export function handleMetricsWithAI(
         name: `${agg.modelId}/${agg.providerId}`,
         modelId: agg.modelId,
         providerId: agg.providerId,
-        dateKey: new Date().toISOString().split('T')[0],
+        dateKey: new Date().toISOString().split('T')[0] ?? '',
         granularity: 'day' as const,
         requestCount: agg.requestCount,
         successCount: agg.successCount,

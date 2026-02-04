@@ -13,20 +13,10 @@ import { QueryExecutor, type FindResult } from './QueryExecutor'
 import { ReadPath } from './ReadPath'
 import { DEFAULT_CACHE_CONFIG } from './CacheStrategy'
 import { logger } from '../utils/logger'
-import { asGlobalR2Bucket } from '../types/cast'
 
 // =============================================================================
 // Types
 // =============================================================================
-
-// Use the Cloudflare R2Bucket type directly
-type R2Bucket = {
-  get(key: string, options?: { range?: { offset: number; length: number } | undefined }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
-  put(key: string, value: ArrayBuffer | Uint8Array): Promise<unknown>
-  delete(key: string): Promise<void>
-  head(key: string): Promise<{ size: number } | null>
-  list(options?: { prefix?: string | undefined; limit?: number | undefined }): Promise<{ objects: { key: string; size: number; uploaded: Date }[]; truncated: boolean }>
-}
 
 /**
  * Individual query benchmark result
@@ -176,7 +166,7 @@ export interface BenchmarkConfig {
  * @returns Full benchmark results
  */
 export async function runPushdownBenchmark(
-  bucket: R2Bucket,
+  bucket: globalThis.R2Bucket,
   cache: Cache,
   config: BenchmarkConfig = {
     iterations: 5,
@@ -185,11 +175,11 @@ export async function runPushdownBenchmark(
 ): Promise<PushdownBenchmarkResult> {
   const startTime = performance.now()
 
-  // Initialize query executor - cast bucket to global R2Bucket for compatibility
-  const readPath = new ReadPath(asGlobalR2Bucket(bucket as R2Bucket), cache, DEFAULT_CACHE_CONFIG)
+  // Initialize query executor
+  const readPath = new ReadPath(bucket, cache, DEFAULT_CACHE_CONFIG)
   const queryExecutor = new QueryExecutor(
     readPath,
-    asGlobalR2Bucket(bucket as R2Bucket),
+    bucket,
     undefined,
     undefined
   )
@@ -549,7 +539,7 @@ function calculateSelectivityStats(results: QueryBenchmarkResult[]): { count: nu
  */
 export async function handlePushdownBenchmarkRequest(
   request: Request,
-  bucket: R2Bucket
+  bucket: globalThis.R2Bucket
 ): Promise<Response> {
   const url = new URL(request.url)
   const startTime = performance.now()

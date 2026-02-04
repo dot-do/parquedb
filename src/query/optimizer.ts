@@ -102,7 +102,7 @@ export interface IndexRecommendation {
   /** Index definition */
   index: IndexDefinition
   /** Type of index */
-  type: 'fts' | 'vector'
+  type: 'fts' | 'vector' | 'geo'
   /** Field(s) the index covers */
   fields: string[]
   /** Estimated selectivity (0-1, lower is more selective) */
@@ -1731,27 +1731,6 @@ export class MVRouter {
     }
 
     return { compatible: true, reason: 'Sort can be satisfied' }
-  }
-
-  /**
-   * Extract field names from a filter
-   */
-  private _extractFilterFields(filter: Filter): Set<string> {
-    const fields = new Set<string>()
-
-    for (const key of Object.keys(filter)) {
-      if (!key.startsWith('$')) {
-        fields.add(key)
-      } else if (key === '$and' || key === '$or') {
-        const nested = filter[key] as Filter[]
-        for (const f of nested) {
-          const nestedFields = this._extractFilterFields(f)
-          nestedFields.forEach(field => fields.add(field))
-        }
-      }
-    }
-
-    return fields
   }
 
   /**

@@ -168,10 +168,12 @@ export interface IMDBFilters {
   year_lte?: number | undefined
   runtime_gte?: number | undefined
   runtime_lte?: number | undefined
+  [key: string]: unknown
 }
 
 export interface ONETFilters {
   code?: string | string[] | undefined
+  [key: string]: unknown
 }
 
 export interface UNSPSCFilters {
@@ -179,6 +181,7 @@ export interface UNSPSCFilters {
   family?: string | string[] | undefined
   class?: string | string[] | undefined
   commodity?: string | string[] | undefined
+  [key: string]: unknown
 }
 
 // =============================================================================
@@ -436,8 +439,4 @@ export async function hybridSearch<T = unknown>(
   return fetchJSON<SearchResult<T>>(url)
 }
 
-// =============================================================================
-// Type Exports
-// =============================================================================
-
-export type { DatasetClient, DatasetSchema, DocType, FilterableFields }
+// DatasetClient, DatasetSchema, DocType, FilterableFields are exported inline above

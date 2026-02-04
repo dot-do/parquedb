@@ -376,8 +376,10 @@ export class IndexManager {
     }
 
     // Check for $geo operator -> use geo index
+    // Supports both top-level $geo with field specification and field-level $geo
     if (filter.$geo) {
-      const geoField = filter.$geo.field ?? filter.$geo.$field ?? 'location'
+      const geoOp = filter.$geo as typeof filter.$geo & { field?: string; $field?: string }
+      const geoField = geoOp.field ?? geoOp.$field ?? 'location'
       const geoIndex = this.findGeoIndex(ns, geoField)
       if (geoIndex) {
         return {

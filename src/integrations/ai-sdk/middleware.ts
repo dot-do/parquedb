@@ -232,7 +232,6 @@ export function createParqueDBMiddleware(
               })
             }
 
-            _cached = true
             const result = asTypedResult<CacheEntry>(cacheResult).response as LanguageModelGenerateResult
 
             // Log the cache hit if logging is enabled
@@ -497,7 +496,7 @@ async function logRequest(options: LogRequestOptions): Promise<void> {
   }
 
   try {
-    const createdEntry = await db.collection(collection).create(logData as Record<string, unknown>)
+    const createdEntry = await db.collection(collection).create(logData as import('../../types').CreateInput)
 
     // Call custom log handler if provided
     if (onLog) {

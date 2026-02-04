@@ -395,7 +395,7 @@ function countAlternationBranches(pattern: string): number {
       depth = Math.max(0, depth - 1)
     } else if (char === '|') {
       branchesAtDepth[depth] = (branchesAtDepth[depth] || 1) + 1
-      currentBranches = branchesAtDepth[depth]
+      currentBranches = branchesAtDepth[depth] ?? 1
     }
   }
 
@@ -450,7 +450,9 @@ function analyzeCharClassComplexity(pattern: string): { maxSize: number; totalCl
   let hasOverlapping = false
   for (let i = 0; i < classContents.length - 1; i++) {
     for (let j = i + 1; j < classContents.length; j++) {
-      if (classContents[i] === classContents[j] && classContents[i].length > 0) {
+      const contentsI = classContents[i]
+      const contentsJ = classContents[j]
+      if (contentsI && contentsJ && contentsI === contentsJ && contentsI.length > 0) {
         hasOverlapping = true
         break
       }
@@ -767,7 +769,15 @@ export interface RegexExecOptions {
   maxInputLength?: number | undefined
 }
 
-const DEFAULT_EXEC_OPTIONS: Required<RegexExecOptions> = {
+/**
+ * Resolved options with all defaults applied
+ */
+interface ResolvedRegexExecOptions {
+  timeoutMs: number
+  maxInputLength: number
+}
+
+const DEFAULT_EXEC_OPTIONS: ResolvedRegexExecOptions = {
   timeoutMs: 1000,
   maxInputLength: 100000,
 }
@@ -801,7 +811,10 @@ export function safeRegexTest(
   input: string,
   options: RegexExecOptions = {}
 ): boolean {
-  const opts = { ...DEFAULT_EXEC_OPTIONS, ...options }
+  const opts: ResolvedRegexExecOptions = {
+    timeoutMs: options.timeoutMs ?? DEFAULT_EXEC_OPTIONS.timeoutMs,
+    maxInputLength: options.maxInputLength ?? DEFAULT_EXEC_OPTIONS.maxInputLength,
+  }
 
   // Check input length
   if (input.length > opts.maxInputLength) {
@@ -854,7 +867,10 @@ export function safeRegexMatch(
   input: string,
   options: RegexExecOptions = {}
 ): RegExpMatchArray | null {
-  const opts = { ...DEFAULT_EXEC_OPTIONS, ...options }
+  const opts: ResolvedRegexExecOptions = {
+    timeoutMs: options.timeoutMs ?? DEFAULT_EXEC_OPTIONS.timeoutMs,
+    maxInputLength: options.maxInputLength ?? DEFAULT_EXEC_OPTIONS.maxInputLength,
+  }
 
   if (input.length > opts.maxInputLength) {
     throw new Error(
@@ -886,7 +902,10 @@ export function safeRegexExec(
   input: string,
   options: RegexExecOptions = {}
 ): RegExpExecArray | null {
-  const opts = { ...DEFAULT_EXEC_OPTIONS, ...options }
+  const opts: ResolvedRegexExecOptions = {
+    timeoutMs: options.timeoutMs ?? DEFAULT_EXEC_OPTIONS.timeoutMs,
+    maxInputLength: options.maxInputLength ?? DEFAULT_EXEC_OPTIONS.maxInputLength,
+  }
 
   if (input.length > opts.maxInputLength) {
     throw new Error(
@@ -911,7 +930,7 @@ export function safeRegexExec(
 function safeChunkedTest(
   regex: RegExp,
   input: string,
-  options: Required<RegexExecOptions>
+  options: ResolvedRegexExecOptions
 ): boolean {
   const chunkSize = 1000
   const startTime = performance.now()

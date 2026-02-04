@@ -552,6 +552,9 @@ export interface ViewOptions {
 
   /** Custom metadata */
   metadata?: Record<string, unknown> | undefined
+
+  /** Grace period in milliseconds before view becomes stale */
+  gracePeriod?: number | undefined
 }
 
 /**

@@ -156,6 +156,21 @@ export interface BackgroundEmbeddingConfig {
 }
 
 /**
+ * Resolved configuration with all defaults applied
+ */
+interface ResolvedEmbeddingConfig {
+  provider: EmbeddingProvider
+  fields: string[]
+  vectorField: string
+  batchSize: number
+  retryAttempts: number
+  processDelay: number
+  fieldSeparator: string
+  onError: ErrorCallback | undefined
+  enableDeadLetter: boolean
+}
+
+/**
  * Queue item for pending embedding generation
  */
 export interface EmbeddingQueueItem {
@@ -262,7 +277,7 @@ export class EmbeddingQueue {
   private storage: DurableObjectStorage
 
   /** Queue configuration */
-  private config: Required<BackgroundEmbeddingConfig> & { enableDeadLetter: boolean }
+  private config: ResolvedEmbeddingConfig
 
   /** Function to load entity data */
   private entityLoader?: EntityLoader
@@ -279,8 +294,7 @@ export class EmbeddingQueue {
   /** Metrics key */
   private static readonly METRICS_KEY = 'embed_queue_metrics'
 
-  /** Stats key (deprecated, kept for backwards compat) */
-  private static readonly _STATS_KEY = 'embed_queue_stats'
+  // _STATS_KEY is deprecated but kept for potential migration needs
 
   /**
    * Create a new EmbeddingQueue
@@ -342,7 +356,7 @@ export class EmbeddingQueue {
 
     // Check if already queued
     const existing = await this.storage.get<EmbeddingQueueItem>(key)
-    if (existing && existing.attempts < this.config.retryAttempts) {
+    if (existing !== undefined && existing.attempts < this.config.retryAttempts) {
       // Already queued and not exhausted retries, skip
       return
     }
@@ -387,7 +401,7 @@ export class EmbeddingQueue {
       })
     }
 
-    await this.storage.put(puts)
+    await this.storage.put(Object.fromEntries(puts))
     await this.ensureAlarmScheduled()
   }
 
@@ -480,7 +494,7 @@ export class EmbeddingQueue {
 
     for (let i = 0; i < batch.length; i++) {
       const item = batch[i]!
-      const entity = entities[i]
+      const entity = entities[i] ?? null
 
       if (!entity) {
         // Entity not found, mark as failed and remove from queue
@@ -552,10 +566,11 @@ export class EmbeddingQueue {
         // Notify error callback
         await this.notifyError(item, errorMessage, isExhausted)
       }
-      await this.storage.put(updates)
+      await this.storage.put(Object.fromEntries(updates))
 
       // Schedule retry if there are items with remaining attempts
-      const hasRetriable = batch.some(item => item.attempts + 1 < this.config.retryAttempts)
+      const retryAttempts = this.config.retryAttempts
+      const hasRetriable = batch.some(item => item.attempts + 1 < retryAttempts)
       if (hasRetriable) {
         await this.ensureAlarmScheduled(EMBEDDING_RETRY_DELAY_MS) // Retry after 5 seconds
       }
@@ -578,7 +593,8 @@ export class EmbeddingQueue {
     const successfulKeys: string[] = []
     for (let i = 0; i < validBatch.length; i++) {
       const item = validBatch[i]!
-      const vector = vectors[i]!
+      const vector = vectors[i]
+      if (!vector) continue
 
       try {
         await this.updateEntity(item.entityType, item.entityId, vector)
@@ -723,7 +739,7 @@ export class EmbeddingQueue {
 
     const failedKeys: string[] = []
     for (const [key, item] of items.entries()) {
-      if (item.attempts >= this.config.retryAttempts) {
+      if (item !== undefined && item.attempts >= this.config.retryAttempts) {
         failedKeys.push(key)
       }
     }
@@ -752,8 +768,8 @@ export class EmbeddingQueue {
   private async ensureAlarmScheduled(delay?: number): Promise<void> {
     const currentAlarm = await this.storage.getAlarm()
     if (!currentAlarm) {
-      const processDelay = delay ?? this.config.processDelay
-      await this.storage.setAlarm(Date.now() + processDelay)
+      const effectiveDelay = delay ?? this.config.processDelay
+      await this.storage.setAlarm(Date.now() + effectiveDelay)
     }
   }
 
@@ -830,7 +846,7 @@ export class EmbeddingQueue {
     const now = Date.now()
 
     for (const [key, item] of Object.entries(items)) {
-      if (item && item.attempts >= this.config.retryAttempts) {
+      if (item !== undefined && item !== null && item.attempts >= this.config.retryAttempts) {
         exhausted.push(key)
 
         // Move to dead letter queue if enabled
@@ -861,7 +877,7 @@ export class EmbeddingQueue {
 
     // Write to dead letter queue first, then delete from main queue
     if (deadLetterPuts.size > 0) {
-      await this.storage.put(deadLetterPuts)
+      await this.storage.put(Object.fromEntries(deadLetterPuts))
     }
 
     if (exhausted.length > 0) {
@@ -1067,7 +1083,7 @@ export class EmbeddingQueue {
 
     if (retried > 0) {
       // Add to main queue
-      await this.storage.put(queueItems)
+      await this.storage.put(Object.fromEntries(queueItems))
       // Remove from dead letter queue
       await this.storage.delete(dlqKeysToDelete)
       // Schedule processing

@@ -33,11 +33,7 @@ import {
 // Types
 // =============================================================================
 
-type R2Bucket = {
-  get(key: string, options?: { range?: { offset: number; length: number } | undefined }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
-  head(key: string): Promise<{ size: number } | null>
-  list(options?: { prefix?: string | undefined; limit?: number | undefined; cursor?: string | undefined }): Promise<{ objects: { key: string; size: number }[]; truncated: boolean; cursor?: string | undefined }>
-}
+// Use globalThis.R2Bucket directly for proper type compatibility
 
 interface DatasetBackendConfig {
   datasets: string[]
@@ -272,7 +268,7 @@ function calculateStats(samples: number[]): LatencyStats {
   }
 }
 
-function createTrackedR2File(bucket: R2Bucket, key: string, size: number) {
+function createTrackedR2File(bucket: globalThis.R2Bucket, key: string, size: number) {
   const file = {
     byteLength: size,
     bytesRead: 0,
@@ -286,7 +282,7 @@ function createTrackedR2File(bucket: R2Bucket, key: string, size: number) {
   return file
 }
 
-async function checkDatasetAvailable(bucket: R2Bucket, prefix: string, file: string): Promise<{ available: boolean; size?: number | undefined }> {
+async function checkDatasetAvailable(bucket: globalThis.R2Bucket, prefix: string, file: string): Promise<{ available: boolean; size?: number | undefined }> {
   try {
     const path = `${prefix}/${file}`
     const head = await bucket.head(path)
@@ -312,7 +308,7 @@ interface MigrationResult {
  * This implements backend evolution - seamlessly converting data when switching formats.
  */
 async function autoMigrateDatasets(
-  bucket: R2Bucket,
+  bucket: globalThis.R2Bucket,
   datasets: string[],
   targetBackends: ('iceberg' | 'delta')[],
   datasetsConfig: typeof DATASETS
@@ -398,7 +394,7 @@ async function autoMigrateDatasets(
 // =============================================================================
 
 async function benchmarkNativeQueries(
-  bucket: R2Bucket,
+  bucket: globalThis.R2Bucket,
   _datasetId: string,
   dataset: typeof DATASETS[string],
   config: DatasetBackendConfig
@@ -503,7 +499,7 @@ async function benchmarkNativeQueries(
 // =============================================================================
 
 async function benchmarkIcebergQueries(
-  bucket: R2Bucket,
+  bucket: globalThis.R2Bucket,
   _datasetId: string,
   dataset: typeof DATASETS[string],
   config: DatasetBackendConfig
@@ -617,7 +613,7 @@ async function benchmarkIcebergQueries(
 // =============================================================================
 
 async function benchmarkDeltaQueries(
-  bucket: R2Bucket,
+  bucket: globalThis.R2Bucket,
   _datasetId: string,
   dataset: typeof DATASETS[string],
   config: DatasetBackendConfig
@@ -664,7 +660,8 @@ async function benchmarkDeltaQueries(
     totalBytesRead += logBytes.byteLength
 
     // Parse commit log
-    const logText = new TextDecoder().decode(logBytes)
+    // Decode log text for potential future use in parsing
+    void new TextDecoder().decode(logBytes)
 
     // For now, report that Delta is available
     const queriesToRun = dataset.queries.slice(0, config.maxQueries)
@@ -707,7 +704,7 @@ async function benchmarkDeltaQueries(
 // =============================================================================
 
 async function runDatasetBackendBenchmark(
-  bucket: R2Bucket,
+  bucket: globalThis.R2Bucket,
   config: DatasetBackendConfig
 ): Promise<BenchmarkResult & { migration?: MigrationResult | undefined }> {
   const startTime = performance.now()
@@ -845,7 +842,7 @@ async function runDatasetBackendBenchmark(
 
 export async function handleDatasetBackendsBenchmarkRequest(
   request: Request,
-  bucket: R2Bucket
+  bucket: globalThis.R2Bucket
 ): Promise<Response> {
   const url = new URL(request.url)
   const params = url.searchParams

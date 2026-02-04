@@ -52,17 +52,17 @@ export interface AuthInfo extends MCPAuthInfo {
   /**
    * When the token expires (Unix timestamp in seconds)
    */
-  expiresAt?: number | undefined
+  expiresAt: number
 
   /**
    * The resource server URL this token is valid for (RFC 8707)
    */
-  resource?: URL | undefined
+  resource: URL
 
   /**
    * Additional custom data attached to the auth info
    */
-  extra?: Record<string, unknown> | undefined
+  extra: Record<string, unknown>
 }
 
 /**
@@ -335,7 +335,8 @@ export function createApiKeyAuthenticator(config: ApiKeyAuthConfig): TokenAuthen
           token: redactToken(normalizedToken),
           clientId: entry.clientId,
           scopes: grantedScopes,
-          expiresAt: entry.expiresAt,
+          expiresAt: entry.expiresAt ?? 0,
+          resource: new URL('mcp://parquedb.local/'),
           extra: {
             name: entry.name,
             ...entry.metadata,

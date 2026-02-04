@@ -391,7 +391,7 @@ export class NativeIcebergMetadataManager {
         location: this.options.location,
         schema,
         partitionSpec,
-        properties: this.options.properties,
+        properties: this.options.properties ?? {},
         dataFiles: [],
       }
     )
@@ -478,7 +478,7 @@ export class NativeIcebergMetadataManager {
           return builder.build()
         },
         {
-          maxRetries: this.options.commitRetry.maxRetries,
+          maxRetries: this.options.commitRetry?.maxRetries,
         }
       )
 
@@ -779,7 +779,8 @@ export class NativeIcebergMetadataManager {
   // ===========================================================================
 
   private buildSchema(iceberg: IcebergLibrary): IcebergSchemaLocal {
-    if (this.options.schema.fields.length === 0) {
+    const schemaFields = this.options.schema?.fields ?? []
+    if (schemaFields.length === 0) {
       // Use default ParqueDB entity schema
       return iceberg.createDefaultSchema()
     }
@@ -787,7 +788,7 @@ export class NativeIcebergMetadataManager {
     return {
       'schema-id': 0,
       type: 'struct',
-      fields: this.options.schema.fields.map((f, i) => ({
+      fields: schemaFields.map((f, i) => ({
         id: i + 1,
         name: f.name,
         required: f.required ?? false,
@@ -798,7 +799,8 @@ export class NativeIcebergMetadataManager {
   }
 
   private buildPartitionSpec(iceberg: IcebergLibrary): { 'spec-id': number; fields: unknown[] } {
-    if (this.options.partitionSpec.fields.length === 0) {
+    const partitionFields = this.options.partitionSpec?.fields ?? []
+    if (partitionFields.length === 0) {
       return iceberg.createUnpartitionedSpec()
     }
 
@@ -808,7 +810,7 @@ export class NativeIcebergMetadataManager {
       build: () => { 'spec-id': number; fields: unknown[] }
     }
 
-    for (const field of this.options.partitionSpec.fields) {
+    for (const field of partitionFields) {
       builder.addField({
         sourceColumn: field.sourceColumn,
         transform: field.transform,

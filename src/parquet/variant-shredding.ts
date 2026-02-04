@@ -87,7 +87,7 @@ export async function prepareShreddedVariantData(
   })
 
   // Create shredded Variant column
-  const { schema, columnData, _shredPaths } = createShreddedVariantColumn(
+  const { schema, columnData } = createShreddedVariantColumn(
     columnName,
     objects,
     shredFields,
@@ -281,44 +281,44 @@ export function createShreddedPredicate(
 ): (min: unknown, max: unknown) => boolean {
   // Direct value comparison (equality)
   if (typeof condition !== 'object' || condition === null) {
-    return (min, max) => {
+    return (min: unknown, max: unknown) => {
       // Value must be within [min, max] range
-      return min <= condition && condition <= max
+      return (min as number) <= (condition as number) && (condition as number) <= (max as number)
     }
   }
 
   const ops = condition as Record<string, unknown>
 
-  return (min, max) => {
+  return (min: unknown, max: unknown) => {
     // $eq: exact match must be in range
     if ('$eq' in ops) {
-      const val = ops.$eq
-      if (!(min <= val && val <= max)) return false
+      const val = ops.$eq as number
+      if (!((min as number) <= val && val <= (max as number))) return false
     }
 
     // $in: any value in set must be in range
     if ('$in' in ops && Array.isArray(ops.$in)) {
-      if (!ops.$in.some(v => min <= v && v <= max)) return false
+      if (!ops.$in.some(v => (min as number) <= (v as number) && (v as number) <= (max as number))) return false
     }
 
     // $gt: max must be > value
     if ('$gt' in ops) {
-      if (!(max > ops.$gt)) return false
+      if (!((max as number) > (ops.$gt as number))) return false
     }
 
     // $gte: max must be >= value
     if ('$gte' in ops) {
-      if (!(max >= ops.$gte)) return false
+      if (!((max as number) >= (ops.$gte as number))) return false
     }
 
     // $lt: min must be < value
     if ('$lt' in ops) {
-      if (!(min < ops.$lt)) return false
+      if (!((min as number) < (ops.$lt as number))) return false
     }
 
     // $lte: min must be <= value
     if ('$lte' in ops) {
-      if (!(min <= ops.$lte)) return false
+      if (!((min as number) <= (ops.$lte as number))) return false
     }
 
     return true

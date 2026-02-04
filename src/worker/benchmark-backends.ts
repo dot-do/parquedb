@@ -27,13 +27,7 @@ import { logger } from '../utils/logger'
 // Types
 // =============================================================================
 
-type R2Bucket = {
-  get(key: string, options?: { range?: { offset: number; length: number } | undefined }): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>
-  put(key: string, value: ArrayBuffer | Uint8Array): Promise<unknown>
-  delete(key: string | string[]): Promise<void>
-  head(key: string): Promise<{ size: number } | null>
-  list(options?: { prefix?: string | undefined; limit?: number | undefined; cursor?: string | undefined }): Promise<{ objects: { key: string; size: number }[]; truncated: boolean; cursor?: string | undefined }>
-}
+// Use globalThis.R2Bucket directly for proper type compatibility
 
 export interface BackendBenchmarkConfig {
   backends: ('native' | 'iceberg' | 'delta')[]
@@ -147,7 +141,7 @@ function generateProducts(count: number): Record<string, unknown>[] {
   return products
 }
 
-function createTrackedR2File(bucket: R2Bucket, key: string, size: number) {
+function createTrackedR2File(bucket: globalThis.R2Bucket, key: string, size: number) {
   const file = {
     byteLength: size,
     bytesRead: 0,
@@ -161,10 +155,12 @@ function createTrackedR2File(bucket: R2Bucket, key: string, size: number) {
   return file
 }
 
-async function cleanupPrefix(bucket: R2Bucket, prefix: string): Promise<void> {
+async function cleanupPrefix(bucket: globalThis.R2Bucket, prefix: string): Promise<void> {
   let cursor: string | undefined
   do {
-    const result = await bucket.list({ prefix, limit: 1000, cursor })
+    const listOptions: { prefix: string; limit: number; cursor?: string } = { prefix, limit: 1000 }
+    if (cursor) listOptions.cursor = cursor
+    const result = await bucket.list(listOptions)
     if (result.objects.length > 0) {
       const keys = result.objects.map(o => o.key)
       await bucket.delete(keys)
@@ -173,11 +169,13 @@ async function cleanupPrefix(bucket: R2Bucket, prefix: string): Promise<void> {
   } while (cursor)
 }
 
-async function getStorageSize(bucket: R2Bucket, prefix: string): Promise<number> {
+async function getStorageSize(bucket: globalThis.R2Bucket, prefix: string): Promise<number> {
   let totalSize = 0
   let cursor: string | undefined
   do {
-    const result = await bucket.list({ prefix, limit: 1000, cursor })
+    const listOptions: { prefix: string; limit: number; cursor?: string } = { prefix, limit: 1000 }
+    if (cursor) listOptions.cursor = cursor
+    const result = await bucket.list(listOptions)
     for (const obj of result.objects) {
       totalSize += obj.size
     }
@@ -191,7 +189,7 @@ async function getStorageSize(bucket: R2Bucket, prefix: string): Promise<number>
 // =============================================================================
 
 async function benchmarkNativeParquet(
-  bucket: R2Bucket,
+  bucket: globalThis.R2Bucket,
   config: BackendBenchmarkConfig
 ): Promise<BackendResult> {
   const startTime = performance.now()
@@ -324,7 +322,7 @@ async function benchmarkNativeParquet(
 // =============================================================================
 
 async function benchmarkIceberg(
-  bucket: R2Bucket,
+  bucket: globalThis.R2Bucket,
   config: BackendBenchmarkConfig
 ): Promise<BackendResult> {
   const startTime = performance.now()
@@ -585,7 +583,7 @@ async function benchmarkIceberg(
 // =============================================================================
 
 async function benchmarkDelta(
-  bucket: R2Bucket,
+  bucket: globalThis.R2Bucket,
   config: BackendBenchmarkConfig
 ): Promise<BackendResult> {
   const startTime = performance.now()
@@ -838,15 +836,15 @@ async function benchmarkDelta(
 
 export async function handleBackendsBenchmarkRequest(
   request: Request,
-  bucket: R2Bucket
+  bucket: globalThis.R2Bucket
 ): Promise<Response> {
   const url = new URL(request.url)
   const startTime = performance.now()
 
   // Parse config from query params
   const backendsParam = url.searchParams.get('backend') ?? 'all'
-  const backends = backendsParam === 'all'
-    ? ['native', 'iceberg', 'delta'] as const
+  const backends: ('native' | 'iceberg' | 'delta')[] = backendsParam === 'all'
+    ? ['native', 'iceberg', 'delta']
     : backendsParam.split(',').filter(b => ['native', 'iceberg', 'delta'].includes(b)) as ('native' | 'iceberg' | 'delta')[]
 
   const opsParam = url.searchParams.get('operations') ?? 'write,read,query'

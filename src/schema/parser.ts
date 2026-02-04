@@ -262,7 +262,7 @@ export function validateRelationshipTargets(schema: Schema): ValidationResult {
 
       if (rel.direction === 'forward') {
         // Forward relation: -> Target.reverse
-        const targetType = rel.toType
+        const targetType = rel.toType!
 
         // Check target type exists
         if (!typeNames.has(targetType)) {
@@ -294,7 +294,7 @@ export function validateRelationshipTargets(schema: Schema): ValidationResult {
         }
       } else {
         // Backward relation: <- Source.field
-        const sourceType = rel.fromType
+        const sourceType = rel.fromType!
 
         // Check source type exists
         if (!typeNames.has(sourceType)) {
@@ -340,7 +340,7 @@ export function validateRelationshipTargets(schema: Schema): ValidationResult {
 
       if (rel.direction === 'forward' && rel.reverse) {
         // Check that the reverse field points back correctly
-        const targetType = rel.toType
+        const targetType = rel.toType!
         const targetDef = schema[targetType]
 
         // Skip if target type doesn't exist (already caught earlier)
@@ -467,11 +467,11 @@ function parseField(name: string, def: FieldDef): ParsedField {
       let reverseName: string
 
       if (rel.direction === 'forward') {
-        targetType = rel.toType
-        reverseName = rel.reverse
+        targetType = rel.toType!
+        reverseName = rel.reverse!
       } else {
-        targetType = rel.fromType
-        reverseName = rel.fromField
+        targetType = rel.fromType!
+        reverseName = rel.fromField!
       }
 
       return {
@@ -1142,11 +1142,11 @@ function parseFieldFromDef(name: string, def: FieldDef): ParsedField {
       let reverseName: string
 
       if (rel.direction === 'forward') {
-        targetType = rel.toType
-        reverseName = rel.reverse
+        targetType = rel.toType!
+        reverseName = rel.reverse!
       } else {
-        targetType = rel.fromType
-        reverseName = rel.fromField
+        targetType = rel.fromType!
+        reverseName = rel.fromField!
       }
 
       return {

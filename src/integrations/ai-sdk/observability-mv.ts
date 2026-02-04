@@ -568,15 +568,17 @@ export class AIObservabilityMVIntegration {
     this.lastEntryAt = Date.now()
 
     // Check if we should flush
-    if (this.buffer.length >= this.config.batchSize) {
+    const batchSize = this.config.batchSize ?? 10
+    if (this.buffer.length >= batchSize) {
       await this.flushBuffer()
     } else if (!this.batchTimer) {
       // Set timeout for partial batch
+      const batchTimeout = this.config.batchTimeoutMs ?? 1000
       this.batchTimer = setTimeout(() => {
         this.flushBuffer().catch(() => {
           // Ignore errors in timer callback
         })
-      }, this.config.batchTimeoutMs)
+      }, batchTimeout)
     }
   }
 

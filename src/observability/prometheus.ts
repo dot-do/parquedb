@@ -363,7 +363,8 @@ export class PrometheusMetrics {
     const key = this.labelsToKey(mergedLabels)
 
     const definition = this.definitions.get(fullName)
-    const buckets = definition?.buckets ?? this.config.defaultBuckets
+    // Ensure we always have bucket values - fallback to DEFAULT_DURATION_BUCKETS
+    const bucketValues = definition?.buckets ?? this.config.defaultBuckets ?? DEFAULT_DURATION_BUCKETS
 
     let values = this.histograms.get(fullName)
     if (!values) {
@@ -376,7 +377,7 @@ export class PrometheusMetrics {
       existing = {
         sum: 0,
         count: 0,
-        buckets: new Map(buckets.map((b) => [b, 0])),
+        buckets: new Map(bucketValues.map((b) => [b, 0])),
         labels: mergedLabels,
       }
       values.push(existing)
@@ -387,7 +388,7 @@ export class PrometheusMetrics {
 
     // Update bucket counts - find the smallest bucket that contains this value
     // Store non-cumulative counts; export will make them cumulative
-    const sortedBuckets = [...buckets].sort((a, b) => a - b)
+    const sortedBuckets = [...bucketValues].sort((a, b) => a - b)
     for (const bucket of sortedBuckets) {
       if (value <= bucket) {
         existing.buckets.set(bucket, (existing.buckets.get(bucket) ?? 0) + 1)
@@ -526,10 +527,11 @@ export class PrometheusMetrics {
   // ===========================================================================
 
   private getFullName(name: string): string {
-    if (name.startsWith(this.config.prefix)) {
+    const prefix = this.config.prefix ?? 'parquedb'
+    if (name.startsWith(prefix)) {
       return name
     }
-    return `${this.config.prefix}_${name}`
+    return `${prefix}_${name}`
   }
 
   private mergeLabels(labels: Labels): Labels {

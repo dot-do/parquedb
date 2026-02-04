@@ -39,9 +39,18 @@ export interface SegmentWriterOptions {
   /** Dataset name (used for path prefix) */
   dataset: string
   /** Path prefix for segments (default: 'events') */
-  prefix?: string | undefined
+  prefix?: string
   /** Sequence number padding (default: 4 digits) */
-  seqPadding?: number | undefined
+  seqPadding?: number
+}
+
+/**
+ * Resolved options with all values defined
+ */
+interface ResolvedSegmentWriterOptions {
+  dataset: string
+  prefix: string
+  seqPadding: number
 }
 
 /**
@@ -72,15 +81,16 @@ const DEFAULT_OPTIONS = {
  */
 export class SegmentWriter {
   private storage: SegmentStorage
-  private options: Required<SegmentWriterOptions>
+  private options: ResolvedSegmentWriterOptions
   private nextSeq: number = 1
 
   constructor(storage: SegmentStorage, options: SegmentWriterOptions) {
     this.storage = storage
     this.options = {
-      ...DEFAULT_OPTIONS,
-      ...options,
-    } as Required<SegmentWriterOptions>
+      dataset: options.dataset,
+      prefix: options.prefix ?? DEFAULT_OPTIONS.prefix,
+      seqPadding: options.seqPadding ?? DEFAULT_OPTIONS.seqPadding,
+    }
   }
 
   // ===========================================================================

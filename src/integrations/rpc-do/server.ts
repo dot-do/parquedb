@@ -118,7 +118,7 @@ export interface MethodSchema {
  */
 export interface ParqueDBAPI {
   // Collection operations
-  collection<T extends object = Record<string, unknown>>(name: string): RPCCollectionAPI<T>
+  collection<T extends Record<string, unknown> = Record<string, unknown>>(name: string): RPCCollectionAPI<T>
 
   // Entity operations
   get(ns: string, id: string): Promise<Entity | null>
@@ -150,7 +150,7 @@ export interface ParqueDBAPI {
 /**
  * Collection API exposed via RPC
  */
-export interface RPCCollectionAPI<T extends object = Record<string, unknown>> {
+export interface RPCCollectionAPI<T extends Record<string, unknown> = Record<string, unknown>> {
   find(filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
   findOne(filter?: Filter, options?: FindOptions): Promise<Entity<T> | null>
   get(id: string): Promise<Entity<T> | null>
@@ -268,7 +268,7 @@ export class ParqueDBRPCWrapper {
   /**
    * Get a collection proxy for CRUD operations
    */
-  collection<T extends object = Record<string, unknown>>(name: string): RPCCollectionAPI<T> {
+  collection<T extends Record<string, unknown> = Record<string, unknown>>(name: string): RPCCollectionAPI<T> {
     if (!this.collectionProxies.has(name)) {
       this.collectionProxies.set(name, this.createCollectionProxy(name))
     }

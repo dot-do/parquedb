@@ -55,7 +55,7 @@ export interface SettingsViewProps {
  */
 export function SettingsView({
   settings,
-  _user,
+  user: _user,
   basePath = '/admin',
   apiEndpoint = '/api/settings',
   onSave,

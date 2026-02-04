@@ -127,23 +127,25 @@ const DEFAULT_SETTINGS: StudioSettings = {
 // Utility Functions
 // =============================================================================
 
-function deepMerge<T extends Record<string, unknown>>(target: T, source: Partial<T>): T {
-  const result = { ...target }
+function deepMerge<T extends object>(target: T, source: Partial<T>): T {
+  const result = { ...target } as T
   for (const key in source) {
-    if (source[key] !== undefined) {
+    const sourceValue = source[key]
+    const targetValue = target[key as keyof T]
+    if (sourceValue !== undefined) {
       if (
-        typeof source[key] === 'object' &&
-        source[key] !== null &&
-        !Array.isArray(source[key]) &&
-        typeof target[key] === 'object' &&
-        target[key] !== null
+        typeof sourceValue === 'object' &&
+        sourceValue !== null &&
+        !Array.isArray(sourceValue) &&
+        typeof targetValue === 'object' &&
+        targetValue !== null
       ) {
-        result[key] = deepMerge(
-          target[key] as Record<string, unknown>,
-          source[key] as Record<string, unknown>
-        ) as T[Extract<keyof T, string>]
+        (result as Record<string, unknown>)[key] = deepMerge(
+          targetValue as object,
+          sourceValue as Partial<typeof targetValue>
+        )
       } else {
-        result[key] = source[key] as T[Extract<keyof T, string>]
+        (result as Record<string, unknown>)[key] = sourceValue
       }
     }
   }

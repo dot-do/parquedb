@@ -88,7 +88,7 @@ import { logger } from '../../utils/logger'
  * Collection API methods exposed via RPC
  * These methods are available on each collection proxy
  */
-export interface CollectionMethods<T extends object = Record<string, unknown>> {
+export interface CollectionMethods<T extends Record<string, unknown> = Record<string, unknown>> {
   /** Find entities matching a filter */
   find(filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
   /** Find a single entity matching a filter */
@@ -115,7 +115,7 @@ export interface CollectionMethods<T extends object = Record<string, unknown>> {
  */
 export interface ParqueDBRPCMethods {
   // Collection access
-  collection<T extends object = Record<string, unknown>>(name: string): CollectionMethods<T>
+  collection<T extends Record<string, unknown> = Record<string, unknown>>(name: string): CollectionMethods<T>
 
   // Entity operations
   get(ns: string, id: string): Promise<Entity | null>
@@ -497,7 +497,7 @@ export class ParqueDBDurableRPC extends DurableObject<Env> {
   /**
    * Get a collection proxy for a namespace
    */
-  collection<T extends object = Record<string, unknown>>(name: string): CollectionMethods<T> {
+  collection<T extends Record<string, unknown> = Record<string, unknown>>(name: string): CollectionMethods<T> {
     if (!this.collectionProxies.has(name)) {
       this.collectionProxies.set(name, this.createCollectionProxy(name))
     }

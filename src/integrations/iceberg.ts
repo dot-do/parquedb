@@ -352,7 +352,7 @@ export class IcebergMetadataManager {
       schemas: [this.createDefaultSchema()],
       'default-spec-id': 0,
       'partition-specs': [this.createPartitionSpec()],
-      'last-partition-id': this.options.partitionBy.length,
+      'last-partition-id': (this.options.partitionBy ?? []).length,
       'default-sort-order-id': 0,
       'sort-orders': [this.createSortOrder()],
       properties: this.options.properties,
@@ -604,7 +604,7 @@ export class IcebergMetadataManager {
   }
 
   private createPartitionSpec(): IcebergPartitionSpec {
-    const fields = this.options.partitionBy.map((field, i) => ({
+    const fields = (this.options.partitionBy ?? []).map((field, i) => ({
       'source-id': i + 1,
       'field-id': 1000 + i,
       name: field,
@@ -618,7 +618,7 @@ export class IcebergMetadataManager {
   }
 
   private createSortOrder(): IcebergSortOrder {
-    const fields = this.options.sortBy.map((_field, i) => ({
+    const fields = (this.options.sortBy ?? []).map((_field, i) => ({
       'source-id': i + 1,
       transform: 'identity',
       direction: 'asc',

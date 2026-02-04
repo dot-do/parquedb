@@ -440,12 +440,15 @@ export class TelemetryCollector {
       if (!byNamespace[op.ns]) {
         byNamespace[op.ns] = { operationCount: 0, bytesWritten: 0 }
       }
-      byNamespace[op.ns].operationCount++
-      byNamespace[op.ns].bytesWritten += op.bytes
+      const nsStats = byNamespace[op.ns]
+      if (nsStats) {
+        nsStats.operationCount++
+        nsStats.bytesWritten += op.bytes
+      }
     }
 
     return {
-      shardId: this.config.shardId,
+      shardId: this.config.shardId ?? 'default',
       operationCount: totalOps,
       bytesWritten: totalBytes,
       opsPerSecond: totalOps / windowDurationSec,
@@ -604,8 +607,10 @@ export class TelemetryCollector {
     let oldestTs: number | null = null
     let newestTs: number | null = null
     if (this.eventLogOps.length > 0) {
-      oldestTs = this.eventLogOps[0].ts
-      newestTs = this.eventLogOps[this.eventLogOps.length - 1].ts
+      const firstOp = this.eventLogOps[0]
+      const lastOp = this.eventLogOps[this.eventLogOps.length - 1]
+      if (firstOp) oldestTs = firstOp.ts
+      if (lastOp) newestTs = lastOp.ts
     }
 
     // Estimate avg event size
@@ -690,9 +695,10 @@ export class TelemetryCollector {
     }
 
     const summary = computeHistogramSummary(allLags)
+    const lastLag = allLags[allLags.length - 1]
 
     return {
-      currentLagMs: allLags.length > 0 ? allLags[allLags.length - 1] : 0,
+      currentLagMs: allLags.length > 0 && lastLag !== undefined ? lastLag : 0,
       avgLagMs: summary.avg,
       maxLagMs: summary.max,
       p95LagMs: summary.p95,
@@ -729,8 +735,8 @@ export class TelemetryCollector {
       status: 'unset',
       attributes: {
         ...attributes,
-        'service.name': this.config.serviceName,
-        'shard.id': this.config.shardId,
+        'service.name': this.config.serviceName ?? 'parquedb',
+        'shard.id': this.config.shardId ?? 'default',
       },
       events: [],
     }
@@ -766,8 +772,9 @@ export class TelemetryCollector {
     this.completedSpans.push(span)
 
     // Trim completed spans
-    if (this.completedSpans.length > this.config.maxDataPoints) {
-      this.completedSpans = this.completedSpans.slice(-this.config.maxDataPoints)
+    const maxDataPoints = this.config.maxDataPoints ?? 500
+    if (this.completedSpans.length > maxDataPoints) {
+      this.completedSpans = this.completedSpans.slice(-maxDataPoints)
     }
   }
 
@@ -858,8 +865,9 @@ export class TelemetryCollector {
     this.logBuffer.push(entry)
 
     // Trim log buffer
-    if (this.logBuffer.length > this.config.maxDataPoints * 2) {
-      this.logBuffer = this.logBuffer.slice(-this.config.maxDataPoints)
+    const maxLogDataPoints = this.config.maxDataPoints ?? 500
+    if (this.logBuffer.length > maxLogDataPoints * 2) {
+      this.logBuffer = this.logBuffer.slice(-maxLogDataPoints)
     }
 
     // Forward to logger
@@ -907,9 +915,9 @@ export class TelemetryCollector {
     return {
       timestamp: Date.now(),
       service: {
-        name: this.config.serviceName,
-        environment: this.config.environment,
-        shardId: this.config.shardId,
+        name: this.config.serviceName ?? 'parquedb',
+        environment: this.config.environment ?? 'production',
+        shardId: this.config.shardId ?? 'default',
       },
       writeThroughput: this.getWriteThroughput(),
       caches: this.getAllCacheMetrics(),
@@ -926,8 +934,8 @@ export class TelemetryCollector {
     const lines: string[] = []
     const timestamp = Date.now()
     const labels = this.formatPrometheusLabels({
-      shard: this.config.shardId,
-      environment: this.config.environment,
+      shard: this.config.shardId ?? 'default',
+      environment: this.config.environment ?? 'production',
       ...this.config.labels,
     })
 
@@ -1093,8 +1101,9 @@ export class TelemetryCollector {
   }
 
   private trimArray<T>(arr: T[]): void {
-    if (arr.length > this.config.maxDataPoints) {
-      arr.splice(0, arr.length - this.config.maxDataPoints)
+    const maxDataPoints = this.config.maxDataPoints ?? 500
+    if (arr.length > maxDataPoints) {
+      arr.splice(0, arr.length - maxDataPoints)
     }
   }
 
@@ -1119,12 +1128,14 @@ export function computeHistogramSummary(values: number[]): HistogramSummary {
 
   const sorted = [...values].sort((a, b) => a - b)
   const sum = sorted.reduce((a, b) => a + b, 0)
+  const first = sorted[0] ?? 0
+  const last = sorted[sorted.length - 1] ?? 0
 
   return {
     count: sorted.length,
     sum,
-    min: sorted[0],
-    max: sorted[sorted.length - 1],
+    min: first,
+    max: last,
     avg: sum / sorted.length,
     p50: percentile(sorted, 50),
     p95: percentile(sorted, 95),
@@ -1137,16 +1148,19 @@ export function computeHistogramSummary(values: number[]): HistogramSummary {
  */
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0
-  if (sorted.length === 1) return sorted[0]
+  const first = sorted[0]
+  if (sorted.length === 1) return first ?? 0
 
   const index = (p / 100) * (sorted.length - 1)
   const lower = Math.floor(index)
   const upper = Math.ceil(index)
 
-  if (lower === upper) return sorted[lower]
+  const lowerVal = sorted[lower] ?? 0
+  const upperVal = sorted[upper] ?? 0
+  if (lower === upper) return lowerVal
 
   const fraction = index - lower
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * fraction
+  return lowerVal + (upperVal - lowerVal) * fraction
 }
 
 /**

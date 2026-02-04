@@ -977,7 +977,8 @@ export class FTSIndex {
    * @param fieldTermPositions - Map of field -> term -> positions
    * @returns true if all terms appear consecutively in at least one field
    */
-  private _hasConsecutivePositionsInAnyField(
+  /** @internal Check if terms appear consecutively within the same field */
+  hasConsecutivePositionsInAnyField(
     terms: string[],
     fieldTermPositions: Map<string, Map<string, number[]>>
   ): boolean {

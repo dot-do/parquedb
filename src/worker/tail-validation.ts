@@ -127,7 +127,9 @@ export interface TailValidationConfig {
 /**
  * Default validation configuration
  */
-export const DEFAULT_VALIDATION_CONFIG: Required<TailValidationConfig> = {
+type ResolvedTailValidationConfig = { [K in keyof TailValidationConfig]-?: NonNullable<TailValidationConfig[K]> }
+
+export const DEFAULT_VALIDATION_CONFIG: ResolvedTailValidationConfig = {
   throwOnError: false,
   skipInvalidItems: true,
   maxItems: DEFAULT_TAIL_MAX_ITEMS,
@@ -138,23 +140,6 @@ export const DEFAULT_VALIDATION_CONFIG: Required<TailValidationConfig> = {
 // =============================================================================
 // Validation Functions
 // =============================================================================
-
-/**
- * Validate that a value is an array
- */
-function _validateIsArray(value: unknown, fieldName: string): ValidationError | null {
-  if (!Array.isArray(value)) {
-    return new ValidationError(
-      `${fieldName} must be an array`,
-      {
-        field: fieldName,
-        expectedType: 'array',
-        actualType: typeof value,
-      }
-    )
-  }
-  return null
-}
 
 /**
  * Validate that a value is an object (not null, not array)
@@ -462,7 +447,13 @@ export function validateTraceItem(
   item: unknown,
   config: TailValidationConfig = {}
 ): TraceItemValidationResult {
-  const cfg = { ...DEFAULT_VALIDATION_CONFIG, ...config }
+  const cfg: ResolvedTailValidationConfig = {
+    throwOnError: config.throwOnError ?? DEFAULT_VALIDATION_CONFIG.throwOnError,
+    skipInvalidItems: config.skipInvalidItems ?? DEFAULT_VALIDATION_CONFIG.skipInvalidItems,
+    maxItems: config.maxItems ?? DEFAULT_VALIDATION_CONFIG.maxItems,
+    maxLogsPerItem: config.maxLogsPerItem ?? DEFAULT_VALIDATION_CONFIG.maxLogsPerItem,
+    maxExceptionsPerItem: config.maxExceptionsPerItem ?? DEFAULT_VALIDATION_CONFIG.maxExceptionsPerItem,
+  }
   const errors: ValidationError[] = []
 
   // Must be an object
@@ -613,7 +604,13 @@ export function validateTraceItems(
   items: unknown,
   config: TailValidationConfig = {}
 ): TraceItemsValidationResult {
-  const cfg = { ...DEFAULT_VALIDATION_CONFIG, ...config }
+  const cfg: ResolvedTailValidationConfig = {
+    throwOnError: config.throwOnError ?? DEFAULT_VALIDATION_CONFIG.throwOnError,
+    skipInvalidItems: config.skipInvalidItems ?? DEFAULT_VALIDATION_CONFIG.skipInvalidItems,
+    maxItems: config.maxItems ?? DEFAULT_VALIDATION_CONFIG.maxItems,
+    maxLogsPerItem: config.maxLogsPerItem ?? DEFAULT_VALIDATION_CONFIG.maxLogsPerItem,
+    maxExceptionsPerItem: config.maxExceptionsPerItem ?? DEFAULT_VALIDATION_CONFIG.maxExceptionsPerItem,
+  }
 
   // Must be an array
   if (!Array.isArray(items)) {

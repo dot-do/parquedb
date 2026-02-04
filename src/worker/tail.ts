@@ -307,8 +307,9 @@ export function filterTraceItem(item: TraceItem, filter: TailEventFilter): boole
 
   // Filter by log levels
   if (filter.logLevels && filter.logLevels.length > 0) {
+    const logLevels = filter.logLevels
     const hasMatchingLog = item.logs.some((log) =>
-      filter.logLevels!.includes(log.level as typeof filter.logLevels![number])
+      logLevels.includes(log.level as 'log' | 'debug' | 'info' | 'warn' | 'error')
     )
     if (item.logs.length > 0 && !hasMatchingLog) {
       return false

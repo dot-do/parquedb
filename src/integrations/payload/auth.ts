@@ -213,7 +213,7 @@ const JWKS_CACHE_TTL = IMPORTED_JWKS_CACHE_TTL
 const JWKS_FETCH_TIMEOUT_MS = IMPORTED_JWKS_FETCH_TIMEOUT_MS
 
 // Import jose for JWT verification
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyResult, type JWTPayload } from 'jose'
+import { createRemoteJWKSet, jwtVerify, type JWTVerifyResult, type JWTPayload, type JWTVerifyOptions } from 'jose'
 
 /**
  * Custom error for JWKS fetch timeout
@@ -265,7 +265,7 @@ async function withAbortTimeout<T>(
 async function verifyJWTWithTimeout(
   token: string,
   jwks: ReturnType<typeof createRemoteJWKSet>,
-  options: { clockTolerance?: number | undefined; audience?: string | undefined },
+  options: JWTVerifyOptions,
   timeoutMs: number = JWKS_FETCH_TIMEOUT_MS
 ): Promise<JWTVerifyResult<JWTPayload>> {
   return withAbortTimeout(
@@ -299,12 +299,9 @@ export async function verifyOAuthToken(
   try {
     const jwks = getJWKS(config.jwksUri)
 
-    const verifyOptions: { clockTolerance?: number | undefined; audience?: string | undefined } = {}
-    if (config.clockTolerance) {
-      verifyOptions.clockTolerance = config.clockTolerance
-    }
-    if (config.clientId) {
-      verifyOptions.audience = config.clientId
+    const verifyOptions: JWTVerifyOptions = {
+      ...(config.clockTolerance ? { clockTolerance: config.clockTolerance } : {}),
+      ...(config.clientId ? { audience: config.clientId } : {}),
     }
 
     // Use timeout-protected verification to handle hung connections
@@ -352,14 +349,16 @@ export async function canAccessPayloadAdmin(
 
   // Check roles
   const userRoles = payload.roles || []
+  const adminRoles = config.adminRoles ?? []
+  const editorRoles = config.editorRoles ?? []
 
   // Check admin roles
-  if (config.adminRoles.some(role => userRoles.includes(role))) {
+  if (adminRoles.some(role => userRoles.includes(role))) {
     return true
   }
 
   // Check editor roles
-  if (config.editorRoles.some(role => userRoles.includes(role))) {
+  if (editorRoles.some(role => userRoles.includes(role))) {
     return true
   }
 
@@ -374,12 +373,14 @@ export function getPayloadRole(
   config: ResolvedOAuthConfig
 ): 'admin' | 'editor' | 'user' {
   const userRoles = payload.roles || []
+  const adminRoles = config.adminRoles ?? []
+  const editorRoles = config.editorRoles ?? []
 
-  if (config.adminRoles.some(role => userRoles.includes(role))) {
+  if (adminRoles.some(role => userRoles.includes(role))) {
     return 'admin'
   }
 
-  if (config.editorRoles.some(role => userRoles.includes(role))) {
+  if (editorRoles.some(role => userRoles.includes(role))) {
     return 'editor'
   }
 

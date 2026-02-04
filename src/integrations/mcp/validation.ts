@@ -423,7 +423,7 @@ export function validatePipeline(pipeline: unknown, field = 'pipeline'): Array<R
       )
     }
 
-    const stageOp = stageKeys[0]
+    const stageOp = stageKeys[0]!
     if (!stageOp.startsWith('$')) {
       throw new ValidationError(
         `${field}[${i}]`,
@@ -431,7 +431,7 @@ export function validatePipeline(pipeline: unknown, field = 'pipeline'): Array<R
       )
     }
 
-    if (!ALLOWED_PIPELINE_STAGES.has(stageOp)) {
+    if (!ALLOWED_PIPELINE_STAGES.has(stageOp as string)) {
       throw new ValidationError(
         `${field}[${i}]`,
         `unknown or unsupported stage: ${stageOp}`

@@ -137,7 +137,8 @@ export interface ShreddedPushdownOptions {
 export class ShreddedPushdownContext {
   private readonly configs: readonly VariantShredPropertyConfig[]
   private readonly fieldIdMap: Map<string, number>
-  private readonly _startingFieldId: number
+  /** Starting field ID for this context */
+  readonly startingFieldId: number
   private readonly debug: boolean
 
   /**

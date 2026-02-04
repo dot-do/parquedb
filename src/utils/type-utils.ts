@@ -140,7 +140,7 @@ export function createTypedProxy<T extends object, O extends object = object>(
   // The cast here is necessary because Proxy's type system doesn't support
   // returning a different type than the target. This is the canonical pattern
   // for typed proxies in TypeScript.
-  return new Proxy(target, handler as ProxyHandler<O>) as T
+  return new Proxy(target as unknown as T, handler) as T
 }
 
 // =============================================================================

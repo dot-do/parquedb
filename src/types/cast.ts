@@ -33,8 +33,8 @@ export function asTypedRecord<T>(value: Record<string, unknown>): T {
  *
  * @remarks Safe because Entity extends Record<string, unknown>.
  */
-export function entityAsRecord<T = unknown>(entity: Entity<T>): Record<string, unknown> {
-  return entity as unknown as Record<string, unknown>
+export function entityAsRecord(entity: Record<string, unknown>): Record<string, unknown> {
+  return entity as Record<string, unknown>
 }
 
 /**

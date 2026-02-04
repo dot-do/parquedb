@@ -586,7 +586,8 @@ export class EvaliteMVIntegration {
    * Apply retention policy to remove old data
    */
   applyRetention(): number {
-    const cutoff = new Date(Date.now() - this.config.retentionMs)
+    const retentionMs = this.config.retentionMs ?? 0
+    const cutoff = new Date(Date.now() - retentionMs)
     let removed = 0
 
     const initialRunCount = this.rawData.runs.length
@@ -655,7 +656,7 @@ export class EvaliteMVIntegration {
         operation,
         data,
         timestamp: new Date(),
-      } as unknown as Record<string, unknown>,
+      } as import('../../types').Variant,
       actor: 'evalite-adapter',
     }
   }
@@ -1089,7 +1090,9 @@ export class EvaliteMVIntegration {
       const buckets = Array(10).fill(0) as number[]
       for (const score of scores) {
         const bucketIndex = Math.min(9, Math.floor(score * 10))
-        buckets[bucketIndex]++
+        if (buckets[bucketIndex] !== undefined) {
+          buckets[bucketIndex]++
+        }
       }
 
       data.distribution = buckets.map((count, i) => ({

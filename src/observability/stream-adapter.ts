@@ -275,9 +275,12 @@ export class EventEmitterAdapter implements StreamAdapter {
 
   private shouldEmit(event: ObservabilityStreamEvent): boolean {
     if (!this.active) return false
-    if (!this.config.categories.includes(event.category)) return false
-    if (!this.config.types.includes(event.type)) return false
-    if (!this.config.filter(event)) return false
+    const categories: Array<'query' | 'mutation' | 'storage'> = this.config.categories ?? ['query', 'mutation', 'storage']
+    const types: Array<'start' | 'end' | 'error'> = this.config.types ?? ['start', 'end', 'error']
+    const filter: ((event: ObservabilityStreamEvent) => boolean) = this.config.filter ?? (() => true)
+    if (!categories.includes(event.category)) return false
+    if (!types.includes(event.type)) return false
+    if (!filter(event)) return false
     return true
   }
 
@@ -287,10 +290,11 @@ export class EventEmitterAdapter implements StreamAdapter {
     this.eventCounter++
 
     // Check buffer overflow
-    if (this.buffer.length >= this.config.maxBufferSize) {
-      const dropped = this.buffer.length - this.config.maxBufferSize + 1
+    const maxBufferSize: number = this.config.maxBufferSize ?? 10000
+    if (this.buffer.length >= maxBufferSize) {
+      const dropped = this.buffer.length - maxBufferSize + 1
       this.buffer = this.buffer.slice(dropped)
-      this.emitter.emit('overflow', { dropped, bufferSize: this.config.maxBufferSize })
+      this.emitter.emit('overflow', { dropped, bufferSize: maxBufferSize })
     }
 
     this.buffer.push(event)
@@ -312,13 +316,14 @@ export class EventEmitterAdapter implements StreamAdapter {
     }
 
     // Check if batch is ready
-    if (this.buffer.length >= this.config.batchSize) {
+    const batchSize: number = this.config.batchSize ?? 100
+    if (this.buffer.length >= batchSize) {
       this.flushBatch()
     } else if (!this.batchTimer) {
       // Start batch timer
       this.batchTimer = setTimeout(() => {
         this.flushBatch()
-      }, this.config.batchTimeoutMs)
+      }, this.config.batchTimeoutMs ?? 1000)
     }
   }
 
@@ -484,7 +489,6 @@ export class AsyncIteratorAdapter implements StreamAdapter {
   private eventCounter: number = 0
   private buffer: ObservabilityStreamEvent[] = []
   private resolvers: Array<(value: IteratorResult<ObservabilityStreamEvent>) => void> = []
-  private _pendingPromise: Promise<IteratorResult<ObservabilityStreamEvent>> | null = null
 
   constructor(config: StreamAdapterConfig = {}) {
     this.config = { ...DEFAULT_STREAM_ADAPTER_CONFIG, ...config }
@@ -564,21 +568,25 @@ export class AsyncIteratorAdapter implements StreamAdapter {
     return `${timestamp}-${random}`
   }
 
-  private shouldEmit(event: ObservabilityStreamEvent): boolean {
+  private shouldEmitCheck(event: ObservabilityStreamEvent): boolean {
     if (!this.active) return false
-    if (!this.config.categories.includes(event.category)) return false
-    if (!this.config.types.includes(event.type)) return false
-    if (!this.config.filter(event)) return false
+    const categories: Array<'query' | 'mutation' | 'storage'> = this.config.categories ?? ['query', 'mutation', 'storage']
+    const types: Array<'start' | 'end' | 'error'> = this.config.types ?? ['start', 'end', 'error']
+    const filter: ((event: ObservabilityStreamEvent) => boolean) = this.config.filter ?? (() => true)
+    if (!categories.includes(event.category)) return false
+    if (!types.includes(event.type)) return false
+    if (!filter(event)) return false
     return true
   }
 
   private pushEvent(event: ObservabilityStreamEvent): void {
-    if (!this.shouldEmit(event)) return
+    if (!this.shouldEmitCheck(event)) return
 
     this.eventCounter++
 
     // Check buffer overflow
-    if (this.buffer.length >= this.config.maxBufferSize) {
+    const maxBufferSize: number = this.config.maxBufferSize ?? 10000
+    if (this.buffer.length >= maxBufferSize) {
       // Drop oldest events
       this.buffer.shift()
     }
@@ -828,21 +836,25 @@ export class PollingAdapter implements StreamAdapter {
     return `${timestamp}-${random}`
   }
 
-  private shouldEmit(event: ObservabilityStreamEvent): boolean {
+  private shouldEmitCheck(event: ObservabilityStreamEvent): boolean {
     if (!this.active) return false
-    if (!this.config.categories.includes(event.category)) return false
-    if (!this.config.types.includes(event.type)) return false
-    if (!this.config.filter(event)) return false
+    const categories: Array<'query' | 'mutation' | 'storage'> = this.config.categories ?? ['query', 'mutation', 'storage']
+    const types: Array<'start' | 'end' | 'error'> = this.config.types ?? ['start', 'end', 'error']
+    const filter: ((event: ObservabilityStreamEvent) => boolean) = this.config.filter ?? (() => true)
+    if (!categories.includes(event.category)) return false
+    if (!types.includes(event.type)) return false
+    if (!filter(event)) return false
     return true
   }
 
   private pushEvent(event: ObservabilityStreamEvent): void {
-    if (!this.shouldEmit(event)) return
+    if (!this.shouldEmitCheck(event)) return
 
     this.eventCounter++
 
     // Check buffer overflow
-    if (this.buffer.length >= this.config.maxBufferSize) {
+    const maxBufferSize: number = this.config.maxBufferSize ?? 10000
+    if (this.buffer.length >= maxBufferSize) {
       // Drop oldest events
       this.buffer.shift()
     }

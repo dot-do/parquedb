@@ -711,12 +711,16 @@ export async function recordAIRequests(
     }
   })
 
-  const created = await db.collection(collection).createMany(
-    requests.map(r => ({
-      $type: 'AIRequest',
-      name: r.requestId,
-      ...r,
-    }))
+  const coll = db.collection(collection)
+  // Use Promise.all with individual creates since createMany may not be available
+  const created = await Promise.all(
+    requests.map(r =>
+      coll.create({
+        $type: 'AIRequest',
+        name: r.requestId,
+        ...r,
+      })
+    )
   )
 
   return asTypedResults<AIRequest>(created)
@@ -1000,7 +1004,7 @@ export async function getAIMetrics(
     // If grouping, add group value to key
     let fullKey = bucketKey
     if (groupByField) {
-      const groupValue = String((request as Record<string, unknown>)[groupByField] ?? 'unknown')
+      const groupValue = String((request as unknown as Record<string, unknown>)[groupByField] ?? 'unknown')
       fullKey = `${bucketKey}${BUCKET_DELIMITER}${groupValue}`
     }
 

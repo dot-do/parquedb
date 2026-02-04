@@ -158,7 +158,7 @@ export async function handleCollectionList(
 
   if (result.items) {
     for (const item of result.items) {
-      const entity = entityAsRecord(item)
+      const entity = entityAsRecord(item as unknown as Record<string, unknown>)
       const entityId = entity.$id || entity.id
       if (entityId) {
         const localId = String(entityId).split('/').pop() || ''

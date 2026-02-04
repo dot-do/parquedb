@@ -470,7 +470,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Delegate to DO via RPC
     const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
-    const result = await stub.create(ns, data, options)
+    // Cast to DOCreateInput - the data should contain $type and name
+    const result = await stub.create(ns, data as unknown as Parameters<typeof stub.create>[1], options)
 
     // Invalidate cache after write
     await this.invalidateCacheForNamespace(ns)
@@ -499,12 +500,13 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Delegate to DO via RPC
     const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
-    const result = await stub.update(ns, id, update, options)
+    // Cast Update to DOUpdateInput - they have similar structure
+    const result = await stub.update(ns, id, update as unknown as Parameters<typeof stub.update>[2], options)
 
     // Invalidate cache after write
     await this.invalidateCacheForNamespace(ns)
 
-    return result as UpdateResult
+    return result as unknown as UpdateResult
   }
 
   /**
@@ -525,7 +527,10 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     await this.ensureInitialized()
 
     // Delegate to DO via RPC
-    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
+    // Note: updateMany is an extended method not in base ParqueDBDOStub interface
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns) as unknown as {
+      updateMany(ns: string, filter: Filter, update: Update, options: UpdateOptions): Promise<UpdateResult>
+    }
     const result = await stub.updateMany(ns, filter, update, options)
 
     // Invalidate cache after write
@@ -575,7 +580,10 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     await this.ensureInitialized()
 
     // Delegate to DO via RPC
-    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
+    // Note: deleteMany with filter is an extended method; base stub only takes string[] ids
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns) as unknown as {
+      deleteMany(ns: string, filter: Filter, options: DeleteOptions): Promise<DeleteResult>
+    }
     const result = await stub.deleteMany(ns, filter, options)
 
     // Invalidate cache after write
@@ -665,8 +673,11 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Relationship traversal via R2 would require reading relationship index files
     // directly from storage. For now, delegate to DO via RPC for consistency.
-    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
-    return stub.related(ns, id, options) as Promise<PaginatedResult<T>>
+    // Note: related is an extended method not in base ParqueDBDOStub interface
+    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns) as unknown as {
+      related(ns: string, id: string, options: RelatedOptions): Promise<PaginatedResult<T>>
+    }
+    return stub.related(ns, id, options)
   }
 
   // ===========================================================================
@@ -913,7 +924,7 @@ export default {
         if (!env.BUCKET) {
           throw new MissingBucketError('BUCKET', 'Required for indexed benchmark operations.')
         }
-        const response = await handleIndexedBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleIndexedBenchmarkRequest>[1])
+        const response = await handleIndexedBenchmarkRequest(request, env.BUCKET)
         return withRateLimitHeaders(response)
       }
 
@@ -1078,14 +1089,15 @@ export default {
         if (!env.COMPACTION_STATE) {
           return withRateLimitHeaders(buildErrorResponse(request, new Error('Compaction State DO not available'), 500, startTime))
         }
+        const compactionState = env.COMPACTION_STATE
 
         const namespaceParam = url.searchParams.get('namespace')
         const namespacesParam = url.searchParams.get('namespaces')
 
         // Single namespace query - direct to its sharded DO
         if (namespaceParam) {
-          const id = env.COMPACTION_STATE.idFromName(namespaceParam)
-          const stub = env.COMPACTION_STATE.get(id)
+          const id = compactionState.idFromName(namespaceParam)
+          const stub = compactionState.get(id)
           const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
           return withRateLimitHeaders(response)
         }
@@ -1105,8 +1117,8 @@ export default {
           // Query all namespace DOs in parallel
           const results = await Promise.all(
             namespaces.map(async (namespace) => {
-              const id = env.COMPACTION_STATE.idFromName(namespace)
-              const stub = env.COMPACTION_STATE.get(id)
+              const id = compactionState.idFromName(namespace)
+              const stub = compactionState.get(id)
               try {
                 const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
                 const data = await response.json() as Record<string, unknown>
@@ -1168,6 +1180,7 @@ export default {
         if (!env.COMPACTION_STATE) {
           return withRateLimitHeaders(buildErrorResponse(request, new Error('Compaction State DO not available'), 500, startTime))
         }
+        const compactionStateHealth = env.COMPACTION_STATE
 
         const namespacesParam = url.searchParams.get('namespaces')
         if (!namespacesParam) {
@@ -1211,8 +1224,8 @@ export default {
 
         await Promise.all(
           namespaces.map(async (namespace) => {
-            const id = env.COMPACTION_STATE.idFromName(namespace)
-            const stub = env.COMPACTION_STATE.get(id)
+            const id = compactionStateHealth.idFromName(namespace)
+            const stub = compactionStateHealth.get(id)
             try {
               const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
               const data = await response.json()

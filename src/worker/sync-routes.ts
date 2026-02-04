@@ -21,13 +21,14 @@ import {
   signDownloadToken,
   verifyUploadToken,
   verifyDownloadToken,
-  type TokenPayload,
 } from './sync-token'
+import type { TokenPayload } from './sync-token'
 import { logger } from '../utils/logger'
 import { SECONDS_PER_DAY, SYNC_TOKEN_URL_EXPIRY_MS } from '../constants'
 
 // Re-export token functions for backwards compatibility and testing
-export { signUploadToken, signDownloadToken, verifyUploadToken, verifyDownloadToken, type TokenPayload }
+export { signUploadToken, signDownloadToken, verifyUploadToken, verifyDownloadToken }
+export type { TokenPayload }
 
 // =============================================================================
 // URL Parameter Validation
@@ -447,13 +448,25 @@ async function handleRegister(
 
     const owner = body.owner ?? user.username ?? user.id
 
+    // Ensure DATABASE_INDEX is available
+    if (!env.DATABASE_INDEX) {
+      return Response.json(
+        { error: 'Database index not configured' },
+        { status: 500 }
+      )
+    }
+
     // Get the user's database index
-    const index = getUserDatabaseIndex(env as { DATABASE_INDEX: Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] }, user.id)
+    // Cast needed because Env uses untyped DurableObjectNamespace while getUserDatabaseIndex expects typed
+    const index = getUserDatabaseIndex(
+      { DATABASE_INDEX: env.DATABASE_INDEX as unknown as Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] },
+      user.id
+    )
 
     // Register the database
     // Note: We use 'parquedb' as the default bucket name since R2 bucket bindings
     // are configured via wrangler.toml and the bucket name isn't exposed at runtime
-    const database = await index.register(
+    const database: DatabaseInfo = await index.register(
       {
         name: body.name,
         bucket: 'parquedb',
@@ -462,7 +475,7 @@ async function handleRegister(
         slug: body.slug,
         owner,
       },
-      user.id
+      user.id as unknown as Parameters<typeof index.register>[1]
     )
 
     return Response.json({
@@ -552,9 +565,10 @@ async function handleUploadUrls(
     const expiresAt = new Date(Date.now() + SYNC_TOKEN_URL_EXPIRY_MS).toISOString() // 1 hour
 
     const urls = await Promise.all(body.files.map(async file => {
-      const _uploadPath = database.prefix
-        ? `${database.prefix}/${file.path}`
-        : file.path
+      // uploadPath is computed but only used for documentation purposes
+      // The actual path is stored in the token and used during upload
+      const _uploadPath = database.prefix ? `${database.prefix}/${file.path}` : file.path
+      void _uploadPath // Intentionally unused - path is in token
 
       // Create a signed token for this upload using HMAC-SHA256
       const uploadToken = await signUploadToken({
@@ -830,9 +844,21 @@ export async function handleUpload(
       ))
     }
 
+    // Ensure DATABASE_INDEX is available
+    if (!env.DATABASE_INDEX) {
+      return addCorsHeaders(Response.json(
+        { error: 'Database index not configured' },
+        { status: 500 }
+      ))
+    }
+
     // Get database info
-    const index = getUserDatabaseIndex(env as { DATABASE_INDEX: Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] }, tokenData.userId)
-    const database = await index.get(databaseId)
+    // Cast needed because Env uses untyped DurableObjectNamespace while getUserDatabaseIndex expects typed
+    const index: ReturnType<typeof getUserDatabaseIndex> = getUserDatabaseIndex(
+      { DATABASE_INDEX: env.DATABASE_INDEX as unknown as Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] },
+      tokenData.userId
+    )
+    const database = await index.get(databaseId) as DatabaseInfo | null
     if (!database) {
       return addCorsHeaders(Response.json(
         { error: 'Database not found' },
@@ -921,9 +947,21 @@ export async function handleDownload(
       ))
     }
 
+    // Ensure DATABASE_INDEX is available
+    if (!env.DATABASE_INDEX) {
+      return addCorsHeaders(Response.json(
+        { error: 'Database index not configured' },
+        { status: 500 }
+      ))
+    }
+
     // Get database info
-    const index = getUserDatabaseIndex(env as { DATABASE_INDEX: Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] }, tokenData.userId)
-    const database = await index.get(databaseId)
+    // Cast needed because Env uses untyped DurableObjectNamespace while getUserDatabaseIndex expects typed
+    const index: ReturnType<typeof getUserDatabaseIndex> = getUserDatabaseIndex(
+      { DATABASE_INDEX: env.DATABASE_INDEX as unknown as Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] },
+      tokenData.userId
+    )
+    const database = await index.get(databaseId) as DatabaseInfo | null
     if (!database) {
       return addCorsHeaders(Response.json(
         { error: 'Database not found' },
@@ -982,7 +1020,14 @@ async function verifyDatabaseOwnership(
   databaseId: string
 ): Promise<DatabaseInfo | null> {
   try {
-    const index = getUserDatabaseIndex(env as { DATABASE_INDEX: Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] }, user.id)
+    if (!env.DATABASE_INDEX) {
+      return null
+    }
+    // Cast needed because Env uses untyped DurableObjectNamespace while getUserDatabaseIndex expects typed
+    const index = getUserDatabaseIndex(
+      { DATABASE_INDEX: env.DATABASE_INDEX as unknown as Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] },
+      user.id
+    )
     const database = await index.get(databaseId)
     return database
   } catch {
@@ -1009,13 +1054,4 @@ async function verifyDatabaseAccess(
 // Token Signing (HMAC-SHA256 based tokens)
 // =============================================================================
 
-/**
- * Token payload for upload/download signed URLs
- * @internal Exported for testing purposes
- */
-export interface TokenPayload {
-  databaseId: string
-  path: string
-  userId: string
-  expiresAt: string
-}
+// TokenPayload is re-exported from sync-token module above

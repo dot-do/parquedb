@@ -462,10 +462,13 @@ export class RateLimitMetrics {
       }
 
       if (state.dataPoints.length > 0) {
-        const oldest = state.dataPoints[0].timestamp
-        const duration = now - oldest
-        if (duration > windowDurationMs) {
-          windowDurationMs = duration
+        const firstPoint = state.dataPoints[0]
+        if (firstPoint) {
+          const oldest = firstPoint.timestamp
+          const duration = now - oldest
+          if (duration > windowDurationMs) {
+            windowDurationMs = duration
+          }
         }
       }
     }

@@ -138,7 +138,7 @@ export async function importFromMongodb(
 
     // Convert BSON extended JSON values
     if (opts.convertObjectIds || opts.convertDates) {
-      doc = convertBsonDocument(doc, opts)
+      doc = convertBsonDocument(doc, { convertObjectIds: opts.convertObjectIds ?? true, convertDates: opts.convertDates ?? true })
     }
 
     // Apply transform
@@ -167,8 +167,8 @@ export async function importFromMongodb(
     batch.push(createInput)
 
     // Process batch when full
-    if (batch.length >= opts.batchSize) {
-      const batchResult = await processBatch(collection, batch, opts, errors, i - batch.length + 1)
+    if (batch.length >= (opts.batchSize ?? MAX_BATCH_SIZE)) {
+      const batchResult = await processBatch(collection, batch, { skipValidation: opts.skipValidation ?? false, actor: opts.actor ?? 'system/migration' }, errors, i - batch.length + 1)
       imported += batchResult.imported
       failed += batchResult.failed
       batch.length = 0
@@ -182,7 +182,7 @@ export async function importFromMongodb(
 
   // Process remaining batch
   if (batch.length > 0) {
-    const batchResult = await processBatch(collection, batch, opts, errors, documents.length - batch.length)
+    const batchResult = await processBatch(collection, batch, { skipValidation: opts.skipValidation ?? false, actor: opts.actor ?? 'system/migration' }, errors, documents.length - batch.length)
     imported += batchResult.imported
     failed += batchResult.failed
 
@@ -247,7 +247,7 @@ async function importFromMongodbStreaming(
 
     // Convert BSON extended JSON values
     if (opts.convertObjectIds || opts.convertDates) {
-      doc = convertBsonDocument(doc, opts)
+      doc = convertBsonDocument(doc, { convertObjectIds: opts.convertObjectIds ?? true, convertDates: opts.convertDates ?? true })
     }
 
     // Apply transform
@@ -276,8 +276,8 @@ async function importFromMongodbStreaming(
     batch.push(createInput)
 
     // Process batch when full
-    if (batch.length >= opts.batchSize) {
-      const batchResult = await processBatch(collection, batch, opts, errors, lineNumber - batch.length)
+    if (batch.length >= (opts.batchSize ?? MAX_BATCH_SIZE)) {
+      const batchResult = await processBatch(collection, batch, { skipValidation: opts.skipValidation ?? false, actor: opts.actor ?? 'system/migration' }, errors, lineNumber - batch.length)
       imported += batchResult.imported
       failed += batchResult.failed
       batch.length = 0
@@ -291,7 +291,7 @@ async function importFromMongodbStreaming(
 
   // Process remaining batch
   if (batch.length > 0) {
-    const batchResult = await processBatch(collection, batch, opts, errors, lineNumber - batch.length)
+    const batchResult = await processBatch(collection, batch, { skipValidation: opts.skipValidation ?? false, actor: opts.actor ?? 'system/migration' }, errors, lineNumber - batch.length)
     imported += batchResult.imported
     failed += batchResult.failed
 
@@ -345,6 +345,7 @@ export async function importFromBson(
   let BSON: BsonModule
   try {
     // Dynamic import - bson is an optional dependency
+    // @ts-expect-error - bson is an optional dependency that may not be installed
     BSON = await import('bson')
   } catch {
     // Intentionally ignored: dynamic import failure means the optional dependency is not installed
@@ -387,7 +388,7 @@ export async function importFromBson(
 
       // Convert BSON values
       if (opts.convertObjectIds || opts.convertDates) {
-        doc = convertBsonDocument(doc, opts)
+        doc = convertBsonDocument(doc, { convertObjectIds: opts.convertObjectIds ?? true, convertDates: opts.convertDates ?? true })
       }
 
       // Apply transform
@@ -404,8 +405,8 @@ export async function importFromBson(
         batch.push(createInput)
 
         // Process batch when full
-        if (batch.length >= opts.batchSize) {
-          const batchResult = await processBatch(collection, batch, opts, errors, docIndex - batch.length + 1)
+        if (batch.length >= (opts.batchSize ?? MAX_BATCH_SIZE)) {
+          const batchResult = await processBatch(collection, batch, { skipValidation: opts.skipValidation ?? false, actor: opts.actor ?? 'system/migration' }, errors, docIndex - batch.length + 1)
           imported += batchResult.imported
           failed += batchResult.failed
           batch.length = 0
@@ -430,7 +431,7 @@ export async function importFromBson(
 
   // Process remaining batch
   if (batch.length > 0) {
-    const batchResult = await processBatch(collection, batch, opts, errors, docIndex - batch.length)
+    const batchResult = await processBatch(collection, batch, { skipValidation: opts.skipValidation ?? false, actor: opts.actor ?? 'system/migration' }, errors, docIndex - batch.length)
     imported += batchResult.imported
     failed += batchResult.failed
 
@@ -704,7 +705,7 @@ export async function* streamFromMongodbJsonl(
 
     // Convert BSON extended JSON values
     if (opts.convertObjectIds || opts.convertDates) {
-      doc = convertBsonDocument(doc, opts)
+      doc = convertBsonDocument(doc, { convertObjectIds: opts.convertObjectIds ?? true, convertDates: opts.convertDates ?? true })
     }
 
     // Apply transform
