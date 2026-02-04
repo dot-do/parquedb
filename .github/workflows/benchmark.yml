@@ -1,62 +1,341 @@
-name: Benchmark
+name: Performance Benchmarks
 
 on:
   push:
     branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 */6 * * *' # Every 6 hours
   workflow_dispatch:
+    inputs:
+      datasets:
+        description: 'Comma-separated datasets to test'
+        required: false
+        default: 'imdb,onet,unspsc,blog,ecommerce'
+      iterations:
+        description: 'Number of iterations per test'
+        required: false
+        default: '10'
+      update_baseline:
+        description: 'Update baseline after successful run'
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CI: true
+
 jobs:
-  benchmark:
-    name: Run Benchmarks
+  benchmark-node:
+    name: Node.js Benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20.x'
-          cache: 'npm'
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
-      - name: Run benchmarks
-        run: npm run bench -- --run
-        env:
-          CI: true
+      - name: Run storage benchmarks
+        id: benchmark
+        run: |
+          npx tsx tests/benchmarks/storage-benchmark-runner.ts \
+            --backend=cdn \
+            --datasets=${{ github.event.inputs.datasets || 'blog,ecommerce' }} \
+            --iterations=${{ github.event.inputs.iterations || '10' }} \
+            --output=json > benchmark-results.json
+
+          echo "benchmark_completed=true" >> $GITHUB_OUTPUT
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: benchmark-results
-          path: |
-            benchmark-results.json
-            benchmark-workers-results.json
+          name: benchmark-results-node
+          path: benchmark-results.json
           retention-days: 30
           if-no-files-found: warn
 
+      - name: Display benchmark summary
+        if: always()
+        run: |
+          echo "## Node.js Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f benchmark-results.json ]; then
+            node -e "
+              const fs = require('fs');
+              const results = JSON.parse(fs.readFileSync('benchmark-results.json', 'utf8'));
+
+              console.log('### Configuration');
+              console.log('- **Backend**: ' + results.config.backend);
+              console.log('- **Datasets**: ' + results.config.datasets.join(', '));
+              console.log('- **Iterations**: ' + results.config.iterations);
+              console.log('- **Duration**: ' + (results.metadata.durationMs / 1000).toFixed(1) + 's');
+              console.log('');
+
+              if (results.summary) {
+                console.log('### Summary');
+                console.log('| Metric | Value |');
+                console.log('|--------|-------|');
+                console.log('| Total Patterns | ' + results.summary.totalPatterns + ' |');
+                console.log('| Passed | ' + results.summary.passedPatterns + ' |');
+                console.log('| Failed | ' + results.summary.failedPatterns + ' |');
+                console.log('| Avg Latency (p50) | ' + results.summary.avgLatencyMs?.toFixed(1) + 'ms |');
+                console.log('| P95 Latency | ' + results.summary.p95LatencyMs?.toFixed(1) + 'ms |');
+                console.log('');
+              }
+
+              if (results.summary.byDataset) {
+                console.log('### Results by Dataset');
+                console.log('| Dataset | Passed | Failed | Avg Latency |');
+                console.log('|---------|--------|--------|-------------|');
+                for (const [name, stats] of Object.entries(results.summary.byDataset)) {
+                  console.log('| ' + name + ' | ' + stats.passed + ' | ' + stats.failed + ' | ' + stats.avgLatencyMs.toFixed(1) + 'ms |');
+                }
+                console.log('');
+              }
+            " >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No results file found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  benchmark-worker:
+    name: Worker Benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only run on main branch or manual trigger to avoid hitting rate limits
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Run E2E worker benchmarks
+        id: worker_benchmark
+        run: |
+          # Run against deployed worker
+          npx tsx tests/e2e/benchmarks/runner.ts \
+            --url=https://parquedb.workers.do \
+            --iterations=${{ github.event.inputs.iterations || '5' }} \
+            --output=json \
+            --save-baseline=./worker-benchmark-results.json
+
+          echo "benchmark_completed=true" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
+      - name: Upload worker benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results-worker
+          path: worker-benchmark-results.json
+          retention-days: 30
+          if-no-files-found: warn
+
+  compare-baseline:
+    name: Compare with Baseline
+    needs: [benchmark-node]
+    runs-on: ubuntu-latest
+    if: always() && needs.benchmark-node.result == 'success'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Download benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-results-node
+          path: ./results
+
+      - name: Compare with baseline
+        id: compare
+        run: |
+          npx tsx tests/benchmarks/compare-baseline.ts \
+            --results=./results/benchmark-results.json \
+            --baseline=./tests/benchmarks/baseline/production.json \
+            --output=json > comparison-results.json
+
+          # Check exit code and set output
+          if [ $? -eq 0 ]; then
+            echo "regression_detected=false" >> $GITHUB_OUTPUT
+          else
+            echo "regression_detected=true" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Generate report
+        if: always()
+        run: |
+          npx tsx tests/benchmarks/generate-report.ts \
+            --results=./results/benchmark-results.json \
+            --comparison=./comparison-results.json \
+            --format=markdown > benchmark-report.md
+
+          cat benchmark-report.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## Performance Benchmark Results\n\n';
+
+            if (fs.existsSync('benchmark-report.md')) {
+              body += fs.readFileSync('benchmark-report.md', 'utf8');
+            } else if (fs.existsSync('./results/benchmark-results.json')) {
+              const results = JSON.parse(fs.readFileSync('./results/benchmark-results.json', 'utf8'));
+
+              body += `**Backend:** ${results.config.backend}\n`;
+              body += `**Duration:** ${(results.metadata.durationMs / 1000).toFixed(1)}s\n`;
+              body += `**Commit:** ${{ github.sha }}\n\n`;
+
+              if (results.summary) {
+                body += '### Summary\n';
+                body += '| Metric | Value |\n';
+                body += '|--------|-------|\n';
+                body += `| Total Patterns | ${results.summary.totalPatterns} |\n`;
+                body += `| Passed | ${results.summary.passedPatterns} |\n`;
+                body += `| Failed | ${results.summary.failedPatterns} |\n`;
+                body += `| Avg Latency | ${results.summary.avgLatencyMs?.toFixed(1)}ms |\n`;
+                body += `| P95 Latency | ${results.summary.p95LatencyMs?.toFixed(1)}ms |\n\n`;
+              }
+            } else {
+              body += ':warning: No benchmark results available\n';
+            }
+
+            // Check if comparison detected regressions
+            if (fs.existsSync('comparison-results.json')) {
+              const comparison = JSON.parse(fs.readFileSync('comparison-results.json', 'utf8'));
+              if (comparison.hasRegression) {
+                body += '\n:warning: **Performance regression detected!**\n';
+                body += `Severity: ${comparison.severity}\n\n`;
+              } else {
+                body += '\n:white_check_mark: No performance regression detected\n';
+              }
+            }
+
+            body += `\n[View full run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('Performance Benchmark Results')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+      - name: Update baseline
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          github.event_name == 'push' &&
+          steps.compare.outputs.regression_detected == 'false'
+        run: |
+          # Only update baseline on main branch without regressions
+          if [ -f ./results/benchmark-results.json ]; then
+            cp ./results/benchmark-results.json ./tests/benchmarks/baseline/production.json
+            echo "Baseline updated from successful main branch run"
+          fi
+
+      - name: Fail on regression (PRs only)
+        if: github.event_name == 'pull_request' && steps.compare.outputs.regression_detected == 'true'
+        run: |
+          echo "Performance regression detected! See the PR comment for details."
+          exit 1
+
+  store-results:
+    name: Store Benchmark Results
+    needs: [benchmark-node, benchmark-worker, compare-baseline]
+    runs-on: ubuntu-latest
+    if: always() && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
-        if: github.ref == 'refs/heads/main'
+        if: hashFiles('./artifacts/benchmark-results-node/benchmark-results.json') != ''
         with:
           name: ParqueDB Benchmarks
           tool: 'customSmallerIsBetter'
-          output-file-path: benchmark-results.json
+          output-file-path: ./artifacts/benchmark-results-node/benchmark-results.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: false
           alert-threshold: '150%'
           comment-on-alert: true
           fail-on-alert: false
-          # Store benchmark data in gh-pages branch
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench

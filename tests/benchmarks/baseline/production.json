@@ -1,0 +1,198 @@
+{
+  "config": {
+    "backend": "cdn",
+    "datasets": ["blog", "ecommerce"],
+    "iterations": 10,
+    "warmup": 2,
+    "timeout": 30000
+  },
+  "metadata": {
+    "startedAt": "2025-01-01T00:00:00.000Z",
+    "completedAt": "2025-01-01T00:05:00.000Z",
+    "durationMs": 300000,
+    "runnerVersion": "1.0.0"
+  },
+  "results": [
+    {
+      "backend": "cdn",
+      "dataset": "blog",
+      "pattern": "Get post by ID",
+      "category": "point-read",
+      "targetMs": 50,
+      "latencyMs": {
+        "min": 15,
+        "max": 45,
+        "mean": 25,
+        "p50": 23,
+        "p95": 40,
+        "p99": 44,
+        "stdDev": 8
+      },
+      "bytesRead": 50000,
+      "avgBytesRead": 5000,
+      "rangeRequests": 10,
+      "avgRangeRequests": 1,
+      "passedTarget": true,
+      "successCount": 10,
+      "failureCount": 0
+    },
+    {
+      "backend": "cdn",
+      "dataset": "blog",
+      "pattern": "List posts with filter",
+      "category": "filtered-query",
+      "targetMs": 100,
+      "latencyMs": {
+        "min": 30,
+        "max": 90,
+        "mean": 55,
+        "p50": 52,
+        "p95": 85,
+        "p99": 88,
+        "stdDev": 15
+      },
+      "bytesRead": 150000,
+      "avgBytesRead": 15000,
+      "rangeRequests": 30,
+      "avgRangeRequests": 3,
+      "passedTarget": true,
+      "successCount": 10,
+      "failureCount": 0
+    },
+    {
+      "backend": "cdn",
+      "dataset": "blog",
+      "pattern": "Full text search",
+      "category": "fts-query",
+      "targetMs": 200,
+      "latencyMs": {
+        "min": 80,
+        "max": 180,
+        "mean": 120,
+        "p50": 115,
+        "p95": 170,
+        "p99": 178,
+        "stdDev": 25
+      },
+      "bytesRead": 300000,
+      "avgBytesRead": 30000,
+      "rangeRequests": 50,
+      "avgRangeRequests": 5,
+      "passedTarget": true,
+      "successCount": 10,
+      "failureCount": 0
+    },
+    {
+      "backend": "cdn",
+      "dataset": "ecommerce",
+      "pattern": "Get product by ID",
+      "category": "point-read",
+      "targetMs": 50,
+      "latencyMs": {
+        "min": 12,
+        "max": 42,
+        "mean": 22,
+        "p50": 20,
+        "p95": 38,
+        "p99": 41,
+        "stdDev": 7
+      },
+      "bytesRead": 45000,
+      "avgBytesRead": 4500,
+      "rangeRequests": 10,
+      "avgRangeRequests": 1,
+      "passedTarget": true,
+      "successCount": 10,
+      "failureCount": 0
+    },
+    {
+      "backend": "cdn",
+      "dataset": "ecommerce",
+      "pattern": "List products by category",
+      "category": "filtered-query",
+      "targetMs": 100,
+      "latencyMs": {
+        "min": 25,
+        "max": 85,
+        "mean": 50,
+        "p50": 48,
+        "p95": 80,
+        "p99": 84,
+        "stdDev": 14
+      },
+      "bytesRead": 140000,
+      "avgBytesRead": 14000,
+      "rangeRequests": 25,
+      "avgRangeRequests": 2.5,
+      "passedTarget": true,
+      "successCount": 10,
+      "failureCount": 0
+    },
+    {
+      "backend": "cdn",
+      "dataset": "ecommerce",
+      "pattern": "Price range query",
+      "category": "range-query",
+      "targetMs": 150,
+      "latencyMs": {
+        "min": 40,
+        "max": 130,
+        "mean": 75,
+        "p50": 72,
+        "p95": 120,
+        "p99": 128,
+        "stdDev": 22
+      },
+      "bytesRead": 200000,
+      "avgBytesRead": 20000,
+      "rangeRequests": 35,
+      "avgRangeRequests": 3.5,
+      "passedTarget": true,
+      "successCount": 10,
+      "failureCount": 0
+    }
+  ],
+  "summary": {
+    "totalPatterns": 6,
+    "passedPatterns": 6,
+    "failedPatterns": 0,
+    "avgLatencyMs": 55,
+    "p95LatencyMs": 95,
+    "totalBytesRead": 885000,
+    "totalRangeRequests": 160,
+    "byDataset": {
+      "blog": {
+        "passed": 3,
+        "failed": 0,
+        "avgLatencyMs": 63
+      },
+      "ecommerce": {
+        "passed": 3,
+        "failed": 0,
+        "avgLatencyMs": 47
+      }
+    },
+    "byCategory": {
+      "point-read": {
+        "passed": 2,
+        "failed": 0,
+        "avgLatencyMs": 22
+      },
+      "filtered-query": {
+        "passed": 2,
+        "failed": 0,
+        "avgLatencyMs": 50
+      },
+      "fts-query": {
+        "passed": 1,
+        "failed": 0,
+        "avgLatencyMs": 115
+      },
+      "range-query": {
+        "passed": 1,
+        "failed": 0,
+        "avgLatencyMs": 72
+      }
+    }
+  }
+}

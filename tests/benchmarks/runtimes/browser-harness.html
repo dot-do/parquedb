@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ParqueDB Browser Benchmarks</title>
+  <style>
+    :root {
+      --bg-primary: #0d1117;
+      --bg-secondary: #161b22;
+      --bg-tertiary: #21262d;
+      --text-primary: #c9d1d9;
+      --text-secondary: #8b949e;
+      --border-color: #30363d;
+      --accent-color: #58a6ff;
+      --success-color: #3fb950;
+      --error-color: #f85149;
+      --warning-color: #d29922;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      margin: 0;
+      padding: 20px;
+      line-height: 1.6;
+    }
+
+    h1 {
+      margin: 0 0 20px 0;
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .runtime-info {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .controls {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 16px;
+      margin-bottom: 20px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+
+    select, input, button {
+      background-color: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-primary);
+      padding: 8px 12px;
+      font-size: 14px;
+    }
+
+    select:focus, input:focus {
+      outline: none;
+      border-color: var(--accent-color);
+    }
+
+    button {
+      cursor: pointer;
+      font-weight: 600;
+      transition: background-color 0.2s;
+    }
+
+    button:hover:not(:disabled) {
+      background-color: var(--accent-color);
+      border-color: var(--accent-color);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background-color: var(--accent-color);
+      border-color: var(--accent-color);
+    }
+
+    .progress {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 16px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    .progress.active {
+      display: block;
+    }
+
+    .progress-bar {
+      background-color: var(--bg-tertiary);
+      border-radius: 4px;
+      height: 8px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .progress-fill {
+      background-color: var(--accent-color);
+      height: 100%;
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    .results {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .results-header {
+      background-color: var(--bg-tertiary);
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .results-header h2 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 16px;
+      padding: 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .summary-item {
+      text-align: center;
+    }
+
+    .summary-value {
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .summary-label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+
+    .summary-value.success {
+      color: var(--success-color);
+    }
+
+    .summary-value.error {
+      color: var(--error-color);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 12px 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    th {
+      background-color: var(--bg-tertiary);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+    }
+
+    tr:hover {
+      background-color: var(--bg-tertiary);
+    }
+
+    .status {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .status-pass {
+      background-color: rgba(63, 185, 80, 0.2);
+      color: var(--success-color);
+    }
+
+    .status-fail {
+      background-color: rgba(248, 81, 73, 0.2);
+      color: var(--error-color);
+    }
+
+    .latency {
+      font-family: 'SF Mono', Monaco, 'Andale Mono', monospace;
+      font-size: 13px;
+    }
+
+    .empty-state {
+      padding: 60px 20px;
+      text-align: center;
+      color: var(--text-secondary);
+    }
+
+    .empty-state p {
+      margin: 8px 0;
+    }
+
+    .error-message {
+      background-color: rgba(248, 81, 73, 0.1);
+      border: 1px solid var(--error-color);
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-bottom: 20px;
+      color: var(--error-color);
+    }
+
+    .export-buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    .export-buttons button {
+      font-size: 12px;
+      padding: 4px 8px;
+    }
+
+    @media (max-width: 768px) {
+      .controls {
+        grid-template-columns: 1fr;
+      }
+
+      .header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+
+      table {
+        font-size: 12px;
+      }
+
+      th, td {
+        padding: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>ParqueDB Browser Benchmarks</h1>
+    <div class="runtime-info" id="runtimeInfo">
+      Detecting runtime...
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="control-group">
+      <label for="dataset">Dataset</label>
+      <select id="dataset">
+        <option value="all">All Datasets</option>
+        <option value="imdb">IMDB (500MB)</option>
+        <option value="onet">O*NET (10MB)</option>
+        <option value="unspsc">UNSPSC (5MB)</option>
+        <option value="blog">Blog (1MB)</option>
+        <option value="ecommerce">E-Commerce (2MB)</option>
+      </select>
+    </div>
+
+    <div class="control-group">
+      <label for="iterations">Iterations</label>
+      <input type="number" id="iterations" value="10" min="1" max="100">
+    </div>
+
+    <div class="control-group">
+      <label for="warmup">Warmup</label>
+      <input type="number" id="warmup" value="2" min="0" max="10">
+    </div>
+
+    <div class="control-group">
+      <label>&nbsp;</label>
+      <button id="runButton" class="btn-primary" onclick="runBenchmarks()">
+        Run Benchmarks
+      </button>
+    </div>
+  </div>
+
+  <div class="progress" id="progress">
+    <div id="progressText">Running benchmarks...</div>
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+  </div>
+
+  <div id="error" class="error-message" style="display: none;"></div>
+
+  <div class="results">
+    <div class="results-header">
+      <h2>Results</h2>
+      <div class="export-buttons" id="exportButtons" style="display: none;">
+        <button onclick="exportJson()">Export JSON</button>
+        <button onclick="exportMarkdown()">Export Markdown</button>
+        <button onclick="copyResults()">Copy</button>
+      </div>
+    </div>
+
+    <div class="summary" id="summary" style="display: none;">
+      <div class="summary-item">
+        <div class="summary-value" id="totalPatterns">-</div>
+        <div class="summary-label">Total Patterns</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-value success" id="passedPatterns">-</div>
+        <div class="summary-label">Passed</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-value error" id="failedPatterns">-</div>
+        <div class="summary-label">Failed</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-value" id="avgLatency">-</div>
+        <div class="summary-label">Avg Latency</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-value" id="p95Latency">-</div>
+        <div class="summary-label">P95 Latency</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-value" id="duration">-</div>
+        <div class="summary-label">Duration</div>
+      </div>
+    </div>
+
+    <div id="resultsTable">
+      <div class="empty-state">
+        <p>No benchmark results yet.</p>
+        <p>Select a dataset and click "Run Benchmarks" to start.</p>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // ==========================================================================
+    // Configuration
+    // ==========================================================================
+
+    const CDN_BASE_URL = 'https://parquedb.workers.do';
+
+    // Dataset patterns - simplified versions for browser
+    // Full patterns would be imported from the patterns modules
+    const DATASET_PATTERNS = {
+      imdb: [
+        { name: 'Title by ID (tt0111161)', category: 'point-lookup', targetMs: 5, endpoint: '/datasets/imdb/titles/tt0111161' },
+        { name: 'Person by ID (nm0000138)', category: 'point-lookup', targetMs: 5, endpoint: '/datasets/imdb/names/nm0000138' },
+        { name: 'Top-rated movies', category: 'compound', targetMs: 50, endpoint: '/datasets/imdb/titles?filter={"titleType":"movie","averageRating":{"$gte":8}}&limit=50' },
+        { name: 'Movies by year (2010-2019)', category: 'filtered', targetMs: 100, endpoint: '/datasets/imdb/titles?filter={"titleType":"movie","startYear":{"$gte":2010,"$lte":2019}}&limit=100' },
+        { name: 'Genre filter (Action)', category: 'compound', targetMs: 50, endpoint: '/datasets/imdb/titles?filter={"genres":{"$contains":"Action"}}&limit=50' },
+        { name: 'Filmography', category: 'relationship', targetMs: 100, endpoint: '/datasets/imdb/names/nm0000138/knownFor' },
+        { name: 'Cast of movie', category: 'relationship', targetMs: 50, endpoint: '/datasets/imdb/titles/tt0111161/cast' },
+        { name: 'Title search', category: 'fts', targetMs: 30, endpoint: '/datasets/imdb/titles?filter={"primaryTitle":{"$contains":"Shawshank"}}&limit=20' },
+      ],
+      onet: [
+        { name: 'Occupation by ID', category: 'point-lookup', targetMs: 5, endpoint: '/datasets/onet/occupations/11-1011.00' },
+        { name: 'Occupations by zone', category: 'filtered', targetMs: 50, endpoint: '/datasets/onet/occupations?filter={"jobZone":4}&limit=50' },
+        { name: 'Skills for occupation', category: 'relationship', targetMs: 50, endpoint: '/datasets/onet/occupations/11-1011.00/skills' },
+        { name: 'Occupation search', category: 'fts', targetMs: 30, endpoint: '/datasets/onet/occupations?filter={"title":{"$contains":"Software"}}&limit=20' },
+      ],
+      unspsc: [
+        { name: 'Category by code', category: 'point-lookup', targetMs: 5, endpoint: '/datasets/unspsc/categories/43230000' },
+        { name: 'Categories by segment', category: 'filtered', targetMs: 50, endpoint: '/datasets/unspsc/categories?filter={"segment":"43"}&limit=100' },
+        { name: 'Category search', category: 'fts', targetMs: 30, endpoint: '/datasets/unspsc/categories?filter={"title":{"$contains":"Computer"}}&limit=20' },
+      ],
+      blog: [
+        { name: 'Published posts', category: 'filtered', targetMs: 20, endpoint: '/api/posts?filter={"status":"published"}&sort={"publishedAt":-1}&limit=20' },
+        { name: 'Posts by author', category: 'filtered', targetMs: 20, endpoint: '/api/posts?filter={"authorId":"authors/author-001"}&limit=50' },
+        { name: 'Posts by tag', category: 'array-filter', targetMs: 30, endpoint: '/api/posts?filter={"tags":{"$in":["javascript"]}}&limit=20' },
+        { name: 'Popular posts', category: 'top-n', targetMs: 20, endpoint: '/api/posts?filter={"status":"published"}&sort={"views":-1}&limit=10' },
+        { name: 'Full-text search', category: 'fts', targetMs: 50, endpoint: '/api/posts?q=typescript&limit=20' },
+      ],
+      ecommerce: [
+        { name: 'Product by ID', category: 'point-lookup', targetMs: 5, endpoint: '/api/products/prod-001' },
+        { name: 'Products by category', category: 'filtered', targetMs: 30, endpoint: '/api/products?filter={"category":"Electronics"}&limit=50' },
+        { name: 'Products in stock', category: 'filtered', targetMs: 30, endpoint: '/api/products?filter={"inStock":true}&limit=50' },
+        { name: 'Product search', category: 'fts', targetMs: 50, endpoint: '/api/products?q=laptop&limit=20' },
+        { name: 'Price range', category: 'range', targetMs: 30, endpoint: '/api/products?filter={"price":{"$gte":100,"$lte":500}}&limit=50' },
+      ],
+    };
+
+    // ==========================================================================
+    // State
+    // ==========================================================================
+
+    let benchmarkResults = null;
+    let isRunning = false;
+
+    // ==========================================================================
+    // Runtime Detection
+    // ==========================================================================
+
+    function detectRuntime() {
+      const info = {
+        browser: navigator.userAgent,
+        timing: typeof performance !== 'undefined' && typeof performance.now === 'function' ? 'high-resolution' : 'standard',
+        streaming: typeof Response !== 'undefined' && typeof ReadableStream !== 'undefined',
+      };
+
+      document.getElementById('runtimeInfo').textContent =
+        `Browser | Timing: ${info.timing} | Streaming: ${info.streaming ? 'Yes' : 'No'}`;
+
+      return info;
+    }
+
+    // ==========================================================================
+    // Statistics
+    // ==========================================================================
+
+    function calculateLatencyStats(samples) {
+      if (samples.length === 0) {
+        return { min: 0, max: 0, mean: 0, p50: 0, p95: 0, p99: 0, stdDev: 0 };
+      }
+
+      const sorted = [...samples].sort((a, b) => a - b);
+      const n = sorted.length;
+      const mean = sorted.reduce((a, b) => a + b, 0) / n;
+
+      const variance = sorted.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / n;
+      const stdDev = Math.sqrt(variance);
+
+      const percentile = (p) => {
+        const idx = Math.ceil((p / 100) * n) - 1;
+        return sorted[Math.max(0, Math.min(idx, n - 1))];
+      };
+
+      return {
+        min: sorted[0],
+        max: sorted[n - 1],
+        mean,
+        p50: percentile(50),
+        p95: percentile(95),
+        p99: percentile(99),
+        stdDev,
+      };
+    }
+
+    function formatMs(ms) {
+      if (ms < 1) return `${(ms * 1000).toFixed(0)}us`;
+      if (ms < 10) return `${ms.toFixed(2)}ms`;
+      if (ms < 100) return `${ms.toFixed(1)}ms`;
+      if (ms < 1000) return `${Math.round(ms)}ms`;
+      return `${(ms / 1000).toFixed(2)}s`;
+    }
+
+    // ==========================================================================
+    // Benchmark Execution
+    // ==========================================================================
+
+    async function runPatternBenchmark(pattern, iterations, warmup) {
+      const latencies = [];
+      const errors = [];
+      let successCount = 0;
+      let failureCount = 0;
+
+      const url = CDN_BASE_URL + pattern.endpoint;
+
+      // Warmup
+      for (let i = 0; i < warmup; i++) {
+        try {
+          const response = await fetch(url, { headers: { Accept: 'application/json' } });
+          await response.arrayBuffer();
+        } catch (e) {
+          // Ignore warmup errors
+        }
+      }
+
+      // Measured iterations
+      for (let i = 0; i < iterations; i++) {
+        try {
+          const start = performance.now();
+          const response = await fetch(url, { headers: { Accept: 'application/json' } });
+          const latencyMs = performance.now() - start;
+
+          if (response.ok) {
+            await response.arrayBuffer();
+            latencies.push(latencyMs);
+            successCount++;
+          } else {
+            latencies.push(latencyMs);
+            failureCount++;
+            errors.push(`HTTP ${response.status}`);
+          }
+        } catch (error) {
+          failureCount++;
+          errors.push(error.message || 'Unknown error');
+        }
+      }
+
+      const latencyStats = calculateLatencyStats(latencies);
+      const passedTarget = successCount > 0 && latencyStats.p50 <= pattern.targetMs;
+
+      return {
+        pattern: pattern.name,
+        category: pattern.category,
+        targetMs: pattern.targetMs,
+        latencyMs: latencyStats,
+        passedTarget,
+        successCount,
+        failureCount,
+        errors: errors.length > 0 ? errors.slice(0, 3) : undefined,
+      };
+    }
+
+    async function runDatasetBenchmark(dataset, iterations, warmup, onProgress) {
+      const patterns = DATASET_PATTERNS[dataset] || [];
+      const results = [];
+
+      for (let i = 0; i < patterns.length; i++) {
+        const pattern = patterns[i];
+        onProgress({ dataset, pattern: pattern.name, progress: i / patterns.length });
+
+        const result = await runPatternBenchmark(pattern, iterations, warmup);
+        results.push(result);
+      }
+
+      return results;
+    }
+
+    window.runBenchmarks = async function() {
+      if (isRunning) return;
+      isRunning = true;
+
+      const runButton = document.getElementById('runButton');
+      const progress = document.getElementById('progress');
+      const progressText = document.getElementById('progressText');
+      const progressFill = document.getElementById('progressFill');
+      const errorDiv = document.getElementById('error');
+
+      runButton.disabled = true;
+      progress.classList.add('active');
+      errorDiv.style.display = 'none';
+      progressFill.style.width = '0%';
+
+      const datasetSelect = document.getElementById('dataset');
+      const iterationsInput = document.getElementById('iterations');
+      const warmupInput = document.getElementById('warmup');
+
+      const selectedDataset = datasetSelect.value;
+      const iterations = parseInt(iterationsInput.value) || 10;
+      const warmup = parseInt(warmupInput.value) || 2;
+
+      const datasets = selectedDataset === 'all'
+        ? Object.keys(DATASET_PATTERNS)
+        : [selectedDataset];
+
+      const startTime = performance.now();
+      const allResults = [];
+
+      try {
+        let completedDatasets = 0;
+
+        for (const dataset of datasets) {
+          progressText.textContent = `Running ${dataset} benchmarks...`;
+
+          const results = await runDatasetBenchmark(dataset, iterations, warmup, ({ pattern, progress }) => {
+            const overallProgress = (completedDatasets + progress) / datasets.length * 100;
+            progressFill.style.width = `${overallProgress}%`;
+            progressText.textContent = `[${dataset}] ${pattern}`;
+          });
+
+          allResults.push({ dataset, results });
+          completedDatasets++;
+          progressFill.style.width = `${(completedDatasets / datasets.length) * 100}%`;
+        }
+
+        const durationMs = performance.now() - startTime;
+
+        benchmarkResults = {
+          runtime: 'browser',
+          userAgent: navigator.userAgent,
+          config: { datasets, iterations, warmup },
+          startedAt: new Date(Date.now() - durationMs).toISOString(),
+          completedAt: new Date().toISOString(),
+          durationMs,
+          results: allResults,
+        };
+
+        displayResults(benchmarkResults);
+      } catch (error) {
+        errorDiv.textContent = `Benchmark failed: ${error.message}`;
+        errorDiv.style.display = 'block';
+      } finally {
+        isRunning = false;
+        runButton.disabled = false;
+        progress.classList.remove('active');
+      }
+    };
+
+    // ==========================================================================
+    // Results Display
+    // ==========================================================================
+
+    function displayResults(data) {
+      // Calculate summary
+      let totalPatterns = 0;
+      let passedPatterns = 0;
+      let allLatencies = [];
+
+      for (const { results } of data.results) {
+        for (const result of results) {
+          totalPatterns++;
+          if (result.passedTarget) passedPatterns++;
+          if (result.successCount > 0) {
+            allLatencies.push(result.latencyMs.p50);
+          }
+        }
+      }
+
+      const failedPatterns = totalPatterns - passedPatterns;
+      const avgLatency = allLatencies.length > 0
+        ? allLatencies.reduce((a, b) => a + b, 0) / allLatencies.length
+        : 0;
+      const p95Latency = calculateLatencyStats(allLatencies).p95;
+
+      // Update summary
+      document.getElementById('summary').style.display = 'grid';
+      document.getElementById('totalPatterns').textContent = totalPatterns;
+      document.getElementById('passedPatterns').textContent = passedPatterns;
+      document.getElementById('failedPatterns').textContent = failedPatterns;
+      document.getElementById('avgLatency').textContent = formatMs(avgLatency);
+      document.getElementById('p95Latency').textContent = formatMs(p95Latency);
+      document.getElementById('duration').textContent = formatMs(data.durationMs);
+
+      // Show export buttons
+      document.getElementById('exportButtons').style.display = 'flex';
+
+      // Build results table
+      let tableHtml = `
+        <table>
+          <thead>
+            <tr>
+              <th>Dataset</th>
+              <th>Pattern</th>
+              <th>Category</th>
+              <th>Target</th>
+              <th>P50</th>
+              <th>P95</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      for (const { dataset, results } of data.results) {
+        for (const result of results) {
+          const statusClass = result.passedTarget ? 'status-pass' : 'status-fail';
+          const statusText = result.passedTarget ? 'PASS' : 'FAIL';
+
+          tableHtml += `
+            <tr>
+              <td>${dataset}</td>
+              <td>${result.pattern}</td>
+              <td>${result.category}</td>
+              <td class="latency">${result.targetMs}ms</td>
+              <td class="latency">${formatMs(result.latencyMs.p50)}</td>
+              <td class="latency">${formatMs(result.latencyMs.p95)}</td>
+              <td><span class="status ${statusClass}">${statusText}</span></td>
+            </tr>
+          `;
+        }
+      }
+
+      tableHtml += '</tbody></table>';
+      document.getElementById('resultsTable').innerHTML = tableHtml;
+    }
+
+    // ==========================================================================
+    // Export Functions
+    // ==========================================================================
+
+    window.exportJson = function() {
+      if (!benchmarkResults) return;
+
+      const blob = new Blob([JSON.stringify(benchmarkResults, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `parquedb-browser-benchmark-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    window.exportMarkdown = function() {
+      if (!benchmarkResults) return;
+
+      let md = '# ParqueDB Browser Benchmark Results\n\n';
+      md += `**Runtime:** Browser\n`;
+      md += `**User Agent:** ${benchmarkResults.userAgent}\n`;
+      md += `**Duration:** ${formatMs(benchmarkResults.durationMs)}\n`;
+      md += `**Date:** ${benchmarkResults.completedAt}\n\n`;
+
+      md += '## Summary\n\n';
+      md += '| Metric | Value |\n';
+      md += '|--------|-------|\n';
+
+      let totalPatterns = 0;
+      let passedPatterns = 0;
+      let allLatencies = [];
+
+      for (const { results } of benchmarkResults.results) {
+        for (const result of results) {
+          totalPatterns++;
+          if (result.passedTarget) passedPatterns++;
+          if (result.successCount > 0) allLatencies.push(result.latencyMs.p50);
+        }
+      }
+
+      const avgLatency = allLatencies.reduce((a, b) => a + b, 0) / allLatencies.length || 0;
+
+      md += `| Total Patterns | ${totalPatterns} |\n`;
+      md += `| Passed | ${passedPatterns} |\n`;
+      md += `| Failed | ${totalPatterns - passedPatterns} |\n`;
+      md += `| Avg Latency | ${formatMs(avgLatency)} |\n\n`;
+
+      md += '## Results\n\n';
+      md += '| Dataset | Pattern | Category | Target | P50 | P95 | Status |\n';
+      md += '|---------|---------|----------|--------|-----|-----|--------|\n';
+
+      for (const { dataset, results } of benchmarkResults.results) {
+        for (const result of results) {
+          const status = result.passedTarget ? 'PASS' : 'FAIL';
+          md += `| ${dataset} | ${result.pattern} | ${result.category} | ${result.targetMs}ms | ${formatMs(result.latencyMs.p50)} | ${formatMs(result.latencyMs.p95)} | ${status} |\n`;
+        }
+      }
+
+      const blob = new Blob([md], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `parquedb-browser-benchmark-${Date.now()}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    window.copyResults = function() {
+      if (!benchmarkResults) return;
+
+      navigator.clipboard.writeText(JSON.stringify(benchmarkResults, null, 2))
+        .then(() => alert('Results copied to clipboard'))
+        .catch(err => alert('Failed to copy: ' + err.message));
+    };
+
+    // ==========================================================================
+    // Initialization
+    // ==========================================================================
+
+    detectRuntime();
+  </script>
+</body>
+</html>
