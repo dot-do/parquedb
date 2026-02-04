@@ -29,13 +29,13 @@ import { IndexCache, createR2IndexStorageAdapter } from './IndexCache'
 // Bloom filter deserialization
 import { IndexBloomFilter } from '../indexes/bloom/bloom-filter'
 // Centralized constants
-import { MAX_CACHE_SIZE as _MAX_CACHE_SIZE, DEFAULT_CACHE_TTL, DATA_CACHE_MAX_ENTRIES } from '../constants'
+import { DEFAULT_CACHE_TTL } from '../constants'
 // Logger
 import { logger } from '../utils/logger'
 import { stringToBase64 } from '../utils/base64'
 import { createSafeRegex } from '../utils/safe-regex'
 import { tryParseJson, isRecord } from '../utils/json-validation'
-import { asStorageBackend, asIndexStorageBucket, rowAsEntity, asCacheableArray, asBodyInit } from '../types/cast'
+import { asStorageBackend, asIndexStorageBucket, rowAsEntity } from '../types/cast'
 
 // =============================================================================
 // Types
@@ -212,77 +212,6 @@ export interface QueryPlan {
 }
 
 // =============================================================================
-// LRU Cache Implementation
-// =============================================================================
-
-/**
- * Simple LRU (Least Recently Used) cache with configurable max entries.
- *
- * Uses a Map for O(1) lookups while maintaining insertion order.
- * When the cache exceeds maxEntries, the oldest (least recently used)
- * entries are evicted.
- */
-class LRUCache<K, V> {
-  private cache = new Map<K, V>()
-
-  constructor(private maxEntries: number = DATA_CACHE_MAX_ENTRIES) {}
-
-  /**
-   * Get a value from the cache.
-   * Moves the entry to the end (most recently used) if found.
-   */
-  get(key: K): V | undefined {
-    const value = this.cache.get(key)
-    if (value !== undefined) {
-      // Move to end (most recently used)
-      this.cache.delete(key)
-      this.cache.set(key, value)
-    }
-    return value
-  }
-
-  /**
-   * Set a value in the cache.
-   * If the cache exceeds maxEntries, evicts the oldest entry.
-   */
-  set(key: K, value: V): void {
-    // If key exists, delete it first to update access order
-    if (this.cache.has(key)) {
-      this.cache.delete(key)
-    }
-
-    this.cache.set(key, value)
-
-    // Evict oldest entries if over limit
-    while (this.cache.size > this.maxEntries) {
-      const oldestKey = this.cache.keys().next().value as K
-      this.cache.delete(oldestKey)
-    }
-  }
-
-  /**
-   * Delete a key from the cache.
-   */
-  delete(key: K): boolean {
-    return this.cache.delete(key)
-  }
-
-  /**
-   * Clear all entries from the cache.
-   */
-  clear(): void {
-    this.cache.clear()
-  }
-
-  /**
-   * Get current cache size.
-   */
-  get size(): number {
-    return this.cache.size
-  }
-}
-
-// =============================================================================
 // QueryExecutor Implementation
 // =============================================================================
 
@@ -322,12 +251,9 @@ class LRUCache<K, V> {
  *
  * Implements ReadonlyStorageBackend - only read operations are supported.
  *
- * CACHING ARCHITECTURE (Two-tier):
- * - L1: Sync in-memory Map<string, Uint8Array> for O(1) hot data access
- * - L2: Cloudflare Cache API for persistence across requests/isolates
- *
- * This restores the fast sync cache hits lost in commit cdcbb34 while
- * keeping Cache API for cross-isolate persistence.
+ * CACHING: CDN (cdn.workers.do) handles caching at the fetch layer.
+ * No additional in-memory caching of whole files - this would hide
+ * actual parquet read performance.
  */
 class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   readonly type = 'r2-cdn-adapter'
@@ -337,322 +263,48 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   public primaryHits = 0
   public edgeHits = 0
   public totalReads = 0
-  public cacheHits = 0
-  public l1CacheHits = 0  // Track L1 vs L2 cache hits
-
-  // L1 Cache: Sync in-memory Map for O(1) hot data access
-  // This is per-isolate but provides fast sync access for repeated reads
-  private l1Cache = new Map<string, Uint8Array>()
-  private l1CacheSize = 0  // Track total bytes in L1 cache
-  private static readonly L1_MAX_SIZE = 50 * 1024 * 1024  // 50MB max L1 cache per isolate
-
-  // L2 Cache: Cache API instance (initialized lazily)
-  private cache: Cache | null = null
-  private cacheInitPromise: Promise<Cache | null> | null = null
-
-  // Cache key prefix for namespacing
-  private readonly cacheKeyPrefix = 'https://parquedb-data/'
 
   // Files being loaded (for deduplication of concurrent requests within same isolate)
   private loadingFiles = new Map<string, Promise<Uint8Array>>()
-
-  // Max file size for whole-file caching - reserved for future size-based caching decisions
-  public static readonly _MAX_CACHE_SIZE = _MAX_CACHE_SIZE
-
-  // Cache TTL for file data (in seconds)
-  private readonly fileCacheTtl: number
 
   constructor(
     private cdnBucket: R2Bucket,      // CDN bucket (cdn) for reads
     private primaryBucket: R2Bucket,  // Primary bucket (parquedb) as fallback
     private cdnPrefix: string = 'parquedb',  // Prefix in CDN bucket
     private r2DevUrl?: string,  // r2.dev URL for edge caching (e.g. 'https://pub-xxx.r2.dev/parquedb')
-    fileCacheTtl: number = DEFAULT_CACHE_TTL  // Cache TTL in seconds
+    _fileCacheTtl: number = DEFAULT_CACHE_TTL  // Unused - CDN handles caching
   ) {
-    this.fileCacheTtl = fileCacheTtl
-  }
-
-  // ===========================================================================
-  // L1 Cache (Sync In-Memory)
-  // ===========================================================================
-
-  /**
-   * Check L1 sync cache - O(1) lookup, no async overhead
-   */
-  private getFromL1Cache(path: string): Uint8Array | null {
-    return this.l1Cache.get(path) ?? null
-  }
-
-  /**
-   * Store in L1 sync cache with LRU-style eviction
-   */
-  private putInL1Cache(path: string, data: Uint8Array): void {
-    // Skip if file is too large for L1 cache (>10MB)
-    if (data.byteLength > 10 * 1024 * 1024) {
-      return
-    }
-
-    // Evict entries if L1 cache is too large
-    while (this.l1CacheSize + data.byteLength > CdnR2StorageAdapter.L1_MAX_SIZE && this.l1Cache.size > 0) {
-      // Remove oldest entry (first key in Map iteration order)
-      const oldestKey = this.l1Cache.keys().next().value
-      if (oldestKey !== undefined) {
-        const oldData = this.l1Cache.get(oldestKey)
-        if (oldData) {
-          this.l1CacheSize -= oldData.byteLength
-        }
-        this.l1Cache.delete(oldestKey)
-      }
-    }
-
-    // Add to L1 cache
-    this.l1Cache.set(path, data)
-    this.l1CacheSize += data.byteLength
-  }
-
-  /**
-   * Invalidate L1 cache entry
-   */
-  private invalidateL1Cache(path: string): void {
-    const data = this.l1Cache.get(path)
-    if (data) {
-      this.l1CacheSize -= data.byteLength
-      this.l1Cache.delete(path)
-    }
-  }
-
-  // ===========================================================================
-  // L2 Cache (Async Cache API)
-  // ===========================================================================
-
-  /**
-   * Get or initialize the Cache API instance
-   * Uses lazy initialization to handle environments where Cache API may not be available
-   */
-  private async getCache(): Promise<Cache | null> {
-    // Return cached instance if available
-    if (this.cache) {
-      return this.cache
-    }
-
-    // Return existing initialization promise to avoid duplicate opens
-    if (this.cacheInitPromise) {
-      return this.cacheInitPromise
-    }
-
-    // Check if Cache API is available (not available in all environments)
-    if (typeof caches === 'undefined') {
-      return null
-    }
-
-    // Initialize cache
-    this.cacheInitPromise = caches.open('parquedb-data').then((cache) => {
-      this.cache = cache
-      return cache
-    }).catch((err) => {
-      // Cache API not available or failed - log and continue without caching
-      logger.debug('Cache API initialization failed, continuing without file cache', err)
-      return null
-    })
-
-    return this.cacheInitPromise
-  }
-
-  /**
-   * Create a cache key Request for a path
-   */
-  private createCacheKey(path: string): Request {
-    return new Request(`${this.cacheKeyPrefix}${path}`)
-  }
-
-  /**
-   * Try to get data from Cache API
-   */
-  private async getFromCache(path: string): Promise<Uint8Array | null> {
-    const cache = await this.getCache()
-    if (!cache) {
-      return null
-    }
-
-    try {
-      const cacheKey = this.createCacheKey(path)
-      const cached = await cache.match(cacheKey)
-      if (cached) {
-        return new Uint8Array(await cached.arrayBuffer())
-      }
-    } catch (err) {
-      // Cache read failed - log and continue
-      logger.debug(`Cache read failed for ${path}`, err)
-    }
-
-    return null
-  }
-
-  /**
-   * Try to get a RANGE from Cache API using Range header
-   * This is much more efficient than reading the whole file and slicing
-   */
-  private async getRangeFromCache(path: string, start: number, end: number): Promise<Uint8Array | null> {
-    const cache = await this.getCache()
-    if (!cache) {
-      return null
-    }
-
-    try {
-      // Create request with Range header
-      const cacheKey = new Request(`${this.cacheKeyPrefix}${path}`, {
-        headers: { 'Range': `bytes=${start}-${end - 1}` }
-      })
-      const cached = await cache.match(cacheKey)
-      if (cached) {
-        // Cache API returns 206 Partial Content for range requests
-        return new Uint8Array(await cached.arrayBuffer())
-      }
-    } catch (err) {
-      logger.debug(`Cache range read failed for ${path}`, err)
-    }
-
-    return null
-  }
-
-  /**
-   * Store data in Cache API
-   */
-  private async putInCache(path: string, data: Uint8Array): Promise<void> {
-    const cache = await this.getCache()
-    if (!cache) {
-      return
-    }
-
-    try {
-      const cacheKey = this.createCacheKey(path)
-      const response = new Response(asBodyInit(data), {
-        headers: {
-          'Cache-Control': `max-age=${this.fileCacheTtl}`,
-          'Content-Type': 'application/octet-stream',
-          'Content-Length': data.byteLength.toString(),
-        },
-      })
-      await cache.put(cacheKey, response)
-    } catch (err) {
-      // Cache write failed - log and continue (non-fatal)
-      logger.debug(`Cache write failed for ${path}`, err)
-    }
+    void _fileCacheTtl // Unused parameter kept for API compatibility
   }
 
   async read(path: string): Promise<Uint8Array> {
-    // L1: Check sync in-memory cache first (O(1), no async overhead)
-    const l1Cached = this.getFromL1Cache(path)
-    if (l1Cached) {
-      this.cacheHits++
-      this.l1CacheHits++
-      return l1Cached
-    }
-
-    // L2: Check Cache API (async, but persistent across isolates)
-    const l2Cached = await this.getFromCache(path)
-    if (l2Cached) {
-      this.cacheHits++
-      // Promote to L1 for faster subsequent access
-      this.putInL1Cache(path, l2Cached)
-      return l2Cached
-    }
-
     // Check if file is being loaded by another request in this isolate
     const loading = this.loadingFiles.get(path)
     if (loading) {
       return loading
     }
 
-    // Load and cache in both L1 and L2
-    const loadPromise = this.loadWholeFile(path)
+    // Load file
+    const loadPromise = this.loadFile(path)
     this.loadingFiles.set(path, loadPromise)
 
     try {
-      const data = await loadPromise
-      // Store in L1 (sync, immediate benefit)
-      this.putInL1Cache(path, data)
-      // Store in L2 Cache API (non-blocking, for persistence)
-      this.putInCache(path, data).catch(() => {
-        // Ignore cache write errors - they're logged in putInCache
-      })
-      return data
+      return await loadPromise
     } finally {
       this.loadingFiles.delete(path)
     }
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
-    // L1: Check sync in-memory cache first (O(1), no async overhead)
-    const l1Cached = this.getFromL1Cache(path)
-    if (l1Cached) {
-      this.cacheHits++
-      this.l1CacheHits++
-      return l1Cached.slice(start, end)
-    }
-
-    // L2: Check Cache API - serve range from cached whole file
-    const l2Cached = await this.getFromCache(path)
-    if (l2Cached) {
-      this.cacheHits++
-      // Promote to L1 for faster subsequent access
-      this.putInL1Cache(path, l2Cached)
-      return l2Cached.slice(start, end)
-    }
-
-    // Check if file is being loaded by another request in this isolate
-    const loading = this.loadingFiles.get(path)
-    if (loading) {
-      const data = await loading
-      return data.slice(start, end)
-    }
-
-    // Load whole file in ONE request, cache it, return the range
-    // This converts N range requests into 1 whole-file request
-    const loadPromise = this.loadWholeFile(path)
-    this.loadingFiles.set(path, loadPromise)
-
-    try {
-      const data = await loadPromise
-      // Store in L1 (sync, immediate benefit)
-      this.putInL1Cache(path, data)
-      // Store in L2 Cache API (non-blocking, for persistence)
-      this.putInCache(path, data).catch(() => {
-        // Ignore cache write errors - they're logged in putInCache
-      })
-      return data.slice(start, end)
-    } finally {
-      this.loadingFiles.delete(path)
-    }
+    // For range reads, fetch the specific range using Range headers
+    // CDN handles caching at the fetch layer
+    return this.loadRange(path, start, end)
   }
 
   /**
-   * Invalidate cached file data (both L1 and L2)
-   * Call this after writes to ensure cache coherence
+   * Load entire file
    */
-  async invalidateCache(path: string): Promise<void> {
-    // Invalidate L1 (sync)
-    this.invalidateL1Cache(path)
-
-    // Invalidate L2 (async Cache API)
-    const cache = await this.getCache()
-    if (!cache) {
-      return
-    }
-
-    try {
-      const cacheKey = this.createCacheKey(path)
-      await cache.delete(cacheKey)
-    } catch (err) {
-      // Cache delete failed - log and continue
-      logger.debug(`Cache invalidation failed for ${path}`, err)
-    }
-  }
-
-  /**
-   * Load entire file in one request
-   */
-  private async loadWholeFile(path: string): Promise<Uint8Array> {
+  private async loadFile(path: string): Promise<Uint8Array> {
     this.totalReads++
 
     // Use edge cache via cdn.workers.do for better global performance
@@ -682,6 +334,49 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
     // Fall back to primary bucket
     this.primaryHits++
     const obj = await this.primaryBucket.get(path)
+    if (!obj) throw new Error(`Object not found: ${path}`)
+    return new Uint8Array(await obj.arrayBuffer())
+  }
+
+  /**
+   * Load byte range from file using Range headers
+   */
+  private async loadRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    this.totalReads++
+
+    // Use edge cache via cdn.workers.do with Range header
+    if (this.r2DevUrl) {
+      const url = `${this.r2DevUrl}/${path}?v=single-snappy`
+      const response = await fetch(url, {
+        headers: {
+          'Range': `bytes=${start}-${end - 1}`,
+        },
+        cf: {
+          cacheTtl: DEFAULT_CACHE_TTL,
+          cacheEverything: true,
+        },
+      })
+      if (response.ok || response.status === 206) {
+        this.edgeHits++
+        return new Uint8Array(await response.arrayBuffer())
+      }
+    }
+
+    // Try CDN bucket with prefix (range read)
+    const cdnPath = `${this.cdnPrefix}/${path}`
+    const cdnObj = await this.cdnBucket.get(cdnPath, {
+      range: { offset: start, length: end - start },
+    })
+    if (cdnObj) {
+      this.cdnHits++
+      return new Uint8Array(await cdnObj.arrayBuffer())
+    }
+
+    // Fall back to primary bucket
+    this.primaryHits++
+    const obj = await this.primaryBucket.get(path, {
+      range: { offset: start, length: end - start },
+    })
     if (!obj) throw new Error(`Object not found: ${path}`)
     return new Uint8Array(await obj.arrayBuffer())
   }
@@ -761,9 +456,6 @@ export class QueryExecutor {
   /** Cache of loaded bloom filters per namespace */
   private bloomCache = new Map<string, BloomFilter>()
 
-  /** Cache of parsed parquet data (for small files) - LRU with max entries */
-  private dataCache = new LRUCache<string, unknown[]>(DATA_CACHE_MAX_ENTRIES)
-
   /** R2 storage adapter for ParquetReader */
   private storageAdapter: CdnR2StorageAdapter | null = null
 
@@ -803,74 +495,41 @@ export class QueryExecutor {
   /**
    * Get storage stats for debugging
    */
-  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; cacheHits: number; l1CacheHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean; usingCacheApi: boolean } {
+  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean } {
     if (!this.storageAdapter) {
-      return { cdnHits: 0, primaryHits: 0, edgeHits: 0, cacheHits: 0, l1CacheHits: 0, totalReads: 0, usingCdn: false, usingEdge: false, usingCacheApi: false }
+      return { cdnHits: 0, primaryHits: 0, edgeHits: 0, totalReads: 0, usingCdn: false, usingEdge: false }
     }
     return {
       cdnHits: this.storageAdapter.cdnHits,
       primaryHits: this.storageAdapter.primaryHits,
       edgeHits: this.storageAdapter.edgeHits,
-      cacheHits: this.storageAdapter.cacheHits,
-      l1CacheHits: this.storageAdapter.l1CacheHits,  // Track sync cache hits
       totalReads: this.storageAdapter.totalReads,
       usingCdn: !!this._cdnBucket,
       usingEdge: !!this._r2DevUrl,
-      // Cache API is used when available (Cloudflare Workers environment)
-      usingCacheApi: typeof caches !== 'undefined',
     }
   }
 
   /**
    * Clear in-memory caches (for benchmarking cold queries)
    *
-   * Note: This only clears the in-memory dataCache and metadataCache.
-   * The file cache in CdnR2StorageAdapter uses Cloudflare Cache API which
-   * is shared across isolates and has its own TTL-based eviction.
+   * Clears metadata and bloom filter caches.
+   * CDN handles file caching at the fetch layer.
    */
   clearCache(): void {
-    this.dataCache.clear()
     this.metadataCache.clear()
-  }
-
-  /**
-   * Invalidate file cache for a specific path
-   *
-   * Call this after writes to ensure cache coherence. This invalidates
-   * both the in-memory caches and the Cloudflare Cache API cache.
-   *
-   * @param path - Path to invalidate (e.g., 'dataset/data.parquet')
-   */
-  async invalidateFileCache(path: string): Promise<void> {
-    // Clear from in-memory dataCache
-    this.dataCache.delete(path)
-
-    // Clear from storage adapter's Cache API cache
-    if (this.storageAdapter) {
-      await this.storageAdapter.invalidateCache(path)
-    }
+    this.bloomCache.clear()
   }
 
   /**
    * Invalidate all caches for a namespace
    *
    * Call this after writes to a namespace to ensure cache coherence.
+   * Note: CDN handles file caching at the fetch layer with TTL-based eviction.
    *
    * @param ns - Namespace to invalidate (e.g., 'dataset' or 'dataset/collection')
    */
-  async invalidateNamespaceCache(ns: string): Promise<void> {
-    // Build paths that need invalidation
-    const paths = [
-      ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`,
-      `${ns}/rels.parquet`,
-    ]
-
-    // Invalidate each path
-    for (const path of paths) {
-      await this.invalidateFileCache(path)
-    }
-
-    // Also invalidate metadata and bloom caches
+  invalidateNamespaceCache(ns: string): void {
+    // Invalidate metadata and bloom caches
     this.metadataCache.delete(ns)
     this.bloomCache.delete(ns)
   }
@@ -917,24 +576,6 @@ export class QueryExecutor {
 
       // Use ParquetReader when available (real implementation)
       if (this.parquetReader && this.storageAdapter) {
-        // Check in-memory cache first (avoids ALL I/O for repeated queries)
-        const cached = this.dataCache.get(path) as T[] | undefined
-        if (cached) {
-          stats.cacheHit = true
-          let results = this.applyFilter([...cached], filter)
-          const processed = this.postProcess(results, options)
-          stats.rowsScanned = cached.length
-          stats.rowsReturned = processed.items.length
-          stats.executionTimeMs = performance.now() - startTime
-          return {
-            items: processed.items,
-            total: processed.total,
-            nextCursor: processed.nextCursor,
-            hasMore: processed.hasMore,
-            stats,
-          }
-        }
-
         // Check for applicable secondary indexes (hash, fts)
         // NOTE: SST indexes removed - range queries now use native parquet predicate pushdown
         // Pass full ns path (e.g., 'onet-full/occupations') for index catalog lookup
@@ -953,9 +594,6 @@ export class QueryExecutor {
         let rows: DataRow[]
         let results: T[]
 
-        // For warm performance, read ALL data and cache it
-        // The dataCache makes subsequent queries instant
-        // Early termination only helps cold queries but prevents caching
         if (pushdownFilter && this.storageAdapter) {
           // Use parquetQuery with predicate pushdown
           // hyparquet uses min/max statistics to skip row groups that can't match
@@ -1008,11 +646,6 @@ export class QueryExecutor {
         if (pendingRows.length > 0) {
           results = [...results, ...pendingRows]
           stats.rowsScanned += pendingRows.length
-        }
-
-        // Cache the unpacked data for subsequent requests (only for full reads without pending)
-        if (!pushdownFilter && pendingRows.length === 0) {
-          this.dataCache.set(path, asCacheableArray(results))
         }
 
         // Apply remaining MongoDB-style filters (for nested fields in data)
@@ -1458,37 +1091,31 @@ export class QueryExecutor {
       // Single rels.parquet file (no sharding - doesn't scale for large datasets)
       const path = `${dataset}/rels.parquet`
 
-      // Check in-memory cache first (cache stores parsed data)
-      let allRels = this.dataCache.get(path) as RelRow[] | undefined
-      if (!allRels) {
-        // Read raw rows and parse JSON data column
-        type RawRelRow = {
-          from_id: string
-          match_mode?: string | null | undefined
-          similarity?: number | null | undefined
-          data: string | RelRow['data']
-        }
-        const rawRels = await this.parquetReader.read<RawRelRow>(path)
-
-        // Parse JSON data column if needed
-        allRels = rawRels.map(row => {
-          if (typeof row.data === 'string') {
-            const parsed = tryParseJson<RelRow['data']>(row.data)
-            return {
-              from_id: row.from_id,
-              match_mode: row.match_mode,
-              similarity: row.similarity,
-              data: parsed ?? { to: '', ns: '', name: '', pred: '', rev: '' },
-            }
-          }
-          return row as RelRow
-        })
-
-        this.dataCache.set(path, asCacheableArray(allRels))
+      // Read raw rows and parse JSON data column
+      type RawRelRow = {
+        from_id: string
+        match_mode?: string | null | undefined
+        similarity?: number | null | undefined
+        data: string | RelRow['data']
       }
+      const rawRels = await this.parquetReader.read<RawRelRow>(path)
+
+      // Parse JSON data column if needed
+      const allRels: RelRow[] = rawRels.map(row => {
+        if (typeof row.data === 'string') {
+          const parsed = tryParseJson<RelRow['data']>(row.data)
+          return {
+            from_id: row.from_id,
+            match_mode: row.match_mode,
+            similarity: row.similarity,
+            data: parsed ?? { to: '', ns: '', name: '', pred: '', rev: '' },
+          }
+        }
+        return row as RelRow
+      })
 
       // Filter by from_id, predicate, and shredded field options
-      return allRels!
+      return allRels
         .filter(rel => {
           // Basic filters
           if (rel.from_id !== fromId) return false
@@ -2206,112 +1833,6 @@ export class QueryExecutor {
     }
 
     return result
-  }
-
-  /**
-   * Read with early termination for limit queries
-   *
-   * Uses parquetQuery's rowLimit to stop reading once enough rows are found.
-   * For filtered queries, reads in chunks and applies filter incrementally.
-   *
-   * @param path - Path to parquet file
-   * @param filter - Filter to apply to rows
-   * @param targetCount - Number of rows needed (limit + skip)
-   * @param stats - Query stats to update
-   * @returns Array of matching rows
-   */
-  private async readRowGroupsWithEarlyTermination<T>(
-    path: string,
-    filter: Filter,
-    targetCount: number,
-    stats: QueryStats
-  ): Promise<T[]> {
-    if (!this.parquetReader || !this.storageAdapter) {
-      return []
-    }
-
-    type DataRow = { $id: string; data: T | string; [key: string]: unknown }
-    const hasFilter = Object.keys(filter).length > 0
-
-    // For queries WITHOUT filter, use rowEnd to limit rows (most efficient)
-    if (!hasFilter) {
-      const asyncBuffer = await this.createAsyncBuffer(path)
-      const rows = await parquetQuery({
-        file: asyncBuffer,
-        columns: ['$id', 'data'],
-        compressors,
-        rowEnd: targetCount,  // Stop reading after targetCount rows (rowEnd is exclusive)
-      }) as DataRow[]
-
-      stats.rowsScanned = rows.length
-      stats.usedEarlyTermination = rows.length >= targetCount
-
-      // Unpack data column
-      return rows.map(row => {
-        if (typeof row.data === 'string') {
-          const parsed = tryParseJson<T>(row.data)
-          return parsed ?? rowAsEntity<T>(row)
-        }
-        return (row.data ?? row) as T
-      })
-    }
-
-    // For queries WITH filter, read in chunks until we find enough matches
-    // Start with 2x target as initial guess, grow exponentially if needed
-    const matchingRows: T[] = []
-    let rowsScanned = 0
-    let chunkSize = Math.max(targetCount * 2, 100)  // Start with 2x or at least 100
-    let rowStart = 0
-    const MAX_CHUNK_SIZE = 10000  // Don't read more than 10K rows at once
-
-    // Create async buffer ONCE outside the loop (avoids repeated stat() calls)
-    const asyncBuffer = await this.createAsyncBuffer(path)
-
-    while (matchingRows.length < targetCount) {
-      const rows = await parquetQuery({
-        file: asyncBuffer,
-        columns: ['$id', 'data'],
-        compressors,
-        rowStart,
-        rowEnd: rowStart + chunkSize,
-      }) as DataRow[]
-
-      // If we got fewer rows than requested, we've reached the end
-      const reachedEnd = rows.length < chunkSize
-      rowsScanned += rows.length
-      rowStart += rows.length
-
-      // Filter and unpack rows
-      for (const row of rows) {
-        let item: T
-        if (typeof row.data === 'string') {
-          const parsed = tryParseJson<T>(row.data)
-          item = parsed ?? rowAsEntity<T>(row)
-        } else {
-          item = (row.data ?? row) as T
-        }
-
-        if (this.matchesFilter(item, filter)) {
-          matchingRows.push(item)
-          if (matchingRows.length >= targetCount) {
-            break
-          }
-        }
-      }
-
-      // Stop if we've reached the end of data or have enough matches
-      if (reachedEnd || matchingRows.length >= targetCount) {
-        break
-      }
-
-      // Grow chunk size for next iteration (up to MAX_CHUNK_SIZE)
-      chunkSize = Math.min(chunkSize * 2, MAX_CHUNK_SIZE)
-    }
-
-    stats.rowsScanned = rowsScanned
-    stats.usedEarlyTermination = matchingRows.length >= targetCount
-
-    return matchingRows
   }
 
   /**

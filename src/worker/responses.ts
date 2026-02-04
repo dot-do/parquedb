@@ -28,7 +28,6 @@ export interface StorageStats {
   cdnHits: number
   primaryHits: number
   edgeHits: number
-  cacheHits: number
   totalReads: number
   usingCdn: boolean
   usingEdge: boolean
@@ -165,9 +164,8 @@ export function buildResponse(
       requestedAt,
       ...(latency !== undefined ? { latency: `${latency}ms` } : {}),
       ...(timingInfo && Object.keys(timingInfo).length > 0 ? { timing: timingInfo } : {}),
-      ...(storageStats?.totalReads || storageStats?.cacheHits ? {
+      ...(storageStats?.totalReads ? {
         storage: {
-          cacheHits: storageStats.cacheHits,
           edgeHits: storageStats.edgeHits,
           cdnHits: storageStats.cdnHits,
           primaryHits: storageStats.primaryHits,

@@ -707,8 +707,6 @@ export interface StorageStats {
   primaryHits: number
   /** Edge cache hits */
   edgeHits: number
-  /** Cache API hits */
-  cacheHits: number
   /** Total read operations */
   totalReads: number
   /** Whether CDN is being used */
