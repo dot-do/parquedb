@@ -20,7 +20,7 @@ import type { ReadonlyStorageBackend, FileStat, ListResult } from '../types/stor
 import { ReadPath, NotFoundError } from './ReadPath'
 import { ParquetReader } from '../parquet/reader'
 // Predicate pushdown from hyparquet fork
-import { parquetQuery, parquetMetadata } from 'hyparquet'
+import { parquetQuery, parquetMetadata, parquetMetadataAsync } from 'hyparquet'
 import type { FileMetaData, RowGroup as HyparquetRowGroup, ColumnChunk as HyparquetColumnChunk } from 'hyparquet'
 // Patched LZ4 decompressor (fixes match length extension + signed integer overflow bugs)
 import { compressors } from '../parquet/compressors'
@@ -450,8 +450,11 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
 }
 
 export class QueryExecutor {
-  /** Cache of loaded metadata per namespace */
+  /** Cache of loaded metadata per namespace (our converted format) */
   private metadataCache = new Map<string, ParquetMetadata>()
+
+  /** Cache of raw hyparquet metadata per path (for passing to parquetQuery) */
+  private rawMetadataCache = new Map<string, FileMetaData>()
 
   /** Cache of loaded bloom filters per namespace */
   private bloomCache = new Map<string, BloomFilter>()
@@ -517,6 +520,7 @@ export class QueryExecutor {
    */
   clearCache(): void {
     this.metadataCache.clear()
+    this.rawMetadataCache.clear()
     this.bloomCache.clear()
   }
 
@@ -532,6 +536,35 @@ export class QueryExecutor {
     // Invalidate metadata and bloom caches
     this.metadataCache.delete(ns)
     this.bloomCache.delete(ns)
+    // Also invalidate raw metadata cache for the parquet file path
+    const path = ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`
+    this.rawMetadataCache.delete(path)
+  }
+
+  /**
+   * Load raw hyparquet metadata with caching
+   *
+   * This returns the native hyparquet FileMetaData format which can be
+   * passed directly to parquetQuery to avoid redundant metadata reads.
+   *
+   * @param path - Path to the parquet file
+   * @returns hyparquet FileMetaData
+   */
+  private async loadRawMetadata(path: string): Promise<FileMetaData> {
+    // Check cache first
+    const cached = this.rawMetadataCache.get(path)
+    if (cached) {
+      return cached
+    }
+
+    // Read metadata using parquetMetadataAsync (handles async buffer)
+    const asyncBuffer = await this.createAsyncBuffer(path)
+    const metadata = await parquetMetadataAsync(asyncBuffer)
+
+    // Cache for future queries
+    this.rawMetadataCache.set(path, metadata)
+
+    return metadata
   }
 
   // ===========================================================================
@@ -598,9 +631,12 @@ export class QueryExecutor {
           // Use parquetQuery with predicate pushdown
           // hyparquet uses min/max statistics to skip row groups that can't match
           const asyncBuffer = await this.createAsyncBuffer(path)
+          // Load and cache metadata to avoid redundant reads in parquetQuery
+          const metadata = await this.loadRawMetadata(path)
           try {
             rows = await parquetQuery({
               file: asyncBuffer,
+              metadata,  // Pass cached metadata to avoid redundant reads
               filter: pushdownFilter,
               compressors,
               rowEnd: options.limit ? (options.skip ?? 0) + options.limit : undefined,
@@ -628,9 +664,12 @@ export class QueryExecutor {
         } else if (options.limit && this.storageAdapter) {
           // No filter but has limit - use rowEnd for early termination
           const asyncBuffer = await this.createAsyncBuffer(path)
+          // Load and cache metadata to avoid redundant reads in parquetQuery
+          const metadata = await this.loadRawMetadata(path)
           const targetRows = (options.skip ?? 0) + options.limit
           rows = await parquetQuery({
             file: asyncBuffer,
+            metadata,  // Pass cached metadata to avoid redundant reads
             compressors,
             rowEnd: targetRows,
           }) as DataRow[]
@@ -871,10 +910,14 @@ export class QueryExecutor {
         rows = []
         let totalRowsScanned = 0
 
+        // Load metadata once before reading ranges to avoid redundant reads
+        const rangeMetadata = await this.loadRawMetadata(dataPath)
+
         for (const range of rowRanges) {
           const asyncBuffer = await this.createAsyncBuffer(dataPath)
           const rangeRows = await parquetQuery({
             file: asyncBuffer,
+            metadata: rangeMetadata,  // Pass cached metadata to avoid redundant reads
             rowStart: range.rowStart,
             rowEnd: range.rowEnd,
             compressors,
