@@ -221,3 +221,391 @@ describe('MockWriter integration', () => {
     expect(writer.getMessagesOfType('change')).toHaveLength(1)
   })
 })
+
+// =============================================================================
+// WebSocketWriter Tests (Mocked WebSocket)
+// =============================================================================
+
+describe('WebSocketWriter', () => {
+  // Create a mock WebSocket for testing
+  function createMockWebSocket() {
+    const listeners: Record<string, Array<(event: any) => void>> = {}
+    const sentMessages: string[] = []
+
+    const mockWs = {
+      readyState: 1, // WebSocket.OPEN
+      addEventListener(event: string, handler: (event: any) => void) {
+        listeners[event] = listeners[event] || []
+        listeners[event].push(handler)
+      },
+      removeEventListener(event: string, handler: (event: any) => void) {
+        const handlers = listeners[event] || []
+        const idx = handlers.indexOf(handler)
+        if (idx >= 0) handlers.splice(idx, 1)
+      },
+      send(data: string) {
+        sentMessages.push(data)
+      },
+      close(_code?: number, _reason?: string) {
+        mockWs.readyState = 3 // WebSocket.CLOSED
+        const closeHandlers = listeners['close'] || []
+        closeHandlers.forEach((h) => h({}))
+      },
+      // Test helpers
+      _sentMessages: sentMessages,
+      _triggerClose() {
+        mockWs.readyState = 3
+        const closeHandlers = listeners['close'] || []
+        closeHandlers.forEach((h) => h({}))
+      },
+      _triggerError() {
+        const errorHandlers = listeners['error'] || []
+        errorHandlers.forEach((h) => h(new Error('WebSocket error')))
+      },
+    }
+
+    return mockWs as unknown as WebSocket & {
+      _sentMessages: string[]
+      _triggerClose: () => void
+      _triggerError: () => void
+    }
+  }
+
+  it('sends messages as JSON', async () => {
+    const { WebSocketWriter } = await import('@/subscriptions/transports')
+    const mockWs = createMockWebSocket()
+    const writer = new WebSocketWriter(mockWs as WebSocket)
+
+    await writer.send({ type: 'pong', ts: 12345 })
+
+    expect(mockWs._sentMessages).toHaveLength(1)
+    expect(mockWs._sentMessages[0]).toBe('{"type":"pong","ts":12345}')
+  })
+
+  it('reports open state correctly', async () => {
+    const { WebSocketWriter } = await import('@/subscriptions/transports')
+    const mockWs = createMockWebSocket()
+    const writer = new WebSocketWriter(mockWs as WebSocket)
+
+    expect(writer.isOpen()).toBe(true)
+
+    mockWs._triggerClose()
+
+    expect(writer.isOpen()).toBe(false)
+  })
+
+  it('closes the WebSocket', async () => {
+    const { WebSocketWriter } = await import('@/subscriptions/transports')
+    const mockWs = createMockWebSocket()
+    const writer = new WebSocketWriter(mockWs as WebSocket)
+
+    await writer.close()
+
+    expect(writer.isOpen()).toBe(false)
+  })
+
+  it('handles close event', async () => {
+    const { WebSocketWriter } = await import('@/subscriptions/transports')
+    const mockWs = createMockWebSocket()
+    const writer = new WebSocketWriter(mockWs as WebSocket)
+
+    expect(writer.isOpen()).toBe(true)
+
+    mockWs._triggerClose()
+
+    expect(writer.isOpen()).toBe(false)
+  })
+
+  it('handles error event', async () => {
+    const { WebSocketWriter } = await import('@/subscriptions/transports')
+    const mockWs = createMockWebSocket()
+    const writer = new WebSocketWriter(mockWs as WebSocket)
+
+    expect(writer.isOpen()).toBe(true)
+
+    mockWs._triggerError()
+
+    expect(writer.isOpen()).toBe(false)
+  })
+
+  it('throws when sending on closed WebSocket', async () => {
+    const { WebSocketWriter } = await import('@/subscriptions/transports')
+    const mockWs = createMockWebSocket()
+    const writer = new WebSocketWriter(mockWs as WebSocket)
+
+    mockWs._triggerClose()
+
+    await expect(writer.send({ type: 'pong', ts: 12345 })).rejects.toThrow(
+      'WebSocket is not open'
+    )
+  })
+
+  it('handles close when already closed', async () => {
+    const { WebSocketWriter } = await import('@/subscriptions/transports')
+    const mockWs = createMockWebSocket()
+    const writer = new WebSocketWriter(mockWs as WebSocket)
+
+    mockWs._triggerClose()
+
+    // Should not throw
+    await expect(writer.close()).resolves.not.toThrow()
+  })
+})
+
+// =============================================================================
+// NodeSSEWriter Tests (Mocked Node Response)
+// =============================================================================
+
+describe('NodeSSEWriter', () => {
+  function createMockNodeResponse() {
+    const listeners: Record<string, Array<() => void>> = {}
+    const writtenData: string[] = []
+    let headersWritten = false
+    let ended = false
+
+    return {
+      writeHead(statusCode: number, headers: Record<string, string>) {
+        headersWritten = true
+        return { statusCode, headers }
+      },
+      write(data: string): boolean {
+        writtenData.push(data)
+        return true
+      },
+      end() {
+        ended = true
+      },
+      on(event: 'close' | 'error', listener: () => void) {
+        listeners[event] = listeners[event] || []
+        listeners[event].push(listener)
+      },
+      // Test helpers
+      _writtenData: writtenData,
+      _isHeadersWritten: () => headersWritten,
+      _isEnded: () => ended,
+      _triggerClose() {
+        const handlers = listeners['close'] || []
+        handlers.forEach((h) => h())
+      },
+      _triggerError() {
+        const handlers = listeners['error'] || []
+        handlers.forEach((h) => h())
+      },
+    }
+  }
+
+  it('writes SSE headers on construction', async () => {
+    const { NodeSSEWriter } = await import('@/subscriptions/transports')
+    const mockRes = createMockNodeResponse()
+
+    new NodeSSEWriter(mockRes)
+
+    expect(mockRes._isHeadersWritten()).toBe(true)
+  })
+
+  it('sends messages in SSE format', async () => {
+    const { NodeSSEWriter } = await import('@/subscriptions/transports')
+    const mockRes = createMockNodeResponse()
+    const writer = new NodeSSEWriter(mockRes)
+
+    await writer.send({ type: 'pong', ts: 12345 })
+
+    expect(mockRes._writtenData).toHaveLength(1)
+    expect(mockRes._writtenData[0]).toBe('data: {"type":"pong","ts":12345}\n\n')
+  })
+
+  it('sends multiple messages', async () => {
+    const { NodeSSEWriter } = await import('@/subscriptions/transports')
+    const mockRes = createMockNodeResponse()
+    const writer = new NodeSSEWriter(mockRes)
+
+    await writer.send({ type: 'connected', connectionId: 'conn1' })
+    await writer.send({ type: 'pong', ts: 12345 })
+
+    expect(mockRes._writtenData).toHaveLength(2)
+  })
+
+  it('reports open state', async () => {
+    const { NodeSSEWriter } = await import('@/subscriptions/transports')
+    const mockRes = createMockNodeResponse()
+    const writer = new NodeSSEWriter(mockRes)
+
+    expect(writer.isOpen()).toBe(true)
+  })
+
+  it('closes the response', async () => {
+    const { NodeSSEWriter } = await import('@/subscriptions/transports')
+    const mockRes = createMockNodeResponse()
+    const writer = new NodeSSEWriter(mockRes)
+
+    await writer.close()
+
+    expect(mockRes._isEnded()).toBe(true)
+    expect(writer.isOpen()).toBe(false)
+  })
+
+  it('handles close event', async () => {
+    const { NodeSSEWriter } = await import('@/subscriptions/transports')
+    const mockRes = createMockNodeResponse()
+    const writer = new NodeSSEWriter(mockRes)
+
+    expect(writer.isOpen()).toBe(true)
+
+    mockRes._triggerClose()
+
+    expect(writer.isOpen()).toBe(false)
+  })
+
+  it('handles error event', async () => {
+    const { NodeSSEWriter } = await import('@/subscriptions/transports')
+    const mockRes = createMockNodeResponse()
+    const writer = new NodeSSEWriter(mockRes)
+
+    expect(writer.isOpen()).toBe(true)
+
+    mockRes._triggerError()
+
+    expect(writer.isOpen()).toBe(false)
+  })
+
+  it('throws when sending after close', async () => {
+    const { NodeSSEWriter } = await import('@/subscriptions/transports')
+    const mockRes = createMockNodeResponse()
+    const writer = new NodeSSEWriter(mockRes)
+
+    mockRes._triggerClose()
+
+    await expect(writer.send({ type: 'pong', ts: 12345 })).rejects.toThrow(
+      'Response is closed'
+    )
+  })
+
+  it('handles close when already closed', async () => {
+    const { NodeSSEWriter } = await import('@/subscriptions/transports')
+    const mockRes = createMockNodeResponse()
+    const writer = new NodeSSEWriter(mockRes)
+
+    mockRes._triggerClose()
+
+    // Should not throw
+    await expect(writer.close()).resolves.not.toThrow()
+  })
+})
+
+// =============================================================================
+// SSEWriter Error Handling Tests
+// =============================================================================
+
+describe('SSEWriter error handling', () => {
+  it('marks closed on write error', async () => {
+    let writeCount = 0
+    const writable = new WritableStream<Uint8Array>({
+      write() {
+        writeCount++
+        if (writeCount > 1) {
+          throw new Error('Write failed')
+        }
+      },
+    })
+
+    const writer = new SSEWriter(writable)
+
+    // First write succeeds
+    await writer.send({ type: 'connected', connectionId: 'conn1' })
+    expect(writer.isOpen()).toBe(true)
+
+    // Second write fails
+    await expect(writer.send({ type: 'pong', ts: 12345 })).rejects.toThrow('Write failed')
+    expect(writer.isOpen()).toBe(false)
+  })
+
+  it('handles close errors gracefully', async () => {
+    const writable = new WritableStream<Uint8Array>({
+      close() {
+        throw new Error('Close failed')
+      },
+    })
+
+    const writer = new SSEWriter(writable)
+
+    // Should not throw
+    await expect(writer.close()).resolves.not.toThrow()
+    expect(writer.isOpen()).toBe(false)
+  })
+})
+
+// =============================================================================
+// MockWriter Edge Cases
+// =============================================================================
+
+describe('MockWriter edge cases', () => {
+  it('can send and receive error messages with code', async () => {
+    const writer = new MockWriter()
+
+    await writer.send({ type: 'error', error: 'Test error', code: 'TEST_CODE' })
+
+    const errors = writer.getMessagesOfType('error')
+    expect(errors).toHaveLength(1)
+    expect(errors[0].error).toBe('Test error')
+    expect(errors[0].code).toBe('TEST_CODE')
+  })
+
+  it('can send and receive error messages without code', async () => {
+    const writer = new MockWriter()
+
+    await writer.send({ type: 'error', error: 'Test error' })
+
+    const errors = writer.getMessagesOfType('error')
+    expect(errors).toHaveLength(1)
+    expect(errors[0].code).toBeUndefined()
+  })
+
+  it('handles change messages with all fields', async () => {
+    const writer = new MockWriter()
+
+    await writer.send({
+      type: 'change',
+      data: {
+        id: 'evt1',
+        ts: 12345,
+        op: 'UPDATE',
+        ns: 'posts',
+        entityId: 'post1',
+        fullId: 'posts/post1' as any,
+        before: { title: 'Old Title' },
+        after: { title: 'New Title' },
+        actor: 'users/admin',
+        metadata: { source: 'api' },
+      },
+    })
+
+    const changes = writer.getMessagesOfType('change')
+    expect(changes).toHaveLength(1)
+    expect(changes[0].data.before).toEqual({ title: 'Old Title' })
+    expect(changes[0].data.after).toEqual({ title: 'New Title' })
+    expect(changes[0].data.actor).toBe('users/admin')
+    expect(changes[0].data.metadata).toEqual({ source: 'api' })
+  })
+
+  it('returns empty array for non-existent message types', async () => {
+    const writer = new MockWriter()
+
+    await writer.send({ type: 'connected', connectionId: 'conn1' })
+
+    const changes = writer.getMessagesOfType('change')
+    expect(changes).toHaveLength(0)
+  })
+
+  it('can clear and resend messages', async () => {
+    const writer = new MockWriter()
+
+    await writer.send({ type: 'connected', connectionId: 'conn1' })
+    expect(writer.messages).toHaveLength(1)
+
+    writer.clear()
+    expect(writer.messages).toHaveLength(0)
+
+    await writer.send({ type: 'pong', ts: 12345 })
+    expect(writer.messages).toHaveLength(1)
+  })
+})

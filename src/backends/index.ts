@@ -154,6 +154,24 @@ export {
 } from './parquet-utils'
 
 // =============================================================================
+// Shared Entity Utilities
+// =============================================================================
+
+export {
+  // Update operations
+  applyUpdate,
+  // Default entity creation
+  createDefaultEntity,
+  // Sorting utilities
+  compareValues,
+  sortEntities,
+  sortEntitiesImmutable,
+  // Pagination utilities
+  applyPagination,
+  applyPaginationFromOptions,
+} from './entity-utils'
+
+// =============================================================================
 // Factory Function
 // =============================================================================
 

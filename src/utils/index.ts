@@ -136,3 +136,10 @@ export {
   type TTLCacheStats,
   TTLCache,
 } from './ttl-cache'
+
+export {
+  type ParsedEntityId,
+  parseEntityId,
+  tryParseEntityId,
+  userActorId,
+} from './entity-id'

@@ -131,7 +131,12 @@ export {
    * Gets the entity store Map for a given storage backend.
    * Used internally for testing and direct store access.
    *
+   * The entity store is an LRU cache with configurable size limits.
+   * Configure the cache before first use with configureEntityStore()
+   * or via ParqueDBConfig.maxCacheSize.
+   *
    * @param storage - The storage backend instance
+   * @param config - Optional cache configuration (used only when creating new store)
    * @returns Map of entity ID to Entity objects
    */
   getEntityStore,
@@ -181,7 +186,39 @@ export {
    * })
    * ```
    */
-  clearGlobalState
+  clearGlobalState,
+  /**
+   * Configure the entity store for a storage backend before first use.
+   *
+   * @param storage - The storage backend to configure
+   * @param config - Cache configuration options
+   *
+   * @example
+   * ```typescript
+   * configureEntityStore(storage, { maxEntities: 5000 })
+   * ```
+   */
+  configureEntityStore,
+  /**
+   * Get cache statistics for the entity store.
+   *
+   * @param storage - The storage backend
+   * @returns Cache statistics or undefined if store not created
+   */
+  getEntityCacheStats,
+  /**
+   * LRU-based entity cache that implements the Map interface.
+   * Provides LRU eviction when the cache exceeds its size limit.
+   */
+  LRUEntityCache,
+  /**
+   * Default maximum number of entities to keep in memory
+   */
+  DEFAULT_MAX_ENTITIES,
+  /**
+   * Configuration interface for the entity store cache
+   */
+  type EntityStoreConfig,
 } from './store'
 
 // Re-export collection

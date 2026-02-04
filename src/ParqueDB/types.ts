@@ -225,6 +225,8 @@ export interface EventLogConfig {
   archiveOnRotation?: boolean | undefined
   /** Maximum number of archived events to keep in memory (default: 50000). Only applies when archiveOnRotation is true. Older archived events are pruned when this limit is exceeded. */
   maxArchivedEvents?: number | undefined
+  /** Maximum number of pending events before backpressure is applied (default: 10000). When exceeded, recordEvent will throw a BackpressureError. Set to 0 to disable the limit. */
+  maxPendingEvents?: number | undefined
 }
 
 /**
@@ -251,6 +253,7 @@ export const DEFAULT_EVENT_LOG_CONFIG: Required<EventLogConfig> = {
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
   archiveOnRotation: false,
   maxArchivedEvents: 50000, // Default limit for archived events to prevent unbounded growth
+  maxPendingEvents: 10000, // Default limit for pending events to prevent unbounded memory growth
 }
 
 /**
@@ -752,6 +755,7 @@ export {
   EntityNotFoundError,
   RelationshipError,
   EventError,
+  BackpressureError,
 } from '../errors'
 
 // Import and re-export ValidationError with backward-compatible constructor

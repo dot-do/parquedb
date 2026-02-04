@@ -32,8 +32,13 @@ import {
   extractDataFields,
 } from './parquet-utils'
 
-// Import update operators
-import { applyOperators } from '../mutation/operators'
+// Import shared entity utilities
+import {
+  applyUpdate as applyUpdateUtil,
+  createDefaultEntity as createDefaultEntityUtil,
+  sortEntitiesImmutable,
+  applyPaginationFromOptions,
+} from './entity-utils'
 
 // =============================================================================
 // Abstract Base Entity Backend
@@ -503,85 +508,45 @@ export abstract class BaseEntityBackend implements EntityBackend {
    * - Array: $push, $pull, $pullAll, $addToSet, $pop
    * - Date: $currentDate
    * - Bitwise: $bit
+   *
+   * Delegates to shared entity-utils for consistent behavior across backends.
    */
   protected applyUpdate<T>(entity: Entity<T>, update: Update): Entity<T> {
-    const result = applyOperators(entity as Record<string, unknown>, update)
-    return result.document as Entity<T>
+    return applyUpdateUtil(entity, update)
   }
 
   /**
    * Create a default entity for upsert operations
+   *
+   * Delegates to shared entity-utils for consistent behavior across backends.
    */
   protected createDefaultEntity<T>(ns: string, id: string): Entity<T> {
-    const now = new Date()
-    return {
-      $id: entityId(ns, id),
-      $type: 'unknown',
-      name: id,
-      createdAt: now,
-      createdBy: SYSTEM_ACTOR,
-      updatedAt: now,
-      updatedBy: SYSTEM_ACTOR,
-      version: 0,
-    } as Entity<T>
+    return createDefaultEntityUtil<T>(ns, id)
   }
 
   /**
    * Sort entities by specified fields
    *
    * Handles null/undefined values (sorted to end), strings, numbers, and dates.
+   * Delegates to shared entity-utils for consistent behavior across backends.
    */
   protected sortEntities<T>(
     entities: Entity<T>[],
     sort: Record<string, 1 | -1>
   ): Entity<T>[] {
-    const sortFields = Object.entries(sort)
-
-    return entities.sort((a, b) => {
-      for (const [field, direction] of sortFields) {
-        const aVal = (a as Record<string, unknown>)[field]
-        const bVal = (b as Record<string, unknown>)[field]
-
-        let cmp = 0
-        if (aVal === bVal) {
-          cmp = 0
-        } else if (aVal === null || aVal === undefined) {
-          cmp = 1
-        } else if (bVal === null || bVal === undefined) {
-          cmp = -1
-        } else if (typeof aVal === 'string' && typeof bVal === 'string') {
-          cmp = aVal.localeCompare(bVal)
-        } else if (typeof aVal === 'number' && typeof bVal === 'number') {
-          cmp = aVal - bVal
-        } else if (aVal instanceof Date && bVal instanceof Date) {
-          cmp = aVal.getTime() - bVal.getTime()
-        } else {
-          cmp = String(aVal).localeCompare(String(bVal))
-        }
-
-        if (cmp !== 0) {
-          return direction === -1 ? -cmp : cmp
-        }
-      }
-      return 0
-    })
+    return sortEntitiesImmutable(entities, sort)
   }
 
   /**
    * Apply skip and limit to an array of entities
+   *
+   * Delegates to shared entity-utils for consistent behavior across backends.
    */
   protected applyPagination<T>(
     entities: Entity<T>[],
     options?: { skip?: number | undefined; limit?: number | undefined }
   ): Entity<T>[] {
-    let result = entities
-    if (options?.skip) {
-      result = result.slice(options.skip)
-    }
-    if (options?.limit) {
-      result = result.slice(0, options.limit)
-    }
-    return result
+    return applyPaginationFromOptions(entities, options)
   }
 
   /**

@@ -502,6 +502,22 @@ interface PushModifier {
   $sort?: 1 | -1 | Record<string, 1 | -1> | undefined
 }
 
+/**
+ * Type guard to check if a value is a $push modifier object.
+ *
+ * A push modifier contains `$each` (required) plus optional `$position`, `$slice`, and `$sort`.
+ * When present, `$each` specifies an array of elements to push, and the other fields
+ * control where elements are inserted and how the resulting array is modified.
+ *
+ * @param value - The value to check
+ * @returns True if the value is a PushModifier with a valid `$each` array
+ *
+ * @example
+ * isPushModifier({ $each: [1, 2, 3] }) // true
+ * isPushModifier({ $each: [1], $position: 0 }) // true
+ * isPushModifier([1, 2, 3]) // false - plain array, not a modifier
+ * isPushModifier({ value: 1 }) // false - missing $each
+ */
 function isPushModifier(value: unknown): value is PushModifier {
   return (
     typeof value === 'object' &&
@@ -511,6 +527,21 @@ function isPushModifier(value: unknown): value is PushModifier {
   )
 }
 
+/**
+ * Type guard to check if a value contains a `$each` modifier.
+ *
+ * This is a more general check than `isPushModifier`, used for operators like `$addToSet`
+ * that support `$each` without the full push modifier options ($position, $slice, $sort).
+ *
+ * @param value - The value to check
+ * @returns True if the value is an object with a valid `$each` array property
+ *
+ * @example
+ * isEachModifier({ $each: ['a', 'b'] }) // true - valid $each modifier
+ * isEachModifier({ $each: [] }) // true - empty array is valid
+ * isEachModifier('value') // false - not an object
+ * isEachModifier({ other: 1 }) // false - missing $each
+ */
 function isEachModifier(value: unknown): value is { $each: unknown[] } {
   return (
     typeof value === 'object' &&
@@ -520,6 +551,39 @@ function isEachModifier(value: unknown): value is { $each: unknown[] } {
   )
 }
 
+/**
+ * Sort an array in place according to the specified sort criteria.
+ *
+ * Supports two sorting modes:
+ * 1. **Simple sort** (number): Sort by element values directly
+ *    - `1` for ascending order
+ *    - `-1` for descending order
+ * 2. **Field sort** (object): Sort objects by one or more fields
+ *    - Keys are dot-notation field paths
+ *    - Values are `1` (ascending) or `-1` (descending)
+ *    - Fields are compared in order; later fields break ties
+ *
+ * Uses `compareValues` for type-aware comparison (handles numbers, strings, dates, etc.).
+ *
+ * @param arr - The array to sort (mutated in place)
+ * @param sort - Sort specification: `1` (asc), `-1` (desc), or `{ field: direction }` object
+ *
+ * @example
+ * // Simple ascending sort
+ * const nums = [3, 1, 2]
+ * sortArray(nums, 1) // nums is now [1, 2, 3]
+ *
+ * @example
+ * // Simple descending sort
+ * const nums = [1, 2, 3]
+ * sortArray(nums, -1) // nums is now [3, 2, 1]
+ *
+ * @example
+ * // Multi-field object sort
+ * const users = [{ name: 'b', age: 20 }, { name: 'a', age: 30 }]
+ * sortArray(users, { name: 1 }) // sorted by name ascending
+ * sortArray(users, { age: -1, name: 1 }) // by age desc, then name asc
+ */
 function sortArray(arr: unknown[], sort: 1 | -1 | Record<string, 1 | -1>): void {
   if (typeof sort === 'number') {
     arr.sort((a, b) => {
@@ -542,6 +606,40 @@ function sortArray(arr: unknown[], sort: 1 | -1 | Record<string, 1 | -1>): void 
   }
 }
 
+/**
+ * Slice an array in place to limit its size.
+ *
+ * Behavior depends on the sign of the slice value:
+ * - **slice = 0**: Empty the array completely
+ * - **slice > 0**: Keep only the first `slice` elements (from the beginning)
+ * - **slice < 0**: Keep only the last `|slice|` elements (from the end)
+ *
+ * If the array length is already within the slice limit, no modification occurs.
+ * This is used by the `$push` operator's `$slice` modifier to cap array size.
+ *
+ * @param arr - The array to slice (mutated in place)
+ * @param slice - The slice limit: positive keeps first N, negative keeps last N, zero empties
+ *
+ * @example
+ * // Keep first 3 elements
+ * const arr1 = [1, 2, 3, 4, 5]
+ * applySlice(arr1, 3) // arr1 is now [1, 2, 3]
+ *
+ * @example
+ * // Keep last 2 elements
+ * const arr2 = [1, 2, 3, 4, 5]
+ * applySlice(arr2, -2) // arr2 is now [4, 5]
+ *
+ * @example
+ * // Empty the array
+ * const arr3 = [1, 2, 3]
+ * applySlice(arr3, 0) // arr3 is now []
+ *
+ * @example
+ * // No change if already within limit
+ * const arr4 = [1, 2]
+ * applySlice(arr4, 5) // arr4 is still [1, 2]
+ */
 function applySlice(arr: unknown[], slice: number): void {
   if (slice === 0) {
     arr.length = 0

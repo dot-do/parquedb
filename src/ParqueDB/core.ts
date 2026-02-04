@@ -474,6 +474,34 @@ export class ParqueDBImpl {
   }
 
   // ===========================================================================
+  // Public API - Cache Management
+  // ===========================================================================
+
+  /**
+   * Get statistics about the entity cache.
+   *
+   * @returns Cache statistics including size, max entries, hits, misses, and evictions
+   *
+   * @example
+   * ```typescript
+   * const stats = db.getCacheStats()
+   * console.log(`Cache size: ${stats.size}/${stats.maxEntries}`)
+   * console.log(`Hit rate: ${(stats.hitRate * 100).toFixed(1)}%`)
+   * console.log(`Evictions: ${stats.evictions}`)
+   * ```
+   */
+  getCacheStats(): {
+    size: number
+    maxEntries: number
+    hits: number
+    misses: number
+    evictions: number
+    hitRate: number
+  } | undefined {
+    return getEntityCacheStats(this.storage)
+  }
+
+  // ===========================================================================
   // Public API - Collection
   // ===========================================================================
 

@@ -738,4 +738,4 @@ function capitalizeFirst(str: string): string {
 }
 
 // Re-export types
-export type { ParqueDBMCPOptions, ToolResult, CollectionInfo } from './types'
+export type { ParqueDBMCPOptions, ParqueDBMCPServerHandle, ToolResult, CollectionInfo } from './types'

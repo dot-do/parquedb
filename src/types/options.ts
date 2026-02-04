@@ -39,9 +39,7 @@ export interface SortSpec {
  * const sortBad: TypedSortSpec<Post> = { invalid: -1 }
  * ```
  */
-export type TypedSortSpec<T> = {
-  [K in keyof T | keyof EntityRef | keyof AuditFields]?: SortDirection
-}
+export type TypedSortSpec<T> = Partial<Record<keyof T | keyof EntityRef | keyof AuditFields, SortDirection>> & SortSpec
 
 /** Normalize sort direction to 1 or -1 */
 export function normalizeSortDirection(dir: SortDirection): 1 | -1 {
@@ -82,9 +80,7 @@ export interface Projection {
  * const projBad: TypedProjection<Post> = { invalid: 1 }
  * ```
  */
-export type TypedProjection<T> = {
-  [K in keyof T | keyof EntityRef | keyof AuditFields]?: 0 | 1 | boolean
-}
+export type TypedProjection<T> = Partial<Record<keyof T | keyof EntityRef | keyof AuditFields, 0 | 1 | boolean>> & Projection
 
 // =============================================================================
 // Populate Options

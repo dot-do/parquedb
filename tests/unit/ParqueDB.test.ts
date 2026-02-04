@@ -27,22 +27,71 @@ import type {
 // =============================================================================
 
 /**
- * Shared test context for tests that need ParqueDB instances.
- * This ensures proper async cleanup before temp directories are deleted.
+ * Create an isolated test context with storage and automatic cleanup.
+ *
+ * IMPORTANT: Each test must properly dispose ParqueDB instances before the
+ * test context is cleaned up. This is handled by storing the db reference
+ * and calling disposeAsync in afterEach.
  */
-let testCtx: TestContext
+
+// Track active db instances for cleanup
+let activeDb: ParqueDB | null = null
+let testCtx: TestContext | null = null
 
 /**
- * Create a real storage backend using the current test context.
- * Use this instead of creating FsBackend directly.
+ * Create a real FsBackend with a unique temporary directory.
+ * Creates a new test context for each call.
  */
 async function createRealStorage(): Promise<StorageBackend> {
-  // The storage is already created by the test context
+  // Clean up previous context if it exists
+  if (testCtx && !testCtx.isCleanedUp) {
+    if (activeDb) {
+      try {
+        await activeDb.disposeAsync()
+      } catch {
+        // Ignore disposal errors
+      }
+      activeDb = null
+    }
+    await testCtx.cleanup()
+  }
+
+  // Create new context
+  testCtx = await createTestContext()
   return testCtx.storage
+}
+
+/**
+ * Dispose of the active db instance and clean up the test context.
+ * Should be called in afterEach.
+ */
+async function cleanupTestResources(): Promise<void> {
+  if (activeDb) {
+    try {
+      await activeDb.disposeAsync()
+    } catch {
+      // Ignore disposal errors
+    }
+    activeDb = null
+  }
+
+  if (testCtx && !testCtx.isCleanedUp) {
+    await testCtx.cleanup()
+    testCtx = null
+  }
+}
+
+/**
+ * Track a db instance for cleanup.
+ * Call this when creating a new ParqueDB instance in tests.
+ */
+function trackDb(db: ParqueDB): void {
+  activeDb = db
 }
 
 // Ensure proper cleanup even if tests fail
 afterAll(async () => {
+  await cleanupTestResources()
   await cleanupAllTestContexts()
 })
 
@@ -134,6 +183,11 @@ describe('ParqueDB', () => {
     beforeEach(async () => {
       storage = await createRealStorage()
       db = new ParqueDB({ storage })
+      trackDb(db)
+    })
+
+    afterEach(async () => {
+      await cleanupTestResources()
     })
 
     it('should provide collection access via db.Posts', () => {
@@ -188,6 +242,11 @@ describe('ParqueDB', () => {
     beforeEach(async () => {
       storage = await createRealStorage()
       db = new ParqueDB({ storage })
+      trackDb(db)
+    })
+
+    afterEach(async () => {
+      await cleanupTestResources()
     })
 
     it('should normalize Posts to posts namespace', () => {
@@ -237,6 +296,11 @@ describe('ParqueDB', () => {
     beforeEach(async () => {
       storage = await createRealStorage()
       db = new ParqueDB({ storage })
+      trackDb(db)
+    })
+
+    afterEach(async () => {
+      await cleanupTestResources()
     })
 
     it('should allow registering a schema after construction', () => {
@@ -348,6 +412,11 @@ describe('ParqueDB', () => {
     beforeEach(async () => {
       storage = await createRealStorage()
       db = new ParqueDB({ storage })
+      trackDb(db)
+    })
+
+    afterEach(async () => {
+      await cleanupTestResources()
     })
 
     it('should return paginated result with items array', async () => {
@@ -535,6 +604,11 @@ describe('ParqueDB', () => {
     beforeEach(async () => {
       storage = await createRealStorage()
       db = new ParqueDB({ storage })
+      trackDb(db)
+    })
+
+    afterEach(async () => {
+      await cleanupTestResources()
     })
 
     it('should return entity when found', async () => {
@@ -634,6 +708,11 @@ describe('ParqueDB', () => {
     beforeEach(async () => {
       storage = await createRealStorage()
       db = new ParqueDB({ storage })
+      trackDb(db)
+    })
+
+    afterEach(async () => {
+      await cleanupTestResources()
     })
 
     it('should create an entity and return it', async () => {
@@ -805,6 +884,11 @@ describe('ParqueDB', () => {
     beforeEach(async () => {
       storage = await createRealStorage()
       db = new ParqueDB({ storage })
+      trackDb(db)
+    })
+
+    afterEach(async () => {
+      await cleanupTestResources()
     })
 
     it('should update entity and return updated version', async () => {
@@ -995,6 +1079,11 @@ describe('ParqueDB', () => {
     beforeEach(async () => {
       storage = await createRealStorage()
       db = new ParqueDB({ storage })
+      trackDb(db)
+    })
+
+    afterEach(async () => {
+      await cleanupTestResources()
     })
 
     it('should delete entity and return result', async () => {

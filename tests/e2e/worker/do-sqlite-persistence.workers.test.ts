@@ -709,9 +709,10 @@ describe('DO SQLite Persistence - Transaction Durability', () => {
       expect(retrieved.version).toBe(4)
     })
 
-    // Note: Error validation tests are skipped because DO RPC errors
+    // Issue: parquedb-j6is - Error validation tests are skipped because DO RPC errors
     // cause isolated storage issues with vitest-pool-workers.
     // See: https://developers.cloudflare.com/workers/testing/vitest-integration/known-issues/#isolated-storage
+    // TODO: Re-enable when vitest-pool-workers fixes isolated storage cleanup on DO errors
     it.skip('enforces optimistic concurrency on update', async () => {
       const { stub, name } = createDOStub('optimistic-concurrency')
 

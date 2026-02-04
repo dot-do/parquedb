@@ -436,18 +436,23 @@ function evaluateOperators(value: unknown, operators: Record<string, unknown>, c
         if (typeof opValue !== 'string' && !(opValue instanceof RegExp)) return false
         // Only pass flags if $options is explicitly provided, otherwise let RegExp keep its own flags
         const flags = operators.$options !== undefined ? String(operators.$options) : undefined
+        let pattern: RegExp
         try {
-          const pattern = createSafeRegex(opValue, flags)
+          pattern = createSafeRegex(opValue, flags)
+        } catch (err) {
+          // Re-throw UnsafeRegexError (security concern - must not silently accept)
+          if (err instanceof UnsafeRegexError) throw err
+          // Other errors from createSafeRegex (e.g., SyntaxError) - treat as no match
+          return false
+        }
+        try {
           // Use safeRegexTest for runtime protection against ReDoS attacks
           // This provides defense-in-depth beyond static pattern analysis
           if (!safeRegexTest(pattern, value)) return false
         } catch (err) {
-          // Re-throw UnsafeRegexError (security concern - must not silently accept)
-          if (err instanceof UnsafeRegexError) throw err
-          // Re-throw RegexTimeoutError (execution took too long or estimated to be dangerous)
-          if (err instanceof RegexTimeoutError) throw err
-          // Other errors (e.g., SyntaxError) - treat as no match
-          return false
+          // Re-throw all errors from safeRegexTest - they all represent security concerns
+          // (RegexTimeoutError, input length exceeded, etc.)
+          throw err
         }
         break
       }

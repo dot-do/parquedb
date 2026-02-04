@@ -397,10 +397,11 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
   })
 
   describe('Error Handling', () => {
-    // Note: Error validation tests are skipped because DO RPC errors
+    // Issue: parquedb-j6is - Error validation tests are skipped because DO RPC errors
     // cause isolated storage issues with vitest-pool-workers.
     // The validation logic is tested via the successful creation tests above.
     // See: https://developers.cloudflare.com/workers/testing/vitest-integration/known-issues/#isolated-storage
+    // TODO: Re-enable when vitest-pool-workers fixes isolated storage cleanup on DO errors
     it.skip('validates $type for bulk creates', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-validate-${Date.now()}`)
       const stub = asDOTestStub(testEnv.PARQUEDB.get(id))
@@ -420,6 +421,7 @@ describe('DO WAL Phase 2 - Bulk Bypass to R2', () => {
       expect(errorMessage).toContain('Entity must have $type')
     })
 
+    // Issue: parquedb-j6is - Same isolated storage issue as above
     it.skip('validates name for bulk creates', async () => {
       const id = testEnv.PARQUEDB.idFromName(`bulk-validate-name-${Date.now()}`)
       const stub = asDOTestStub(testEnv.PARQUEDB.get(id))

@@ -57,7 +57,7 @@ import type {
 } from './types'
 import { normalizeSortDirection } from './types'
 import { castEntity, entityAsRecord } from './types/cast'
-import { deepClone, getNestedValue, compareValues, generateId } from './utils'
+import { deepClone, getNestedValue, compareValues, generateId, parseEntityId } from './utils'
 import { validatePath, validateKey, validateObjectKeys, validateObjectKeysDeep } from './utils/path-safety'
 import { matchesFilter as canonicalMatchesFilter } from './query/filter'
 import { QueryBuilder } from './query/builder'
@@ -804,13 +804,11 @@ export class Collection<T extends EntityData = EntityData> {
     // Batch fetch target entities by namespace to avoid N+1 queries
     const outboundIdsByNs = new Map<string, string[]>()
     for (const rel of outboundRels) {
-      const targetNs = rel.to.split('/')[0]
-      const targetLocalId = rel.to.split('/').slice(1).join('/')
-      if (!targetNs) continue
-      if (!outboundIdsByNs.has(targetNs)) {
-        outboundIdsByNs.set(targetNs, [])
+      const parsed = parseEntityId(rel.to)
+      if (!outboundIdsByNs.has(parsed.ns)) {
+        outboundIdsByNs.set(parsed.ns, [])
       }
-      outboundIdsByNs.get(targetNs)!.push(targetLocalId)
+      outboundIdsByNs.get(parsed.ns)!.push(parsed.localId)
     }
 
     const outboundEntitiesByFullId = new Map<string, Entity<unknown>>()
@@ -829,11 +827,9 @@ export class Collection<T extends EntityData = EntityData> {
       if (!predicateGroups.has(rel.predicate)) {
         predicateGroups.set(rel.predicate, [])
       }
-      const targetNs = rel.to.split('/')[0]
-      if (!targetNs) continue
-      const targetLocalId = rel.to.split('/').slice(1).join('/')
+      const parsed = parseEntityId(rel.to)
       const targetEntity = outboundEntitiesByFullId.get(rel.to)
-      const displayName = targetEntity?.name || targetLocalId
+      const displayName = targetEntity?.name || parsed.localId
       predicateGroups.get(rel.predicate)!.push({ displayName: String(displayName), targetId: rel.to })
     }
 
@@ -858,13 +854,11 @@ export class Collection<T extends EntityData = EntityData> {
       // Batch fetch source entities by namespace to avoid N+1 queries
       const inboundIdsByNs = new Map<string, string[]>()
       for (const rel of inboundRels) {
-        const sourceNs = rel.from.split('/')[0]
-        const sourceLocalId = rel.from.split('/').slice(1).join('/')
-        if (!sourceNs) continue
-        if (!inboundIdsByNs.has(sourceNs)) {
-          inboundIdsByNs.set(sourceNs, [])
+        const parsed = parseEntityId(rel.from)
+        if (!inboundIdsByNs.has(parsed.ns)) {
+          inboundIdsByNs.set(parsed.ns, [])
         }
-        inboundIdsByNs.get(sourceNs)!.push(sourceLocalId)
+        inboundIdsByNs.get(parsed.ns)!.push(parsed.localId)
       }
 
       const inboundEntitiesByFullId = new Map<string, Entity<unknown>>()
@@ -880,8 +874,7 @@ export class Collection<T extends EntityData = EntityData> {
       }
 
       for (const rel of inboundRels) {
-        const sourceNs = rel.from.split('/')[0]
-        if (!sourceNs) continue
+        const parsed = parseEntityId(rel.from)
         // Determine reverse name based on source namespace and predicate
         // posts/author -> User = posts
         // comments/author -> User = comments
@@ -891,15 +884,14 @@ export class Collection<T extends EntityData = EntityData> {
           'posts': { 'author': 'posts', 'categories': 'posts' },
           'comments': { 'author': 'comments', 'post': 'comments' },
         }
-        const nsReverseMap = reverseMap[sourceNs] || {}
-        const reverseName = nsReverseMap[rel.predicate] || sourceNs
+        const nsReverseMap = reverseMap[parsed.ns] || {}
+        const reverseName = nsReverseMap[rel.predicate] || parsed.ns
 
         if (!reverseGroups.has(reverseName)) {
           reverseGroups.set(reverseName, [])
         }
-        const sourceLocalId = rel.from.split('/').slice(1).join('/')
         const sourceEntity = inboundEntitiesByFullId.get(rel.from)
-        const displayName = sourceEntity?.name || sourceLocalId
+        const displayName = sourceEntity?.name || parsed.localId
         reverseGroups.get(reverseName)!.push({ displayName: String(displayName), sourceId: rel.from })
       }
 
@@ -942,13 +934,11 @@ export class Collection<T extends EntityData = EntityData> {
       // Batch entity fetches by namespace to avoid N+1 queries
       const idsByNamespace = new Map<string, string[]>()
       for (const rel of rels) {
-        const targetNs = rel.to.split('/')[0]
-        const targetLocalId = rel.to.split('/').slice(1).join('/')
-        if (!targetNs) continue
-        if (!idsByNamespace.has(targetNs)) {
-          idsByNamespace.set(targetNs, [])
+        const parsed = parseEntityId(rel.to)
+        if (!idsByNamespace.has(parsed.ns)) {
+          idsByNamespace.set(parsed.ns, [])
         }
-        idsByNamespace.get(targetNs)!.push(targetLocalId)
+        idsByNamespace.get(parsed.ns)!.push(parsed.localId)
       }
 
       // Fetch all entities from each namespace in batch
@@ -1016,8 +1006,8 @@ export class Collection<T extends EntityData = EntityData> {
       const rels = allRels.filter(r => {
         if (r.to !== entityId) return false
         if (config) {
-          const sourceNs = r.from.split('/')[0]
-          return sourceNs === config.sourceNs && r.predicate === config.predicate
+          const parsed = parseEntityId(r.from)
+          return parsed.ns === config.sourceNs && r.predicate === config.predicate
         }
         return true
       })
@@ -1025,13 +1015,11 @@ export class Collection<T extends EntityData = EntityData> {
       // Batch entity fetches by namespace to avoid N+1 queries
       const idsByNamespace = new Map<string, string[]>()
       for (const rel of rels) {
-        const sourceNs = rel.from.split('/')[0]
-        const sourceLocalId = rel.from.split('/').slice(1).join('/')
-        if (!sourceNs) continue
-        if (!idsByNamespace.has(sourceNs)) {
-          idsByNamespace.set(sourceNs, [])
+        const parsed = parseEntityId(rel.from)
+        if (!idsByNamespace.has(parsed.ns)) {
+          idsByNamespace.set(parsed.ns, [])
         }
-        idsByNamespace.get(sourceNs)!.push(sourceLocalId)
+        idsByNamespace.get(parsed.ns)!.push(parsed.localId)
       }
 
       // Fetch all entities from each namespace in batch

@@ -211,9 +211,10 @@ describe('ParqueDB Workers E2E', () => {
       expect(retrieved).toBeNull()
     })
 
-    // Note: This test is skipped due to vitest-pool-workers isolated storage limitations
+    // Issue: parquedb-j6is - Skipped due to vitest-pool-workers isolated storage limitations
     // When a DO throws an error, isolated storage cleanup can fail
     // See: https://developers.cloudflare.com/workers/testing/vitest-integration/known-issues/#isolated-storage
+    // TODO: Re-enable when vitest-pool-workers fixes isolated storage cleanup on DO errors
     it.skip('enforces optimistic concurrency', async () => {
       // Create first
       const created = await stub.create('posts', {
@@ -419,7 +420,10 @@ describe('ParqueDB Workers E2E', () => {
       })
     })
 
-    // Skipped: requires parquet files in R2 - use npm run check:datasets for production validation
+    // Issue: parquedb-j6is - Requires parquet files in R2 bucket
+    // These tests validate production dataset access and should be run with:
+    //   npm run check:datasets
+    // To enable locally, populate R2 with onet-graph and imdb datasets
     describe.skip('/datasets/:dataset/:collection - Collection list', () => {
       // O*NET Graph Dataset Tests
       describe('onet-graph dataset', () => {
@@ -561,7 +565,7 @@ describe('ParqueDB Workers E2E', () => {
       })
     })
 
-    // Skipped: requires parquet files in R2 - use npm run check:datasets for production validation
+    // Issue: parquedb-j6is - Requires parquet files in R2 bucket (see above)
     describe.skip('Filtering', () => {
       it('filters onet-graph occupations by name', async () => {
         const ctx = createExecutionContext()
@@ -606,7 +610,7 @@ describe('ParqueDB Workers E2E', () => {
       })
     })
 
-    // Skipped: requires parquet files in R2 - use npm run check:datasets for production validation
+    // Issue: parquedb-j6is - Requires parquet files in R2 bucket (see above)
     describe.skip('Pagination', () => {
       it('respects limit parameter', async () => {
         const ctx = createExecutionContext()
@@ -692,7 +696,7 @@ describe('ParqueDB Workers E2E', () => {
       })
     })
 
-    // Skipped: requires parquet files in R2 - use npm run check:datasets for production validation
+    // Issue: parquedb-j6is - Requires parquet files in R2 bucket (see above)
     describe.skip('Error handling', () => {
       it('returns 404 for non-existent collection', async () => {
         const ctx = createExecutionContext()

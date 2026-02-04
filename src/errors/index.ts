@@ -24,6 +24,8 @@
  * @module errors
  */
 
+import { isProduction } from '../config/runtime'
+
 // =============================================================================
 // Error Codes
 // =============================================================================
@@ -119,6 +121,7 @@ export enum ErrorCode {
   EVENT_ERROR = 'EVENT_ERROR',
   SNAPSHOT_ERROR = 'SNAPSHOT_ERROR',
   REPLAY_ERROR = 'REPLAY_ERROR',
+  BACKPRESSURE = 'BACKPRESSURE',
 
   // Backend errors (13xxx)
   BACKEND_ERROR = 'BACKEND_ERROR',
@@ -208,7 +211,7 @@ export class ParqueDBError extends Error {
       name: this.name,
       code: this.code,
       message: this.message,
-      stack: process.env.NODE_ENV !== 'production' ? this.stack : undefined,
+      stack: !isProduction() ? this.stack : undefined,
       context: Object.keys(this.context).length > 0 ? this.context : undefined,
       cause: this.cause instanceof ParqueDBError ? this.cause.toJSON() : undefined,
     }
@@ -1106,6 +1109,61 @@ export class EventError extends ParqueDBError {
   }
 }
 
+/**
+ * Error thrown when the pending events queue is full and backpressure is applied.
+ *
+ * This error indicates that the system is receiving events faster than it can
+ * flush them to storage. Callers should either:
+ * - Wait and retry the operation
+ * - Reduce the rate of writes
+ * - Increase maxPendingEvents in the configuration
+ */
+export class BackpressureError extends ParqueDBError {
+  override name = 'BackpressureError'
+
+  constructor(
+    currentSize: number,
+    maxSize: number,
+    context?: {
+      operation?: string | undefined
+      namespace?: string | undefined
+    }
+  ) {
+    const contextMsg = context?.namespace
+      ? ` for namespace "${context.namespace}"`
+      : ''
+
+    super(
+      `Pending events queue is full${contextMsg}: ${currentSize}/${maxSize} events. ` +
+        'The system is receiving events faster than it can flush to storage. ' +
+        'Wait and retry, reduce write rate, or increase maxPendingEvents.',
+      ErrorCode.BACKPRESSURE,
+      { currentSize, maxSize, ...context }
+    )
+    Object.setPrototypeOf(this, BackpressureError.prototype)
+  }
+
+  /** Current number of pending events */
+  get currentSize(): number {
+    return this.context.currentSize as number
+  }
+
+  /** Maximum allowed pending events */
+  get maxSize(): number {
+    return this.context.maxSize as number
+  }
+
+  /** Operation that triggered the backpressure */
+  get operation(): string | undefined {
+    return this.context.operation as string | undefined
+  }
+
+  /** Namespace where backpressure occurred */
+  get namespace(): string | undefined {
+    return this.context.namespace as string | undefined
+  }
+}
+
 // =============================================================================
 // Type Guards
 // =============================================================================
@@ -1231,6 +1289,14 @@ export function isIndexError(error: unknown): error is IndexError {
  */
 export function isEventError(error: unknown): error is EventError {
   return error instanceof EventError
+}
+
+/**
+ * Check if an error is a BackpressureError
+ */
+export function isBackpressureError(error: unknown): error is BackpressureError {
+  return error instanceof BackpressureError ||
+    (isParqueDBError(error) && error.code === ErrorCode.BACKPRESSURE)
 }
 
 // =============================================================================

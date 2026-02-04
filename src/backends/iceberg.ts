@@ -33,8 +33,7 @@ import {
 } from './types'
 import type { Entity, EntityId, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
 import type { Filter } from '../types/filter'
-import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions, SortSpec } from '../types/options'
-import { normalizeSortDirection } from '../types/options'
+import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions } from '../types/options'
 import type { Update } from '../types/update'
 import type { StorageBackend } from '../types/storage'
 import { isETagMismatchError, isNotFoundError } from '../storage/errors'
@@ -295,8 +294,8 @@ export class IcebergBackend implements EntityBackend {
     const now = new Date()
     const actor = options?.actor ?? 'system/parquedb' as EntityId
 
-    // Apply update operators
-    const updated = this.applyUpdate(existing ?? this.createDefaultEntity<T>(ns, id), update)
+    // Apply update operators (using shared utility)
+    const updated = applyUpdate(existing ?? createDefaultEntity<T>(ns, id), update)
 
     // Update audit fields
     const entity: Entity<T> = {
@@ -400,7 +399,7 @@ export class IcebergBackend implements EntityBackend {
     const actor = options?.actor ?? 'system/parquedb' as EntityId
 
     const updated = entities.map(entity => {
-      const result = this.applyUpdate(entity, update)
+      const result = applyUpdate(entity, update)
       return {
         ...result,
         updatedAt: now,

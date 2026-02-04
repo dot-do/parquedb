@@ -516,7 +516,27 @@ class TransactionImpl implements Transaction {
 
     // Phase 3: If there was an error, rollback all applied changes
     if (commitError) {
+      // Emit commit failure event
+      const commitFailureEvent: CommitFailureEvent = {
+        type: 'transaction:commit_failure',
+        transactionId: this.id,
+        timestamp: new Date(),
+        backendType: this.backend.type,
+        error: commitError,
+        appliedOperationCount: appliedOperations.length,
+        totalOperationCount: deletes.length + writes.length,
+      }
+      transactionEventEmitter.emit('transaction:commit_failure', commitFailureEvent)
+      metrics.commitsFailed++
+
+      logger.warn(
+        `[TransactionalBackend] Commit failed for transaction ${this.id}, ` +
+          `attempting rollback of ${appliedOperations.length} operations. ` +
+          `Error: ${commitError.message}`
+      )
+
       const rollbackErrors: Error[] = []
+      const failedRollbackPaths: string[] = []
 
       // Rollback in reverse order
       for (let i = appliedOperations.length - 1; i >= 0; i--) {
@@ -524,7 +544,10 @@ class TransactionImpl implements Transaction {
         const original = originalStates.find((s) => s.path === op.path)
 
         if (!original) {
-          // This shouldn't happen, but handle gracefully
+          // This shouldn't happen, but log it as a warning
+          logger.warn(
+            `[TransactionalBackend] No original state found for path ${op.path} during rollback`
+          )
           continue
         }
 
@@ -532,14 +555,26 @@ class TransactionImpl implements Transaction {
           if (original.data === null) {
             // File didn't exist before - delete it
             await this.backend.delete(op.path)
+            logger.debug(
+              `[TransactionalBackend] Rollback: deleted ${op.path} (did not exist before)`
+            )
           } else {
             // File existed - restore original content
             await this.backend.write(op.path, original.data)
+            logger.debug(
+              `[TransactionalBackend] Rollback: restored ${op.path} (${original.data.length} bytes)`
+            )
           }
         } catch (rollbackError) {
           // Track rollback errors but continue trying to rollback other files
-          rollbackErrors.push(
-            rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError))
+          const err = rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError))
+          rollbackErrors.push(err)
+          failedRollbackPaths.push(op.path)
+
+          logger.error(
+            `[TransactionalBackend] ROLLBACK FAILURE: Failed to restore ${op.path}. ` +
+              `Original existed: ${original.data !== null}, Error: ${err.message}`,
+            rollbackError
           )
         }
       }
@@ -549,15 +584,75 @@ class TransactionImpl implements Transaction {
       this.state.pending.clear()
       this.onComplete(this.id)
 
-      // Throw with all errors
+      // Handle rollback failure case - this is CRITICAL
       if (rollbackErrors.length > 0) {
-        throw new TransactionCommitError(this.id, [
+        metrics.rollbacksFailed++
+        metrics.lastRollbackFailure = new Date()
+
+        // Collect affected paths (all paths involved in the failed rollback)
+        const affectedPaths = appliedOperations.map((op) => op.path)
+
+        // Emit rollback failure event
+        const rollbackFailureEvent: RollbackFailureEvent = {
+          type: 'transaction:rollback_failure',
+          transactionId: this.id,
+          timestamp: new Date(),
+          backendType: this.backend.type,
           commitError,
-          new Error(
-            `Rollback also failed with ${rollbackErrors.length} error(s): ${rollbackErrors.map((e) => e.message).join('; ')}`
+          rollbackErrors,
+          affectedPaths,
+          originalStates: new Map(
+            originalStates.map((s) => [s.path, { existed: s.data !== null, data: s.data }])
           ),
-        ])
+          partiallyAppliedOperations: appliedOperations,
+        }
+        transactionEventEmitter.emit('transaction:rollback_failure', rollbackFailureEvent)
+
+        // Log detailed recovery information
+        logger.error(
+          `[TransactionalBackend] CRITICAL: Rollback failed for transaction ${this.id}. ` +
+            `Database may be in inconsistent state. ` +
+            `Failed paths: ${failedRollbackPaths.join(', ')}. ` +
+            `Total affected paths: ${affectedPaths.length}. ` +
+            `Manual recovery may be required.`
+        )
+
+        // Log recovery data in a structured format for operators
+        const recoveryLogData = {
+          transactionId: this.id,
+          timestamp: new Date().toISOString(),
+          commitError: commitError.message,
+          rollbackErrors: rollbackErrors.map((e) => e.message),
+          affectedPaths,
+          originalStates: originalStates.map((s) => ({
+            path: s.path,
+            existed: s.data !== null,
+            sizeBytes: s.data?.length ?? 0,
+          })),
+          partiallyAppliedOperations: appliedOperations,
+        }
+        logger.error(
+          `[TransactionalBackend] Recovery data (JSON): ${JSON.stringify(recoveryLogData)}`
+        )
+
+        // Throw the specialized rollback failure error
+        throw new TransactionRollbackFailureError(
+          this.id,
+          commitError,
+          rollbackErrors,
+          affectedPaths,
+          originalStates,
+          appliedOperations
+        )
       }
+
+      // Rollback succeeded, but commit still failed
+      metrics.rollbacksSucceeded++
+      logger.info(
+        `[TransactionalBackend] Rollback succeeded for transaction ${this.id}, ` +
+          `${appliedOperations.length} operations were reverted`
+      )
+
       throw new TransactionCommitError(this.id, [commitError])
     }
 
@@ -662,6 +757,7 @@ export class TransactionalBackend implements ITransactionalBackend {
     }
 
     this.transactions.set(id, state)
+    metrics.transactionsStarted++
 
     return new TransactionImpl(this.backend, state, this.onTransactionComplete)
   }
@@ -786,6 +882,166 @@ export class TransactionCommitError extends TransactionError {
     )
     this.name = 'TransactionCommitError'
   }
+}
+
+/**
+ * Recovery information for manual intervention after rollback failure
+ */
+export interface RollbackRecoveryInfo {
+  /** Transaction ID */
+  transactionId: string
+  /** Paths that may be in inconsistent state */
+  affectedPaths: string[]
+  /** Map of path to original state data (base64 encoded for serialization) */
+  originalStates: Record<string, { existed: boolean; dataBase64: string | null }>
+  /** Operations that were partially applied */
+  partiallyAppliedOperations: Array<{ type: 'write' | 'delete'; path: string }>
+  /** Human-readable recovery instructions */
+  recoveryInstructions: string
+}
+
+/**
+ * Error thrown when rollback fails during commit recovery
+ *
+ * This is a CRITICAL error that indicates the database may be in an
+ * inconsistent state. The error contains detailed recovery information
+ * that can be used for manual intervention.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await tx.commit()
+ * } catch (error) {
+ *   if (error instanceof TransactionRollbackFailureError) {
+ *     // CRITICAL: Database may be inconsistent
+ *     console.error('Rollback failed!', error.recoveryInfo)
+ *
+ *     // Log recovery info for later manual recovery
+ *     await logRecoveryInfo(error.recoveryInfo)
+ *
+ *     // Alert operations team
+ *     await sendCriticalAlert({
+ *       type: 'ROLLBACK_FAILURE',
+ *       transactionId: error.transactionId,
+ *       affectedPaths: error.affectedPaths,
+ *     })
+ *   }
+ * }
+ * ```
+ */
+export class TransactionRollbackFailureError extends TransactionError {
+  /** The original error that caused the commit to fail */
+  public readonly commitError: Error
+  /** Errors that occurred during rollback */
+  public readonly rollbackErrors: Error[]
+  /** Paths that may be in inconsistent state */
+  public readonly affectedPaths: string[]
+  /** Structured recovery information for manual intervention */
+  public readonly recoveryInfo: RollbackRecoveryInfo
+
+  constructor(
+    transactionId: string,
+    commitError: Error,
+    rollbackErrors: Error[],
+    affectedPaths: string[],
+    originalStates: Array<{ path: string; data: Uint8Array | null }>,
+    partiallyApplied: Array<{ type: 'write' | 'delete'; path: string }>
+  ) {
+    const message = [
+      'CRITICAL: Commit failed and rollback also failed. Database may be inconsistent.',
+      '',
+      `Commit error: ${commitError.message}`,
+      `Rollback errors (${rollbackErrors.length}): ${rollbackErrors.map((e) => e.message).join('; ')}`,
+      `Affected paths (${affectedPaths.length}): ${affectedPaths.join(', ')}`,
+      '',
+      'See error.recoveryInfo for detailed recovery instructions.',
+    ].join('\n')
+
+    super(transactionId, message)
+    this.name = 'TransactionRollbackFailureError'
+    this.commitError = commitError
+    this.rollbackErrors = rollbackErrors
+    this.affectedPaths = affectedPaths
+
+    // Build recovery info
+    const originalStatesRecord: Record<string, { existed: boolean; dataBase64: string | null }> = {}
+    for (const state of originalStates) {
+      originalStatesRecord[state.path] = {
+        existed: state.data !== null,
+        dataBase64: state.data ? encodeBase64(state.data) : null,
+      }
+    }
+
+    this.recoveryInfo = {
+      transactionId,
+      affectedPaths,
+      originalStates: originalStatesRecord,
+      partiallyAppliedOperations: partiallyApplied,
+      recoveryInstructions: this.generateRecoveryInstructions(
+        affectedPaths,
+        originalStatesRecord,
+        partiallyApplied
+      ),
+    }
+  }
+
+  private generateRecoveryInstructions(
+    affectedPaths: string[],
+    originalStates: Record<string, { existed: boolean; dataBase64: string | null }>,
+    partiallyApplied: Array<{ type: 'write' | 'delete'; path: string }>
+  ): string {
+    const lines: string[] = [
+      '=== TRANSACTION ROLLBACK FAILURE RECOVERY ===',
+      '',
+      'The following manual steps may be required to restore consistency:',
+      '',
+    ]
+
+    for (const path of affectedPaths) {
+      const original = originalStates[path]
+      const applied = partiallyApplied.find((op) => op.path === path)
+
+      if (!original) {
+        lines.push(`- ${path}: Original state unknown, manual verification required`)
+        continue
+      }
+
+      if (original.existed) {
+        lines.push(`- ${path}: Restore original content (existed before transaction)`)
+        if (original.dataBase64) {
+          lines.push(`  Original data (base64): ${original.dataBase64.substring(0, 50)}...`)
+        }
+      } else {
+        if (applied?.type === 'write') {
+          lines.push(`- ${path}: Delete this file (did not exist before transaction)`)
+        } else {
+          lines.push(`- ${path}: Verify file state (did not exist before transaction)`)
+        }
+      }
+    }
+
+    lines.push('')
+    lines.push('To programmatically restore, use the originalStates data in recoveryInfo.')
+    lines.push('Each value contains the original file content in base64 encoding.')
+
+    return lines.join('\n')
+  }
+}
+
+/**
+ * Encode Uint8Array to base64 string
+ */
+function encodeBase64(data: Uint8Array): string {
+  // Use Buffer in Node.js, btoa in browser
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(data).toString('base64')
+  }
+  // Browser fallback
+  let binary = ''
+  for (let i = 0; i < data.length; i++) {
+    binary += String.fromCharCode(data[i]!)
+  }
+  return btoa(binary)
 }
 
 /**

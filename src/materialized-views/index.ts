@@ -102,8 +102,7 @@ export { validateCronExpression, type CronValidationResult } from './cron'
 // Cycle detection module
 export * from './cycle-detection'
 
-// Ingest source module
-export * from './ingest-source'
+// Ingest source types are exported from ./types (canonical source)
 
 // Write path integration module
 export * from './write-path-integration'
