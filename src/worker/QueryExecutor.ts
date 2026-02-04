@@ -254,14 +254,19 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   readonly type = 'r2-cdn-adapter'
 
   // Stats for debugging
-  public cdnHits = 0
-  public primaryHits = 0
-  public edgeHits = 0
+  public cdnHits = 0          // Reads from R2
+  public primaryHits = 0      // Reads from primary bucket
+  public edgeHits = 0         // Reads from edge cache (Cache API)
+  public memHits = 0          // Reads from in-memory cache (fastest)
   public cacheApiHits = 0
   public totalReads = 0
 
   // Files being loaded (for deduplication of concurrent requests within same isolate)
   private loadingFiles = new Map<string, Promise<Uint8Array>>()
+
+  // In-memory file cache (avoids repeated Cache API lookups within same request)
+  // This dramatically reduces latency when parquetQuery makes many range requests
+  private fileCache = new Map<string, Uint8Array>()
 
   constructor(
     private cdnBucket: R2Bucket,      // CDN bucket for reads (same as primary)
@@ -332,34 +337,54 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
 
   /**
    * Load byte range from file
-   * For small files (<5MB): cache full file, slice locally
-   * For large files: use R2 range request directly (cheaper)
+   * Strategy:
+   * 1. Check in-memory cache (instant, no I/O)
+   * 2. Check edge Cache API (fast, ~1-5ms)
+   * 3. Load from R2 and cache everywhere (slower, ~50-200ms)
    */
   private async loadRange(path: string, start: number, end: number): Promise<Uint8Array> {
     this.totalReads++
+
+    // Fast path: Check in-memory cache first (avoids Cache API round-trip)
+    const memCached = this.fileCache.get(path)
+    if (memCached) {
+      this.memHits++
+      return memCached.slice(start, end)
+    }
+
+    // Check edge Cache API
     const cache = caches.default
     const cacheKey = new Request(`https://parquedb.cache/${path}?v=3`)
-
-    // Check if full file is cached - if so, slice from it
     const cachedResponse = await cache.match(cacheKey)
     if (cachedResponse) {
       this.edgeHits++
       const fullData = new Uint8Array(await cachedResponse.arrayBuffer())
+      // Store in memory for subsequent range requests in this request
+      this.fileCache.set(path, fullData)
       return fullData.slice(start, end)
     }
 
-    // For range requests, read directly from R2 (no caching of partial responses)
-    // This avoids cache fragmentation while still being fast (same datacenter)
+    // Not cached - load full file from R2
     const cdnPath = this.cdnPrefix ? `${this.cdnPrefix}/${path}` : path
-    const obj = await this.cdnBucket.get(cdnPath, {
-      range: { offset: start, length: end - start },
-    }) ?? await this.primaryBucket.get(path, {
-      range: { offset: start, length: end - start },
-    })
-    if (!obj) throw new Error(`Object not found: ${path}`)
+    const fullObj = await this.cdnBucket.get(cdnPath) ?? await this.primaryBucket.get(path)
+    if (!fullObj) throw new Error(`Object not found: ${path}`)
 
+    const fullData = new Uint8Array(await fullObj.arrayBuffer())
     this.cdnHits++
-    return new Uint8Array(await obj.arrayBuffer())
+
+    // Cache in memory for this request
+    this.fileCache.set(path, fullData)
+
+    // Cache in edge for future requests (async, don't await)
+    const responseToCache = new Response(fullData, {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Cache-Control': `public, max-age=${DEFAULT_CACHE_TTL}`,
+      },
+    })
+    cache.put(cacheKey, responseToCache)
+
+    return fullData.slice(start, end)
   }
 
   async exists(path: string): Promise<boolean> {
@@ -480,14 +505,15 @@ export class QueryExecutor {
   /**
    * Get storage stats for debugging
    */
-  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean } {
+  getStorageStats(): { cdnHits: number; primaryHits: number; edgeHits: number; memHits: number; totalReads: number; usingCdn: boolean; usingEdge: boolean } {
     if (!this.storageAdapter) {
-      return { cdnHits: 0, primaryHits: 0, edgeHits: 0, totalReads: 0, usingCdn: false, usingEdge: false }
+      return { cdnHits: 0, primaryHits: 0, edgeHits: 0, memHits: 0, totalReads: 0, usingCdn: false, usingEdge: false }
     }
     return {
       cdnHits: this.storageAdapter.cdnHits,
       primaryHits: this.storageAdapter.primaryHits,
       edgeHits: this.storageAdapter.edgeHits,
+      memHits: this.storageAdapter.memHits,
       totalReads: this.storageAdapter.totalReads,
       usingCdn: !!this._cdnBucket,
       usingEdge: !!this._r2DevUrl,
@@ -1117,6 +1143,9 @@ export class QueryExecutor {
       return []
     }
 
+    const timing: Record<string, number> = {}
+    const t0 = performance.now()
+
     try {
       // Single rels.parquet file (no sharding - doesn't scale for large datasets)
       const path = `${dataset}/rels.parquet`
@@ -1148,18 +1177,28 @@ export class QueryExecutor {
 
       // Use parquetQuery with predicate pushdown on from_id
       // This enables row-group skipping based on min/max column statistics
+      const t1 = performance.now()
       const asyncBuffer = await this.createAsyncBuffer(path)
+      timing.asyncBuffer = performance.now() - t1
+
+      const t2 = performance.now()
       const metadata = await this.loadRawMetadata(path)
+      timing.metadata = performance.now() - t2
+      const t3 = performance.now()
       const rawRels = await parquetQuery({
         file: asyncBuffer,
         metadata,
         filter: { from_id: fromId },  // Predicate pushdown on from_id
         compressors,
       }) as FlatRelRow[]
-      logger.debug(`Relationship query with pushdown: from_id=${fromId}, rows=${rawRels.length}`)
+      timing.parquetQuery = performance.now() - t3
+      timing.total = performance.now() - t0
+
+      logger.debug(`Relationship query: from_id=${fromId}, rows=${rawRels.length}, timing=${JSON.stringify(timing)}ms`)
 
       // Map to output format, handling both flat and nested schemas
-      return rawRels
+      const t4 = performance.now()
+      const results = rawRels
         .filter(rel => {
           // Predicate filter (from_id already filtered by pushdown)
           const relPredicate = rel.predicate ?? (rel.data && typeof rel.data === 'object' ? rel.data.pred : undefined)
@@ -1224,6 +1263,12 @@ export class QueryExecutor {
             similarity: null,
           }
         })
+
+      timing.transform = performance.now() - t4
+      timing.totalWithTransform = performance.now() - t0
+      logger.info(`getRelationships timing: ${JSON.stringify(timing)}`)
+
+      return results
     } catch (error: unknown) {
       // Relationship data may not exist or may be malformed - return empty gracefully
       logger.debug('Failed to load relationships', error)
