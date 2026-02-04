@@ -457,10 +457,10 @@ export class ParqueDBDO extends DurableObject<Env> {
     const actor = options.actor || 'system/anonymous'
     const pendingId = generateULID()
 
-    // Reserve sequence numbers for all items
+    // Calculate sequence range for entity IDs
+    // Note: Counter is incremented by appendEvent below, not here
     const firstSeq = this.counters.get(ns) || 1
     const lastSeq = firstSeq + items.length - 1
-    this.counters.set(ns, lastSeq + 1)
 
     // Build entities with assigned IDs
     const entities: Entity[] = []

@@ -215,11 +215,36 @@ describe('ParqueDB Workers E2E', () => {
       expect(retrieved).toBeNull()
     })
 
-    // This test cannot run in vitest-pool-workers because DO RPC errors
-    // cause isolated storage cleanup failures. Optimistic concurrency IS implemented
-    // and works in production.
-    // See: https://developers.cloudflare.com/workers/testing/vitest-integration/known-issues/#isolated-storage
-    it.todo('enforces optimistic concurrency (blocked by vitest-pool-workers isolated storage bug)')
+    it('tracks version with expectedVersion check', async () => {
+      const id = testEnv.PARQUEDB.idFromName(`test-occ-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+      const occStub = asDOTestStub(testEnv.PARQUEDB.get(id))
+
+      // Create entity (starts at version 1)
+      const created = await occStub.create('posts', {
+        $type: 'Post',
+        name: 'OCC Test',
+      }, {}) as Record<string, unknown>
+      const postId = (created.$id as string).split('/')[1]!
+      expect(created.version).toBe(1)
+
+      // Update with correct expectedVersion should succeed
+      await occStub.update('posts', postId, { $set: { name: 'Updated V2' } }, { expectedVersion: 1 })
+
+      // Verify version incremented
+      let retrieved = await occStub.get('posts', postId) as Record<string, unknown>
+      expect(retrieved.name).toBe('Updated V2')
+      expect(retrieved.version).toBe(2)
+
+      // Update with new correct version should also succeed
+      await occStub.update('posts', postId, { $set: { name: 'Updated V3' } }, { expectedVersion: 2 })
+
+      // Verify version incremented again
+      retrieved = await occStub.get('posts', postId) as Record<string, unknown>
+      expect(retrieved.name).toBe('Updated V3')
+      expect(retrieved.version).toBe(3)
+
+      // Note: Version mismatch rejection is tested in unit tests
+    })
   })
 
   describe('ParqueDB DO Relationship Operations', () => {

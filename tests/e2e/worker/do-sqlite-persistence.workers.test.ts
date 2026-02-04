@@ -709,11 +709,37 @@ describe('DO SQLite Persistence - Transaction Durability', () => {
       expect(retrieved.version).toBe(4)
     })
 
-    // This test cannot run in vitest-pool-workers because DO RPC errors
-    // cause isolated storage cleanup failures. Optimistic concurrency IS implemented
-    // and works in production - version tracking is verified by the test above.
-    // See: https://developers.cloudflare.com/workers/testing/vitest-integration/known-issues/#isolated-storage
-    it.todo('enforces optimistic concurrency on update (blocked by vitest-pool-workers isolated storage bug)')
+    it('tracks version on update with expectedVersion check', async () => {
+      const { stub, name } = createDOStub('occ-versioning')
+
+      // Create entity (starts at version 1)
+      const entity = await stub.create('posts', {
+        $type: 'Post',
+        name: 'Original',
+      }, {}) as Record<string, unknown>
+      const entityId = (entity.$id as string).split('/')[1]!
+      expect(entity.version).toBe(1)
+
+      // Update with correct expectedVersion should succeed
+      await stub.update('posts', entityId, { $set: { name: 'Updated V2' } }, { expectedVersion: 1 })
+
+      // Verify version was incremented
+      let retrieved = await stub.get('posts', entityId) as Record<string, unknown>
+      expect(retrieved.name).toBe('Updated V2')
+      expect(retrieved.version).toBe(2)
+
+      // Update with new correct version should also succeed
+      await stub.update('posts', entityId, { $set: { name: 'Updated V3' } }, { expectedVersion: 2 })
+
+      // Verify version incremented again and persists across DO stubs
+      const freshStub = getDOStubByName(name)
+      retrieved = await freshStub.get('posts', entityId) as Record<string, unknown>
+      expect(retrieved.name).toBe('Updated V3')
+      expect(retrieved.version).toBe(3)
+
+      // Note: Version mismatch rejection is tested in unit tests
+      // E2E tests can't reliably test DO error cases due to isolated storage cleanup issues
+    })
   })
 })
 
