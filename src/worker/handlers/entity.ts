@@ -42,18 +42,32 @@ export async function handleEntityDetail(
     return buildResponse(request, cachedData as Parameters<typeof buildResponse>[1], timing, worker.getStorageStats())
   }
 
-  // Construct the full $id (e.g., "knowledge/2.C.2.b")
-  const fullId = `${collectionId}/${entityId}`
+  // Construct possible $id formats (data may use : or / as separator)
+  // e.g., "title:tt0000000" or "knowledge/2.C.2.b"
+  const idFormats = [
+    `${collectionId}:${entityId}`,   // title:tt0000000
+    `${collectionId}/${entityId}`,   // title/tt0000000
+    entityId,                         // Just the raw ID
+  ]
 
-  // PARALLEL: Fetch entity and relationships simultaneously (2 subrequests)
+  // PARALLEL: Fetch entity (trying multiple ID formats) and relationships simultaneously
   markTiming(timing, 'parallel_start')
   let entityResult
   let allRels
   try {
-    [entityResult, allRels] = await Promise.all([
-      worker.find<EntityRecord>(datasetId, { $id: fullId }, { limit: 1 }),
+    // Try to find entity with any of the ID formats
+    const [result1, result2, result3, rels] = await Promise.all([
+      worker.find<EntityRecord>(datasetId, { $id: idFormats[0] }, { limit: 1 }),
+      worker.find<EntityRecord>(datasetId, { $id: idFormats[1] }, { limit: 1 }),
+      worker.find<EntityRecord>(datasetId, { $id: idFormats[2] }, { limit: 1 }),
       worker.getRelationships(datasetId, entityId),
     ])
+
+    // Use the first result that found something
+    entityResult = result1.items.length > 0 ? result1 :
+                   result2.items.length > 0 ? result2 :
+                   result3
+    allRels = rels
   } catch (error) {
     // Handle "File not found" errors with 404 instead of 500
     const notFoundResponse = handleFileNotFoundError(error, request, startTime, `${datasetId}/${collectionId}.parquet`)
@@ -64,12 +78,12 @@ export async function handleEntityDetail(
   measureTiming(timing, 'parallel', 'parallel_start')
 
   if (entityResult.items.length === 0) {
-    return buildErrorResponse(request, new Error(`Entity '${fullId}' not found in ${datasetId}`), 404, startTime)
+    return buildErrorResponse(request, new Error(`Entity '${entityId}' not found in ${datasetId}/${collectionId}`), 404, startTime)
   }
 
   const entity = entityResult.items[0]
   if (!entity) {
-    return buildErrorResponse(request, new Error(`Entity '${fullId}' not found in ${datasetId}`), 404, startTime)
+    return buildErrorResponse(request, new Error(`Entity '${entityId}' not found in ${datasetId}/${collectionId}`), 404, startTime)
   }
   const entityRaw = entityAsRecord(asParam<Record<string, unknown>>(entity))
 

@@ -161,7 +161,11 @@ export async function handleCollectionList(
       const entity = entityAsRecord(asParam<Record<string, unknown>>(item))
       const entityId = entity.$id || entity.id
       if (entityId) {
-        const localId = String(entityId).split('/').pop() || ''
+        // Extract local ID from full $id (e.g., "title:tt0000000" -> "tt0000000")
+        // Handle both / and : separators
+        const idStr = String(entityId)
+        const localId = idStr.includes(':') ? idStr.split(':').pop() || idStr :
+                        idStr.includes('/') ? idStr.split('/').pop() || idStr : idStr
         const href = `${baseUrl}/datasets/${datasetId}/${collectionId}/${encodeURIComponent(localId)}`
 
         // Add to quick links (first 10)
