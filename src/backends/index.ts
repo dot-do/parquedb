@@ -169,6 +169,8 @@ export {
   // Pagination utilities
   applyPagination,
   applyPaginationFromOptions,
+  // UUID generation
+  generateUUID,
 } from './entity-utils'
 
 // =============================================================================

@@ -39,6 +39,15 @@ import {
   extractDataFields,
 } from './parquet-utils'
 
+// Import shared entity utilities
+import {
+  applyUpdate as applyUpdateUtil,
+  createDefaultEntity as createDefaultEntityUtil,
+  sortEntities,
+  applyPagination,
+  generateUUID,
+} from './entity-utils'
+
 // Import Parquet utilities
 import { ParquetWriter } from '../parquet/writer'
 import { readParquet } from '../parquet/reader'
@@ -291,7 +300,7 @@ export class DeltaBackend implements EntityBackend {
     const actor = options?.actor ?? 'system/parquedb' as EntityId
 
     // Apply update operators
-    const updated = this.applyUpdate(existing ?? this.createDefaultEntity<T>(ns, id), update)
+    const updated = applyUpdateUtil(existing ?? createDefaultEntityUtil<T>(ns, id), update)
 
     // Update audit fields
     const entity: Entity<T> = {
@@ -392,7 +401,7 @@ export class DeltaBackend implements EntityBackend {
     const actor = options?.actor ?? 'system/parquedb' as EntityId
 
     const updated = entities.map(entity => {
-      const result = this.applyUpdate(entity, update)
+      const result = applyUpdateUtil(entity, update)
       return {
         ...result,
         updatedAt: now,
@@ -689,7 +698,7 @@ export class DeltaBackend implements EntityBackend {
 
       // Write data file (only on first attempt or if file set changed)
       if (!dataFilePath) {
-        const dataFileId = this.generateUUID()
+        const dataFileId = generateUUID()
         dataFilePath = `${tableLocation}/${dataFileId}.parquet`
         const parquetSchema = buildEntityParquetSchema()
         const rows = entities.map(entity => entityToRow(entity))
@@ -1172,7 +1181,7 @@ export class DeltaBackend implements EntityBackend {
 
     const metaData: MetaDataAction = {
       metaData: {
-        id: this.generateUUID(),
+        id: generateUUID(),
         schemaString: JSON.stringify(deltaSchema),
         partitionColumns: [],
         createdTime: Date.now(),
@@ -1292,7 +1301,7 @@ export class DeltaBackend implements EntityBackend {
     tableLocation: string,
     entities: Entity<T>[]
   ): Promise<string> {
-    const dataFileId = this.generateUUID()
+    const dataFileId = generateUUID()
     const dataFilePath = `${tableLocation}/${dataFileId}.parquet`
     const parquetSchema = buildEntityParquetSchema()
     const rows = entities.map(entity => entityToRow(entity))
@@ -1348,7 +1357,7 @@ export class DeltaBackend implements EntityBackend {
   private createMetadataAction(): MetaDataAction {
     return {
       metaData: {
-        id: this.generateUUID(),
+        id: generateUUID(),
         schemaString: JSON.stringify(this.createDefaultDeltaSchema()),
         partitionColumns: [],
         createdTime: Date.now(),
@@ -1618,7 +1627,7 @@ export class DeltaBackend implements EntityBackend {
 
         // Write data file (only on first attempt or after state change)
         if (!dataFilePath) {
-          const dataFileId = this.generateUUID()
+          const dataFileId = generateUUID()
           dataFilePath = `${tableLocation}/${dataFileId}.parquet`
 
           const parquetSchema = buildEntityParquetSchema()
@@ -1775,117 +1784,10 @@ export class DeltaBackend implements EntityBackend {
     }
 
     // Apply sorting
-    if (options?.sort) {
-      const sortFields = Object.entries(options.sort)
-      entities.sort((a, b) => {
-        for (const [field, direction] of sortFields) {
-          const aVal = (a as Record<string, unknown>)[field]
-          const bVal = (b as Record<string, unknown>)[field]
-
-          let cmp = 0
-          if (aVal === bVal) {
-            cmp = 0
-          } else if (aVal === null || aVal === undefined) {
-            cmp = 1
-          } else if (bVal === null || bVal === undefined) {
-            cmp = -1
-          } else if (typeof aVal === 'string' && typeof bVal === 'string') {
-            cmp = aVal.localeCompare(bVal)
-          } else if (typeof aVal === 'number' && typeof bVal === 'number') {
-            cmp = aVal - bVal
-          } else if (aVal instanceof Date && bVal instanceof Date) {
-            cmp = aVal.getTime() - bVal.getTime()
-          } else {
-            cmp = String(aVal).localeCompare(String(bVal))
-          }
-
-          if (cmp !== 0) {
-            return direction === -1 ? -cmp : cmp
-          }
-        }
-        return 0
-      })
-    }
+    sortEntities(entities, options?.sort)
 
     // Apply skip and limit
-    let result = entities
-    if (options?.skip) {
-      result = result.slice(options.skip)
-    }
-    if (options?.limit) {
-      result = result.slice(0, options.limit)
-    }
-
-    return result
-  }
-
-  /**
-   * Apply update operators to an entity
-   */
-  private applyUpdate<T>(entity: Entity<T>, update: Update): Entity<T> {
-    const result = { ...entity }
-
-    // Handle $set
-    if (update.$set) {
-      Object.assign(result, update.$set)
-    }
-
-    // Handle $unset
-    if (update.$unset) {
-      for (const key of Object.keys(update.$unset)) {
-        delete (result as Record<string, unknown>)[key]
-      }
-    }
-
-    // Handle $inc
-    if (update.$inc) {
-      for (const [key, value] of Object.entries(update.$inc)) {
-        const current = (result as Record<string, unknown>)[key]
-        if (typeof current === 'number' && typeof value === 'number') {
-          (result as Record<string, unknown>)[key] = current + value
-        }
-      }
-    }
-
-    return result
-  }
-
-  /**
-   * Create a default entity for upsert
-   */
-  private createDefaultEntity<T>(ns: string, id: string): Entity<T> {
-    const now = new Date()
-    return {
-      $id: `${ns}/${id}` as EntityId,
-      $type: 'unknown',
-      name: id,
-      createdAt: now,
-      createdBy: 'system/parquedb' as EntityId,
-      updatedAt: now,
-      updatedBy: 'system/parquedb' as EntityId,
-      version: 0,
-    } as Entity<T>
-  }
-
-  /**
-   * Generate a UUID
-   */
-  private generateUUID(): string {
-    const bytes = new Uint8Array(16)
-    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-      crypto.getRandomValues(bytes)
-    } else {
-      for (let i = 0; i < 16; i++) {
-        bytes[i] = Math.floor(Math.random() * 256)
-      }
-    }
-
-    // Set version 4 and variant
-    bytes[6] = (bytes[6]! & 0x0f) | 0x40
-    bytes[8] = (bytes[8]! & 0x3f) | 0x80
-
-    const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
-    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+    return applyPagination(entities, options?.skip, options?.limit)
   }
 
   /**

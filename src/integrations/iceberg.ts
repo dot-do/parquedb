@@ -38,6 +38,7 @@
 import type { StorageBackend } from '../types/storage'
 import type { EventManifest, EventSegment } from '../events/types'
 import { getStorageFromDB } from '../types/cast'
+import { generateUUID } from '../backends/entity-utils'
 
 // =============================================================================
 // Types
@@ -343,7 +344,7 @@ export class IcebergMetadataManager {
   private async createNewTable(): Promise<void> {
     const metadata = {
       'format-version': 2,
-      'table-uuid': this.generateUUID(),
+      'table-uuid': generateUUID(),
       location: this.options.location,
       'last-sequence-number': 0,
       'last-updated-ms': Date.now(),
@@ -552,7 +553,7 @@ export class IcebergMetadataManager {
       metadataPath: this.getMetadataPath(),
       location: this.options.location,
       currentSnapshotId: this.currentSnapshotId,
-      tableUuid: this.generateUUID(),
+      tableUuid: generateUUID(),
     }
   }
 
@@ -685,7 +686,7 @@ export class IcebergMetadataManager {
 
     const metadata = {
       'format-version': 2,
-      'table-uuid': this.generateUUID(),
+      'table-uuid': generateUUID(),
       location: this.options.location,
       'last-sequence-number': sequenceNumber,
       'last-updated-ms': Date.now(),
@@ -724,13 +725,6 @@ export class IcebergMetadataManager {
     return metadataPath
   }
 
-  private generateUUID(): string {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = Math.random() * 16 | 0
-      const v = c === 'x' ? r : (r & 0x3 | 0x8)
-      return v.toString(16)
-    })
-  }
 }
 
 // =============================================================================

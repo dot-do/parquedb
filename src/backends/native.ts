@@ -40,6 +40,14 @@ import {
   extractDataFields,
 } from './parquet-utils'
 
+// Import shared entity utilities
+import {
+  applyUpdate as applyUpdateUtil,
+  createDefaultEntity as createDefaultEntityUtil,
+  sortEntities,
+  applyPagination,
+} from './entity-utils'
+
 // Import Parquet utilities
 import { ParquetWriter } from '../parquet/writer'
 import { readParquet } from '../parquet/reader'
@@ -137,48 +145,10 @@ export class NativeBackend implements EntityBackend {
     }
 
     // Apply sorting
-    if (options?.sort) {
-      const sortFields = Object.entries(options.sort)
-      entities.sort((a, b) => {
-        for (const [field, direction] of sortFields) {
-          const aVal = (a as Record<string, unknown>)[field]
-          const bVal = (b as Record<string, unknown>)[field]
-
-          let cmp = 0
-          if (aVal === bVal) {
-            cmp = 0
-          } else if (aVal === null || aVal === undefined) {
-            cmp = 1
-          } else if (bVal === null || bVal === undefined) {
-            cmp = -1
-          } else if (typeof aVal === 'string' && typeof bVal === 'string') {
-            cmp = aVal.localeCompare(bVal)
-          } else if (typeof aVal === 'number' && typeof bVal === 'number') {
-            cmp = aVal - bVal
-          } else if (aVal instanceof Date && bVal instanceof Date) {
-            cmp = aVal.getTime() - bVal.getTime()
-          } else {
-            cmp = String(aVal).localeCompare(String(bVal))
-          }
-
-          if (cmp !== 0) {
-            return direction === -1 ? -cmp : cmp
-          }
-        }
-        return 0
-      })
-    }
+    sortEntities(entities, options?.sort)
 
     // Apply skip and limit
-    let result = entities
-    if (options?.skip) {
-      result = result.slice(options.skip)
-    }
-    if (options?.limit) {
-      result = result.slice(0, options.limit)
-    }
-
-    return result
+    return applyPagination(entities, options?.skip, options?.limit)
   }
 
   async count(ns: string, filter?: Filter): Promise<number> {
@@ -250,7 +220,7 @@ export class NativeBackend implements EntityBackend {
     const actor = options?.actor ?? 'system/parquedb' as EntityId
 
     // Apply update operators
-    const updated = this.applyUpdate(existing ?? this.createDefaultEntity<T>(ns, id), update)
+    const updated = applyUpdateUtil(existing ?? createDefaultEntityUtil<T>(ns, id), update)
 
     // Update audit fields
     const entity: Entity<T> = {
@@ -359,7 +329,7 @@ export class NativeBackend implements EntityBackend {
     const entityMap = await this.loadEntities(ns)
 
     for (const entity of entities) {
-      const updated = this.applyUpdate(entity, update)
+      const updated = applyUpdateUtil(entity, update)
       const result = {
         ...updated,
         updatedAt: now,
@@ -574,53 +544,6 @@ export class NativeBackend implements EntityBackend {
     this.entityCache.set(ns, entityMap as Map<string, Entity>)
   }
 
-  /**
-   * Apply update operators to an entity
-   */
-  private applyUpdate<T>(entity: Entity<T>, update: Update): Entity<T> {
-    const result = { ...entity }
-
-    // Handle $set
-    if (update.$set) {
-      Object.assign(result, update.$set)
-    }
-
-    // Handle $unset
-    if (update.$unset) {
-      for (const key of Object.keys(update.$unset)) {
-        delete (result as Record<string, unknown>)[key]
-      }
-    }
-
-    // Handle $inc
-    if (update.$inc) {
-      for (const [key, value] of Object.entries(update.$inc)) {
-        const current = (result as Record<string, unknown>)[key]
-        if (typeof current === 'number' && typeof value === 'number') {
-          (result as Record<string, unknown>)[key] = current + value
-        }
-      }
-    }
-
-    return result
-  }
-
-  /**
-   * Create a default entity for upsert
-   */
-  private createDefaultEntity<T>(ns: string, id: string): Entity<T> {
-    const now = new Date()
-    return {
-      $id: `${ns}/${id}` as EntityId,
-      $type: 'unknown',
-      name: id,
-      createdAt: now,
-      createdBy: 'system/parquedb' as EntityId,
-      updatedAt: now,
-      updatedBy: 'system/parquedb' as EntityId,
-      version: 0,
-    } as Entity<T>
-  }
 }
 
 // =============================================================================
