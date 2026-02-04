@@ -7,21 +7,28 @@
 
 /**
  * Bun runtime global type
- * Minimal type declarations for runtime detection
+ * Type declarations for runtime detection and environment access
  */
 interface BunGlobal {
   version: string
+  env?: Record<string, string | undefined>
 }
 
 /**
  * Deno runtime global types
- * Minimal type declarations for runtime detection
+ * Type declarations for runtime detection and environment access
  */
 interface DenoGlobal {
   version: {
     deno: string
   }
   cwd(): string
+  env: {
+    get(key: string): string | undefined
+    set(key: string, value: string): void
+    delete(key: string): void
+    toObject(): Record<string, string>
+  }
 }
 
 /**

@@ -152,7 +152,8 @@ export function getEnv(name: string): string | undefined {
   // Deno
   if (typeof globalThis !== 'undefined' && 'Deno' in globalThis) {
     try {
-      return (globalThis as { Deno: { env: { get: (key: string) => string | undefined } } }).Deno.env.get(name)
+      const denoGlobal = globalThis as unknown as { Deno: { env: { get: (key: string) => string | undefined } } }
+      return denoGlobal.Deno.env.get(name)
     } catch {
       // Deno.env.get may throw if permission denied
       return undefined
@@ -161,7 +162,8 @@ export function getEnv(name: string): string | undefined {
 
   // Bun has Bun.env and also process.env
   if (typeof globalThis !== 'undefined' && 'Bun' in globalThis) {
-    const bunEnv = (globalThis as { Bun: { env?: Record<string, string | undefined> } }).Bun.env
+    const bunGlobal = globalThis as unknown as { Bun: { env?: Record<string, string | undefined> } }
+    const bunEnv = bunGlobal.Bun.env
     if (bunEnv) {
       return bunEnv[name]
     }

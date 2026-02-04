@@ -34,6 +34,7 @@ import type {
 } from './types'
 
 import { EntityNotFoundError, EventError } from './types'
+import { BackpressureError } from '../errors'
 
 import {
   addToEntityEventIndex,
@@ -137,6 +138,22 @@ export function recordEvent(
   actor?: EntityId,
   meta?: Record<string, unknown>
 ): Promise<void> {
+  // Check backpressure limit before adding event
+  const maxPendingEvents = ctx.eventLogConfig.maxPendingEvents
+  if (maxPendingEvents > 0 && ctx.pendingEvents.length >= maxPendingEvents) {
+    // Extract namespace from target for error context
+    let namespace: string | undefined
+    if (!isRelationshipTarget(target)) {
+      const { ns } = parseEntityTarget(target)
+      namespace = ns
+    }
+
+    throw new BackpressureError(ctx.pendingEvents.length, maxPendingEvents, {
+      operation: op,
+      namespace,
+    })
+  }
+
   // Deep copy to prevent mutation of stored event state
   const deepCopy = <T>(obj: T | null): T | undefined => {
     if (obj === null) return undefined
