@@ -123,7 +123,7 @@ export interface StorageBackend extends ReadonlyStorageBackend {
     path: string,
     data: Uint8Array,
     expectedVersion: string | null,
-    options?: WriteOptions
+    options?: WriteOptions | undefined
   ): Promise<WriteResult>
 
   /**
@@ -691,4 +691,28 @@ export function parseStoragePath(path: string): { type: string; ns?: string | un
   }
 
   return { type: 'unknown', path }
+}
+
+// =============================================================================
+// Storage Statistics
+// =============================================================================
+
+/**
+ * Storage read/write statistics for monitoring
+ */
+export interface StorageStats {
+  /** CDN cache hits */
+  cdnHits: number
+  /** Primary storage hits */
+  primaryHits: number
+  /** Edge cache hits */
+  edgeHits: number
+  /** Cache API hits */
+  cacheHits: number
+  /** Total read operations */
+  totalReads: number
+  /** Whether CDN is being used */
+  usingCdn: boolean
+  /** Whether edge caching is active */
+  usingEdge: boolean
 }

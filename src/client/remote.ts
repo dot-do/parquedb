@@ -60,16 +60,16 @@ function validateRequiredFields(
  */
 export interface OpenRemoteDBOptions {
   /** Authentication token (required for private databases) */
-  token?: string
+  token?: string | undefined
 
   /** Custom base URL (defaults to https://parque.db) */
-  baseUrl?: string
+  baseUrl?: string | undefined
 
   /** Request timeout in milliseconds */
-  timeout?: number
+  timeout?: number | undefined
 
   /** Custom headers */
-  headers?: Record<string, string>
+  headers?: Record<string, string> | undefined
 }
 
 /**
@@ -92,13 +92,13 @@ export interface RemoteDBInfo {
   visibility: Visibility
 
   /** Description */
-  description?: string
+  description?: string | undefined
 
   /** Number of collections */
-  collectionCount?: number
+  collectionCount?: number | undefined
 
   /** Number of entities */
-  entityCount?: number
+  entityCount?: number | undefined
 }
 
 /**

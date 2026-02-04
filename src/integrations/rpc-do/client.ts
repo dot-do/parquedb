@@ -565,7 +565,7 @@ export interface RPCBatchLoaderDB {
     namespace: string,
     id: string,
     relationField: string,
-    options?: Record<string, unknown>
+    options?: Record<string, unknown> | undefined
   ): Promise<{ items: Entity<T>[]; total?: number | undefined; hasMore?: boolean | undefined }>
 
   getByIds?<T extends object = Record<string, unknown>>(

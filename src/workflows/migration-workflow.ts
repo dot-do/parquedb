@@ -101,7 +101,7 @@ export class MigrationWorkflow extends WorkflowEntrypoint<Env, MigrationWorkflow
   /**
    * Main workflow execution
    */
-  async run(event: WorkflowEvent<MigrationWorkflowParams>, step: WorkflowStep) {
+  override async run(event: WorkflowEvent<MigrationWorkflowParams>, step: WorkflowStep) {
     const params = event.payload
     const to = params.to
     const from = params.from ?? 'auto'
@@ -225,7 +225,7 @@ export class MigrationWorkflow extends WorkflowEntrypoint<Env, MigrationWorkflow
 
       // Optional: Add a small sleep between namespaces to avoid overwhelming R2
       if (currentState.currentIndex < currentState.namespaces.length) {
-        await step.sleep('cooldown', '100ms')
+        await step.sleep('cooldown', { seconds: 0.1 })
       }
     }
 

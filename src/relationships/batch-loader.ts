@@ -93,7 +93,7 @@ export interface BatchLoaderDB {
     namespace: string,
     id: string,
     relationField: string,
-    options?: GetRelatedOptions
+    options?: GetRelatedOptions | undefined
   ): Promise<GetRelatedResult<T>>
 
   /**

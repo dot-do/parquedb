@@ -32,8 +32,8 @@ export interface WorkerInterface {
   getRelationships(
     ns: string,
     entityId: string,
-    predicate?: string,
-    options?: { direction?: 'outbound' | 'inbound' | 'both' | undefined; limit?: number | undefined; offset?: number | undefined }
+    predicate?: string | undefined,
+    options?: { direction?: 'outbound' | 'inbound' | 'both' | undefined; limit?: number | undefined; offset?: number | undefined } | undefined
   ): Promise<Array<{
     predicate: string
     reverse?: string | undefined

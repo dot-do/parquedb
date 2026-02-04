@@ -130,8 +130,8 @@ export interface ParqueDBRPCMethods {
   getRelationships(
     ns: string,
     id: string,
-    predicate?: string,
-    direction?: 'outbound' | 'inbound'
+    predicate?: string | undefined,
+    direction?: 'outbound' | 'inbound' | undefined
   ): Promise<Relationship[]>
 
   // Batch operations

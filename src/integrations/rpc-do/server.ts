@@ -134,8 +134,8 @@ export interface ParqueDBAPI {
   getRelationships(
     ns: string,
     id: string,
-    predicate?: string,
-    direction?: 'outbound' | 'inbound'
+    predicate?: string | undefined,
+    direction?: 'outbound' | 'inbound' | undefined
   ): Promise<Relationship[]>
 
   // Batch operations
@@ -494,41 +494,41 @@ export interface ParqueDBDOInterface {
   create(
     ns: string,
     data: CreateInput,
-    options?: { actor?: string | undefined; skipValidation?: boolean | undefined }
+    options?: { actor?: string | undefined; skipValidation?: boolean | undefined } | undefined
   ): Promise<Entity>
   createMany(
     ns: string,
     items: CreateInput[],
-    options?: { actor?: string | undefined; skipValidation?: boolean | undefined }
+    options?: { actor?: string | undefined; skipValidation?: boolean | undefined } | undefined
   ): Promise<Entity[]>
   update(
     ns: string,
     id: string,
     update: UpdateInput,
-    options?: { actor?: string | undefined; expectedVersion?: number | undefined; upsert?: boolean | undefined }
+    options?: { actor?: string | undefined; expectedVersion?: number | undefined; upsert?: boolean | undefined } | undefined
   ): Promise<Entity>
   delete(
     ns: string,
     id: string,
-    options?: { actor?: string | undefined; hard?: boolean | undefined; expectedVersion?: number | undefined }
+    options?: { actor?: string | undefined; hard?: boolean | undefined; expectedVersion?: number | undefined } | undefined
   ): Promise<DeleteResult>
   link(
     fromId: string,
     predicate: string,
     toId: string,
-    options?: { actor?: string | undefined; matchMode?: 'exact' | 'fuzzy' | undefined; similarity?: number | undefined; data?: Record<string, unknown> | undefined }
+    options?: { actor?: string | undefined; matchMode?: 'exact' | 'fuzzy' | undefined; similarity?: number | undefined; data?: Record<string, unknown> | undefined } | undefined
   ): Promise<void>
   unlink(
     fromId: string,
     predicate: string,
     toId: string,
-    options?: { actor?: string | undefined }
+    options?: { actor?: string | undefined } | undefined
   ): Promise<void>
   getRelationships(
     ns: string,
     id: string,
-    predicate?: string,
-    direction?: 'outbound' | 'inbound'
+    predicate?: string | undefined,
+    direction?: 'outbound' | 'inbound' | undefined
   ): Promise<Relationship[]>
 }
 

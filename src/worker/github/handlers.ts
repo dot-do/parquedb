@@ -145,7 +145,7 @@ export interface ParqueDBService {
   readonly merge: (
     source: string,
     target: string,
-    options?: MergeServiceOptions
+    options?: MergeServiceOptions | undefined
   ) => Promise<MergeServiceResult>
   readonly diff: (source: string, target: string) => Promise<DiffResult>
 }

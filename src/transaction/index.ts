@@ -235,7 +235,7 @@ export interface DatabaseTransaction extends Transaction {
   create<T = Record<string, unknown>>(
     namespace: string,
     data: T,
-    options?: { actor?: string | undefined }
+    options?: { actor?: string | undefined } | undefined
   ): Promise<T & { $id: string }>
 
   /**
@@ -245,7 +245,7 @@ export interface DatabaseTransaction extends Transaction {
     namespace: string,
     id: string,
     update: Record<string, unknown>,
-    options?: { actor?: string | undefined; expectedVersion?: number | undefined }
+    options?: { actor?: string | undefined; expectedVersion?: number | undefined } | undefined
   ): Promise<T | null>
 
   /**
@@ -254,7 +254,7 @@ export interface DatabaseTransaction extends Transaction {
   delete(
     namespace: string,
     id: string,
-    options?: { actor?: string | undefined; soft?: boolean | undefined }
+    options?: { actor?: string | undefined; soft?: boolean | undefined } | undefined
   ): Promise<{ deletedCount: number }>
 
   /**

@@ -313,7 +313,7 @@ export interface R2Bucket {
   put(
     key: string,
     value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob | null,
-    options?: R2PutOptions
+    options?: R2PutOptions | undefined
   ): Promise<R2Object | null>
 
   /**

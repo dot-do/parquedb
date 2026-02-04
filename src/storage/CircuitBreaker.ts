@@ -128,7 +128,7 @@ export interface CircuitBreakerMetrics {
  */
 export class CircuitOpenError extends Error {
   override readonly name = 'CircuitOpenError'
-  readonly circuitName?: string
+  readonly circuitName: string | undefined
   readonly remainingMs: number
 
   constructor(circuitName?: string, remainingMs: number = 0) {
@@ -156,8 +156,8 @@ export class CircuitBreaker {
   private state: CircuitState = CircuitState.CLOSED
   private failureCount = 0
   private successCount = 0
-  private lastFailureTime?: number
-  private lastHalfOpenTime?: number
+  private lastFailureTime: number | undefined
+  private lastHalfOpenTime: number | undefined
   private lastStateChangeTime = Date.now()
   private failureTimestamps: number[] = []
 
@@ -170,8 +170,8 @@ export class CircuitBreaker {
   private readonly failureThreshold: number
   private readonly successThreshold: number
   private readonly resetTimeoutMs: number
-  private readonly name?: string
-  private readonly onStateChange?: (from: CircuitState, to: CircuitState, name?: string) => void
+  private readonly name: string | undefined
+  private readonly onStateChange: ((from: CircuitState, to: CircuitState, name?: string) => void) | undefined
   private readonly isFailure: (error: Error) => boolean
   private readonly failureWindowMs: number
 

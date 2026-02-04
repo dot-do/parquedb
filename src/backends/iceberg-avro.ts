@@ -23,8 +23,8 @@ import {
   encodeManifestEntry,
   encodeManifestListEntry,
   // Decoding functions from @dotdo/iceberg
-  decodeManifestEntry as decodeManifestEntryAvro,
-  decodeManifestListEntry as decodeManifestListEntryAvro,
+  decodeManifestEntry as _decodeManifestEntryAvro,
+  decodeManifestListEntry as _decodeManifestListEntryAvro,
   // Types
   type EncodableManifestEntry,
   type EncodableManifestListEntry,
@@ -143,7 +143,7 @@ export function encodeManifestListToAvro(manifests: ManifestFile[]): Uint8Array 
  * Parse Avro container file header to extract block data.
  * Returns the offset after the header and sync marker, plus the sync marker itself.
  */
-function parseAvroContainerHeader(data: Uint8Array): { dataOffset: number; syncMarker: Uint8Array } | null {
+function _parseAvroContainerHeader(data: Uint8Array): { dataOffset: number; syncMarker: Uint8Array } | null {
   if (!isAvroFormat(data)) return null
 
   let offset = 4 // Skip magic bytes

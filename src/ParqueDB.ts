@@ -138,27 +138,27 @@ export interface IParqueDB {
   // CRUD Operations
   find<T = Record<string, unknown>>(
     namespace: string,
-    filter?: Filter,
-    options?: FindOptions
+    filter?: Filter | undefined,
+    options?: FindOptions | undefined
   ): Promise<PaginatedResult<Entity<T>>>
 
   get<T = Record<string, unknown>>(
     namespace: string,
     id: string,
-    options?: GetOptions
+    options?: GetOptions | undefined
   ): Promise<Entity<T> | null>
 
   create<T = Record<string, unknown>>(
     namespace: string,
     data: CreateInput<T>,
-    options?: CreateOptions
+    options?: CreateOptions | undefined
   ): Promise<Entity<T>>
 
   update<T = Record<string, unknown>>(
     namespace: string,
     id: string,
     update: UpdateInput<T>,
-    options?: UpdateOptions
+    options?: UpdateOptions | undefined
   ): Promise<Entity<T> | null>
 
   delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
@@ -168,13 +168,13 @@ export interface IParqueDB {
     namespace: string,
     filter: Filter,
     update: UpdateInput<T>,
-    options?: { returnDocument?: 'before' | 'after' | undefined }
+    options?: { returnDocument?: 'before' | 'after' | undefined } | undefined
   ): Promise<Entity<T> | null>
 
   upsertMany<T = Record<string, unknown>>(
     namespace: string,
     items: UpsertManyItem<T>[],
-    options?: UpsertManyOptions
+    options?: UpsertManyOptions | undefined
   ): Promise<UpsertManyResult>
 
   deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
@@ -182,13 +182,13 @@ export interface IParqueDB {
   restore<T = Record<string, unknown>>(
     namespace: string,
     id: string,
-    options?: { actor?: EntityId | undefined }
+    options?: { actor?: EntityId | undefined } | undefined
   ): Promise<Entity<T> | null>
 
   ingestStream<T = Record<string, unknown>>(
     namespace: string,
     source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>,
-    options?: IngestStreamOptions<Partial<T>>
+    options?: IngestStreamOptions<Partial<T>> | undefined
   ): Promise<IngestStreamResult>
 
   // History & Time-Travel
@@ -208,7 +208,7 @@ export interface IParqueDB {
     namespace: string,
     id: string,
     toVersion: number,
-    options?: RevertOptions
+    options?: RevertOptions | undefined
   ): Promise<Entity<T> | null>
 
   // Relationships
@@ -216,7 +216,7 @@ export interface IParqueDB {
     namespace: string,
     id: string,
     relationField: string,
-    options?: GetRelatedOptions
+    options?: GetRelatedOptions | undefined
   ): Promise<GetRelatedResult<T>>
 
   // Transactions & Snapshots

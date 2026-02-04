@@ -286,7 +286,7 @@ export interface Transaction {
     relation: string,
     toType: string,
     toId: string,
-    metadata?: RelationMetadata
+    metadata?: RelationMetadata | undefined
   ): Promise<void>
   /** Commit the transaction */
   commit(): Promise<void>
@@ -412,7 +412,7 @@ export interface DBRelationships {
     relation: string,
     toType: string,
     toId: string,
-    metadata?: RelationMetadata
+    metadata?: RelationMetadata | undefined
   ): Promise<void>
 
   /**

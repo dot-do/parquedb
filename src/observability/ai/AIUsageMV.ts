@@ -322,7 +322,7 @@ export class AIUsageMV {
         sort: { timestamp: 1 },
       })
 
-      if (logs.length === 0) {
+      if (logs.items.length === 0) {
         return {
           success: true,
           recordsProcessed: 0,
@@ -334,7 +334,7 @@ export class AIUsageMV {
       // Group logs by aggregate key
       const aggregates = new Map<string, WorkingAggregate>()
 
-      for (const log of logs) {
+      for (const log of logs.items) {
         recordsProcessed++
 
         const modelId = ((log as Record<string, unknown>).modelId as string) ?? 'unknown'
@@ -353,8 +353,8 @@ export class AIUsageMV {
             aggregateFilter.tenantId = this.config.tenantId
           }
           const existingAggregates = await targetCollection.find(aggregateFilter, { limit: 1 })
-          if (existingAggregates.length > 0) {
-            aggregate = normalizeAggregateFromDB(existingAggregates[0] as unknown as AIUsageAggregate)
+          if (existingAggregates.items.length > 0) {
+            aggregate = normalizeAggregateFromDB(existingAggregates.items[0] as unknown as AIUsageAggregate)
           } else {
             aggregate = createEmptyAggregate(aggregateId, modelId, providerId, dateKey, this.config.granularity, this.config.tenantId)
           }
@@ -386,8 +386,8 @@ export class AIUsageMV {
         }
         const existing = await targetCollection.find(existingFilter, { limit: 1 })
 
-        if (existing.length > 0) {
-          const existingId = ((existing[0] as Record<string, unknown>).$id as string).split('/').pop()
+        if (existing.items.length > 0) {
+          const existingId = ((existing.items[0] as Record<string, unknown>).$id as string).split('/').pop()
           if (existingId) {
             await targetCollection.update(existingId, {
               $set: {
@@ -419,8 +419,8 @@ export class AIUsageMV {
           }
         } else {
           // Build create payload with optional tenantId
-          const createPayload: Record<string, unknown> = {
-            $type: 'AIUsage',
+          const createPayload = {
+            $type: 'AIUsage' as const,
             name: `${aggregate.modelId}/${aggregate.providerId} (${aggregate.dateKey})`,
             modelId: aggregate.modelId,
             providerId: aggregate.providerId,
@@ -450,10 +450,7 @@ export class AIUsageMV {
             createdAt: aggregate.createdAt,
             updatedAt: aggregate.updatedAt,
             version: aggregate.version,
-          }
-          // Add tenantId if configured
-          if (aggregate.tenantId) {
-            createPayload.tenantId = aggregate.tenantId
+            ...(aggregate.tenantId ? { tenantId: aggregate.tenantId } : {}),
           }
           await targetCollection.create(createPayload)
         }

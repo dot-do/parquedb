@@ -618,8 +618,8 @@ describe('IncrementalRefresher', () => {
       const result = await refresher.fullRefresh(view, lineage)
 
       expect(result.lineage.lastEventIds?.get('users')).toBe(event.id)
-      expect(result.lineage.definitionVersionId).toBeTruthy()
-      expect(result.lineage.definitionVersionId).not.toBe(lineage.definitionVersionId)
+      expect(result.lineage.refreshVersionId).toBeTruthy()
+      expect(result.lineage.refreshVersionId).not.toBe(lineage.refreshVersionId)
     })
   })
 

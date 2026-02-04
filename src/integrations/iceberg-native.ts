@@ -232,13 +232,13 @@ interface IcebergLibrary {
   createAtomicCommitter: (
     storage: NativeIcebergStorageAdapter,
     location: string,
-    options?: CommitOptions
+    options?: CommitOptions | undefined
   ) => { commit: (updateFn: (metadata: IcebergTableMetadata) => Promise<unknown>) => Promise<CommitResult> }
   commitWithCleanup: (
     storage: NativeIcebergStorageAdapter,
     location: string,
     updateFn: (currentMetadata: IcebergTableMetadata) => Promise<unknown>,
-    options?: CommitOptions
+    options?: CommitOptions | undefined
   ) => Promise<CommitResult>
   isCommitConflictError: (error: unknown) => boolean
   createDefaultSchema: () => IcebergSchemaLocal

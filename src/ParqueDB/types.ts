@@ -26,7 +26,7 @@ import type {
   HistoryOptions,
 } from '../types'
 
-import type { HybridSearchStrategy } from '../indexes/types'
+// HybridSearchStrategy is available from '../indexes/types' if needed externally
 
 import type { IStorageRouter } from '../storage/router'
 import type { CollectionOptions } from '../types/collection-options'
@@ -47,6 +47,45 @@ export interface SnapshotConfig {
 // =============================================================================
 // UpsertMany Types
 // =============================================================================
+
+/**
+ * Item for upsertMany operation
+ */
+/**
+ * Semantic search options for Collection interface
+ */
+export interface SemanticSearchOptions {
+  /** Minimum similarity score (0-1) */
+  minScore?: number | undefined
+  /** Maximum results to return */
+  limit?: number | undefined
+  /** Field containing embeddings */
+  field?: string | undefined
+}
+
+/**
+ * Semantic search result with similarity score
+ */
+export interface SemanticSearchResult<_T = Record<string, unknown>> {
+  $id: string
+  $type: string
+  $score: number
+  [key: string]: unknown
+}
+
+/**
+ * Hybrid search options for Collection interface
+ */
+export interface HybridSearchOptionsCollection {
+  /** Minimum similarity score (0-1) */
+  minScore?: number | undefined
+  /** Maximum results to return */
+  limit?: number | undefined
+  /** Additional filter criteria */
+  filter?: Filter | undefined
+  /** Strategy for combining vector + filter results */
+  strategy?: 'pre-filter' | 'post-filter' | 'auto' | undefined
+}
 
 /**
  * Item for upsertMany operation
@@ -381,7 +420,7 @@ export interface Collection<T = Record<string, unknown>> {
    */
   semanticSearch(
     query: string | number[],
-    options?: SemanticSearchOptions
+    options?: SemanticSearchOptions | undefined
   ): Promise<SemanticSearchResult<T>[]>
 
   /**
@@ -415,7 +454,7 @@ export interface Collection<T = Record<string, unknown>> {
    */
   hybridSearch(
     query: string | number[],
-    options?: HybridSearchOptionsCollection
+    options?: HybridSearchOptionsCollection | undefined
   ): Promise<SemanticSearchResult<T>[]>
 
   /**
@@ -446,7 +485,7 @@ export interface Collection<T = Record<string, unknown>> {
    */
   ingestStream(
     source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>,
-    options?: IngestStreamOptions<Partial<T>>
+    options?: IngestStreamOptions<Partial<T>> | undefined
   ): Promise<IngestStreamResult>
 }
 
@@ -661,7 +700,7 @@ export {
 // Import and re-export ValidationError with backward-compatible constructor
 import {
   ValidationError as BaseValidationError,
-  ErrorCode,
+  // ErrorCode is available from '../errors' if needed externally
 } from '../errors'
 
 /**

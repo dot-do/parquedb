@@ -248,8 +248,8 @@ export async function withLoading<T>(
 ): Promise<T> {
   return withSpinner(fn, {
     text: options.text ?? 'Processing...',
-    successText: options.successText,
-    failText: options.failText,
+    ...(options.successText !== undefined ? { successText: options.successText } : {}),
+    ...(options.failText !== undefined ? { failText: options.failText } : {}),
   })
 }
 
@@ -271,7 +271,7 @@ export async function processWithProgress<T>(
   }
 
   await withProgress(items, fn, {
-    config: { showETA: showEta } as Omit<ProgressConfig, 'total'>,
+    config: { showETA: showEta } as unknown as Omit<ProgressConfig, 'total'>,
   })
 }
 

@@ -34,9 +34,9 @@ export interface ServiceBindingResult<T> {
   /** Whether the call was successful */
   success: boolean
   /** Result data (if successful) */
-  data?: T
+  data?: T | undefined
   /** Error message (if failed) */
-  error?: string
+  error?: string | undefined
 }
 
 // =============================================================================

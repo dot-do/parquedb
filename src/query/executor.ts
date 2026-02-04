@@ -159,7 +159,7 @@ export interface ParquetReader {
   readRowGroups<T>(
     path: string,
     rowGroups: number[],
-    columns?: string[]
+    columns?: string[] | undefined
   ): Promise<T[]>
 
   /**

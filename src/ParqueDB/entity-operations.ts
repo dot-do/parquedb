@@ -75,8 +75,8 @@ export interface EntityOperationsContext {
     target: string,
     before: Entity | null,
     after: Entity | null,
-    actor?: EntityId,
-    meta?: Record<string, unknown>
+    actor?: EntityId | undefined,
+    meta?: Record<string, unknown> | undefined
   ) => Promise<void>
 
   reconstructEntityAtTime: (fullId: string, asOf: Date) => Entity | null

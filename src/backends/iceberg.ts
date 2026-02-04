@@ -1050,7 +1050,7 @@ export class IcebergBackend implements EntityBackend {
     const snapshotBuilder = new SnapshotBuilder({
       sequenceNumber,
       snapshotId,
-      parentSnapshotId: currentSnapshotId ?? undefined,
+      ...(currentSnapshotId != null ? { parentSnapshotId: currentSnapshotId } : {}),
       manifestListPath,
       operation: 'append',
       schemaId: metadata['current-schema-id'],
@@ -1328,7 +1328,7 @@ export class IcebergBackend implements EntityBackend {
     const snapshotBuilder = new SnapshotBuilder({
       sequenceNumber,
       snapshotId,
-      parentSnapshotId: currentSnapshotId ?? undefined,
+      ...(currentSnapshotId != null ? { parentSnapshotId: currentSnapshotId } : {}),
       manifestListPath,
       operation: 'delete', // Use delete operation
       schemaId: metadata['current-schema-id'],

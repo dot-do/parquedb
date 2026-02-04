@@ -51,11 +51,11 @@ export interface SerializedMapper {
   /** Mapper type */
   mapperType: SerializedMapperType
   /** For 'path': the property path (e.g., "author.name") */
-  path?: string
+  path?: string | undefined
   /** For 'registered': the mapper name */
-  name?: string
+  name?: string | undefined
   /** Whether the original function was async */
-  async?: boolean
+  async?: boolean | undefined
 }
 
 /**
@@ -67,15 +67,15 @@ interface RpcPromiseState<T> {
   /** The chain of operations */
   chain: RpcPromiseChain
   /** Resolve function (set when promise is awaited) */
-  resolve?: (value: T | PromiseLike<T>) => void
+  resolve?: ((value: T | PromiseLike<T>) => void) | undefined
   /** Reject function (set when promise is awaited) */
-  reject?: (reason: unknown) => void
+  reject?: ((reason: unknown) => void) | undefined
   /** Whether execution has started */
   started: boolean
   /** Cached result (if already executed) */
-  result?: T
+  result?: T | undefined
   /** Cached error (if execution failed) */
-  error?: unknown
+  error?: unknown | undefined
 }
 
 // =============================================================================

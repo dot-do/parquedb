@@ -353,3 +353,38 @@ export interface AggregateOptions {
    */
   indexManager?: import('../indexes/manager').IndexManager | undefined
 }
+
+// =============================================================================
+// Result Types (for handlers that need them)
+// =============================================================================
+
+/** Result of a find operation */
+export interface FindResult<T> {
+  /** Array of matching entities */
+  items: T[]
+  /** Total count (if countTotal was requested) */
+  total?: number | undefined
+  /** Cursor for pagination */
+  cursor?: string | undefined
+  /** Whether there are more results */
+  hasMore: boolean
+  /** Query statistics */
+  stats?: {
+    bytesRead?: number | undefined
+    filesRead?: number | undefined
+  } | undefined
+}
+
+/** Result of an update operation */
+export interface UpdateResult {
+  /** Number of documents that matched the filter */
+  matchedCount: number
+  /** Number of documents that were actually modified */
+  modifiedCount: number
+}
+
+/** Result of a delete operation */
+export interface DeleteResult {
+  /** Number of documents that were deleted */
+  deletedCount: number
+}

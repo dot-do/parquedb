@@ -430,7 +430,7 @@ export class EmbeddingQueue {
     // Get batch of pending items
     const pending = await this.storage.list<EmbeddingQueueItem>({
       prefix: EmbeddingQueue.QUEUE_PREFIX,
-      limit: this.config.batchSize,
+      ...(this.config.batchSize !== undefined ? { limit: this.config.batchSize } : {}),
     })
 
     if (pending.size === 0) {

@@ -73,7 +73,7 @@ export interface EntityBackend {
   get<T extends EntityData = EntityData>(
     ns: string,
     id: string,
-    options?: GetOptions
+    options?: GetOptions | undefined
   ): Promise<Entity<T> | null>
 
   /**
@@ -81,8 +81,8 @@ export interface EntityBackend {
    */
   find<T extends EntityData = EntityData>(
     ns: string,
-    filter?: Filter,
-    options?: FindOptions
+    filter?: Filter | undefined,
+    options?: FindOptions | undefined
   ): Promise<Entity<T>[]>
 
   /**
@@ -105,7 +105,7 @@ export interface EntityBackend {
   create<T extends EntityData = EntityData>(
     ns: string,
     input: CreateInput<T>,
-    options?: CreateOptions
+    options?: CreateOptions | undefined
   ): Promise<Entity<T>>
 
   /**
@@ -115,7 +115,7 @@ export interface EntityBackend {
     ns: string,
     id: string,
     update: Update,
-    options?: UpdateOptions
+    options?: UpdateOptions | undefined
   ): Promise<Entity<T>>
 
   /**
@@ -133,7 +133,7 @@ export interface EntityBackend {
   bulkCreate<T extends EntityData = EntityData>(
     ns: string,
     inputs: CreateInput<T>[],
-    options?: CreateOptions
+    options?: CreateOptions | undefined
   ): Promise<Entity<T>[]>
 
   /**
@@ -143,7 +143,7 @@ export interface EntityBackend {
     ns: string,
     filter: Filter,
     update: Update,
-    options?: UpdateOptions
+    options?: UpdateOptions | undefined
   ): Promise<UpdateResult>
 
   /**

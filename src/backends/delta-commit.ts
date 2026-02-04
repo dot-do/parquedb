@@ -408,7 +408,7 @@ export class DeltaCommitter {
    */
   async commitRemoveFiles(
     filePaths: string[],
-    readVersion: number
+    _readVersion: number
   ): Promise<DeltaCommitResult> {
     if (filePaths.length === 0) {
       return { success: true }

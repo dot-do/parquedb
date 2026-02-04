@@ -56,8 +56,8 @@ export enum StorageErrorCode {
 export class StorageError extends Error {
   override readonly name: string = 'StorageError'
   readonly code: StorageErrorCode
-  readonly path?: string
-  override readonly cause?: Error
+  readonly path: string | undefined
+  override readonly cause: Error | undefined
 
   constructor(
     message: string,

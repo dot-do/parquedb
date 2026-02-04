@@ -56,8 +56,8 @@ export interface SQLExecutor {
    */
   raw<T = Record<string, unknown>>(
     query: string,
-    params?: unknown[],
-    options?: SQLQueryOptions
+    params?: unknown[] | undefined,
+    options?: SQLQueryOptions | undefined
   ): Promise<SQLQueryResult<T>>
 }
 

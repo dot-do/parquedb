@@ -311,9 +311,9 @@ export async function initCommand(parsed: ParsedArgs, io?: PromptIO): Promise<nu
       const values = await runInitWizard(
         targetDir,
         {
-          name: options.name,
-          storageType: options.storageType,
-          namespaces: options.namespaces,
+          ...(options.name !== undefined ? { name: options.name } : {}),
+          ...(options.storageType !== undefined ? { storageType: options.storageType } : {}),
+          ...(options.namespaces !== undefined ? { namespaces: options.namespaces } : {}),
         },
         io
       )

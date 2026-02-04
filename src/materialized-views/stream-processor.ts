@@ -1283,8 +1283,14 @@ export function createProcessorSink<T extends Record<string, unknown>>(
 // =============================================================================
 
 import type { MVStorageManager } from './storage'
-import type { ViewState, Filter, Projection } from './types'
+import type { ViewState } from './types'
+import type { Filter } from '../types/filter'
 import { matchesFilter } from '../query/filter'
+
+/**
+ * Projection type for MV operations
+ */
+type MVProjection = Record<string, 0 | 1 | boolean>
 
 /**
  * Configuration for MVStreamProcessor
@@ -1322,7 +1328,7 @@ export interface MVStreamProcessorConfig<T> {
   /**
    * Projection to apply to incoming records
    */
-  project?: Projection | undefined
+  project?: MVProjection | undefined
 
   /**
    * Update metadata after each batch write
@@ -1437,7 +1443,7 @@ export class MVStreamProcessor<T extends Record<string, unknown> = Record<string
   private batchSize: number
   private flushIntervalMs: number
   private filter?: Filter
-  private project?: Projection
+  private project?: MVProjection
   private updateMetadataOnBatch: boolean
   private onBatchWritten?: (result: MVBatchWriteResult) => void
   private onStateChange?: (newState: ViewState, oldState: ViewState) => void

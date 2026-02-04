@@ -32,7 +32,7 @@ export interface Fsx {
   writeFile(
     path: string,
     data: Uint8Array | string,
-    options?: FsxWriteOptions
+    options?: FsxWriteOptions | undefined
   ): Promise<FsxWriteResult>
 
   /**
@@ -41,7 +41,7 @@ export interface Fsx {
   writeFileAtomic(
     path: string,
     data: Uint8Array | string,
-    options?: FsxWriteOptions
+    options?: FsxWriteOptions | undefined
   ): Promise<FsxWriteResult>
 
   /**

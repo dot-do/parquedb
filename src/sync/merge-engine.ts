@@ -157,7 +157,7 @@ export interface MergeEngine {
   findCommonAncestor(
     commit1: string,
     commit2: string,
-    options?: FindCommonAncestorOptions
+    options?: FindCommonAncestorOptions | undefined
   ): Promise<CommonAncestorResult>
 
   /**
@@ -173,7 +173,7 @@ export interface MergeEngine {
   mergeBranches(
     source: string,
     target: string,
-    options?: MergeBranchesOptions
+    options?: MergeBranchesOptions | undefined
   ): Promise<MergeBranchesResult>
 
   /**
@@ -189,7 +189,7 @@ export interface MergeEngine {
   mergeEvents(
     ourEvents: Event[],
     theirEvents: Event[],
-    options?: MergeEventsOptions
+    options?: MergeEventsOptions | undefined
   ): Promise<EventMergeResult>
 }
 

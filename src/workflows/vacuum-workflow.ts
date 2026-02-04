@@ -639,7 +639,7 @@ export class VacuumWorkflow extends WorkflowEntrypoint<Env, VacuumWorkflowParams
    */
   private determineOrphanReason(
     filePath: string,
-    tableLocation: string,
+    _tableLocation: string,
     format: 'iceberg' | 'delta'
   ): OrphanedFileInfo['reason'] {
     if (format === 'delta') {

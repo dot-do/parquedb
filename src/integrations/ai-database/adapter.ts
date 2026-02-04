@@ -185,7 +185,7 @@ export interface Transaction {
     relation: string,
     toType: string,
     toId: string,
-    metadata?: RelationMetadata
+    metadata?: RelationMetadata | undefined
   ): Promise<void>
   commit(): Promise<void>
   rollback(): Promise<void>
@@ -208,7 +208,7 @@ export interface DBProvider {
     relation: string,
     toType: string,
     toId: string,
-    metadata?: RelationMetadata
+    metadata?: RelationMetadata | undefined
   ): Promise<void>
   unrelate(
     fromType: string,

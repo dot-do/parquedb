@@ -94,8 +94,8 @@ export interface Collection<T = Record<string, unknown>> {
    */
   getRelationships(
     id: string,
-    predicate?: string,
-    direction?: 'outbound' | 'inbound'
+    predicate?: string | undefined,
+    direction?: 'outbound' | 'inbound' | undefined
   ): Promise<Relationship[]>
 
   /**
@@ -114,13 +114,13 @@ export interface Collection<T = Record<string, unknown>> {
  */
 export interface ParqueDBClientOptions {
   /** Default actor for write operations */
-  actor?: string
+  actor?: string | undefined
 
   /** Request timeout in milliseconds */
-  timeout?: number
+  timeout?: number | undefined
 
   /** Enable request/response logging */
-  debug?: boolean
+  debug?: boolean | undefined
 }
 
 // =============================================================================
