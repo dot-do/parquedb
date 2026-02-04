@@ -1034,7 +1034,7 @@ export default {
         if (!env.BUCKET) {
           throw new MissingBucketError('BUCKET', 'Required for E2E benchmark operations.')
         }
-        const response = await handleE2EBenchmarkRequest(request, env.BUCKET)
+        const response = await handleE2EBenchmarkRequest(request, env.BUCKET as Parameters<typeof handleE2EBenchmarkRequest>[1])
         return withRateLimitHeaders(response)
       }
 
