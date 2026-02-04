@@ -64,10 +64,10 @@ npm install parquedb
 ## Quick Start
 
 ```typescript
-import { DB, FsBackend } from 'parquedb'
+// lib/db.ts - Define schema once, get full TypeScript types
+import { DB } from 'parquedb'
 
-// Define your schema with $id and $name directives
-const db = DB({
+export const db = DB({
   User: {
     $id: 'email',           // Use email as entity ID
     $name: 'name',          // Use name as display name
@@ -85,7 +85,13 @@ const db = DB({
     status: 'string',
     author: '-> User'
   }
-}, { storage: new FsBackend('.db') })
+})
+// DB() infers types at compile time - no codegen needed!
+```
+
+```typescript
+// app/page.tsx - Import and use with full autocomplete
+import { db } from '@/lib/db'
 
 // Create users - email becomes the $id
 const alice = await db.User.create({

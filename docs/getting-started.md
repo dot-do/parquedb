@@ -10,10 +10,11 @@ Get up and running with ParqueDB in minutes.
 Here is a complete working example you can run immediately:
 
 ```typescript
-import { DB, FsBackend } from 'parquedb'
+// lib/db.ts - Define your schema once
+import { DB } from 'parquedb'
 
-// 1. Define your schema with $id and $name directives
-const db = DB({
+// DB() returns a fully-typed instance - no codegen needed!
+export const db = DB({
   User: {
     $id: 'email',           // Use email as entity ID
     $name: 'name',          // Use name as display name
@@ -31,7 +32,12 @@ const db = DB({
     published: 'boolean = false',
     author: '-> User'       // Forward relationship to User
   }
-}, { storage: new FsBackend('.db') })
+})
+```
+
+```typescript
+// app/page.tsx - Import and use anywhere
+import { db } from '@/lib/db'
 
 // 2. Create some data
 const alice = await db.User.create({
@@ -114,30 +120,39 @@ const published = await db.Posts.find({ status: 'published' })
 const found = await db.Posts.get(post.$id)
 ```
 
-### Typed Schema
+### Typed Schema (Recommended)
 
-Define your data model upfront for validation and relationships:
+Define your schema with `DB()` to get full TypeScript types:
 
 ```typescript
+// lib/db.ts
 import { DB } from 'parquedb'
 
-const database = DB({
+export const db = DB({
   User: {
+    $id: 'email',          // use email as entity ID
     email: 'string!#',     // required, indexed
     name: 'string',
-    age: 'int?'
+    posts: '<- Post.author[]'
   },
   Post: {
+    $id: 'slug',           // use slug as entity ID
     title: 'string!',
     content: 'string',
     author: '-> User'      // relationship to User
   }
 })
+// Types are inferred at compile time - no codegen step needed!
+```
 
-// TypeScript knows the shape of your data
-// Note: With typed schema, collection names match your schema exactly (User, not Users)
-const user = await database.User.create({ email: 'alice@example.com', name: 'Alice' })
-await database.Post.create({ title: 'Hello', content: 'World', author: user.$id })
+```typescript
+// app/page.tsx
+import { db } from '@/lib/db'
+
+// Full autocomplete and type checking
+const user = await db.User.create({ email: 'alice@example.com', name: 'Alice' })
+const post = await db.Post.get('hello-world')
+console.log(post.author?.name)  // Auto-hydrated and typed!
 ```
 
 ## Schema Notation
