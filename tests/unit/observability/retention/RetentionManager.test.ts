@@ -85,7 +85,7 @@ function createMockCollection() {
         results = results.slice(0, options.limit)
       }
 
-      return results
+      return { items: results }
     }),
     count: vi.fn(async (filter?: Record<string, unknown>) => {
       let results = Array.from(store.values())
@@ -154,13 +154,19 @@ function createMockCollection() {
 function createMockDB() {
   const collections: Map<string, ReturnType<typeof createMockCollection>> = new Map()
 
+  const getOrCreateCollection = (name: string) => {
+    if (!collections.has(name)) {
+      collections.set(name, createMockCollection())
+    }
+    return collections.get(name)!
+  }
+
   return {
     collections,
-    collection: vi.fn((name: string) => {
-      if (!collections.has(name)) {
-        collections.set(name, createMockCollection())
-      }
-      return collections.get(name)!
+    collection: vi.fn((name: string) => getOrCreateCollection(name)),
+    deleteMany: vi.fn(async (collectionName: string, filter: Record<string, unknown>, options?: { hard?: boolean }) => {
+      const col = getOrCreateCollection(collectionName)
+      return col.deleteMany(filter, options)
     }),
   }
 }
@@ -273,22 +279,22 @@ describe('Cleanup Operations', () => {
 
       // Add old records (older than 1 second)
       addTestRecords(collection, [
-        { timestamp: new Date(now - 5000), granularity: 'hourly' },
-        { timestamp: new Date(now - 3000), granularity: 'hourly' },
-        { timestamp: new Date(now - 2000), granularity: 'hourly' },
+        { timestamp: new Date(now - 5000), granularity: 'hour' },
+        { timestamp: new Date(now - 3000), granularity: 'hour' },
+        { timestamp: new Date(now - 2000), granularity: 'hour' },
       ])
 
       // Add recent records
       addTestRecords(collection, [
-        { timestamp: new Date(now - 500), granularity: 'hourly' },
-        { timestamp: new Date(now - 100), granularity: 'hourly' },
+        { timestamp: new Date(now - 500), granularity: 'hour' },
+        { timestamp: new Date(now - 100), granularity: 'hour' },
       ])
 
       const result = await manager.cleanup()
 
       expect(result.success).toBe(true)
       expect(result.deletedCount).toBe(3)
-      expect(result.byGranularity.hourly).toBe(3)
+      expect(result.byGranularity.hour).toBe(3)
     })
 
     it('should respect granularity-specific policies', async () => {
@@ -297,28 +303,28 @@ describe('Cleanup Operations', () => {
 
       // Hourly records - policy: 1 second
       addTestRecords(collection, [
-        { timestamp: new Date(now - 2000), granularity: 'hourly' }, // Should be deleted
-        { timestamp: new Date(now - 500), granularity: 'hourly' },  // Should be kept
+        { timestamp: new Date(now - 2000), granularity: 'hour' }, // Should be deleted
+        { timestamp: new Date(now - 500), granularity: 'hour' },  // Should be kept
       ])
 
       // Daily records - policy: 5 seconds
       addTestRecords(collection, [
-        { timestamp: new Date(now - 6000), granularity: 'daily' },  // Should be deleted
-        { timestamp: new Date(now - 2000), granularity: 'daily' },  // Should be kept
+        { timestamp: new Date(now - 6000), granularity: 'day' },  // Should be deleted
+        { timestamp: new Date(now - 2000), granularity: 'day' },  // Should be kept
       ])
 
       // Monthly records - policy: 10 seconds
       addTestRecords(collection, [
-        { timestamp: new Date(now - 15000), granularity: 'monthly' }, // Should be deleted
-        { timestamp: new Date(now - 5000), granularity: 'monthly' },  // Should be kept
+        { timestamp: new Date(now - 15000), granularity: 'month' }, // Should be deleted
+        { timestamp: new Date(now - 5000), granularity: 'month' },  // Should be kept
       ])
 
       const result = await manager.cleanup()
 
       expect(result.success).toBe(true)
-      expect(result.byGranularity.hourly).toBe(1)
-      expect(result.byGranularity.daily).toBe(1)
-      expect(result.byGranularity.monthly).toBe(1)
+      expect(result.byGranularity.hour).toBe(1)
+      expect(result.byGranularity.day).toBe(1)
+      expect(result.byGranularity.month).toBe(1)
       expect(result.deletedCount).toBe(3)
     })
 
@@ -345,8 +351,8 @@ describe('Cleanup Operations', () => {
 
       // Add only recent records
       addTestRecords(collection, [
-        { timestamp: new Date(now - 100), granularity: 'hourly' },
-        { timestamp: new Date(now - 200), granularity: 'daily' },
+        { timestamp: new Date(now - 100), granularity: 'hour' },
+        { timestamp: new Date(now - 200), granularity: 'day' },
       ])
 
       const result = await manager.cleanup()
@@ -360,8 +366,8 @@ describe('Cleanup Operations', () => {
       const now = Date.now()
 
       addTestRecords(collection, [
-        { timestamp: new Date(now - 5000), granularity: 'hourly' },
-        { timestamp: new Date(now - 5000), granularity: 'hourly' },
+        { timestamp: new Date(now - 5000), granularity: 'hour' },
+        { timestamp: new Date(now - 5000), granularity: 'hour' },
       ])
 
       const progressCalls: CleanupProgress[] = []
@@ -516,11 +522,11 @@ describe('Retention Statistics', () => {
 
       // Add records
       addTestRecords(collection, [
-        { timestamp: new Date(now - 5000), granularity: 'hourly' },  // Eligible
-        { timestamp: new Date(now - 2000), granularity: 'hourly' },  // Eligible
-        { timestamp: new Date(now - 100), granularity: 'hourly' },   // Not eligible
-        { timestamp: new Date(now - 10000), granularity: 'daily' },  // Eligible
-        { timestamp: new Date(now - 1000), granularity: 'daily' },   // Not eligible
+        { timestamp: new Date(now - 5000), granularity: 'hour' },  // Eligible
+        { timestamp: new Date(now - 2000), granularity: 'hour' },  // Eligible
+        { timestamp: new Date(now - 100), granularity: 'hour' },   // Not eligible
+        { timestamp: new Date(now - 10000), granularity: 'day' },  // Eligible
+        { timestamp: new Date(now - 1000), granularity: 'day' },   // Not eligible
       ])
 
       const stats = await manager.getRetentionStats()
@@ -528,8 +534,8 @@ describe('Retention Statistics', () => {
       expect(stats.collection).toBe('test_records')
       expect(stats.totalRecords).toBe(5)
       expect(stats.totalEligibleForDeletion).toBeGreaterThan(0)
-      expect(stats.byGranularity.hourly).toBeDefined()
-      expect(stats.byGranularity.daily).toBeDefined()
+      expect(stats.byGranularity.hour).toBeDefined()
+      expect(stats.byGranularity.day).toBeDefined()
     })
 
     it('should return oldest timestamp per granularity', async () => {
@@ -538,14 +544,14 @@ describe('Retention Statistics', () => {
       const oldestTimestamp = new Date(now - 10000)
 
       addTestRecords(collection, [
-        { timestamp: oldestTimestamp, granularity: 'hourly' },
-        { timestamp: new Date(now - 5000), granularity: 'hourly' },
-        { timestamp: new Date(now - 1000), granularity: 'hourly' },
+        { timestamp: oldestTimestamp, granularity: 'hour' },
+        { timestamp: new Date(now - 5000), granularity: 'hour' },
+        { timestamp: new Date(now - 1000), granularity: 'hour' },
       ])
 
       const stats = await manager.getRetentionStats()
 
-      expect(stats.byGranularity.hourly.oldestTimestamp?.getTime()).toBe(oldestTimestamp.getTime())
+      expect(stats.byGranularity.hour.oldestTimestamp?.getTime()).toBe(oldestTimestamp.getTime())
     })
   })
 })
