@@ -346,8 +346,14 @@ export async function handleSyncRoutes(
   env: Env,
   path: string
 ): Promise<Response | null> {
+  // Early return if not a sync route - check this BEFORE auth to avoid
+  // requiring auth for non-sync routes that happen to pass through here
+  if (!path.startsWith('/api/sync/')) {
+    return null
+  }
+
   // Handle CORS preflight
-  if (request.method === 'OPTIONS' && path.startsWith('/api/sync/')) {
+  if (request.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
       headers: SYNC_CORS_HEADERS,
