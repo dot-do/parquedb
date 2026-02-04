@@ -57,7 +57,9 @@
   },
   "browser": {
     "./dist/config/auth.js": "./dist/config/auth.browser.js",
+    "./dist/config/env.js": "./dist/config/env.browser.js",
     "./dist/config/index.js": "./dist/config/index.browser.js",
+    "./dist/migration/index.js": "./dist/migration/index.browser.js",
     "./dist/index.js": "./dist/index.browser.js"
   },
   "peerDependencies": {
@@ -137,7 +139,8 @@
     "@icetype/iceberg": "^0.3.0",
     "@types/pluralize": "^0.0.33",
     "fflate": "^0.8.2",
-    "hyparquet": "github:dot-do/hyparquet#variant-shredding",
+    "fzstd": "^0.1.1",
+    "hyparquet": "github:dot-do/hyparquet#perf/predicate-pushdown-fixes",
     "hyparquet-compressors": "^1.1.1",
     "hyparquet-writer": "github:dot-do/hyparquet-writer#variant-shredding",
     "jose": "^6.1.3",
