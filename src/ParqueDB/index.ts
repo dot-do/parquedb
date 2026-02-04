@@ -296,6 +296,9 @@ export { EventLogImpl } from './events'
  */
 export { ParqueDBImpl } from './core'
 
+// Re-export ParqueDBImpl as ParqueDB for backwards compatibility
+export { ParqueDBImpl as ParqueDB } from './core'
+
 // Re-export entity operations types and helpers
 export {
   /**

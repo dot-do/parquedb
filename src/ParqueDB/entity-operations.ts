@@ -27,7 +27,7 @@ import type {
 import { entityTarget, parseEntityTarget, isRelationshipTarget } from '../types'
 import { parseFieldType, isRelationString } from '../types/schema'
 import { FileNotFoundError } from '../storage/MemoryBackend'
-import { generateId, deepClone } from '../utils'
+import { deepClone } from '../utils'
 import { matchesFilter as canonicalMatchesFilter } from '../query/filter'
 import { sortEntities } from '../query/sort'
 import { applyOperators } from '../mutation/operators'
@@ -48,7 +48,7 @@ import {
   ValidationError,
 } from './types'
 
-import { validateNamespace, validateFilter, validateUpdateOperators, toFullId } from './validation'
+import { validateNamespace, validateFilter, validateUpdateOperators, toFullId, resolveEntityId } from './validation'
 
 // =============================================================================
 // Types - Focused Context Interfaces
@@ -561,31 +561,33 @@ export async function createEntity<T extends EntityData = EntityData>(
 
   const now = new Date()
 
-  // Use provided $id if present, otherwise generate a new one
-  let fullId: EntityId
-  let entityIdPart: string
-  if (data.$id) {
-    const providedId = String(data.$id)
-    if (providedId.includes('/')) {
-      fullId = providedId as EntityId
-      entityIdPart = providedId.split('/').slice(1).join('/')
-    } else {
-      entityIdPart = providedId
-      fullId = `${namespace}/${entityIdPart}` as EntityId
-    }
-  } else {
-    entityIdPart = generateId()
-    fullId = `${namespace}/${entityIdPart}` as EntityId
+  // Auto-derive $type from namespace (needed early to check $id directive)
+  const derivedType = data.$type || deriveTypeFromNamespace(namespace)
+
+  // Resolve entity ID using the utility function
+  const { fullId, localId: entityIdPart } = resolveEntityId({
+    namespace,
+    typeName: derivedType,
+    schema: ctx.schema,
+    data: data as Record<string, unknown>,
+  })
+
+  // Check for duplicate ID (entity already exists with this ID)
+  const existingEntity = ctx.entities.get(fullId)
+  if (existingEntity && !existingEntity.deletedAt) {
+    throw new ValidationError(
+      'create',
+      derivedType,
+      `Entity with ID '${fullId}' already exists`,
+      { entityId: fullId }
+    )
   }
 
   const actor = options?.actor || ('system/anonymous' as EntityId)
 
-  // Auto-derive $type from namespace if not provided
-  const derivedType = data.$type || deriveTypeFromNamespace(namespace)
-
   // Auto-derive name from common fields or use id
-  const dataRecord = data as Record<string, unknown>
-  const derivedName = data.name || dataRecord.title || dataRecord.label || entityIdPart
+  const dataAsRecord = data as Record<string, unknown>
+  const derivedName = data.name || dataAsRecord.title || dataAsRecord.label || entityIdPart
 
   // Apply defaults from schema
   const dataWithDefaults = applySchemaDefaults(data, ctx.schema)
