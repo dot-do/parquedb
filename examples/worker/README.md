@@ -1,33 +1,18 @@
 # ParqueDB Cloudflare Worker Example
 
-A REST API for a blog using ParqueDB with R2 storage.
+A REST API using ParqueDB with R2 storage.
 
 ## Setup
 
 ```bash
-# Install dependencies
 pnpm install
-
-# Create R2 bucket
 wrangler r2 bucket create parquedb-data
-
-# Start local development
 pnpm dev
 ```
 
-## Project Structure
+## Schema in db.ts
 
-```
-src/
-  db.ts        # Schema definition (required in Workers - no config file support)
-  index.ts     # Worker handler - re-exports ParqueDBDO
-wrangler.jsonc # R2 + DO bindings
-```
-
-### Why db.ts in Workers?
-
-Workers don't have filesystem access, so `parquedb.config.ts` doesn't work.
-Define your schema with `DB()` in `db.ts`:
+Workers don't have filesystem access, so use `DB()` directly:
 
 ```ts
 // src/db.ts
@@ -51,43 +36,22 @@ export const db = DB({
 })
 ```
 
-No storage configuration needed - ParqueDB auto-detects R2 and DO bindings.
-
-### index.ts - Worker Handler
+## Worker Handler
 
 ```ts
+// src/index.ts
 import { db } from './db'
-
-// Re-export ParqueDBDO for Cloudflare binding
 export { ParqueDBDO } from 'parquedb/worker'
 
 export default {
-  async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request) {
     const post = await db.Post.get('hello-world')
     return Response.json({
       title: post?.title,
-      author: post?.author?.name  // Auto-hydrated
+      author: post?.author?.name
     })
   }
 }
-```
-
-## Endpoints
-
-```bash
-# List published posts
-curl http://localhost:8787/posts
-
-# Get single post (auto-hydrates author)
-curl http://localhost:8787/posts/hello-world
-
-# Create new post
-curl -X POST http://localhost:8787/posts \
-  -H "Content-Type: application/json" \
-  -d '{"slug":"my-post","title":"My Post","content":"Hello!","author":"alice@example.com"}'
-
-# Get user with their posts
-curl http://localhost:8787/users/alice%40example.com
 ```
 
 ## wrangler.jsonc
@@ -97,23 +61,14 @@ curl http://localhost:8787/users/alice%40example.com
   "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "parquedb-data" }],
   "durable_objects": {
     "bindings": [{ "name": "PARQUEDB", "class_name": "ParqueDBDO" }]
-  },
-  "migrations": [{ "tag": "v1", "new_classes": ["ParqueDBDO"] }]
+  }
 }
 ```
 
-## Deploy
+## Endpoints
 
 ```bash
-pnpm deploy
+curl http://localhost:8787/posts
+curl http://localhost:8787/posts/hello-world
+curl http://localhost:8787/users/alice%40example.com
 ```
-
-## Comparison with Next.js
-
-| Feature | Worker | Next.js |
-|---------|--------|---------|
-| Config file | No (no FS access) | Yes (`parquedb.config.ts`) |
-| Schema location | `src/db.ts` with `DB()` | `parquedb.config.ts` |
-| Import | `import { db } from './db'` | `import { db } from 'parquedb'` |
-| Storage | Auto-detects R2 | Auto-detects `.parquedb/` |
-| DO export | Required | Not needed |
