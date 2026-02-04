@@ -1172,7 +1172,7 @@ import {
   isIngestSource,
   KNOWN_INGEST_SOURCES,
 } from '@/materialized-views/types'
-import { isCustomIngestSource, getCustomSourceHandler } from '@/materialized-views/ingest-source'
+import { isCustomIngestSource, getCustomSourceHandler } from '@/materialized-views/types'
 
 describe('IngestSource Types', () => {
   describe('KNOWN_INGEST_SOURCES', () => {

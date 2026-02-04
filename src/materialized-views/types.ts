@@ -10,8 +10,8 @@
 
 import type { Filter } from '../types/filter'
 
-// Re-export cron validation from cron.ts
-export { validateCronExpression, type CronValidationResult } from './cron'
+// Re-export cron validation from scheduler.ts (canonical source)
+export { validateCronExpression, type CronValidationResult } from './scheduler'
 
 // =============================================================================
 // IngestSource Types (consolidated from ingest-source.ts)

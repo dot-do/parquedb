@@ -9,7 +9,7 @@ import {
   validateCronExpression,
   isValidCronExpression,
   type CronValidationResult,
-} from '@/materialized-views/cron'
+} from '@/materialized-views/scheduler'
 
 // =============================================================================
 // isValidCronExpression Tests

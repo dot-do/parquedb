@@ -7,6 +7,20 @@
  * - Manual refresh: On-demand MV rebuilds
  * - Staleness detection: Track and detect stale views
  * - Incremental refresh: Efficient delta-based updates
+ *
+ * File organization (consolidated):
+ * - types.ts: Core types, IngestSource types, cron re-exports
+ * - define.ts: defineView(), parseSchema(), cycle detection, validation
+ * - scheduler.ts: MVScheduler, cron validation
+ * - stream-processor.ts: StreamProcessor, StreamPersistence (WAL/DLQ/checkpointing)
+ * - streaming.ts: StreamingRefreshEngine (CDC events)
+ * - staleness.ts: StalenessDetector, lineage tracking
+ * - aggregations.ts: Aggregate computation, groupBy, having
+ * - refresh.ts: Full refresh implementation
+ * - incremental.ts: IncrementalRefresher (delta-based updates)
+ * - storage.ts: MVStorageManager (view persistence)
+ * - version-providers.ts: SourceVersionProvider implementations
+ * - write-path-integration.ts: MVEventEmitter, ParqueDB hooks
  */
 
 // Core types - types.ts is the canonical source for shared types
@@ -89,20 +103,12 @@ export {
   type SourceDelta,
 } from './incremental'
 
-// Stream processor module - has RetryConfig that conflicts with scheduler
-// Let stream-processor's version be exported (comes after scheduler)
+// Stream processor module - includes StreamPersistence (consolidated from stream-persistence.ts)
+// Has RetryConfig that conflicts with scheduler - let stream-processor's version be exported
 export * from './stream-processor'
 
-// Stream persistence module
-export * from './stream-persistence'
-
-// Cron module - has isValidCronExpression that conflicts with types.ts
-export { validateCronExpression, type CronValidationResult } from './cron'
-
-// Cycle detection module
-export * from './cycle-detection'
-
-// Ingest source types are exported from ./types (canonical source)
+// Version providers module
+export * from './version-providers'
 
 // Write path integration module
 export * from './write-path-integration'

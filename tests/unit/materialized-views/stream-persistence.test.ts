@@ -18,7 +18,7 @@ import {
   type StreamCheckpoint,
   type RecoveryResult,
   type PersistedDLQEntry,
-} from '../../../src/materialized-views/stream-persistence'
+} from '../../../src/materialized-views/stream-processor'
 import type { FailedBatch } from '../../../src/materialized-views/stream-processor'
 import type { StorageBackend, WriteResult, FileStat } from '../../../src/types/storage'
 
