@@ -79,6 +79,13 @@ export {
 } from './errors'
 
 // =============================================================================
+// Base Backend Class
+// =============================================================================
+
+// BaseBackend - Abstract base class with shared functionality
+export { BaseBackend, type BaseBackendOptions } from './BaseBackend'
+
+// =============================================================================
 // Backend Implementations
 // =============================================================================
 
