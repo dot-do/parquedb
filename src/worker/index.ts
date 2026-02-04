@@ -87,6 +87,48 @@ import {
   type HandlerContext,
 } from './handlers'
 
+// =============================================================================
+// Module-level state (persists across requests in the same isolate)
+// This is critical for warm cache performance
+// =============================================================================
+let cachedQueryExecutor: QueryExecutor | null = null
+let cachedReadPath: ReadPath | null = null
+let cachedEnvHash: string | null = null
+
+/**
+ * Get or create a QueryExecutor that persists across requests
+ * This enables the dataCache to be reused, making warm queries instant
+ */
+function getOrCreateQueryExecutor(env: Env, ctx: ExecutionContext, cache: Cache): { queryExecutor: QueryExecutor; readPath: ReadPath } {
+  // Create a hash of env to detect if bindings changed (e.g., different worker version)
+  const envHash = `${env.BUCKET?.name ?? 'none'}-${env.CDN_BUCKET?.name ?? 'none'}`
+
+  // Reuse cached executor if env matches
+  if (cachedQueryExecutor && cachedReadPath && cachedEnvHash === envHash) {
+    // Update execution context for this request (needed for ctx.waitUntil)
+    cachedReadPath.setExecutionContext(ctx)
+    return { queryExecutor: cachedQueryExecutor, readPath: cachedReadPath }
+  }
+
+  // Create new executor and cache it
+  const readPath = new ReadPath(env.BUCKET, cache, DEFAULT_CACHE_CONFIG)
+  readPath.setExecutionContext(ctx)
+
+  const queryExecutor = new QueryExecutor(
+    readPath,
+    env.BUCKET,
+    env.CDN_BUCKET,
+    env.CDN_R2_DEV_URL
+  )
+
+  // Cache at module level
+  cachedQueryExecutor = queryExecutor
+  cachedReadPath = readPath
+  cachedEnvHash = envHash
+
+  return { queryExecutor, readPath }
+}
+
 // Re-export for external use
 export { ReadPath, NotFoundError, ReadError } from './ReadPath'
 export { QueryExecutor } from './QueryExecutor'
@@ -304,19 +346,14 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
   /**
    * Initialize cache asynchronously
+   * Uses module-level cached QueryExecutor for warm performance
    */
   private async initializeCache(): Promise<void> {
     this.#cache = await caches.open('parquedb')
-    this.readPath = new ReadPath(this.env.BUCKET, this.#cache, DEFAULT_CACHE_CONFIG)
-    // Set execution context for proper background revalidation lifecycle
-    this.readPath.setExecutionContext(this.ctx)
-    // Pass R2Buckets and r2.dev URL to QueryExecutor for edge caching
-    this.queryExecutor = new QueryExecutor(
-      this.readPath,
-      this.env.BUCKET,
-      this.env.CDN_BUCKET,
-      this.env.CDN_R2_DEV_URL
-    )
+    // Use cached QueryExecutor that persists across requests in same isolate
+    const { queryExecutor, readPath } = getOrCreateQueryExecutor(this.env, this.ctx, this.#cache)
+    this.queryExecutor = queryExecutor
+    this.readPath = readPath
   }
 
   /**

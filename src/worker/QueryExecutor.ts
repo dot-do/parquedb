@@ -489,6 +489,33 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   }
 
   /**
+   * Try to get a RANGE from Cache API using Range header
+   * This is much more efficient than reading the whole file and slicing
+   */
+  private async getRangeFromCache(path: string, start: number, end: number): Promise<Uint8Array | null> {
+    const cache = await this.getCache()
+    if (!cache) {
+      return null
+    }
+
+    try {
+      // Create request with Range header
+      const cacheKey = new Request(`${this.cacheKeyPrefix}${path}`, {
+        headers: { 'Range': `bytes=${start}-${end - 1}` }
+      })
+      const cached = await cache.match(cacheKey)
+      if (cached) {
+        // Cache API returns 206 Partial Content for range requests
+        return new Uint8Array(await cached.arrayBuffer())
+      }
+    } catch (err) {
+      logger.debug(`Cache range read failed for ${path}`, err)
+    }
+
+    return null
+  }
+
+  /**
    * Store data in Cache API
    */
   private async putInCache(path: string, data: Uint8Array): Promise<void> {
@@ -670,28 +697,41 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
     return head !== null
   }
 
+  // Stat cache to avoid repeated HEAD requests
+  private statCache = new Map<string, FileStat>()
+
   async stat(path: string): Promise<FileStat | null> {
+    // Check stat cache first
+    const cachedStat = this.statCache.get(path)
+    if (cachedStat) {
+      return cachedStat
+    }
+
     // Check CDN bucket first
     const cdnPath = `${this.cdnPrefix}/${path}`
     const cdnHead = await this.cdnBucket.head(cdnPath)
     if (cdnHead) {
-      return {
+      const result: FileStat = {
         path,
         size: cdnHead.size,
         mtime: cdnHead.uploaded,
         isDirectory: false,
       }
+      this.statCache.set(path, result)
+      return result
     }
 
     // Fall back to primary
     const head = await this.primaryBucket.head(path)
     if (!head) return null
-    return {
+    const result: FileStat = {
       path,
       size: head.size,
       mtime: head.uploaded,
       isDirectory: false,
     }
+    this.statCache.set(path, result)
+    return result
   }
 
   async list(prefix: string): Promise<ListResult> {
@@ -913,24 +953,10 @@ export class QueryExecutor {
         let rows: DataRow[]
         let results: T[]
 
-        // EARLY TERMINATION: For limit queries WITHOUT sort, we can stop
-        // scanning once we've found enough matching rows
-        const canUseEarlyTermination = options.limit && options.limit > 0 && !options.sort
-        const targetCount = canUseEarlyTermination
-          ? (options.limit ?? 0) + (options.skip ?? 0)
-          : Infinity
-
-        if (canUseEarlyTermination && !pushdownFilter) {
-          // Use early termination - process row groups incrementally
-          // and stop once we have enough matching rows
-          const remainingFilter = this.removeIdFilter(filter)
-          results = await this.readRowGroupsWithEarlyTermination<T>(
-            path,
-            remainingFilter,
-            targetCount,
-            stats
-          )
-        } else if (pushdownFilter && this.storageAdapter) {
+        // For warm performance, read ALL data and cache it
+        // The dataCache makes subsequent queries instant
+        // Early termination only helps cold queries but prevents caching
+        if (pushdownFilter && this.storageAdapter) {
           // Use parquetQuery with predicate pushdown
           // hyparquet uses min/max statistics to skip row groups that can't match
           const asyncBuffer = await this.createAsyncBuffer(path)
@@ -985,18 +1011,14 @@ export class QueryExecutor {
         }
 
         // Cache the unpacked data for subsequent requests (only for full reads without pending)
-        // Skip caching when early termination was used (we don't have all data)
-        if (!pushdownFilter && pendingRows.length === 0 && !stats.usedEarlyTermination) {
+        if (!pushdownFilter && pendingRows.length === 0) {
           this.dataCache.set(path, asCacheableArray(results))
         }
 
         // Apply remaining MongoDB-style filters (for nested fields in data)
-        // Skip if early termination was used (filter already applied during read)
-        if (!stats.usedEarlyTermination) {
-          const remainingFilter = this.removeIdFilter(filter)
-          if (Object.keys(remainingFilter).length > 0) {
-            results = this.applyFilter(results, remainingFilter)
-          }
+        const remainingFilter = this.removeIdFilter(filter)
+        if (Object.keys(remainingFilter).length > 0) {
+          results = this.applyFilter(results, remainingFilter)
         }
 
         // Post-process: sort, skip, limit, project
@@ -2242,8 +2264,10 @@ export class QueryExecutor {
     let rowStart = 0
     const MAX_CHUNK_SIZE = 10000  // Don't read more than 10K rows at once
 
+    // Create async buffer ONCE outside the loop (avoids repeated stat() calls)
+    const asyncBuffer = await this.createAsyncBuffer(path)
+
     while (matchingRows.length < targetCount) {
-      const asyncBuffer = await this.createAsyncBuffer(path)
       const rows = await parquetQuery({
         file: asyncBuffer,
         columns: ['$id', 'data'],
