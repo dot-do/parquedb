@@ -34,6 +34,15 @@ export async function create(
   // Create the entity
   const entity = await db.create(collection, input, { actor })
 
+  // Store the local ID as a regular 'id' field for Payload's findOne({ id: ... }) queries
+  // ParqueDB uses $id format (ns/localId), but Payload expects 'id' to be queryable
+  const localId = entity.$id.split('/')[1]
+  if (localId && !(entity as Record<string, unknown>)['id']) {
+    // Update the entity to include the id field
+    await db.update(collection, localId, { $set: { id: localId } }, { actor })
+    ;(entity as Record<string, unknown>)['id'] = localId
+  }
+
   // Transform back to Payload format
   const doc = toPayloadDoc(entity, { collection })
 
