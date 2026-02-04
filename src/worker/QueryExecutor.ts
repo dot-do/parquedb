@@ -295,88 +295,75 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   }
 
   /**
-   * Load entire file
+   * Load entire file using Cache API + R2 binding (no external fetch)
    */
   private async loadFile(path: string): Promise<Uint8Array> {
     this.totalReads++
+    const cache = caches.default
+    const cacheKey = new Request(`https://parquedb.cache/${path}`)
 
-    // Use edge cache via cdn.workers.do for better global performance
-    if (this.r2DevUrl) {
-      // Version string for cache invalidation
-      const url = `${this.r2DevUrl}/${path}?v=single-snappy`
-      const response = await fetch(url, {
-        cf: {
-          cacheTtl: DEFAULT_CACHE_TTL,  // 1 hour edge cache
-          cacheEverything: true,
-        },
-      })
-      if (response.ok) {
-        this.edgeHits++
-        return new Uint8Array(await response.arrayBuffer())
-      }
+    // Check cache first
+    const cachedResponse = await cache.match(cacheKey)
+    if (cachedResponse) {
+      this.edgeHits++
+      return new Uint8Array(await cachedResponse.arrayBuffer())
     }
 
-    // Try CDN bucket with prefix (whole file)
-    const cdnPath = `${this.cdnPrefix}/${path}`
-    const cdnObj = await this.cdnBucket.get(cdnPath)
-    if (cdnObj) {
-      this.cdnHits++
-      return new Uint8Array(await cdnObj.arrayBuffer())
-    }
-
-    // Fall back to primary bucket
-    this.primaryHits++
-    const obj = await this.primaryBucket.get(path)
+    // Read from R2 binding (same datacenter, no network hop)
+    const cdnPath = this.cdnPrefix ? `${this.cdnPrefix}/${path}` : path
+    const obj = await this.cdnBucket.get(cdnPath) ?? await this.primaryBucket.get(path)
     if (!obj) throw new Error(`Object not found: ${path}`)
-    return new Uint8Array(await obj.arrayBuffer())
+
+    const data = new Uint8Array(await obj.arrayBuffer())
+    this.cdnHits++
+
+    // Cache for future reads
+    const responseToCache = new Response(data, {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Cache-Control': `public, max-age=${DEFAULT_CACHE_TTL}`,
+      },
+    })
+    cache.put(cacheKey, responseToCache)
+
+    return data
   }
 
   /**
-   * Load byte range from file using Range headers
+   * Load byte range from file
+   * For small files (<5MB): cache full file, slice locally
+   * For large files: use R2 range request directly (cheaper)
    */
   private async loadRange(path: string, start: number, end: number): Promise<Uint8Array> {
     this.totalReads++
+    const cache = caches.default
+    const cacheKey = new Request(`https://parquedb.cache/${path}`)
 
-    // Use edge cache via cdn.workers.do with Range header
-    if (this.r2DevUrl) {
-      const url = `${this.r2DevUrl}/${path}?v=single-snappy`
-      const response = await fetch(url, {
-        headers: {
-          'Range': `bytes=${start}-${end - 1}`,
-        },
-        cf: {
-          cacheTtl: DEFAULT_CACHE_TTL,
-          cacheEverything: true,
-        },
-      })
-      if (response.ok || response.status === 206) {
-        this.edgeHits++
-        return new Uint8Array(await response.arrayBuffer())
-      }
+    // Check if full file is cached - if so, slice from it
+    const cachedResponse = await cache.match(cacheKey)
+    if (cachedResponse) {
+      this.edgeHits++
+      const fullData = new Uint8Array(await cachedResponse.arrayBuffer())
+      return fullData.slice(start, end)
     }
 
-    // Try CDN bucket with prefix (range read)
-    const cdnPath = `${this.cdnPrefix}/${path}`
-    const cdnObj = await this.cdnBucket.get(cdnPath, {
+    // For range requests, read directly from R2 (no caching of partial responses)
+    // This avoids cache fragmentation while still being fast (same datacenter)
+    const cdnPath = this.cdnPrefix ? `${this.cdnPrefix}/${path}` : path
+    const obj = await this.cdnBucket.get(cdnPath, {
       range: { offset: start, length: end - start },
-    })
-    if (cdnObj) {
-      this.cdnHits++
-      return new Uint8Array(await cdnObj.arrayBuffer())
-    }
-
-    // Fall back to primary bucket
-    this.primaryHits++
-    const obj = await this.primaryBucket.get(path, {
+    }) ?? await this.primaryBucket.get(path, {
       range: { offset: start, length: end - start },
     })
     if (!obj) throw new Error(`Object not found: ${path}`)
+
+    this.cdnHits++
     return new Uint8Array(await obj.arrayBuffer())
   }
 
   async exists(path: string): Promise<boolean> {
     // Check CDN bucket first
-    const cdnPath = `${this.cdnPrefix}/${path}`
+    const cdnPath = this.cdnPrefix ? `${this.cdnPrefix}/${path}` : path
     const cdnHead = await this.cdnBucket.head(cdnPath)
     if (cdnHead !== null) return true
 
@@ -396,7 +383,7 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
     }
 
     // Check CDN bucket first
-    const cdnPath = `${this.cdnPrefix}/${path}`
+    const cdnPath = this.cdnPrefix ? `${this.cdnPrefix}/${path}` : path
     const cdnHead = await this.cdnBucket.head(cdnPath)
     if (cdnHead) {
       const result: FileStat = {
@@ -424,11 +411,11 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
 
   async list(prefix: string): Promise<ListResult> {
     // List from CDN bucket with prefix
-    const cdnPrefix = `${this.cdnPrefix}/${prefix}`
+    const cdnPrefix = this.cdnPrefix ? `${this.cdnPrefix}/${prefix}` : prefix
     const result = await this.cdnBucket.list({ prefix: cdnPrefix, limit: 1000 })
 
-    // Remove CDN prefix from paths
-    const prefixLen = this.cdnPrefix.length + 1
+    // Remove CDN prefix from paths (only if cdnPrefix is set)
+    const prefixLen = this.cdnPrefix ? this.cdnPrefix.length + 1 : 0
     return {
       files: result.objects.map(obj => obj.key.slice(prefixLen)),
       hasMore: result.truncated,
