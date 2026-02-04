@@ -26,7 +26,9 @@ import type { Entity, EntityId, Event, Variant } from '../types'
 import { ParquetWriter } from '../parquet/writer'
 import {
   buildEventParquetSchema,
+  buildEntityParquetSchema,
   buildRelationshipParquetSchema,
+  entityToRow,
   eventToRow,
   rowToEvent,
 } from '../backends/parquet-utils'
@@ -177,8 +179,14 @@ export class EventSourcedBackend implements EventSourcedOperations {
   /** Snapshot cache */
   private snapshotCache: Map<string, EntitySnapshot> = new Map()
 
+  /** Current entity state (derived from events) - Map<fullId, Entity> */
+  private entities: Map<string, Entity> = new Map()
+
   /** Relationship index: targetId -> Map<sourceField, Set<sourceId>> */
   private relIndex: Map<string, Map<string, Set<string>>> = new Map()
+
+  /** Whether entities have been modified since last flush */
+  private entitiesDirty = false
 
   /** Whether relationships have been modified since last flush */
   private relsDirty = false
@@ -196,30 +204,10 @@ export class EventSourcedBackend implements EventSourcedOperations {
   // ===========================================================================
 
   /**
-   * Initialize sequence counters from storage
+   * Initialize from storage (sequences can be derived from event count)
    */
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return
-
-    try {
-      // Read sequence metadata from storage
-      const metaPath = 'data/event-meta.json'
-      const exists = await this.storage.exists(metaPath)
-
-      if (exists) {
-        const data = await this.storage.read(metaPath)
-        const meta = JSON.parse(new TextDecoder().decode(data)) as {
-          sequences: Record<string, number>
-        }
-
-        for (const [ns, seq] of Object.entries(meta.sequences)) {
-          this.sequences.set(ns, seq)
-        }
-      }
-    } catch {
-      // Ignore read errors - start fresh
-    }
-
     this.initialized = true
   }
 
@@ -250,11 +238,22 @@ export class EventSourcedBackend implements EventSourcedOperations {
     // Invalidate entity cache
     this.invalidateEntityCache(event.target)
 
-    // Track relationship changes from entity events
-    if (event.op === 'CREATE' || event.op === 'UPDATE') {
-      if (event.after && typeof event.after === 'object') {
-        const afterEntity = event.after as Entity
-        this.updateRelationshipsFromEntity(afterEntity, event.target)
+    // Update entity state and relationships from events
+    const parts = event.target.split(':')
+    if (parts.length === 2) {
+      const [ns, id] = parts
+      const fullId = `${ns}/${id}`
+
+      if (event.op === 'CREATE' || event.op === 'UPDATE') {
+        if (event.after && typeof event.after === 'object') {
+          const entity = this.variantToEntity(event.after as Variant, event.target)
+          this.entities.set(fullId, entity)
+          this.entitiesDirty = true
+          this.updateRelationshipsFromEntity(entity, event.target)
+        }
+      } else if (event.op === 'DELETE') {
+        this.entities.delete(fullId)
+        this.entitiesDirty = true
       }
     }
 
@@ -366,9 +365,6 @@ export class EventSourcedBackend implements EventSourcedOperations {
     for (const ns of namespaces) {
       await this.flushNamespace(ns)
     }
-
-    // Persist sequence metadata
-    await this.persistSequenceMetadata()
   }
 
   /**
@@ -494,7 +490,8 @@ export class EventSourcedBackend implements EventSourcedOperations {
           const fullId = `${ns}/${id}`
           entities.set(fullId, entity)
 
-          // Also index relationships from this entity
+          // Also store in internal entities map and index relationships
+          this.entities.set(fullId, entity)
           this.updateRelationshipsFromEntity(entity, target)
         }
       }
@@ -760,10 +757,16 @@ export class EventSourcedBackend implements EventSourcedOperations {
     const eventSchema = buildEventParquetSchema()
     const writer = new ParquetWriter(this.storage, { compression: 'lz4' })
 
-    // Write to flat events.parquet file (not namespace subfolders)
+    // Write to flat events.parquet file (oplog for sync/time-travel)
     await writer.write('events.parquet', eventRows, eventSchema)
 
-    // Write rels.parquet if relationships have changed
+    // Write data.parquet (primary entity storage for deployment/queries)
+    if (this.entitiesDirty && this.entities.size > 0) {
+      await this.writeDataParquet(writer)
+      this.entitiesDirty = false
+    }
+
+    // Write rels.parquet (relationship index for queries)
     if (this.relsDirty) {
       await this.writeRelsParquet(writer)
       this.relsDirty = false
@@ -779,9 +782,6 @@ export class EventSourcedBackend implements EventSourcedOperations {
       lastSeq: buffer.lastSeq,
       sizeBytes: 0,
     })
-
-    // Also persist sequence metadata for consistency
-    await this.persistSequenceMetadata()
   }
 
   /**
@@ -857,6 +857,18 @@ export class EventSourcedBackend implements EventSourcedOperations {
   }
 
   /**
+   * Write entities to data.parquet (primary storage for deployment/queries)
+   */
+  private async writeDataParquet(writer: ParquetWriter): Promise<void> {
+    const rows = Array.from(this.entities.values()).map(entity => entityToRow(entity))
+
+    if (rows.length > 0) {
+      const entitySchema = buildEntityParquetSchema()
+      await writer.write('data.parquet', rows, entitySchema)
+    }
+  }
+
+  /**
    * Write relationships to rels.parquet
    */
   private async writeRelsParquet(writer: ParquetWriter): Promise<void> {
@@ -880,20 +892,6 @@ export class EventSourcedBackend implements EventSourcedOperations {
       const relSchema = buildRelationshipParquetSchema()
       await writer.write('rels.parquet', rows, relSchema)
     }
-  }
-
-  /**
-   * Persist sequence metadata to storage
-   */
-  private async persistSequenceMetadata(): Promise<void> {
-    const meta = {
-      sequences: Object.fromEntries(this.sequences),
-      updatedAt: new Date().toISOString(),
-    }
-
-    const metaPath = 'data/event-meta.json'
-    const data = new TextEncoder().encode(JSON.stringify(meta))
-    await this.storage.write(metaPath, data)
   }
 
   /**
@@ -930,7 +928,9 @@ export class EventSourcedBackend implements EventSourcedOperations {
     this.eventBuffers.clear()
     this.entityCache.clear()
     this.snapshotCache.clear()
+    this.entities.clear()
     this.relIndex.clear()
+    this.entitiesDirty = false
     this.relsDirty = false
   }
 

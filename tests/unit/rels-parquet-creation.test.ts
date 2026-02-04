@@ -104,6 +104,63 @@ describe('Relationships Parquet File Creation', () => {
     }
   })
 
+  it('should create data.parquet with lean schema ($id, $type, name, $data)', async () => {
+    // Create an entity
+    await db.create('posts', {
+      $type: 'Post',
+      name: 'Test Post',
+      title: 'Hello',
+      content: 'World',
+      customField: 'value',
+    })
+
+    await db.disposeAsync()
+
+    // List files
+    const files = await readdir(tempDir, { recursive: true })
+    console.log('Files:', files)
+
+    // Should have data.parquet
+    const hasDataParquet = files.some((f) => f === 'data.parquet')
+    expect(hasDataParquet).toBe(true)
+
+    // Read data.parquet
+    const data = await readFile(join(tempDir, 'data.parquet'))
+    const { parquetMetadataAsync } = await import('hyparquet')
+
+    const asyncBuffer = {
+      byteLength: data.length,
+      slice: async (start: number, end?: number): Promise<ArrayBuffer> => {
+        const sliced = data.slice(start, end ?? data.length)
+        const buffer = new ArrayBuffer(sliced.byteLength)
+        new Uint8Array(buffer).set(sliced)
+        return buffer
+      },
+    }
+
+    const metadata = await parquetMetadataAsync(asyncBuffer)
+    const schemaNames = (metadata.schema as Array<{ name?: string }>)
+      .filter((s) => s.name && s.name !== 'root')
+      .map((s) => s.name)
+
+    console.log('Data.parquet schema columns:', schemaNames)
+
+    // data.parquet should have lean schema: $id, $type, name, $data
+    expect(schemaNames).toContain('$id')
+    expect(schemaNames).toContain('$type')
+    expect(schemaNames).toContain('name')
+    expect(schemaNames).toContain('$data')
+
+    // Audit fields should NOT be separate columns (they're in $data)
+    expect(schemaNames).not.toContain('createdAt')
+    expect(schemaNames).not.toContain('createdBy')
+    expect(schemaNames).not.toContain('updatedAt')
+    expect(schemaNames).not.toContain('updatedBy')
+    expect(schemaNames).not.toContain('version')
+    expect(schemaNames).not.toContain('deletedAt')
+    expect(schemaNames).not.toContain('deletedBy')
+  })
+
   it('should have correct schema in events.parquet with audit info in after variant', async () => {
     // Create an entity
     await db.create('posts', {
