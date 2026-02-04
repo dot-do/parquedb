@@ -242,18 +242,13 @@ export interface QueryPlan {
 /**
  * CDN-backed R2 storage adapter for ParquetReader
  *
- * Uses CDN bucket (separate R2 bucket) for reads, which enables:
- * - Read/write separation (CDN bucket is read-only copy)
- * - Edge caching via CDN custom domain
- * - Reduced load on primary bucket
- *
- * Files in CDN bucket are stored under parquedb/ prefix.
+ * Uses the cdn bucket for both reads and writes, accessible via cdn.workers.do.
+ * Edge caching happens automatically through Cloudflare's CDN.
  *
  * Implements ReadonlyStorageBackend - only read operations are supported.
  *
  * CACHING: CDN (cdn.workers.do) handles caching at the fetch layer.
- * No additional in-memory caching of whole files - this would hide
- * actual parquet read performance.
+ * Files are cached at the edge for fast subsequent reads (~5-10ms vs 50-200ms from R2).
  */
 class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   readonly type = 'r2-cdn-adapter'
@@ -262,20 +257,18 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
   public cdnHits = 0
   public primaryHits = 0
   public edgeHits = 0
+  public cacheApiHits = 0
   public totalReads = 0
 
   // Files being loaded (for deduplication of concurrent requests within same isolate)
   private loadingFiles = new Map<string, Promise<Uint8Array>>()
 
   constructor(
-    private cdnBucket: R2Bucket,      // CDN bucket (cdn) for reads
-    private primaryBucket: R2Bucket,  // Primary bucket (parquedb) as fallback
-    private cdnPrefix: string = 'parquedb',  // Prefix in CDN bucket
-    private r2DevUrl?: string,  // r2.dev URL for edge caching (e.g. 'https://pub-xxx.r2.dev/parquedb')
-    _fileCacheTtl: number = DEFAULT_CACHE_TTL  // Unused - CDN handles caching
-  ) {
-    void _fileCacheTtl // Unused parameter kept for API compatibility
-  }
+    private cdnBucket: R2Bucket,      // CDN bucket for reads (same as primary)
+    private primaryBucket: R2Bucket,  // Primary bucket for fallback reads
+    private cdnPrefix: string = '',   // Prefix in CDN bucket (empty = no prefix)
+    private r2DevUrl?: string         // r2.dev URL for edge caching (e.g. 'https://cdn.workers.do')
+  ) {}
 
   async read(path: string): Promise<Uint8Array> {
     // Check if file is being loaded by another request in this isolate
@@ -481,9 +474,10 @@ export class QueryExecutor {
     const cdnBucket = _cdnBucket
     const r2DevUrl = _r2DevUrl
     if (bucket) {
-      // Use CDN adapter if CDN bucket is available, otherwise direct primary bucket access
+      // Use CDN adapter - both buckets should point to the same cdn bucket
+      // No prefix needed since writes go directly to the bucket root
       if (cdnBucket) {
-        this.storageAdapter = new CdnR2StorageAdapter(cdnBucket, bucket, 'parquedb', r2DevUrl)
+        this.storageAdapter = new CdnR2StorageAdapter(cdnBucket, bucket, '', r2DevUrl)
       } else {
         // Create adapter that uses primary bucket only
         this.storageAdapter = new CdnR2StorageAdapter(bucket, bucket, '', r2DevUrl)

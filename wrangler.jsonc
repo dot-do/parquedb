@@ -126,7 +126,7 @@
   "r2_buckets": [
     {
       "binding": "BUCKET",
-      "bucket_name": "parquedb"
+      "bucket_name": "cdn"
     },
     {
       "binding": "CDN_BUCKET",
@@ -152,7 +152,7 @@
   "vars": {
     "ENVIRONMENT": "development",
     // CDN URL for edge-cached R2 reads via cdn.workers.do custom domain
-    "CDN_R2_DEV_URL": "https://cdn.workers.do/parquedb"
+    "CDN_R2_DEV_URL": "https://cdn.workers.do"
   },
 
   // =============================================================================
