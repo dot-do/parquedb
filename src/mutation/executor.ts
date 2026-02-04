@@ -86,7 +86,7 @@ export class MutationExecutor {
   private schemaValidator: SchemaValidatorInterface | null
   private hooks: MutationHooks
   private defaultActor: EntityId
-  private recordEventFn?: (event: MutationEvent) => Promise<void>
+  private recordEventFn?: ((event: MutationEvent) => Promise<void>) | undefined
 
   constructor(config: MutationExecutorConfig = {}) {
     this.schema = config.schema || {}

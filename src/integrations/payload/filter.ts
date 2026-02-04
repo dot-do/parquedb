@@ -74,7 +74,7 @@ export function translatePayloadFilter(where: PayloadWhere | undefined): ParqueD
  * Translate a single field condition from Payload to ParqueDB format
  */
 function translateFieldCondition(
-  field: string,
+  _field: string,
   condition: PayloadWhereField
 ): unknown {
   // If the condition is a primitive value, treat it as equality

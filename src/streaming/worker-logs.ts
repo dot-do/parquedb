@@ -33,6 +33,11 @@ import type { StorageBackend } from '../types/storage'
 import type { ParquetSchema } from '../parquet/types'
 import { countFetchSubrequestsFromUnknown } from '../worker/subrequest-tracking'
 import { logger } from '../utils/logger'
+import {
+  DEFAULT_WORKER_LOGS_FLUSH_THRESHOLD,
+  DEFAULT_WORKER_LOGS_FLUSH_INTERVAL_MS,
+  DEFAULT_WORKER_LOGS_ROW_GROUP_SIZE,
+} from '../constants'
 
 // =============================================================================
 // Tail Worker Types (from Cloudflare Workers Runtime)
@@ -275,10 +280,10 @@ export interface WorkerLogsMVConfig {
  * Default configuration values
  */
 const DEFAULT_CONFIG = {
-  flushThreshold: 1000,
-  flushIntervalMs: 30000,
+  flushThreshold: DEFAULT_WORKER_LOGS_FLUSH_THRESHOLD,
+  flushIntervalMs: DEFAULT_WORKER_LOGS_FLUSH_INTERVAL_MS,
   compression: 'lz4' as const,
-  rowGroupSize: 5000,
+  rowGroupSize: DEFAULT_WORKER_LOGS_ROW_GROUP_SIZE,
 }
 
 // =============================================================================

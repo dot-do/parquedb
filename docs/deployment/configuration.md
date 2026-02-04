@@ -706,9 +706,25 @@ Default CPU limit is 50ms per request. For complex queries:
 
 ---
 
+## Write Scaling
+
+When deploying to Cloudflare Workers, ParqueDB uses Durable Objects which have an inherent write throughput limit of approximately 30 requests per second per namespace due to their single-writer consistency model.
+
+For most applications, this limit is sufficient. However, high-write workloads may require mitigation strategies:
+
+- **Write batching**: Combine multiple writes into single requests
+- **Queue-based writes**: Use Cloudflare Queues to absorb traffic spikes
+- **Namespace sharding**: Route different entity types to separate DOs
+- **Time-bucket partitioning**: Route time-series data to time-bucketed DOs
+
+See [Write Scaling Guide](../architecture/WRITE_SCALING.md) for detailed guidance on when and how to scale writes.
+
+---
+
 ## Next Steps
 
 - [Cloudflare Workers Guide](./cloudflare-workers.md) - Deploy to Cloudflare
 - [Node.js Standalone Guide](./node-standalone.md) - Deploy to Node.js
 - [R2 Setup Guide](./r2-setup.md) - Configure R2 storage
+- [Write Scaling Guide](../architecture/WRITE_SCALING.md) - Scale write throughput
 - [Architecture Overview](../architecture/) - Understand internals

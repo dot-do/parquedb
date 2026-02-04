@@ -19,7 +19,6 @@ import type {
   GroupSpec,
   Document,
 } from '../aggregation/types'
-import { isFieldRef } from '../aggregation/types'
 
 // Re-export Document type for consumers of this module
 export type { Document } from '../aggregation/types'
@@ -598,10 +597,12 @@ export function groupDocuments(
     const groupKey = computeGroupKey(doc, groupBy)
     const keyStr = JSON.stringify(groupKey)
 
-    if (!groups.has(keyStr)) {
-      groups.set(keyStr, { key: groupKey, docs: [] })
+    let group = groups.get(keyStr)
+    if (!group) {
+      group = { key: groupKey, docs: [] }
+      groups.set(keyStr, group)
     }
-    groups.get(keyStr)!.docs.push(doc)
+    group.docs.push(doc)
   }
 
   return groups

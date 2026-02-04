@@ -7,6 +7,7 @@
 import type {
   Entity,
   EntityId,
+  EntityData,
   CreateInput,
   PaginatedResult,
   DeleteResult,
@@ -24,6 +25,8 @@ import type {
   StorageBackend,
   Schema,
   HistoryOptions,
+  Metadata,
+  EntityState,
 } from '../types'
 
 // HybridSearchStrategy is available from '../indexes/types' if needed externally
@@ -90,7 +93,7 @@ export interface HybridSearchOptionsCollection {
 /**
  * Item for upsertMany operation
  */
-export interface UpsertManyItem<T = Record<string, unknown>> {
+export interface UpsertManyItem<T extends EntityData = EntityData> {
   /** Filter to find existing document */
   filter: Filter
   /** Update operations to apply */
@@ -345,7 +348,7 @@ export interface ParqueDBConfig {
  * Collection interface for type-safe entity operations
  * Provides a fluent API for working with entities in a namespace
  */
-export interface Collection<T = Record<string, unknown>> {
+export interface Collection<T extends EntityData = EntityData> {
   /** Namespace for this collection */
   readonly namespace: string
 
@@ -505,7 +508,7 @@ export interface HistoryItem {
   before: Entity | null
   after: Entity | null
   actor?: EntityId | undefined
-  metadata?: Record<string, unknown> | undefined
+  metadata?: Metadata | undefined
 }
 
 /**
@@ -562,7 +565,7 @@ export interface GetRelatedOptions {
 /**
  * Result of getRelated operation
  */
-export interface GetRelatedResult<T = Record<string, unknown>> {
+export interface GetRelatedResult<T extends EntityData = EntityData> {
   /** Related entities */
   items: Entity<T>[]
   /** Total count of related entities */
@@ -581,8 +584,8 @@ export interface GetRelatedResult<T = Record<string, unknown>> {
  * Transaction interface for ParqueDB
  */
 export interface ParqueDBTransaction {
-  create<T = Record<string, unknown>>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
-  update<T = Record<string, unknown>>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
+  create<T extends EntityData = EntityData>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
+  update<T extends EntityData = EntityData>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
   delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
   commit(): Promise<void>
   rollback(): Promise<void>
@@ -602,7 +605,7 @@ export interface Snapshot {
   sequenceNumber: number
   eventId?: string | undefined
   createdAt: Date
-  state: Record<string, unknown>
+  state: EntityState
   compressed: boolean
   size?: number | undefined
 }
@@ -712,10 +715,8 @@ import {
 export class ValidationError extends BaseValidationError {
   /** @deprecated Use context.field instead */
   readonly operation: string
-  /** @deprecated Use context.namespace instead */
-  declare readonly namespace: string
-  /** @deprecated Use field getter instead */
-  readonly fieldName?: string
+  /** @deprecated Use field getter instead - namespace is available via inherited getter */
+  readonly fieldName?: string | undefined
 
   constructor(
     operation: string,

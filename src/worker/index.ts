@@ -46,7 +46,6 @@ import {
 // Import R2 error handling
 import {
   MissingBucketError,
-  BucketOperationError,
   handleBucketError,
 } from './r2-errors'
 

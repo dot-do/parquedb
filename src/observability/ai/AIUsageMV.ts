@@ -578,31 +578,35 @@ export class AIUsageMV {
       summary.estimatedTotalCost += agg.estimatedTotalCost
       totalLatencyMs += agg.totalLatencyMs
 
-      // By model
-      if (!summary.byModel[agg.modelId]) {
-        summary.byModel[agg.modelId] = {
-          requestCount: 0,
-          totalTokens: 0,
-          estimatedCost: 0,
-          avgLatencyMs: 0,
-        }
+      // By model - use local variable to help TypeScript track narrowing
+      const existingModel = summary.byModel[agg.modelId]
+      const modelStats = existingModel ?? {
+        requestCount: 0,
+        totalTokens: 0,
+        estimatedCost: 0,
+        avgLatencyMs: 0,
       }
-      summary.byModel[agg.modelId].requestCount += agg.requestCount
-      summary.byModel[agg.modelId].totalTokens += agg.totalTokens
-      summary.byModel[agg.modelId].estimatedCost += agg.estimatedTotalCost
+      if (!existingModel) {
+        summary.byModel[agg.modelId] = modelStats
+      }
+      modelStats.requestCount += agg.requestCount
+      modelStats.totalTokens += agg.totalTokens
+      modelStats.estimatedCost += agg.estimatedTotalCost
 
-      // By provider
-      if (!summary.byProvider[agg.providerId]) {
-        summary.byProvider[agg.providerId] = {
-          requestCount: 0,
-          totalTokens: 0,
-          estimatedCost: 0,
-          avgLatencyMs: 0,
-        }
+      // By provider - use local variable to help TypeScript track narrowing
+      const existingProvider = summary.byProvider[agg.providerId]
+      const providerStats = existingProvider ?? {
+        requestCount: 0,
+        totalTokens: 0,
+        estimatedCost: 0,
+        avgLatencyMs: 0,
       }
-      summary.byProvider[agg.providerId].requestCount += agg.requestCount
-      summary.byProvider[agg.providerId].totalTokens += agg.totalTokens
-      summary.byProvider[agg.providerId].estimatedCost += agg.estimatedTotalCost
+      if (!existingProvider) {
+        summary.byProvider[agg.providerId] = providerStats
+      }
+      providerStats.requestCount += agg.requestCount
+      providerStats.totalTokens += agg.totalTokens
+      providerStats.estimatedCost += agg.estimatedTotalCost
     }
 
     // Calculate averages
@@ -613,19 +617,21 @@ export class AIUsageMV {
 
     // Calculate per-model averages
     for (const modelId of Object.keys(summary.byModel)) {
-      const modelAggs = aggregates.filter(a => a.modelId === modelId)
-      const modelTotalLatency = modelAggs.reduce((sum, a) => sum + a.totalLatencyMs, 0)
-      if (summary.byModel[modelId].requestCount > 0) {
-        summary.byModel[modelId].avgLatencyMs = modelTotalLatency / summary.byModel[modelId].requestCount
+      const modelEntry = summary.byModel[modelId]
+      if (modelEntry && modelEntry.requestCount > 0) {
+        const modelAggs = aggregates.filter(a => a.modelId === modelId)
+        const modelTotalLatency = modelAggs.reduce((sum, a) => sum + a.totalLatencyMs, 0)
+        modelEntry.avgLatencyMs = modelTotalLatency / modelEntry.requestCount
       }
     }
 
     // Calculate per-provider averages
     for (const providerId of Object.keys(summary.byProvider)) {
-      const providerAggs = aggregates.filter(a => a.providerId === providerId)
-      const providerTotalLatency = providerAggs.reduce((sum, a) => sum + a.totalLatencyMs, 0)
-      if (summary.byProvider[providerId].requestCount > 0) {
-        summary.byProvider[providerId].avgLatencyMs = providerTotalLatency / summary.byProvider[providerId].requestCount
+      const providerEntry = summary.byProvider[providerId]
+      if (providerEntry && providerEntry.requestCount > 0) {
+        const providerAggs = aggregates.filter(a => a.providerId === providerId)
+        const providerTotalLatency = providerAggs.reduce((sum, a) => sum + a.totalLatencyMs, 0)
+        providerEntry.avgLatencyMs = providerTotalLatency / providerEntry.requestCount
       }
     }
 
@@ -1052,12 +1058,12 @@ function calculatePercentiles(samples: number[]): {
    * Percentile p means p% of values are at or below this value
    */
   const getPercentile = (p: number): number => {
-    if (n === 1) return sorted[0]
+    if (n === 1) return sorted[0] ?? 0
     // Use ceiling to get the rank (1-indexed), then convert to 0-indexed
     const rank = Math.ceil((p / 100) * n)
     // Clamp to valid array bounds
     const index = Math.min(Math.max(rank - 1, 0), n - 1)
-    return sorted[index]
+    return sorted[index] ?? 0
   }
 
   return {

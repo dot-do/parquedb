@@ -119,6 +119,23 @@ export enum ErrorCode {
   EVENT_ERROR = 'EVENT_ERROR',
   SNAPSHOT_ERROR = 'SNAPSHOT_ERROR',
   REPLAY_ERROR = 'REPLAY_ERROR',
+
+  // Backend errors (13xxx)
+  BACKEND_ERROR = 'BACKEND_ERROR',
+  COMMIT_CONFLICT = 'COMMIT_CONFLICT',
+  READ_ONLY = 'READ_ONLY',
+  TABLE_NOT_FOUND = 'TABLE_NOT_FOUND',
+  INVALID_NAMESPACE = 'INVALID_NAMESPACE',
+  SCHEMA_NOT_FOUND = 'SCHEMA_NOT_FOUND',
+  WRITE_LOCK_TIMEOUT = 'WRITE_LOCK_TIMEOUT',
+
+  // Materialized View errors (14xxx)
+  MV_ERROR = 'MV_ERROR',
+  MV_NOT_FOUND = 'MV_NOT_FOUND',
+  MV_ALREADY_EXISTS = 'MV_ALREADY_EXISTS',
+  MV_MANIFEST_ERROR = 'MV_MANIFEST_ERROR',
+  MV_REFRESH_ERROR = 'MV_REFRESH_ERROR',
+  MV_INVALID_DEFINITION = 'MV_INVALID_DEFINITION',
 }
 
 // =============================================================================
@@ -165,10 +182,10 @@ export interface SerializedError {
  * ```
  */
 export class ParqueDBError extends Error {
-  override readonly name: string = 'ParqueDBError'
+  override name: string = 'ParqueDBError'
   readonly code: ErrorCode
   readonly context: Record<string, unknown>
-  override readonly cause?: Error
+  override readonly cause?: Error | undefined
 
   constructor(
     message: string,
@@ -238,7 +255,7 @@ export class ParqueDBError extends Error {
  * - Invalid formats
  */
 export class ValidationError extends ParqueDBError {
-  override readonly name = 'ValidationError'
+  override name = 'ValidationError'
 
   constructor(
     message: string,
@@ -291,8 +308,6 @@ export class ValidationError extends ParqueDBError {
  * Error thrown when a requested resource is not found.
  */
 export class NotFoundError extends ParqueDBError {
-  override readonly name = 'NotFoundError'
-
   constructor(
     message: string,
     code: ErrorCode = ErrorCode.NOT_FOUND,
@@ -300,6 +315,7 @@ export class NotFoundError extends ParqueDBError {
     cause?: Error
   ) {
     super(message, code, context, cause)
+    this.name = 'NotFoundError'
     Object.setPrototypeOf(this, NotFoundError.prototype)
   }
 }
@@ -308,7 +324,7 @@ export class NotFoundError extends ParqueDBError {
  * Error thrown when an entity is not found.
  */
 export class EntityNotFoundError extends NotFoundError {
-  override readonly name = 'EntityNotFoundError'
+  override name: string = 'EntityNotFoundError'
 
   constructor(
     namespace: string,
@@ -337,7 +353,7 @@ export class EntityNotFoundError extends NotFoundError {
  * Error thrown when an index is not found.
  */
 export class IndexNotFoundError extends NotFoundError {
-  override readonly name = 'IndexNotFoundError'
+  override name: string = 'IndexNotFoundError'
 
   constructor(
     indexName: string,
@@ -366,7 +382,7 @@ export class IndexNotFoundError extends NotFoundError {
  * Error thrown when an event is not found.
  */
 export class EventNotFoundError extends NotFoundError {
-  override readonly name = 'EventNotFoundError'
+  override name: string = 'EventNotFoundError'
 
   constructor(eventId: string, cause?: Error) {
     super(
@@ -387,7 +403,7 @@ export class EventNotFoundError extends NotFoundError {
  * Error thrown when a snapshot is not found.
  */
 export class SnapshotNotFoundError extends NotFoundError {
-  override readonly name = 'SnapshotNotFoundError'
+  override name: string = 'SnapshotNotFoundError'
 
   constructor(snapshotId: string, cause?: Error) {
     super(
@@ -408,7 +424,7 @@ export class SnapshotNotFoundError extends NotFoundError {
  * Error thrown when a file is not found in storage.
  */
 export class FileNotFoundError extends NotFoundError {
-  override readonly name = 'FileNotFoundError'
+  override name: string = 'FileNotFoundError'
 
   constructor(path: string, cause?: Error) {
     super(
@@ -433,7 +449,7 @@ export class FileNotFoundError extends NotFoundError {
  * Error thrown when a conflict occurs (version, duplicate, etc.)
  */
 export class ConflictError extends ParqueDBError {
-  override readonly name = 'ConflictError'
+  override name = 'ConflictError'
 
   constructor(
     message: string,
@@ -450,7 +466,7 @@ export class ConflictError extends ParqueDBError {
  * Error thrown when optimistic concurrency check fails.
  */
 export class VersionConflictError extends ConflictError {
-  override readonly name = 'VersionConflictError'
+  override name: string = 'VersionConflictError'
 
   constructor(
     expectedVersion: number,
@@ -497,7 +513,7 @@ export class VersionConflictError extends ConflictError {
  * Error thrown when a resource already exists.
  */
 export class AlreadyExistsError extends ConflictError {
-  override readonly name = 'AlreadyExistsError'
+  override name: string = 'AlreadyExistsError'
 
   constructor(
     resource: string,
@@ -526,7 +542,7 @@ export class AlreadyExistsError extends ConflictError {
  * Error thrown when ETag/version mismatch occurs for conditional operations.
  */
 export class ETagMismatchError extends ConflictError {
-  override readonly name = 'ETagMismatchError'
+  override name: string = 'ETagMismatchError'
 
   constructor(
     path: string,
@@ -560,7 +576,7 @@ export class ETagMismatchError extends ConflictError {
  * Error thrown when a unique constraint is violated.
  */
 export class UniqueConstraintError extends ConflictError {
-  override readonly name = 'UniqueConstraintError'
+  override name: string = 'UniqueConstraintError'
 
   constructor(
     indexName: string,
@@ -597,7 +613,7 @@ export class UniqueConstraintError extends ConflictError {
  * Error thrown when a relationship operation fails.
  */
 export class RelationshipError extends ParqueDBError {
-  override readonly name = 'RelationshipError'
+  override name = 'RelationshipError'
 
   constructor(
     operation: string,
@@ -658,7 +674,7 @@ export class RelationshipError extends ParqueDBError {
  * Error thrown when a query operation fails.
  */
 export class QueryError extends ParqueDBError {
-  override readonly name = 'QueryError'
+  override name = 'QueryError'
 
   constructor(
     message: string,
@@ -684,7 +700,7 @@ export class QueryError extends ParqueDBError {
  * Error thrown for invalid filter operators or syntax.
  */
 export class InvalidFilterError extends QueryError {
-  override readonly name = 'InvalidFilterError'
+  override name: string = 'InvalidFilterError'
 
   constructor(
     message: string,
@@ -708,18 +724,15 @@ export class InvalidFilterError extends QueryError {
  * Error thrown when a storage operation fails.
  */
 export class StorageError extends ParqueDBError {
-  override readonly name = 'StorageError'
+  override name = 'StorageError'
 
   constructor(
     message: string,
     code: ErrorCode = ErrorCode.STORAGE_ERROR,
-    context?: {
-      path?: string | undefined
-      operation?: string | undefined
-    },
+    context?: Record<string, unknown>,
     cause?: Error
   ) {
-    super(message, code, context as Record<string, unknown>, cause)
+    super(message, code, context, cause)
     Object.setPrototypeOf(this, StorageError.prototype)
   }
 
@@ -736,7 +749,7 @@ export class StorageError extends ParqueDBError {
  * Error thrown when storage quota is exceeded.
  */
 export class QuotaExceededError extends StorageError {
-  override readonly name = 'QuotaExceededError'
+  override name: string = 'QuotaExceededError'
 
   constructor(
     path: string,
@@ -765,7 +778,7 @@ export class QuotaExceededError extends StorageError {
  * Error thrown when a path is invalid.
  */
 export class InvalidPathError extends StorageError {
-  override readonly name = 'InvalidPathError'
+  override name: string = 'InvalidPathError'
 
   constructor(path: string, reason?: string, cause?: Error) {
     const reasonPart = reason ? `: ${reason}` : ''
@@ -782,7 +795,7 @@ export class InvalidPathError extends StorageError {
  * Error thrown when a path traversal attempt is detected.
  */
 export class PathTraversalError extends StorageError {
-  override readonly name = 'PathTraversalError'
+  override name: string = 'PathTraversalError'
 
   constructor(path: string, cause?: Error) {
     super(
@@ -799,7 +812,7 @@ export class PathTraversalError extends StorageError {
  * Error thrown for network-related failures.
  */
 export class NetworkError extends StorageError {
-  override readonly name = 'NetworkError'
+  override name: string = 'NetworkError'
 
   constructor(message: string, path?: string, cause?: Error) {
     super(message, ErrorCode.NETWORK_ERROR, { path }, cause)
@@ -815,7 +828,7 @@ export class NetworkError extends StorageError {
  * Error thrown when authorization fails.
  */
 export class AuthorizationError extends ParqueDBError {
-  override readonly name = 'AuthorizationError'
+  override name = 'AuthorizationError'
 
   constructor(
     message: string,
@@ -836,7 +849,7 @@ export class AuthorizationError extends ParqueDBError {
  * Error thrown when permission is denied.
  */
 export class PermissionDeniedError extends AuthorizationError {
-  override readonly name = 'PermissionDeniedError'
+  override name: string = 'PermissionDeniedError'
 
   constructor(
     resource: string,
@@ -870,7 +883,7 @@ export class PermissionDeniedError extends AuthorizationError {
  * Error thrown when configuration is invalid.
  */
 export class ConfigurationError extends ParqueDBError {
-  override readonly name = 'ConfigurationError'
+  override name = 'ConfigurationError'
 
   constructor(
     message: string,
@@ -894,7 +907,7 @@ export class ConfigurationError extends ParqueDBError {
  * Error thrown when an operation times out.
  */
 export class TimeoutError extends ParqueDBError {
-  override readonly name = 'TimeoutError'
+  override name = 'TimeoutError'
 
   constructor(
     operation: string,
@@ -927,7 +940,7 @@ export class TimeoutError extends ParqueDBError {
  * Error thrown when RPC communication fails.
  */
 export class RpcError extends ParqueDBError {
-  override readonly name = 'RpcError'
+  override name = 'RpcError'
 
   constructor(
     message: string,
@@ -964,18 +977,15 @@ export class RpcError extends ParqueDBError {
  * Error thrown when an index operation fails.
  */
 export class IndexError extends ParqueDBError {
-  override readonly name = 'IndexError'
+  override name = 'IndexError'
 
   constructor(
     message: string,
     code: ErrorCode = ErrorCode.INDEX_ERROR,
-    context?: {
-      indexName?: string | undefined
-      namespace?: string | undefined
-    },
+    context?: Record<string, unknown>,
     cause?: Error
   ) {
-    super(message, code, context as Record<string, unknown>, cause)
+    super(message, code, context, cause)
     Object.setPrototypeOf(this, IndexError.prototype)
   }
 
@@ -992,7 +1002,7 @@ export class IndexError extends ParqueDBError {
  * Error thrown when an index build fails.
  */
 export class IndexBuildError extends IndexError {
-  override readonly name = 'IndexBuildError'
+  override name: string = 'IndexBuildError'
 
   constructor(indexName: string, cause: Error) {
     super(
@@ -1009,7 +1019,7 @@ export class IndexBuildError extends IndexError {
  * Error thrown when an index fails to load.
  */
 export class IndexLoadError extends IndexError {
-  override readonly name = 'IndexLoadError'
+  override name: string = 'IndexLoadError'
 
   constructor(indexName: string, path: string, cause: Error) {
     super(
@@ -1030,7 +1040,7 @@ export class IndexLoadError extends IndexError {
  * Error thrown when an index already exists.
  */
 export class IndexAlreadyExistsError extends IndexError {
-  override readonly name = 'IndexAlreadyExistsError'
+  override name: string = 'IndexAlreadyExistsError'
 
   constructor(indexName: string, namespace: string) {
     super(
@@ -1050,7 +1060,7 @@ export class IndexAlreadyExistsError extends IndexError {
  * Error thrown when an event operation fails.
  */
 export class EventError extends ParqueDBError {
-  override readonly name = 'EventError'
+  override name = 'EventError'
 
   constructor(
     operation: string,
@@ -1295,4 +1305,340 @@ export function assertFound<T>(
   if (value == null) {
     throw new NotFoundError(message, code)
   }
+}
+
+// =============================================================================
+// Backend Errors
+// =============================================================================
+
+/**
+ * Base error class for backend operations.
+ */
+export class BackendError extends ParqueDBError {
+  override name = 'BackendError'
+
+  constructor(
+    message: string,
+    code: ErrorCode = ErrorCode.BACKEND_ERROR,
+    context?: Record<string, unknown>,
+    cause?: Error
+  ) {
+    super(message, code, context, cause)
+    Object.setPrototypeOf(this, BackendError.prototype)
+  }
+
+  get namespace(): string | undefined {
+    return this.context.namespace as string | undefined
+  }
+
+  get operation(): string | undefined {
+    return this.context.operation as string | undefined
+  }
+
+  get backend(): string | undefined {
+    return this.context.backend as string | undefined
+  }
+}
+
+/**
+ * Error thrown when a commit fails due to concurrent writes (OCC conflict).
+ */
+export class CommitConflictError extends BackendError {
+  override name: string = 'CommitConflictError'
+
+  constructor(
+    namespace: string,
+    version: number,
+    retries: number,
+    cause?: Error
+  ) {
+    super(
+      `Commit conflict for ${namespace} at version ${version} after ${retries} retries`,
+      ErrorCode.COMMIT_CONFLICT,
+      { namespace, version, retries },
+      cause
+    )
+    Object.setPrototypeOf(this, CommitConflictError.prototype)
+  }
+
+  get version(): number {
+    return this.context.version as number
+  }
+
+  get retries(): number {
+    return this.context.retries as number
+  }
+}
+
+/**
+ * Error thrown when a write operation is attempted on a read-only backend.
+ */
+export class ReadOnlyError extends BackendError {
+  override name: string = 'ReadOnlyError'
+
+  constructor(operation: string, backend?: string) {
+    const backendMsg = backend ? ` (${backend})` : ''
+    super(
+      `Cannot perform ${operation} operation: backend is read-only${backendMsg}`,
+      ErrorCode.READ_ONLY,
+      { operation, backend }
+    )
+    Object.setPrototypeOf(this, ReadOnlyError.prototype)
+  }
+}
+
+/**
+ * Error thrown when a table/namespace is not found in the backend.
+ */
+export class TableNotFoundError extends BackendError {
+  override name: string = 'TableNotFoundError'
+
+  constructor(namespace: string, backend?: string) {
+    const backendMsg = backend ? ` in ${backend}` : ''
+    super(
+      `Table not found: ${namespace}${backendMsg}`,
+      ErrorCode.TABLE_NOT_FOUND,
+      { namespace, backend }
+    )
+    Object.setPrototypeOf(this, TableNotFoundError.prototype)
+  }
+}
+
+/**
+ * Error thrown when an operation targets an invalid namespace.
+ */
+export class InvalidNamespaceError extends BackendError {
+  override name: string = 'InvalidNamespaceError'
+
+  constructor(provided: string, expected: string) {
+    super(
+      `Invalid namespace: expected "${expected}", got "${provided}"`,
+      ErrorCode.INVALID_NAMESPACE,
+      { provided, expected }
+    )
+    Object.setPrototypeOf(this, InvalidNamespaceError.prototype)
+  }
+
+  get provided(): string {
+    return this.context.provided as string
+  }
+
+  get expected(): string {
+    return this.context.expected as string
+  }
+}
+
+/**
+ * Error thrown when a table's schema is missing or corrupted.
+ */
+export class SchemaNotFoundError extends BackendError {
+  override name: string = 'SchemaNotFoundError'
+
+  constructor(namespace: string, message?: string) {
+    super(
+      message ?? `Schema not found for table: ${namespace}`,
+      ErrorCode.SCHEMA_NOT_FOUND,
+      { namespace }
+    )
+    Object.setPrototypeOf(this, SchemaNotFoundError.prototype)
+  }
+}
+
+/**
+ * Error thrown when write lock acquisition times out.
+ */
+export class WriteLockTimeoutError extends BackendError {
+  override name: string = 'WriteLockTimeoutError'
+
+  constructor(namespace: string, timeoutMs: number) {
+    super(
+      `Write lock acquisition timed out for namespace '${namespace}' after ${timeoutMs}ms. ` +
+        'This may indicate a stalled or failed operation in the write queue.',
+      ErrorCode.WRITE_LOCK_TIMEOUT,
+      { namespace, timeoutMs }
+    )
+    Object.setPrototypeOf(this, WriteLockTimeoutError.prototype)
+  }
+
+  get timeoutMs(): number {
+    return this.context.timeoutMs as number
+  }
+}
+
+// =============================================================================
+// Materialized View Errors
+// =============================================================================
+
+/**
+ * Base error class for materialized view operations.
+ */
+export class MVError extends ParqueDBError {
+  override name = 'MVError'
+
+  constructor(
+    message: string,
+    code: ErrorCode = ErrorCode.MV_ERROR,
+    context?: Record<string, unknown>,
+    cause?: Error
+  ) {
+    super(message, code, context, cause)
+    Object.setPrototypeOf(this, MVError.prototype)
+  }
+
+  get viewName(): string | undefined {
+    return this.context.viewName as string | undefined
+  }
+
+  get source(): string | undefined {
+    return this.context.source as string | undefined
+  }
+}
+
+/**
+ * Error thrown when a materialized view is not found.
+ */
+export class MVNotFoundError extends MVError {
+  override name: string = 'MVNotFoundError'
+
+  constructor(viewName: string, cause?: Error) {
+    super(
+      `Materialized view not found: ${viewName}`,
+      ErrorCode.MV_NOT_FOUND,
+      { viewName },
+      cause
+    )
+    Object.setPrototypeOf(this, MVNotFoundError.prototype)
+  }
+}
+
+/**
+ * Error thrown when a materialized view already exists.
+ */
+export class MVAlreadyExistsError extends MVError {
+  override name: string = 'MVAlreadyExistsError'
+
+  constructor(viewName: string) {
+    super(
+      `Materialized view already exists: ${viewName}`,
+      ErrorCode.MV_ALREADY_EXISTS,
+      { viewName }
+    )
+    Object.setPrototypeOf(this, MVAlreadyExistsError.prototype)
+  }
+}
+
+/**
+ * Error thrown when the MV manifest is corrupted or invalid.
+ */
+export class MVManifestError extends MVError {
+  override name: string = 'MVManifestError'
+
+  constructor(message: string, cause?: Error) {
+    super(message, ErrorCode.MV_MANIFEST_ERROR, undefined, cause)
+    Object.setPrototypeOf(this, MVManifestError.prototype)
+  }
+}
+
+/**
+ * Error thrown when a materialized view refresh fails.
+ */
+export class MVRefreshError extends MVError {
+  override name: string = 'MVRefreshError'
+
+  constructor(
+    viewName: string,
+    message: string,
+    cause?: Error
+  ) {
+    super(
+      `Failed to refresh materialized view "${viewName}": ${message}`,
+      ErrorCode.MV_REFRESH_ERROR,
+      { viewName },
+      cause
+    )
+    Object.setPrototypeOf(this, MVRefreshError.prototype)
+  }
+}
+
+/**
+ * Error thrown when a materialized view definition is invalid.
+ */
+export class MVInvalidDefinitionError extends MVError {
+  override name: string = 'MVInvalidDefinitionError'
+
+  constructor(viewName: string, reason: string) {
+    super(
+      `Invalid materialized view definition for "${viewName}": ${reason}`,
+      ErrorCode.MV_INVALID_DEFINITION,
+      { viewName, reason }
+    )
+    Object.setPrototypeOf(this, MVInvalidDefinitionError.prototype)
+  }
+}
+
+// =============================================================================
+// Additional Type Guards
+// =============================================================================
+
+/**
+ * Check if an error is a BackendError (or any subclass)
+ */
+export function isBackendError(error: unknown): error is BackendError {
+  return error instanceof BackendError ||
+    (isParqueDBError(error) && (
+      error.code === ErrorCode.BACKEND_ERROR ||
+      error.code === ErrorCode.COMMIT_CONFLICT ||
+      error.code === ErrorCode.READ_ONLY ||
+      error.code === ErrorCode.TABLE_NOT_FOUND ||
+      error.code === ErrorCode.INVALID_NAMESPACE ||
+      error.code === ErrorCode.SCHEMA_NOT_FOUND ||
+      error.code === ErrorCode.WRITE_LOCK_TIMEOUT
+    ))
+}
+
+/**
+ * Check if an error is a CommitConflictError
+ */
+export function isCommitConflictError(error: unknown): error is CommitConflictError {
+  return error instanceof CommitConflictError ||
+    (isParqueDBError(error) && error.code === ErrorCode.COMMIT_CONFLICT)
+}
+
+/**
+ * Check if an error is a ReadOnlyError
+ */
+export function isReadOnlyError(error: unknown): error is ReadOnlyError {
+  return error instanceof ReadOnlyError ||
+    (isParqueDBError(error) && error.code === ErrorCode.READ_ONLY)
+}
+
+/**
+ * Check if an error is a WriteLockTimeoutError
+ */
+export function isWriteLockTimeoutError(error: unknown): error is WriteLockTimeoutError {
+  return error instanceof WriteLockTimeoutError ||
+    (isParqueDBError(error) && error.code === ErrorCode.WRITE_LOCK_TIMEOUT)
+}
+
+/**
+ * Check if an error is an MVError (or any subclass)
+ */
+export function isMVError(error: unknown): error is MVError {
+  return error instanceof MVError ||
+    (isParqueDBError(error) && (
+      error.code === ErrorCode.MV_ERROR ||
+      error.code === ErrorCode.MV_NOT_FOUND ||
+      error.code === ErrorCode.MV_ALREADY_EXISTS ||
+      error.code === ErrorCode.MV_MANIFEST_ERROR ||
+      error.code === ErrorCode.MV_REFRESH_ERROR ||
+      error.code === ErrorCode.MV_INVALID_DEFINITION
+    ))
+}
+
+/**
+ * Check if an error is an MVNotFoundError
+ */
+export function isMVNotFoundError(error: unknown): error is MVNotFoundError {
+  return error instanceof MVNotFoundError ||
+    (isParqueDBError(error) && error.code === ErrorCode.MV_NOT_FOUND)
 }

@@ -566,7 +566,7 @@ export class ParquetWriter {
    */
   private convertToColumnData(
     columns: Record<string, unknown[]>,
-    schema: ParquetSchema,
+    _schema: ParquetSchema,
     options: { columnIndex: boolean; offsetIndex: boolean }
   ): Array<{ name: string; data: unknown[]; columnIndex?: boolean | undefined; offsetIndex?: boolean | undefined }> {
     return Object.entries(columns).map(([name, data]) => ({

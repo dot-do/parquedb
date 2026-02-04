@@ -6,19 +6,20 @@
 
 import type {
   Entity,
-  EntityId,
+  EntityData,
+  EntityId as _EntityId,
   PaginatedResult,
   Filter,
   FindOptions,
   GetOptions,
   Event,
-  RelSet,
+  RelSet as _RelSet,
   SortDirection,
   Schema,
   StorageBackend,
 } from '../types'
 
-import { parseEntityTarget, isRelationshipTarget, asEntityId } from '../types'
+import { parseEntityTarget, isRelationshipTarget, asEntityId as _asEntityId } from '../types'
 import { normalizeSortDirection } from '../types/options'
 import { matchesFilter as canonicalMatchesFilter } from '../query/filter'
 import { getNestedValue, compareValues } from '../utils'
@@ -316,7 +317,7 @@ export async function getEntity<T = Record<string, unknown>>(
 /**
  * Get related entities with pagination support
  */
-export async function getRelatedEntities<T = Record<string, unknown>>(
+export async function getRelatedEntities<T extends EntityData = EntityData>(
   namespace: string,
   id: string,
   relationField: string,

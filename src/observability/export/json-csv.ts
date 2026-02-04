@@ -12,11 +12,9 @@ import type {
   JSONExportPayload,
   JSONMetricSeries,
   CSVExportOptions,
-  TimeRange,
-  Resolution,
 } from './types'
 import type { AIUsageAggregate, AIUsageSummary } from '../ai/types'
-import type { AIRequestRecord, AIRequestsStats } from '../ai/AIRequestsMV'
+import type { AIRequestRecord } from '../ai/AIRequestsMV'
 import type { CompactionMetrics, MetricTimeSeries } from '../compaction/types'
 
 // =============================================================================
@@ -34,7 +32,7 @@ const EXPORT_VERSION = '1.0.0'
  */
 export function exportAIUsageToJSON(
   aggregates: AIUsageAggregate[],
-  summary?: AIUsageSummary,
+  _summary?: AIUsageSummary,
   options: JSONExportOptions = {}
 ): JSONExportPayload {
   const now = Date.now()

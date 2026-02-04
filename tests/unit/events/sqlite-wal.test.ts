@@ -17,18 +17,30 @@ class MockSqlite implements SqliteInterface {
   private autoIncrement: Map<string, number> = new Map()
   private lastInsertId = 0
 
+  /**
+   * Extract table name from SQL query, handling both quoted and unquoted identifiers.
+   * Matches: table_name, "table_name", FROM table_name, FROM "table_name"
+   */
+  private extractTableName(query: string, prefix: string): string | null {
+    // Match quoted identifier: "table_name" or unquoted: table_name
+    const regex = new RegExp(`${prefix}\\s+(?:"([^"]+)"|([a-zA-Z_][a-zA-Z0-9_]*))`, 'i')
+    const match = query.match(regex)
+    if (match) {
+      // Return quoted match (group 1) or unquoted match (group 2)
+      return match[1] || match[2] || null
+    }
+    return null
+  }
+
   exec<T = unknown>(query: string, ...params: unknown[]): Iterable<T> {
     const trimmedQuery = query.trim().toLowerCase()
 
     // CREATE TABLE
     if (trimmedQuery.startsWith('create table')) {
-      const match = query.match(/create table if not exists (\w+)/i)
-      if (match) {
-        const tableName = match[1]
-        if (!this.tables.has(tableName)) {
-          this.tables.set(tableName, [])
-          this.autoIncrement.set(tableName, 0)
-        }
+      const tableName = this.extractTableName(query, 'CREATE TABLE IF NOT EXISTS')
+      if (tableName && !this.tables.has(tableName)) {
+        this.tables.set(tableName, [])
+        this.autoIncrement.set(tableName, 0)
       }
       return [] as T[]
     }
@@ -40,9 +52,8 @@ class MockSqlite implements SqliteInterface {
 
     // INSERT
     if (trimmedQuery.startsWith('insert into')) {
-      const match = query.match(/insert into (\w+)/i)
-      if (match) {
-        const tableName = match[1]
+      const tableName = this.extractTableName(query, 'INSERT INTO')
+      if (tableName) {
         const rows = this.tables.get(tableName) || []
         const id = (this.autoIncrement.get(tableName) || 0) + 1
         this.autoIncrement.set(tableName, id)
@@ -71,9 +82,8 @@ class MockSqlite implements SqliteInterface {
 
     // SELECT with SUM
     if (trimmedQuery.includes('sum(count)')) {
-      const match = query.match(/from (\w+)/i)
-      if (match) {
-        const tableName = match[1]
+      const tableName = this.extractTableName(query, 'FROM')
+      if (tableName) {
         const rows = this.tables.get(tableName) || []
         const unflushed = rows.filter((r: any) => r.flushed === 0)
         const total = unflushed.reduce((sum: number, r: any) => sum + r.count, 0)
@@ -83,9 +93,8 @@ class MockSqlite implements SqliteInterface {
 
     // SELECT with COUNT(*)
     if (trimmedQuery.includes('count(*)')) {
-      const match = query.match(/from (\w+)/i)
-      if (match) {
-        const tableName = match[1]
+      const tableName = this.extractTableName(query, 'FROM')
+      if (tableName) {
         const rows = this.tables.get(tableName) || []
         if (trimmedQuery.includes('flushed = 0')) {
           const count = rows.filter((r: any) => r.flushed === 0).length
@@ -105,9 +114,8 @@ class MockSqlite implements SqliteInterface {
 
     // SELECT unflushed
     if (trimmedQuery.includes('select') && trimmedQuery.includes('flushed = 0')) {
-      const match = query.match(/from (\w+)/i)
-      if (match) {
-        const tableName = match[1]
+      const tableName = this.extractTableName(query, 'FROM')
+      if (tableName) {
         const rows = this.tables.get(tableName) || []
         const unflushed = rows.filter((r: any) => r.flushed === 0)
         return unflushed as T[]
@@ -116,9 +124,8 @@ class MockSqlite implements SqliteInterface {
 
     // SELECT by time range
     if (trimmedQuery.includes('max_ts >=') && trimmedQuery.includes('min_ts <=')) {
-      const match = query.match(/from (\w+)/i)
-      if (match) {
-        const tableName = match[1]
+      const tableName = this.extractTableName(query, 'FROM')
+      if (tableName) {
         const rows = this.tables.get(tableName) || []
         const minTs = params[0] as number
         const maxTs = params[1] as number
@@ -129,9 +136,8 @@ class MockSqlite implements SqliteInterface {
 
     // UPDATE flushed
     if (trimmedQuery.startsWith('update') && trimmedQuery.includes('flushed = 1')) {
-      const match = query.match(/update (\w+)/i)
-      if (match) {
-        const tableName = match[1]
+      const tableName = this.extractTableName(query, 'UPDATE')
+      if (tableName) {
         const rows = this.tables.get(tableName) || []
         const ids = params as number[]
         rows.forEach((r: any) => {
@@ -145,9 +151,8 @@ class MockSqlite implements SqliteInterface {
 
     // DELETE flushed
     if (trimmedQuery.startsWith('delete') && trimmedQuery.includes('flushed = 1')) {
-      const match = query.match(/from (\w+)/i)
-      if (match) {
-        const tableName = match[1]
+      const tableName = this.extractTableName(query, 'FROM')
+      if (tableName) {
         const rows = this.tables.get(tableName) || []
         const remaining = rows.filter((r: any) => r.flushed !== 1)
         this.tables.set(tableName, remaining)
@@ -157,9 +162,8 @@ class MockSqlite implements SqliteInterface {
 
     // DELETE older than
     if (trimmedQuery.startsWith('delete') && trimmedQuery.includes('max_ts <')) {
-      const match = query.match(/from (\w+)/i)
-      if (match) {
-        const tableName = match[1]
+      const tableName = this.extractTableName(query, 'FROM')
+      if (tableName) {
         const rows = this.tables.get(tableName) || []
         const timestamp = params[0] as number
         const remaining = rows.filter((r: any) => r.max_ts >= timestamp)

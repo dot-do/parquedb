@@ -17,7 +17,6 @@
 
 import {
   validateTraceItems,
-  type ValidatedTraceItem,
   type TailValidationConfig,
   type TraceItemsValidationResult,
 } from './tail-validation'

@@ -130,7 +130,7 @@ export function executeCreate<T = Record<string, unknown>>(
  */
 export function validateCreateInput(
   data: CreateInput,
-  context: MutationContext
+  _context: MutationContext
 ): void {
   if (!data.$type) {
     throw new MutationOperationError(

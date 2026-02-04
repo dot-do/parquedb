@@ -380,7 +380,7 @@ export class PayloadAdapter {
   /**
    * Run migrations
    */
-  async migrate(args?: { migrations?: unknown[] | undefined }): Promise<void> {
+  async migrate(_args?: { migrations?: unknown[] | undefined }): Promise<void> {
     // Payload handles the actual migration execution
     // We just need to track which migrations have run
     if (this.config.debug) {
@@ -401,7 +401,7 @@ export class PayloadAdapter {
   /**
    * Fresh migration (drop all and re-run)
    */
-  async migrateFresh(args: { forceAcceptWarning?: boolean | undefined }): Promise<void> {
+  async migrateFresh(_args: { forceAcceptWarning?: boolean | undefined }): Promise<void> {
     await this.migrations.deleteAllMigrations()
   }
 

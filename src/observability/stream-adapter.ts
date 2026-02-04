@@ -212,7 +212,7 @@ export class EventEmitterAdapter implements StreamAdapter {
   private active: boolean = true
   private eventCounter: number = 0
   private buffer: ObservabilityStreamEvent[] = []
-  private batchTimer?: ReturnType<typeof setTimeout>
+  private batchTimer?: ReturnType<typeof setTimeout> | undefined
 
   constructor(config: StreamAdapterConfig = {}) {
     this.config = { ...DEFAULT_STREAM_ADAPTER_CONFIG, ...config }
@@ -484,7 +484,7 @@ export class AsyncIteratorAdapter implements StreamAdapter {
   private eventCounter: number = 0
   private buffer: ObservabilityStreamEvent[] = []
   private resolvers: Array<(value: IteratorResult<ObservabilityStreamEvent>) => void> = []
-  private pendingPromise: Promise<IteratorResult<ObservabilityStreamEvent>> | null = null
+  private _pendingPromise: Promise<IteratorResult<ObservabilityStreamEvent>> | null = null
 
   constructor(config: StreamAdapterConfig = {}) {
     this.config = { ...DEFAULT_STREAM_ADAPTER_CONFIG, ...config }

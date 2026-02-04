@@ -33,7 +33,8 @@ import {
 } from './types'
 import type { Entity, EntityId, CreateInput, DeleteResult, UpdateResult } from '../types/entity'
 import type { Filter } from '../types/filter'
-import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions } from '../types/options'
+import type { FindOptions, CreateOptions, UpdateOptions, DeleteOptions, GetOptions, SortSpec } from '../types/options'
+import { normalizeSortDirection } from '../types/options'
 import type { Update } from '../types/update'
 import type { StorageBackend } from '../types/storage'
 import { isETagMismatchError, isNotFoundError } from '../storage/errors'
@@ -223,9 +224,7 @@ export class IcebergBackend implements EntityBackend {
   }
 
   async count(ns: string, filter?: Filter): Promise<number> {
-    // Count by reading all matching entities.
-    // Performance note: Could be optimized by using manifest statistics
-    // for unfiltered counts, avoiding full data scan.
+    // Issue parquedb-kzoe: Optimize using manifest statistics for unfiltered counts
     const entities = await this.find(ns, filter)
     return entities.length
   }
@@ -526,17 +525,40 @@ export class IcebergBackend implements EntityBackend {
           | 'date' | 'time' | 'timestamp' | 'timestamptz' | 'uuid' | 'binary'
         builder.addColumn(field.name, icebergType, {
           required: !field.nullable,
-          doc: field.doc,
+          ...(field.doc !== undefined ? { doc: field.doc } : {}),
         })
       }
     }
 
-    // Note: Field removals, renames, and type changes are more complex operations
-    // that require careful migration of existing data. For now, only additions are supported.
+    // Issue parquedb-7tin: Implement field removals, renames, and type changes
 
-    // Apply evolution
-    // const result = builder.build()
-    // Update metadata with new schema...
+    const evolvedSchema = builder.build()
+
+    // Build updated metadata with the evolved schema (spread to set schema-id)
+    const newSchemaId = (metadata['current-schema-id'] ?? 0) + 1
+    const newSchema: IcebergSchema = {
+      ...evolvedSchema,
+      'schema-id': newSchemaId,
+    }
+
+    const updatedMetadata: TableMetadata = {
+      ...metadata,
+      schemas: [...metadata.schemas, newSchema],
+      'current-schema-id': newSchemaId,
+      'last-updated-ms': Date.now(),
+    }
+
+    // Write the new metadata file
+    const location = this.getTableLocation(ns)
+    const sequenceNumber = (metadata['last-sequence-number'] ?? 0) + 1
+    const metadataPath = await this.writeMetadataFile(location, sequenceNumber, updatedMetadata)
+
+    // Update version hint
+    const versionHintPath = `${location}/metadata/version-hint.text`
+    await this.storage.write(versionHintPath, new TextEncoder().encode(metadataPath))
+
+    // Invalidate cache to pick up new metadata
+    this.tableCache.delete(ns)
   }
 
   async listNamespaces(): Promise<string[]> {
@@ -562,13 +584,12 @@ export class IcebergBackend implements EntityBackend {
   // Maintenance
   // ===========================================================================
 
-  async compact(_ns: string, _options?: CompactOptions): Promise<CompactResult> {
+  async compact(ns: string, options?: CompactOptions): Promise<CompactResult> {
     if (this.readOnly) {
       throw new ReadOnlyError('compact', 'IcebergBackend')
     }
 
-    // For R2 Data Catalog, compaction is managed by Cloudflare automatically.
-    // Manual triggering would require R2 Data Catalog API support.
+    // R2 Data Catalog manages compaction automatically via Cloudflare
     if (this.catalogConfig?.type === 'r2-data-catalog') {
       return {
         filesCompacted: 0,
@@ -579,17 +600,121 @@ export class IcebergBackend implements EntityBackend {
       }
     }
 
-    // Manual compaction would involve:
-    // 1. Reading multiple small data files
-    // 2. Merging them into fewer larger files
-    // 3. Updating the Iceberg metadata
-    // For now, return no-op result. Use vacuum() for cleanup.
+    // Issue parquedb-j0n8: Full compaction implementation for filesystem catalogs
+    const startTime = Date.now()
+    const metadata = await this.getTableMetadata(ns)
+    if (!metadata) {
+      return {
+        filesCompacted: 0,
+        filesCreated: 0,
+        bytesBefore: 0,
+        bytesAfter: 0,
+        durationMs: Date.now() - startTime,
+      }
+    }
+
+    const snapshot = getCurrentSnapshot(metadata)
+    if (!snapshot) {
+      return {
+        filesCompacted: 0,
+        filesCreated: 0,
+        bytesBefore: 0,
+        bytesAfter: 0,
+        durationMs: Date.now() - startTime,
+      }
+    }
+
+    // Read manifest list to find small files to compact
+    const manifestListPath = snapshot['manifest-list']
+    if (!manifestListPath) {
+      return {
+        filesCompacted: 0,
+        filesCreated: 0,
+        bytesBefore: 0,
+        bytesAfter: 0,
+        durationMs: Date.now() - startTime,
+      }
+    }
+
+    const manifestListData = await this.storage.read(manifestListPath)
+    const manifestFiles = decodeManifestListFromAvroOrJson(manifestListData)
+
+    // Find data files under the target size threshold
+    const targetFileSizeBytes = options?.targetFileSize ?? 128 * 1024 * 1024 // 128MB default
+    const smallFiles: { path: string; size: number }[] = []
+    let bytesBefore = 0
+
+    for (const manifestFile of manifestFiles) {
+      if (manifestFile.content === MANIFEST_CONTENT_DELETES) continue
+
+      try {
+        const manifestData = await this.storage.read(manifestFile['manifest-path'])
+        const entries = decodeManifestFromAvroOrJson(manifestData)
+
+        for (const entry of entries) {
+          if (entry.status !== 2) { // Not deleted
+            const fileSize = entry['data-file']['file-size-in-bytes']
+            bytesBefore += fileSize
+            if (fileSize < targetFileSizeBytes) {
+              smallFiles.push({
+                path: entry['data-file']['file-path'],
+                size: fileSize,
+              })
+            }
+          }
+        }
+      } catch {
+        // Skip missing manifests
+      }
+    }
+
+    // If not enough small files to compact, return early
+    if (smallFiles.length < 2) {
+      return {
+        filesCompacted: 0,
+        filesCreated: 0,
+        bytesBefore,
+        bytesAfter: bytesBefore,
+        durationMs: Date.now() - startTime,
+      }
+    }
+
+    // Read all entities from small files
+    const entitiesToCompact: Entity<Record<string, unknown>>[] = []
+    for (const file of smallFiles) {
+      try {
+        const rows = await readParquet<Record<string, unknown>>(this.storage, file.path)
+        for (const row of rows) {
+          entitiesToCompact.push(rowToEntity(row))
+        }
+      } catch {
+        // Skip unreadable files
+      }
+    }
+
+    if (entitiesToCompact.length === 0) {
+      return {
+        filesCompacted: 0,
+        filesCreated: 0,
+        bytesBefore,
+        bytesAfter: bytesBefore,
+        durationMs: Date.now() - startTime,
+      }
+    }
+
+    // Write compacted entities to new file(s)
+    // The appendEntities method handles creating new snapshots
+    await this.appendEntities(ns, entitiesToCompact)
+
+    // Calculate bytes after (approximate - actual reclaimed after vacuum)
+    const bytesAfter = bytesBefore - smallFiles.reduce((sum, f) => sum + f.size, 0)
+
     return {
-      filesCompacted: 0,
-      filesCreated: 0,
-      bytesBefore: 0,
-      bytesAfter: 0,
-      durationMs: 0,
+      filesCompacted: smallFiles.length,
+      filesCreated: 1,
+      bytesBefore,
+      bytesAfter: Math.max(0, bytesAfter),
+      durationMs: Date.now() - startTime,
     }
   }
 
@@ -606,21 +731,136 @@ export class IcebergBackend implements EntityBackend {
     const manager = new SnapshotManager(metadata)
     const retentionMs = options?.retentionMs ?? 7 * 24 * 60 * 60 * 1000 // 7 days default
     const olderThanMs = Date.now() - retentionMs
-    // Note: minSnapshots is handled by SnapshotManager's retention policy, not this method
     const result = manager.expireSnapshots(olderThanMs)
 
-    if (!options?.dryRun) {
-      // Full vacuum implementation would:
-      // 1. Write updated metadata with expired snapshots removed
-      // 2. Identify orphaned data files no longer referenced
-      // 3. Delete orphaned files from storage
-      // For now, only snapshot expiration tracking is implemented
+    const expiredSnapshotIds = result.expiredSnapshotIds ?? []
+    if (expiredSnapshotIds.length === 0) {
+      return { filesDeleted: 0, bytesReclaimed: 0, snapshotsExpired: 0 }
+    }
+
+    // Collect all files referenced by current (non-expired) snapshots
+    const referencedFiles = new Set<string>()
+    const currentSnapshots = metadata.snapshots.filter(
+      snap => !expiredSnapshotIds.includes(snap['snapshot-id'])
+    )
+
+    for (const snap of currentSnapshots) {
+      const manifestListPath = snap['manifest-list']
+      if (!manifestListPath) continue
+
+      try {
+        const manifestListData = await this.storage.read(manifestListPath)
+        const manifestFiles = decodeManifestListFromAvroOrJson(manifestListData)
+        referencedFiles.add(manifestListPath)
+
+        for (const manifestFile of manifestFiles) {
+          referencedFiles.add(manifestFile['manifest-path'])
+
+          const manifestData = await this.storage.read(manifestFile['manifest-path'])
+          const entries = decodeManifestFromAvroOrJson(manifestData)
+          for (const entry of entries) {
+            if (entry.status !== 2) {
+              referencedFiles.add(entry['data-file']['file-path'])
+            }
+          }
+        }
+      } catch {
+        // Skip missing files during scan
+      }
+    }
+
+    // Collect files from expired snapshots that are not referenced
+    const orphanedFiles: { path: string; size: number }[] = []
+
+    for (const snapId of expiredSnapshotIds) {
+      const snap = metadata.snapshots.find(s => s['snapshot-id'] === snapId)
+      if (!snap?.['manifest-list']) continue
+
+      try {
+        const manifestListPath = snap['manifest-list']
+        const manifestListData = await this.storage.read(manifestListPath)
+        const manifestFiles = decodeManifestListFromAvroOrJson(manifestListData)
+
+        // Check manifest list itself
+        if (!referencedFiles.has(manifestListPath)) {
+          const stat = await this.storage.stat(manifestListPath)
+          if (stat) {
+            orphanedFiles.push({ path: manifestListPath, size: stat.size ?? 0 })
+          }
+        }
+
+        for (const manifestFile of manifestFiles) {
+          // Check manifest file
+          if (!referencedFiles.has(manifestFile['manifest-path'])) {
+            orphanedFiles.push({
+              path: manifestFile['manifest-path'],
+              size: manifestFile['manifest-length'],
+            })
+          }
+
+          // Check data files referenced by this manifest
+          const manifestData = await this.storage.read(manifestFile['manifest-path'])
+          const entries = decodeManifestFromAvroOrJson(manifestData)
+          for (const entry of entries) {
+            const dataFilePath = entry['data-file']['file-path']
+            if (!referencedFiles.has(dataFilePath)) {
+              orphanedFiles.push({
+                path: dataFilePath,
+                size: entry['data-file']['file-size-in-bytes'],
+              })
+            }
+          }
+        }
+      } catch {
+        // Skip missing files
+      }
+    }
+
+    // Issue parquedb-0wut: Full file deletion and metadata update implementation
+    let filesDeleted = 0
+    let bytesReclaimed = 0
+
+    if (!options?.dryRun && orphanedFiles.length > 0) {
+      // Delete orphaned files
+      for (const file of orphanedFiles) {
+        try {
+          await this.storage.delete(file.path)
+          filesDeleted++
+          bytesReclaimed += file.size
+        } catch {
+          // Skip files that cannot be deleted
+        }
+      }
+
+      // Write updated metadata with expired snapshots removed
+      const location = this.getTableLocation(ns)
+
+      const updatedMetadata: TableMetadata = {
+        ...metadata,
+        snapshots: currentSnapshots,
+        'snapshot-log': (metadata['snapshot-log'] ?? []).filter(
+          log => !expiredSnapshotIds.includes(log['snapshot-id'])
+        ),
+        'last-updated-ms': Date.now(),
+      }
+
+      const sequenceNumber = metadata['last-sequence-number'] ?? 0
+      const metadataPath = await this.writeMetadataFile(location, sequenceNumber + 1, updatedMetadata)
+
+      // Update version hint
+      const versionHintPath = `${location}/metadata/version-hint.text`
+      await this.storage.write(versionHintPath, new TextEncoder().encode(metadataPath))
+
+      // Invalidate cache
+      this.tableCache.delete(ns)
     }
 
     return {
-      filesDeleted: 0, // File deletion not yet implemented
-      bytesReclaimed: 0,
-      snapshotsExpired: result.expiredSnapshotIds?.length ?? 0,
+      filesDeleted: options?.dryRun ? orphanedFiles.length : filesDeleted,
+      bytesReclaimed: options?.dryRun
+        ? orphanedFiles.reduce((sum, f) => sum + f.size, 0)
+        : bytesReclaimed,
+      snapshotsExpired: expiredSnapshotIds.length,
     }
   }
 
@@ -860,10 +1100,8 @@ export class IcebergBackend implements EntityBackend {
       }
 
       throw new CommitConflictError(
-        `Commit failed after ${this.maxOccRetries} retries due to concurrent modifications. ` +
-        `Consider using a different concurrency strategy or retry the operation.`,
         ns,
-        /* version */ -1, // Unknown version after exhausted retries
+        -1, // Unknown version after exhausted retries
         this.maxOccRetries
       )
     } finally {
@@ -1190,7 +1428,6 @@ export class IcebergBackend implements EntityBackend {
       }
 
       throw new CommitConflictError(
-        `Delete commit failed after ${this.maxOccRetries} retries due to concurrent modifications.`,
         ns,
         -1,
         this.maxOccRetries
@@ -1365,105 +1602,133 @@ export class IcebergBackend implements EntityBackend {
   }
 
   /**
-   * Read entities from a snapshot
+   * Read manifest list from a snapshot.
+   * Returns null if snapshot has no manifest list or it's not found.
    */
-  private async readEntitiesFromSnapshot<T>(
-    _ns: string,
-    _metadata: TableMetadata,
-    snapshot: Snapshot,
-    filter?: Filter,
-    options?: FindOptions
-  ): Promise<Entity<T>[]> {
-    // Step 1: Read manifest list from snapshot
+  private async readManifestList(snapshot: Snapshot): Promise<ManifestFile[] | null> {
     const manifestListPath = snapshot['manifest-list']
     if (!manifestListPath) {
-      return []
+      return null
     }
 
-    let manifestFiles: ManifestFile[]
     try {
       const manifestListData = await this.storage.read(manifestListPath)
-      manifestFiles = decodeManifestListFromAvroOrJson(manifestListData)
+      return decodeManifestListFromAvroOrJson(manifestListData)
     } catch (error) {
-      // Manifest list not found is expected for empty snapshots
-      // Propagate other errors (permission, network, corruption)
       if (!isNotFoundError(error)) {
         throw error
       }
-      return []
+      return null
     }
+  }
 
-    // Step 2: Collect data file paths and deleted entity IDs
+  /**
+   * Collect deleted entity IDs from a delete manifest file.
+   */
+  private async collectDeletedIdsFromManifest(
+    manifestFile: ManifestFile,
+    deletedIds: Set<string>
+  ): Promise<void> {
+    try {
+      const manifestData = await this.storage.read(manifestFile['manifest-path'])
+      const entries = decodeManifestFromAvroOrJson(manifestData)
+
+      for (const entry of entries) {
+        // Only process ADDED (1) and EXISTING (0) delete entries, not DELETED (2)
+        if (entry.status === 2) continue
+
+        const content = entry['data-file'].content
+        if (content !== CONTENT_EQUALITY_DELETES) continue
+
+        await this.collectDeletedIdsFromDeleteFile(
+          entry['data-file']['file-path'],
+          deletedIds
+        )
+      }
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error
+      }
+    }
+  }
+
+  /**
+   * Read and parse an equality delete file to collect deleted entity IDs.
+   */
+  private async collectDeletedIdsFromDeleteFile(
+    deleteFilePath: string,
+    deletedIds: Set<string>
+  ): Promise<void> {
+    try {
+      const deleteFileData = await this.storage.read(deleteFilePath)
+      const deleteInfo = parseEqualityDeleteFile(deleteFileData)
+
+      for (const deleteEntry of deleteInfo.entries) {
+        const deletedId = deleteEntry['$id'] as string
+        if (deletedId) {
+          deletedIds.add(deletedId)
+        }
+      }
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error
+      }
+    }
+  }
+
+  /**
+   * Collect data file paths from a data manifest file.
+   */
+  private async collectDataFilePaths(
+    manifestFile: ManifestFile,
+    dataFilePaths: string[]
+  ): Promise<void> {
+    try {
+      const manifestData = await this.storage.read(manifestFile['manifest-path'])
+      const entries = decodeManifestFromAvroOrJson(manifestData)
+
+      for (const entry of entries) {
+        // Only include ADDED (1) and EXISTING (0) entries, not DELETED (2)
+        if (entry.status !== 2) {
+          dataFilePaths.push(entry['data-file']['file-path'])
+        }
+      }
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error
+      }
+    }
+  }
+
+  /**
+   * Process all manifest files to collect data file paths and deleted IDs.
+   */
+  private async processManifestFiles(
+    manifestFiles: ManifestFile[]
+  ): Promise<{ dataFilePaths: string[]; deletedIds: Set<string> }> {
     const dataFilePaths: string[] = []
     const deletedIds = new Set<string>()
 
     for (const manifestFile of manifestFiles) {
       if (manifestFile.content === MANIFEST_CONTENT_DELETES) {
-        // Process delete manifests to collect deleted entity IDs
-        try {
-          const manifestData = await this.storage.read(manifestFile['manifest-path'])
-          const entries = decodeManifestFromAvroOrJson(manifestData)
-
-          for (const entry of entries) {
-            // Only process ADDED (1) and EXISTING (0) delete entries, not DELETED (2)
-            if (entry.status !== 2) {
-              const deleteFilePath = entry['data-file']['file-path']
-              // Check if this is an equality delete file (content type 2)
-              const content = entry['data-file'].content
-              if (content === CONTENT_EQUALITY_DELETES) {
-                // Read and parse the equality delete file
-                try {
-                  const deleteFileData = await this.storage.read(deleteFilePath)
-                  const deleteInfo = parseEqualityDeleteFile(deleteFileData)
-                  // Collect all deleted IDs
-                  for (const deleteEntry of deleteInfo.entries) {
-                    const deletedId = deleteEntry['$id'] as string
-                    if (deletedId) {
-                      deletedIds.add(deletedId)
-                    }
-                  }
-                } catch (error) {
-                  // Skip missing delete files (can happen during time travel)
-                  // Propagate other errors (permission, network, corruption)
-                  if (!isNotFoundError(error)) {
-                    throw error
-                  }
-                }
-              }
-            }
-          }
-        } catch (error) {
-          // Skip missing manifest files (can happen during time travel)
-          // Propagate other errors (permission, network, corruption)
-          if (!isNotFoundError(error)) {
-            throw error
-          }
-        }
+        await this.collectDeletedIdsFromManifest(manifestFile, deletedIds)
       } else {
-        // Process data manifests
-        try {
-          const manifestData = await this.storage.read(manifestFile['manifest-path'])
-          const entries = decodeManifestFromAvroOrJson(manifestData)
-
-          for (const entry of entries) {
-            // Only include ADDED (1) and EXISTING (0) entries, not DELETED (2)
-            if (entry.status !== 2) {
-              dataFilePaths.push(entry['data-file']['file-path'])
-            }
-          }
-        } catch (error) {
-          // Skip missing manifest files (can happen during time travel)
-          // Propagate other errors (permission, network, corruption)
-          if (!isNotFoundError(error)) {
-            throw error
-          }
-        }
+        await this.collectDataFilePaths(manifestFile, dataFilePaths)
       }
     }
 
-    // Step 3: Read entities from each data file
-    // Use a Map to deduplicate by entity ID, keeping the highest version
+    return { dataFilePaths, deletedIds }
+  }
+
+  /**
+   * Read entities from data files and deduplicate by ID (keeping highest version).
+   */
+  private async readAndDeduplicateEntities<T>(
+    dataFilePaths: string[],
+    deletedIds: Set<string>
+  ): Promise<Map<string, Entity<T>>> {
     const entityMap = new Map<string, Entity<T>>()
+
     for (const dataFilePath of dataFilePaths) {
       try {
         const rows = await readParquet<Record<string, unknown>>(this.storage, dataFilePath)
@@ -1472,9 +1737,7 @@ export class IcebergBackend implements EntityBackend {
           const entity = rowToEntity<T>(row)
 
           // Skip entities that have been hard deleted
-          if (deletedIds.has(entity.$id)) {
-            continue
-          }
+          if (deletedIds.has(entity.$id)) continue
 
           const existingEntity = entityMap.get(entity.$id)
 
@@ -1484,67 +1747,118 @@ export class IcebergBackend implements EntityBackend {
           }
         }
       } catch (error) {
-        // Skip missing data files (can happen during time travel or concurrent operations)
-        // Propagate other errors (permission, network, corruption)
         if (!isNotFoundError(error)) {
           throw error
         }
       }
     }
 
-    // Convert map values to array and apply filter
-    const allEntities: Entity<T>[] = []
+    return entityMap
+  }
+
+  /**
+   * Filter entities based on the provided filter criteria.
+   */
+  private filterEntities<T>(
+    entityMap: Map<string, Entity<T>>,
+    filter?: Filter
+  ): Entity<T>[] {
+    const entities: Entity<T>[] = []
+
     for (const entity of entityMap.values()) {
-      // Apply filter if provided
       if (filter && !matchesFilter(entityAsRecord(entity), filter)) {
         continue
       }
-      allEntities.push(entity)
+      entities.push(entity)
     }
 
-    // Step 4: Apply sorting
-    if (options?.sort) {
-      const sortFields = Object.entries(options.sort)
-      allEntities.sort((a, b) => {
-        for (const [field, direction] of sortFields) {
-          const aVal = (a as Record<string, unknown>)[field]
-          const bVal = (b as Record<string, unknown>)[field]
+    return entities
+  }
 
-          let cmp = 0
-          if (aVal === bVal) {
-            cmp = 0
-          } else if (aVal === null || aVal === undefined) {
-            cmp = 1
-          } else if (bVal === null || bVal === undefined) {
-            cmp = -1
-          } else if (typeof aVal === 'string' && typeof bVal === 'string') {
-            cmp = aVal.localeCompare(bVal)
-          } else if (typeof aVal === 'number' && typeof bVal === 'number') {
-            cmp = aVal - bVal
-          } else if (aVal instanceof Date && bVal instanceof Date) {
-            cmp = aVal.getTime() - bVal.getTime()
-          } else {
-            cmp = String(aVal).localeCompare(String(bVal))
-          }
+  /**
+   * Sort entities based on the provided sort options.
+   */
+  private sortEntities<T>(entities: Entity<T>[], sort?: SortSpec): void {
+    if (!sort) return
 
-          if (cmp !== 0) {
-            return direction === -1 ? -cmp : cmp
-          }
+    const sortFields = Object.entries(sort)
+    entities.sort((a, b) => {
+      for (const [field, direction] of sortFields) {
+        const aVal = (a as Record<string, unknown>)[field]
+        const bVal = (b as Record<string, unknown>)[field]
+
+        const cmp = this.compareValues(aVal, bVal)
+        if (cmp !== 0) {
+          const normalizedDir = normalizeSortDirection(direction)
+          return normalizedDir === -1 ? -cmp : cmp
         }
-        return 0
-      })
-    }
+      }
+      return 0
+    })
+  }
 
-    // Step 5: Apply skip and limit
-    let result = allEntities
-    if (options?.skip) {
-      result = result.slice(options.skip)
+  /**
+   * Compare two values for sorting (handles null, undefined, strings, numbers, dates).
+   */
+  private compareValues(aVal: unknown, bVal: unknown): number {
+    if (aVal === bVal) return 0
+    if (aVal === null || aVal === undefined) return 1
+    if (bVal === null || bVal === undefined) return -1
+    if (typeof aVal === 'string' && typeof bVal === 'string') {
+      return aVal.localeCompare(bVal)
     }
-    if (options?.limit) {
-      result = result.slice(0, options.limit)
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      return aVal - bVal
     }
+    if (aVal instanceof Date && bVal instanceof Date) {
+      return aVal.getTime() - bVal.getTime()
+    }
+    return String(aVal).localeCompare(String(bVal))
+  }
 
+  /**
+   * Apply pagination (skip and limit) to entities.
+   */
+  private applyPagination<T>(entities: Entity<T>[], skip?: number, limit?: number): Entity<T>[] {
+    let result = entities
+    if (skip) {
+      result = result.slice(skip)
+    }
+    if (limit) {
+      result = result.slice(0, limit)
+    }
     return result
+  }
+
+  /**
+   * Read entities from a snapshot.
+   * Orchestrates reading manifest files, collecting data/deletes, and applying filters.
+   */
+  private async readEntitiesFromSnapshot<T>(
+    _ns: string,
+    _metadata: TableMetadata,
+    snapshot: Snapshot,
+    filter?: Filter,
+    options?: FindOptions
+  ): Promise<Entity<T>[]> {
+    // Read manifest list from snapshot
+    const manifestFiles = await this.readManifestList(snapshot)
+    if (!manifestFiles) return []
+
+    // Process manifests to get data files and deleted IDs
+    const { dataFilePaths, deletedIds } = await this.processManifestFiles(manifestFiles)
+
+    // Read and deduplicate entities from data files
+    const entityMap = await this.readAndDeduplicateEntities<T>(dataFilePaths, deletedIds)
+
+    // Filter entities
+    const entities = this.filterEntities(entityMap, filter)
+
+    // Sort entities
+    this.sortEntities(entities, options?.sort)
+
+    // Apply pagination
+    return this.applyPagination(entities, options?.skip, options?.limit)
   }
 
   /**

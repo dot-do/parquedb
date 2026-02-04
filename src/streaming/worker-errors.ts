@@ -48,6 +48,13 @@ import {
   categoryFromStatus,
   DEFAULT_ERROR_PATTERNS,
 } from './types'
+import {
+  DEFAULT_WORKER_ERRORS_FLUSH_THRESHOLD,
+  DEFAULT_WORKER_LOGS_FLUSH_INTERVAL_MS,
+  DEFAULT_WORKER_LOGS_ROW_GROUP_SIZE,
+  DEFAULT_WORKER_ERRORS_MAX_ERRORS,
+  DEFAULT_WORKER_ERRORS_STATS_WINDOW_MS,
+} from '../constants'
 
 // =============================================================================
 // Parquet Schema for Worker Errors
@@ -126,13 +133,13 @@ export interface WorkerErrorsConfig {
 
 const DEFAULT_CONFIG = {
   errorPatterns: [] as ErrorPattern[],
-  maxErrors: 10000,
-  statsWindowMs: 60000,
+  maxErrors: DEFAULT_WORKER_ERRORS_MAX_ERRORS,
+  statsWindowMs: DEFAULT_WORKER_ERRORS_STATS_WINDOW_MS,
   sourceNamespaces: ['logs', 'errors', 'workers'],
-  flushThreshold: 500,
-  flushIntervalMs: 30000,
+  flushThreshold: DEFAULT_WORKER_ERRORS_FLUSH_THRESHOLD,
+  flushIntervalMs: DEFAULT_WORKER_LOGS_FLUSH_INTERVAL_MS,
   compression: 'lz4' as const,
-  rowGroupSize: 5000,
+  rowGroupSize: DEFAULT_WORKER_LOGS_ROW_GROUP_SIZE,
 }
 
 // =============================================================================
@@ -159,8 +166,8 @@ export class WorkerErrorsMV implements MVHandler {
   private readonly errorPatterns: ErrorPattern[]
 
   // Parquet persistence
-  private readonly storage?: StorageBackend
-  private readonly datasetPath?: string
+  private readonly storage?: StorageBackend | undefined
+  private readonly datasetPath?: string | undefined
   private readonly flushThreshold: number
   private readonly flushIntervalMs: number
   private readonly compression: 'none' | 'snappy' | 'gzip' | 'lz4' | 'zstd'

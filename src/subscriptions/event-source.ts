@@ -253,8 +253,8 @@ export class PollingEventSource implements SubscriptionEventSource {
   private handlers: Set<(event: Event) => void> = new Set()
   private fetcher: EventFetcher
   private intervalMs: number
-  private lastEventId?: string
-  private timer?: ReturnType<typeof setInterval>
+  private lastEventId?: string | undefined
+  private timer?: ReturnType<typeof setInterval> | undefined
   private started = false
 
   constructor(fetcher: EventFetcher, options: PollingEventSourceOptions = {}) {

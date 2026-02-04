@@ -11,7 +11,7 @@
  * - Staleness Metrics: Detailed information about how stale a view is
  */
 
-import type { ViewName, ViewMetadata, RefreshMode } from './types'
+import type { ViewName } from './types'
 
 // =============================================================================
 // Source Version Types
@@ -586,7 +586,7 @@ export class StalenessDetector {
    */
   private buildReason(
     state: StalenessState,
-    anyStale: boolean,
+    _anyStale: boolean,
     timeSinceRefresh: number,
     sources: SourceStaleness[]
   ): string {

@@ -320,7 +320,8 @@ export async function parquetQuery(
   const asyncBuffer = createBufferAdapter(buffer)
 
   // Build read options
-  const readOptions: { file: AsyncBuffer; columns?: string[] | undefined; rowGroups?: number[] | undefined } = {
+  // Build read options - avoid | undefined on optional properties for exactOptionalPropertyTypes
+  const readOptions: { file: AsyncBuffer; columns?: string[]; rowGroups?: number[] } = {
     file: asyncBuffer,
   }
 
@@ -389,7 +390,7 @@ export async function* parquetStream(
   for (const groupIndex of rowGroups) {
     if (limit !== undefined && rowCount - offset >= limit) break
 
-    const readOptions: { file: AsyncBuffer; columns?: string[] | undefined; rowGroups: number[] } = {
+    const readOptions: { file: AsyncBuffer; columns?: string[]; rowGroups: number[] } = {
       file: asyncBuffer,
       rowGroups: [groupIndex],
     }

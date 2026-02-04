@@ -173,7 +173,7 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
   /**
    * Main workflow execution
    */
-  async run(event: WorkflowEvent<CompactionMigrationParams>, step: WorkflowStep) {
+  override async run(event: WorkflowEvent<CompactionMigrationParams>, step: WorkflowStep) {
     const params = event.payload
     const {
       namespace,
@@ -200,7 +200,8 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
     })
 
     // Step 1: Analyze files and group by writer
-    const analysis = await step.do('analyze-files', async () => {
+    // Note: This step groups files by writer for the workflow state
+    await step.do('analyze-files', async () => {
       const storage = new R2Backend(toInternalR2Bucket(this.env.BUCKET))
 
       const writerWindows = new Map<string, WriterWindow>()
@@ -213,7 +214,8 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
           continue
         }
 
-        const [, timestampStr, writerId] = match
+        const [, timestampStr, writerIdMatch] = match
+        const writerId = writerIdMatch ?? 'unknown'
         const timestamp = parseInt(timestampStr ?? '0', 10)
 
         // Get file size
@@ -413,7 +415,7 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
 
       // Small cooldown between batches
       if (state.remainingFiles.length > 0) {
-        await step.sleep(`cooldown-${batchNum}`, '100ms')
+        await step.sleep(`cooldown-${batchNum}`, 100) // 100ms
       }
     }
 
@@ -479,6 +481,10 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
     await step.do('notify-completion', async () => {
       const doId = params.doId ?? params.namespace
       try {
+        if (!this.env.COMPACTION_STATE) {
+          logger.warn('COMPACTION_STATE binding not available, skipping completion notification')
+          return
+        }
         const stateId = this.env.COMPACTION_STATE.idFromName(doId)
         const stateDO = this.env.COMPACTION_STATE.get(stateId)
         const response = await stateDO.fetch('http://internal/workflow-complete', {
@@ -693,8 +699,9 @@ export class CompactionMigrationWorkflow extends WorkflowEntrypoint<Env, Compact
         break
 
       default: {
-        const _exhaustive: never = format
-        throw new Error(`Unknown backend format: ${format}`)
+        // Exhaustive check - TypeScript ensures all cases are covered
+        const exhaustiveCheck: never = format
+        throw new Error(`Unknown backend format: ${exhaustiveCheck}`)
       }
     }
 

@@ -1087,3 +1087,150 @@ export const DEFAULT_ICEBERG_MAX_RETRY_DELAY_MS = 10000
  * Default write lock timeout in milliseconds (30 seconds)
  */
 export const DEFAULT_WRITE_LOCK_TIMEOUT_MS = 30000
+
+// =============================================================================
+// CLI Merge Constants
+// =============================================================================
+
+/**
+ * Merge lock timeout in milliseconds (60 seconds)
+ * How long a merge lock is held before expiring
+ */
+export const MERGE_LOCK_TIMEOUT_MS = 60_000
+
+/**
+ * Merge lock wait timeout in milliseconds (10 seconds)
+ * How long to wait to acquire a merge lock
+ */
+export const MERGE_LOCK_WAIT_TIMEOUT_MS = 10_000
+
+// =============================================================================
+// Migration DO Constants
+// =============================================================================
+
+/**
+ * Default batch size for migration operations.
+ * Stay well under 1,000 subrequests (read + write = 2 per entity)
+ */
+export const DEFAULT_MIGRATION_BATCH_SIZE = 400
+
+/**
+ * Delay between migration batches in milliseconds
+ * Helps avoid overwhelming R2
+ */
+export const MIGRATION_BATCH_DELAY_MS = 100
+
+/**
+ * Migration DO alarm initial delay in milliseconds (1 second)
+ */
+export const MIGRATION_DO_ALARM_INITIAL_DELAY_MS = 1000
+
+// =============================================================================
+// Worker Logs/Errors MV Constants
+// =============================================================================
+
+/**
+ * Default flush threshold for worker logs MV (records)
+ */
+export const DEFAULT_WORKER_LOGS_FLUSH_THRESHOLD = 1000
+
+/**
+ * Default flush interval for worker logs MV in milliseconds (30 seconds)
+ */
+export const DEFAULT_WORKER_LOGS_FLUSH_INTERVAL_MS = 30000
+
+/**
+ * Default row group size for worker logs MV
+ */
+export const DEFAULT_WORKER_LOGS_ROW_GROUP_SIZE = 5000
+
+/**
+ * Default flush threshold for worker errors MV (records)
+ */
+export const DEFAULT_WORKER_ERRORS_FLUSH_THRESHOLD = 500
+
+/**
+ * Default maximum errors to retain in memory
+ */
+export const DEFAULT_WORKER_ERRORS_MAX_ERRORS = 10000
+
+/**
+ * Default window size for error stats in milliseconds (1 minute)
+ */
+export const DEFAULT_WORKER_ERRORS_STATS_WINDOW_MS = 60000
+
+// =============================================================================
+// Event Compaction Constants
+// =============================================================================
+
+/**
+ * Minimum events before compaction triggers
+ */
+export const DEFAULT_COMPACTION_MIN_EVENTS = 10000
+
+/**
+ * Default segment max age for compaction
+ */
+export const DEFAULT_COMPACTION_MAX_SEGMENT_AGE = '24h'
+
+/**
+ * Default retention period for compaction
+ */
+export const DEFAULT_COMPACTION_RETENTION = '30d'
+
+// =============================================================================
+// Studio Settings Constants
+// =============================================================================
+
+/**
+ * Default studio page size
+ */
+export const DEFAULT_STUDIO_PAGE_SIZE = 25
+
+/**
+ * Default studio connection timeout in milliseconds (30 seconds)
+ */
+export const DEFAULT_STUDIO_CONNECTION_TIMEOUT_MS = 30000
+
+/**
+ * Default studio retry attempts
+ */
+export const DEFAULT_STUDIO_RETRY_ATTEMPTS = 3
+
+/**
+ * Default studio idle timeout in minutes
+ */
+export const DEFAULT_STUDIO_IDLE_TIMEOUT_MINUTES = 30
+
+// =============================================================================
+// Tail Validation Constants
+// =============================================================================
+
+/**
+ * Default max items for tail validation
+ */
+export const DEFAULT_TAIL_MAX_ITEMS = 10000
+
+/**
+ * Default max logs per tail item
+ */
+export const DEFAULT_TAIL_MAX_LOGS_PER_ITEM = 1000
+
+/**
+ * Default max exceptions per tail item
+ */
+export const DEFAULT_TAIL_MAX_EXCEPTIONS_PER_ITEM = 100
+
+// =============================================================================
+// Embedding Queue Constants
+// =============================================================================
+
+/**
+ * Retry delay after embedding batch failure in milliseconds (5 seconds)
+ */
+export const EMBEDDING_RETRY_DELAY_MS = 5000
+
+/**
+ * Delay between batch processing in milliseconds (100ms)
+ */
+export const EMBEDDING_BATCH_PROCESSING_DELAY_MS = 100

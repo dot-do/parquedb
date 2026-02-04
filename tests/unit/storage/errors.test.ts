@@ -45,7 +45,10 @@ describe('Storage Errors', () => {
       const error = new StorageError('test error', StorageErrorCode.NOT_FOUND)
 
       expect(error.message).toBe('test error')
-      expect(error.code).toBe(StorageErrorCode.NOT_FOUND)
+      // storageCode provides backward compatibility with legacy StorageErrorCode
+      expect(error.storageCode).toBe(StorageErrorCode.NOT_FOUND)
+      // code now returns ErrorCode for unified error handling
+      expect(error.code).toBe('FILE_NOT_FOUND')
       expect(error.name).toBe('StorageError')
     })
 
@@ -110,7 +113,10 @@ describe('Storage Errors', () => {
       const error = new NotFoundError('test/file.txt')
 
       expect(error.message).toBe('File not found: test/file.txt')
-      expect(error.code).toBe(StorageErrorCode.NOT_FOUND)
+      // storageCode provides backward compatibility
+      expect(error.storageCode).toBe(StorageErrorCode.NOT_FOUND)
+      // code now returns ErrorCode
+      expect(error.code).toBe('FILE_NOT_FOUND')
       expect(error.path).toBe('test/file.txt')
       expect(error.name).toBe('NotFoundError')
     })
@@ -382,7 +388,10 @@ describe('Storage Errors', () => {
       expect(error.message).toBe('Failed to read')
       expect(error.operation).toBe('read')
       expect(error.path).toBe('test.txt')
-      expect(error.code).toBe(StorageErrorCode.OPERATION_ERROR)
+      // storageCode provides backward compatibility
+      expect(error.storageCode).toBe(StorageErrorCode.OPERATION_ERROR)
+      // code now returns ErrorCode
+      expect(error.code).toBe('STORAGE_ERROR')
       expect(error.name).toBe('OperationError')
     })
 

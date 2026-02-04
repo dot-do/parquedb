@@ -245,7 +245,10 @@ export class MemoryBackend implements StorageBackend {
     // Include metadata if requested
     if (includeMetadata) {
       result.stats = files.map((filePath) => {
-        const entry = this.files.get(filePath)!
+        const entry = this.files.get(filePath)
+        if (!entry) {
+          throw new Error(`File entry not found for path: ${filePath}`)
+        }
         return { ...entry.metadata }
       })
     }

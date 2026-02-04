@@ -21,7 +21,6 @@ import type {
   TimeRange,
 } from './types'
 import type { AIUsageAggregate } from '../ai/types'
-import type { AIRequestsStats, AIRequestRecord } from '../ai/AIRequestsMV'
 import type { CompactionMetrics, MetricTimeSeries } from '../compaction/types'
 
 // =============================================================================
@@ -87,8 +86,9 @@ export function parseGrafanaTimeRange(range: { from: string; to: string }): Time
 
 /**
  * Format timestamp for Grafana (milliseconds)
+ * @internal Reserved for future use
  */
-function toGrafanaTimestamp(date: Date): number {
+export function toGrafanaTimestamp(date: Date): number {
   return date.getTime()
 }
 
@@ -138,7 +138,7 @@ export function handleGrafanaSearch(): string[] {
 export function handleAIUsageQuery(
   request: GrafanaQueryRequest,
   aggregates: AIUsageAggregate[],
-  timeSeries?: Map<string, MetricTimeSeries>
+  _timeSeries?: Map<string, MetricTimeSeries>
 ): GrafanaQueryResponse[] {
   const responses: GrafanaQueryResponse[] = []
   const timeRange = parseGrafanaTimeRange(request.range)

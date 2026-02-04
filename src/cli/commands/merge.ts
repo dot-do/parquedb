@@ -12,6 +12,7 @@ import type { ParsedArgs } from '../types'
 import { print, printError, printSuccess } from '../types'
 import { createLockManager, type Lock } from '../../sync/lock'
 import { createMergeEngine } from '../../sync/merge-engine'
+import { MERGE_LOCK_TIMEOUT_MS, MERGE_LOCK_WAIT_TIMEOUT_MS } from '../../constants'
 
 // =============================================================================
 // Helper Functions
@@ -169,8 +170,8 @@ async function performMerge(
   if (!options.dryRun) {
     print('Acquiring merge lock...')
     const lockResult = await lockManager.acquire('merge', {
-      timeout: 60_000,     // Lock expires after 60 seconds
-      waitTimeout: 10_000, // Wait up to 10 seconds to acquire
+      timeout: MERGE_LOCK_TIMEOUT_MS,     // Lock expires after 60 seconds
+      waitTimeout: MERGE_LOCK_WAIT_TIMEOUT_MS, // Wait up to 10 seconds to acquire
     })
 
     if (!lockResult.acquired) {
@@ -317,8 +318,8 @@ async function continueMerge(
   const lockManager = createLockManager(storage)
   print('Acquiring merge lock...')
   const lockResult = await lockManager.acquire('merge', {
-    timeout: 60_000,
-    waitTimeout: 10_000,
+    timeout: MERGE_LOCK_TIMEOUT_MS,
+    waitTimeout: MERGE_LOCK_WAIT_TIMEOUT_MS,
   })
 
   if (!lockResult.acquired) {

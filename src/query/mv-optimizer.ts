@@ -24,9 +24,9 @@
  */
 
 import type { Filter, FindOptions } from '../types'
-import type { MVDefinition, MVMetadata, MVState } from '../materialized-views/types'
+import type { MVDefinition, MVMetadata, MVState, ViewName } from '../materialized-views/types'
 import type { StalenessMetrics, StalenessDetector, MVLineage } from '../materialized-views/staleness'
-import type { OptimizedQueryPlan, QueryCost, TableStatistics } from './optimizer'
+import type { QueryCost, TableStatistics } from './optimizer'
 import { COST_CONSTANTS } from './optimizer'
 import { extractFilterFields } from './predicate'
 
@@ -244,7 +244,7 @@ export interface MVRegistry {
  */
 export class MVQueryOptimizer {
   private registry: MVRegistry
-  private stalenessDetector?: StalenessDetector
+  private stalenessDetector?: StalenessDetector | undefined
   private config: MVOptimizationConfig
 
   constructor(
@@ -275,7 +275,9 @@ export class MVQueryOptimizer {
 
     for (const [name, definition] of Array.from(mvsBySource)) {
       const candidate = await this.evaluateCandidate(name, definition, filter, options)
-      if (candidate.coverageScore >= this.config.minCoverageScore) {
+      // Only include candidates that have sufficient coverage AND compatible filters
+      const filterCompatible = this.isFilterCompatibleWithMV(filter, definition)
+      if (candidate.coverageScore >= this.config.minCoverageScore && filterCompatible) {
         candidates.push(candidate)
       }
     }
@@ -320,13 +322,15 @@ export class MVQueryOptimizer {
       candidate.estimatedCost = mvCost
       candidate.costSavings = Math.max(0, 1 - (mvCost.totalCost / sourceCost.totalCost))
 
-      // Update recommendation based on cost
-      if (candidate.costSavings >= this.config.minCostSavings) {
-        candidate.recommended = true
-        candidate.reason = `MV provides ${(candidate.costSavings * 100).toFixed(0)}% cost savings`
-      } else {
-        candidate.recommended = false
-        candidate.reason = `Insufficient cost savings (${(candidate.costSavings * 100).toFixed(0)}% < ${(this.config.minCostSavings * 100).toFixed(0)}% threshold)`
+      // Only update recommendation based on cost if the candidate was already viable
+      // (don't overwrite staleness/filter rejections)
+      if (candidate.recommended) {
+        if (candidate.costSavings >= this.config.minCostSavings) {
+          candidate.reason = `MV provides ${(candidate.costSavings * 100).toFixed(0)}% cost savings`
+        } else {
+          candidate.recommended = false
+          candidate.reason = `Insufficient cost savings (${(candidate.costSavings * 100).toFixed(0)}% < ${(this.config.minCostSavings * 100).toFixed(0)}% threshold)`
+        }
       }
     }
 
@@ -414,11 +418,29 @@ export class MVQueryOptimizer {
     const coveredFields: string[] = []
     const uncoveredFields: string[] = []
 
+    // Check if MV has wildcard (inherits all source fields)
+    const hasWildcard = mvFields.has('*')
+
     for (const field of Array.from(allQueryFields)) {
-      if (mvFields.has(field) || this.isCoreField(field)) {
+      if (hasWildcard || mvFields.has(field) || this.isCoreField(field)) {
         coveredFields.push(field)
       } else {
-        uncoveredFields.push(field)
+        // Check for expanded field patterns (e.g., 'buyer_name' matches 'buyer_*')
+        let isExpandedField = false
+        for (const mvField of Array.from(mvFields)) {
+          if (mvField.endsWith('_*')) {
+            const prefix = mvField.slice(0, -1) // Remove the '*' to get 'buyer_'
+            if (field.startsWith(prefix)) {
+              isExpandedField = true
+              break
+            }
+          }
+        }
+        if (isExpandedField) {
+          coveredFields.push(field)
+        } else {
+          uncoveredFields.push(field)
+        }
       }
     }
 
@@ -439,7 +461,7 @@ export class MVQueryOptimizer {
       const lineage = await this.registry.getMVLineage(name)
       if (lineage) {
         stalenessMetrics = await this.stalenessDetector.getMetrics(
-          name as any,
+          name as unknown as ViewName,
           lineage,
           [definition.$from]
         )
@@ -578,9 +600,20 @@ export class MVQueryOptimizer {
         }
       }
 
+      // List of logical operators that should be skipped (not field names)
+      const logicalOperators = new Set(['$and', '$or', '$not', '$nor', '$text', '$vector', '$geo'])
+
       for (const field of Object.keys(filter)) {
-        if (field.startsWith('$')) continue
-        if (!groupedFields.has(field) && !this.isCoreField(field)) {
+        // Skip logical operators, but NOT entity fields like $id, $type
+        if (logicalOperators.has(field)) continue
+
+        // For aggregation MVs, individual entity fields like $id cannot be queried
+        // because individual records have been aggregated away
+        if (field === '$id' || field === '$type') {
+          return false
+        }
+
+        if (!groupedFields.has(field)) {
           // Filtering on a non-grouped field is not possible
           return false
         }

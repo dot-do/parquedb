@@ -637,131 +637,91 @@ export function isCompatibleWithEngine(backend: EntityBackend, engine: string): 
 // =============================================================================
 // Backend Errors
 // =============================================================================
+// Re-export error classes from the centralized errors module.
+// These provide consistent error handling with error codes and serialization.
+
+// Import from centralized errors module
+import {
+  BackendError as _BackendErrorBase,
+  CommitConflictError as CommitConflictErrorBase,
+  ReadOnlyError as ReadOnlyErrorBase,
+  TableNotFoundError as TableNotFoundErrorBase,
+  InvalidNamespaceError as InvalidNamespaceErrorBase,
+  SchemaNotFoundError as SchemaNotFoundErrorBase,
+  WriteLockTimeoutError as WriteLockTimeoutErrorBase,
+  EntityNotFoundError,
+  SnapshotNotFoundError as _BaseSnapshotNotFoundError,
+  ErrorCode,
+  ParqueDBError,
+  isCommitConflictError,
+  isReadOnlyError,
+  isWriteLockTimeoutError,
+  isBackendError,
+} from '../errors'
+
+// Re-export the error classes
+export {
+  CommitConflictErrorBase as CommitConflictError,
+  ReadOnlyErrorBase as ReadOnlyError,
+  TableNotFoundErrorBase as TableNotFoundError,
+  InvalidNamespaceErrorBase as InvalidNamespaceError,
+  SchemaNotFoundErrorBase as SchemaNotFoundError,
+  WriteLockTimeoutErrorBase as WriteLockTimeoutError,
+  // Type guards
+  isCommitConflictError,
+  isReadOnlyError,
+  isWriteLockTimeoutError,
+  isBackendError,
+}
 
 /**
- * Error thrown when a commit fails due to concurrent writes
+ * Error thrown when an entity is not found in a backend
  *
- * This is part of the optimistic concurrency control (OCC) mechanism.
- * When multiple processes try to commit at the same version, only one succeeds
- * and the others receive this error after exhausting retries.
+ * @deprecated Use EntityNotFoundError from '../errors' instead
  */
-export class CommitConflictError extends Error {
-  override readonly name = 'CommitConflictError'
+export class BackendEntityNotFoundError extends EntityNotFoundError {
+  override name = 'BackendEntityNotFoundError'
 
   constructor(
-    message: string,
-    public readonly ns: string,
-    public readonly version: number,
-    public readonly retries: number
+    ns: string,
+    entityId: string
   ) {
-    super(message)
-    Object.setPrototypeOf(this, CommitConflictError.prototype)
-  }
-}
-
-/**
- * Error thrown when a write operation is attempted on a read-only backend
- */
-export class ReadOnlyError extends Error {
-  override readonly name = 'ReadOnlyError'
-
-  constructor(operation: string, backend?: string) {
-    const backendMsg = backend ? ` (${backend})` : ''
-    super(`Cannot perform ${operation} operation: backend is read-only${backendMsg}`)
-    Object.setPrototypeOf(this, ReadOnlyError.prototype)
-  }
-}
-
-/**
- * Error thrown when an entity is not found
- */
-export class BackendEntityNotFoundError extends Error {
-  override readonly name = 'EntityNotFoundError'
-
-  constructor(
-    public readonly ns: string,
-    public readonly entityId: string
-  ) {
-    super(`Entity not found: ${ns}/${entityId}`)
+    super(ns, entityId)
     Object.setPrototypeOf(this, BackendEntityNotFoundError.prototype)
   }
-}
 
-/**
- * Error thrown when a table/namespace is not found in the backend
- */
-export class TableNotFoundError extends Error {
-  override readonly name = 'TableNotFoundError'
-
-  constructor(
-    public readonly ns: string,
-    public readonly backend?: string
-  ) {
-    const backendMsg = backend ? ` in ${backend}` : ''
-    super(`Table not found: ${ns}${backendMsg}`)
-    Object.setPrototypeOf(this, TableNotFoundError.prototype)
+  get ns(): string {
+    return this.namespace
   }
 }
 
 /**
  * Error thrown when a snapshot version is not found
+ *
+ * This error provides additional context for time-travel queries.
  */
-export class SnapshotNotFoundError extends Error {
-  override readonly name = 'SnapshotNotFoundError'
+export class SnapshotNotFoundError extends ParqueDBError {
+  override name = 'SnapshotNotFoundError'
 
   constructor(
-    public readonly ns: string,
-    public readonly version: number | Date
+    ns: string,
+    version: number | Date
   ) {
     const versionStr = version instanceof Date ? version.toISOString() : String(version)
-    super(`Snapshot not found for ${ns}: version ${versionStr}`)
+    super(
+      `Snapshot not found for ${ns}: version ${versionStr}`,
+      ErrorCode.SNAPSHOT_NOT_FOUND,
+      { namespace: ns, version: versionStr }
+    )
     Object.setPrototypeOf(this, SnapshotNotFoundError.prototype)
   }
-}
 
-/**
- * Error thrown when an operation targets an invalid namespace
- */
-export class InvalidNamespaceError extends Error {
-  override readonly name = 'InvalidNamespaceError'
-
-  constructor(
-    public readonly provided: string,
-    public readonly expected: string
-  ) {
-    super(`Invalid namespace: expected "${expected}", got "${provided}"`)
-    Object.setPrototypeOf(this, InvalidNamespaceError.prototype)
+  get ns(): string {
+    return this.context.namespace as string
   }
-}
 
-/**
- * Error thrown when a table's schema is missing or corrupted
- */
-export class SchemaNotFoundError extends Error {
-  override readonly name = 'SchemaNotFoundError'
-
-  constructor(
-    public readonly ns: string,
-    message?: string
-  ) {
-    super(message ?? `Schema not found for table: ${ns}`)
-    Object.setPrototypeOf(this, SchemaNotFoundError.prototype)
-  }
-}
-
-/**
- * Error thrown when write lock acquisition times out
- * This prevents indefinite blocking when an earlier operation in the lock chain fails or hangs
- */
-export class WriteLockTimeoutError extends Error {
-  override readonly name = 'WriteLockTimeoutError'
-
-  constructor(
-    public readonly ns: string,
-    public readonly timeoutMs: number
-  ) {
-    super(`Write lock acquisition timed out for namespace '${ns}' after ${timeoutMs}ms. This may indicate a stalled or failed operation in the write queue.`)
-    Object.setPrototypeOf(this, WriteLockTimeoutError.prototype)
+  get version(): string {
+    return this.context.version as string
   }
 }
 

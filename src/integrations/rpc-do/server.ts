@@ -61,7 +61,6 @@
 
 import type {
   Entity,
-  EntityId,
   Filter,
   FindOptions,
   PaginatedResult,
@@ -348,9 +347,9 @@ export class ParqueDBRPCWrapper {
    * Find entities in a namespace with optional filter
    */
   private async findEntities(
-    ns: string,
-    filter?: Filter,
-    options?: FindOptions
+    _ns: string,
+    _filter?: Filter,
+    _options?: FindOptions
   ): Promise<Entity[]> {
     // This is a simplified implementation
     // In a real scenario, you'd query the events_wal or use QueryExecutor

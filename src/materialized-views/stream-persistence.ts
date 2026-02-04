@@ -425,7 +425,8 @@ export class StreamPersistence<T extends Record<string, unknown> = Record<string
    * Rotate WAL if it exceeds size or age limits
    */
   private async maybeRotateWAL(): Promise<void> {
-    const { maxWalSegmentSize, maxWalSegmentAge } = this.config
+    const maxWalSegmentSize = this.config.maxWalSegmentSize ?? 10 * 1024 * 1024
+    const maxWalSegmentAge = this.config.maxWalSegmentAge ?? 60 * 60 * 1000
 
     const shouldRotate =
       this.currentWalSize >= maxWalSegmentSize ||

@@ -30,6 +30,10 @@
  */
 
 import type { EmbeddingProvider } from '../../embeddings/provider'
+import {
+  DEFAULT_EMBEDDING_CACHE_SIZE,
+  DEFAULT_EMBEDDING_CACHE_TTL,
+} from '../../constants'
 
 // =============================================================================
 // Types
@@ -145,8 +149,8 @@ export class QueryEmbeddingGenerator {
   ) {
     this.provider = provider
     this.cacheEnabled = options.cacheEnabled ?? false
-    this.maxCacheSize = options.maxCacheSize ?? 1000
-    this.cacheTtlMs = options.cacheTtlMs ?? 5 * 60 * 1000 // 5 minutes
+    this.maxCacheSize = options.maxCacheSize ?? DEFAULT_EMBEDDING_CACHE_SIZE
+    this.cacheTtlMs = options.cacheTtlMs ?? DEFAULT_EMBEDDING_CACHE_TTL
     this._validateDimensions = options.validateDimensions ?? true
   }
 

@@ -38,10 +38,20 @@
     "./search": {
       "import": "./dist/search/index.js",
       "types": "./dist/search/index.d.ts"
+    },
+    "./express": {
+      "import": "./dist/integrations/express/index.js",
+      "types": "./dist/integrations/express/index.d.ts"
+    },
+    "./fastify": {
+      "import": "./dist/integrations/fastify/index.js",
+      "types": "./dist/integrations/fastify/index.d.ts"
     }
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "express": "^4.0.0 || ^5.0.0",
+    "fastify": "^4.0.0 || ^5.0.0",
     "hono": "^4.0.0",
     "payload": "^3.0.0"
   },
@@ -53,6 +63,12 @@
       "optional": true
     },
     "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "express": {
+      "optional": true
+    },
+    "fastify": {
       "optional": true
     }
   },

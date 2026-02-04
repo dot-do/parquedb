@@ -102,50 +102,60 @@ const RECONSTRUCTION_CACHE_MAX_AGE = 5 * 60 * 1000
  * Get or create the entity store for a storage backend
  */
 export function getEntityStore(storage: StorageBackend): Map<string, Entity> {
-  if (!globalEntityStore.has(storage)) {
-    globalEntityStore.set(storage, new Map())
+  let store = globalEntityStore.get(storage)
+  if (!store) {
+    store = new Map()
+    globalEntityStore.set(storage, store)
   }
-  return globalEntityStore.get(storage)!
+  return store
 }
 
 /**
  * Get or create the event store for a storage backend
  */
 export function getEventStore(storage: StorageBackend): Event[] {
-  if (!globalEventStore.has(storage)) {
-    globalEventStore.set(storage, [])
+  let store = globalEventStore.get(storage)
+  if (!store) {
+    store = []
+    globalEventStore.set(storage, store)
   }
-  return globalEventStore.get(storage)!
+  return store
 }
 
 /**
  * Get or create the archived event store for a storage backend
  */
 export function getArchivedEventStore(storage: StorageBackend): Event[] {
-  if (!globalArchivedEventStore.has(storage)) {
-    globalArchivedEventStore.set(storage, [])
+  let store = globalArchivedEventStore.get(storage)
+  if (!store) {
+    store = []
+    globalArchivedEventStore.set(storage, store)
   }
-  return globalArchivedEventStore.get(storage)!
+  return store
 }
 
 /**
  * Get or create the snapshot store for a storage backend
  */
 export function getSnapshotStore(storage: StorageBackend): Snapshot[] {
-  if (!globalSnapshotStore.has(storage)) {
-    globalSnapshotStore.set(storage, [])
+  let store = globalSnapshotStore.get(storage)
+  if (!store) {
+    store = []
+    globalSnapshotStore.set(storage, store)
   }
-  return globalSnapshotStore.get(storage)!
+  return store
 }
 
 /**
  * Get or create the query stats store for a storage backend
  */
 export function getQueryStatsStore(storage: StorageBackend): Map<string, SnapshotQueryStats> {
-  if (!globalQueryStats.has(storage)) {
-    globalQueryStats.set(storage, new Map())
+  let store = globalQueryStats.get(storage)
+  if (!store) {
+    store = new Map()
+    globalQueryStats.set(storage, store)
   }
-  return globalQueryStats.get(storage)!
+  return store
 }
 
 /**
@@ -161,10 +171,12 @@ export function getQueryStatsStore(storage: StorageBackend): Map<string, Snapsho
  * -> reverseRelIndex.get("users/123")?.get("posts.author")
  */
 export function getReverseRelIndex(storage: StorageBackend): Map<string, Map<string, Set<string>>> {
-  if (!globalReverseRelIndex.has(storage)) {
-    globalReverseRelIndex.set(storage, new Map())
+  let index = globalReverseRelIndex.get(storage)
+  if (!index) {
+    index = new Map()
+    globalReverseRelIndex.set(storage, index)
   }
-  return globalReverseRelIndex.get(storage)!
+  return index
 }
 
 /**
@@ -317,10 +329,12 @@ export function removeAllFromReverseRelIndex(
  * @returns Map of entity targets to their sorted events
  */
 export function getEntityEventIndex(storage: StorageBackend): Map<string, Event[]> {
-  if (!globalEntityEventIndex.has(storage)) {
-    globalEntityEventIndex.set(storage, new Map())
+  let index = globalEntityEventIndex.get(storage)
+  if (!index) {
+    index = new Map()
+    globalEntityEventIndex.set(storage, index)
   }
-  return globalEntityEventIndex.get(storage)!
+  return index
 }
 
 /**
@@ -393,10 +407,12 @@ export function getFromEntityEventIndex(
  * @returns Map of cache keys to cached entities
  */
 export function getReconstructionCache(storage: StorageBackend): Map<string, { entity: Entity | null; timestamp: number }> {
-  if (!globalReconstructionCache.has(storage)) {
-    globalReconstructionCache.set(storage, new Map())
+  let cache = globalReconstructionCache.get(storage)
+  if (!cache) {
+    cache = new Map()
+    globalReconstructionCache.set(storage, cache)
   }
-  return globalReconstructionCache.get(storage)!
+  return cache
 }
 
 /**

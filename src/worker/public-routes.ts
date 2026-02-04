@@ -279,7 +279,7 @@ export async function handlePublicRoutes(
  */
 async function handleListPublic(
   request: Request,
-  env: Env
+  _env: Env
 ): Promise<Response> {
   try {
     // Get query parameters with validation

@@ -12,9 +12,6 @@ import { DEFAULT_REMOTE_TIMEOUT } from '../constants'
 import {
   validateResponseFields,
   validateResponseArray,
-  isRecord,
-  isString,
-  isArray,
 } from '../utils/json-validation'
 
 // =============================================================================

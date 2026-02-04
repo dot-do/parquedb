@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest'
 import { whereToFilter } from '../../../src/integrations/sql/translator.js'
 import { SqliteWal } from '../../../src/events/sqlite-wal.js'
 import type { SqliteInterface } from '../../../src/events/sqlite-wal.js'
-import { escapeLikePattern, isValidTableName, validateWhereClause } from '../../../src/utils/sql-security.js'
+import { escapeLikePattern, isValidTableName, validateWhereClause, escapeIdentifier } from '../../../src/utils/sql-security.js'
 
 // =============================================================================
 // Mock SQLite for testing
@@ -290,6 +290,49 @@ describe('SqliteWal Table Name Injection Protection', () => {
     expect(() => new SqliteWal(sql, { tableName: 'events_wal' })).not.toThrow()
     expect(() => new SqliteWal(sql, { tableName: 'my_custom_table' })).not.toThrow()
     expect(() => new SqliteWal(sql)).not.toThrow() // default table name
+  })
+})
+
+// =============================================================================
+// escapeIdentifier Tests
+// =============================================================================
+
+describe('escapeIdentifier Security', () => {
+  describe('escapes identifiers correctly', () => {
+    it('wraps simple identifiers in double quotes', () => {
+      expect(escapeIdentifier('users')).toBe('"users"')
+      expect(escapeIdentifier('my_table')).toBe('"my_table"')
+    })
+
+    it('escapes embedded double quotes', () => {
+      expect(escapeIdentifier('table"name')).toBe('"table""name"')
+      expect(escapeIdentifier('a"b"c')).toBe('"a""b""c"')
+    })
+
+    it('handles empty string', () => {
+      expect(escapeIdentifier('')).toBe('""')
+    })
+
+    it('preserves special characters in quoted form', () => {
+      // These would be invalid table names but escaping makes them safe
+      expect(escapeIdentifier("table'name")).toBe('"table\'name"')
+      expect(escapeIdentifier('table;name')).toBe('"table;name"')
+      expect(escapeIdentifier('table--name')).toBe('"table--name"')
+    })
+  })
+
+  describe('prevents identifier injection', () => {
+    it('prevents SQL injection via double quotes', () => {
+      // Attack: try to break out of quoted identifier
+      const escaped = escapeIdentifier('users"; DROP TABLE users; --')
+      expect(escaped).toBe('"users""; DROP TABLE users; --"')
+      // The entire string is now treated as a single identifier
+    })
+
+    it('handles multiple injection attempts', () => {
+      const escaped = escapeIdentifier('a"b"c"d')
+      expect(escaped).toBe('"a""b""c""d"')
+    })
   })
 })
 

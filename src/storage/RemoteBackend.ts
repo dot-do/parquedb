@@ -76,7 +76,7 @@ export class RemoteBackend implements StorageBackend {
   readonly type = 'remote'
 
   private baseUrl: string
-  private token?: string
+  private token?: string | undefined
   private headers: Record<string, string>
   private timeout: number
   private fetch: typeof globalThis.fetch

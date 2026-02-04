@@ -38,7 +38,6 @@ import {
   NotFoundError,
   ETagMismatchError,
   OperationError,
-  StorageErrorCode,
 } from './errors'
 
 // =============================================================================
@@ -54,8 +53,8 @@ import {
  * This class is maintained for backward compatibility.
  */
 export class R2OperationError extends OperationError {
-  readonly key?: string
-  readonly underlyingCause?: Error
+  readonly key?: string | undefined
+  readonly underlyingCause?: Error | undefined
 
   constructor(
     message: string,
@@ -79,7 +78,7 @@ export class R2OperationError extends OperationError {
  * This class is maintained for backward compatibility.
  */
 export class R2ETagMismatchError extends ETagMismatchError {
-  readonly key: string
+  readonly key: string | undefined
 
   constructor(
     key: string,
@@ -101,7 +100,7 @@ export class R2ETagMismatchError extends ETagMismatchError {
  * This class is maintained for backward compatibility.
  */
 export class R2NotFoundError extends NotFoundError {
-  readonly key: string
+  readonly key: string | undefined
 
   constructor(key: string, cause?: Error) {
     super(key, cause)

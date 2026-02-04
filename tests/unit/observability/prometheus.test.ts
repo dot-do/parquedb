@@ -4,7 +4,7 @@
  * Tests for the PrometheusMetrics class and related utilities.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   PrometheusMetrics,
   getGlobalMetrics,
@@ -23,10 +23,12 @@ describe('PrometheusMetrics', () => {
   let metrics: PrometheusMetrics
 
   beforeEach(() => {
+    vi.useFakeTimers()
     metrics = new PrometheusMetrics()
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     resetGlobalMetrics()
   })
 
@@ -162,7 +164,7 @@ describe('PrometheusMetrics', () => {
 
     it('should time an async function', async () => {
       const result = await metrics.time('request_duration_seconds', async () => {
-        await new Promise(resolve => setTimeout(resolve, 10))
+        await vi.advanceTimersByTimeAsync(10)
         return 'done'
       }, { method: 'GET', namespace: 'users' })
 
@@ -173,7 +175,7 @@ describe('PrometheusMetrics', () => {
 
     it('should use startTimer for manual timing', async () => {
       const timer = metrics.startTimer('request_duration_seconds', { method: 'GET', namespace: 'users' })
-      await new Promise(resolve => setTimeout(resolve, 10))
+      await vi.advanceTimersByTimeAsync(10)
       const duration = timer.end()
 
       expect(duration).toBeGreaterThan(0.009) // At least 9ms
@@ -297,10 +299,12 @@ describe('PrometheusMetrics', () => {
 
 describe('Global Metrics', () => {
   beforeEach(() => {
+    vi.useFakeTimers()
     resetGlobalMetrics()
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     resetGlobalMetrics()
   })
 
@@ -341,7 +345,7 @@ describe('Global Metrics', () => {
 
   it('should use startTimer convenience function', async () => {
     const timer = startTimer('request_duration_seconds', { method: 'GET', namespace: 'users' })
-    await new Promise(resolve => setTimeout(resolve, 5))
+    await vi.advanceTimersByTimeAsync(5)
     timer.end()
 
     const output = exportMetrics()

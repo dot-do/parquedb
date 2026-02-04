@@ -12,7 +12,6 @@
 
 import { createReadStream, createWriteStream as fsCreateWriteStream } from 'node:fs'
 import { promises as fs } from 'node:fs'
-import { Readable, Writable } from 'node:stream'
 import { dirname } from 'node:path'
 import type {
   StreamableBackend,
@@ -214,7 +213,7 @@ export class StreamableFsBackend implements StreamableBackend {
    * await writer.close()
    * ```
    */
-  createWriteStream(path: string, options?: WriteOptions): WritableStream<Uint8Array> {
+  createWriteStream(path: string, _options?: WriteOptions): WritableStream<Uint8Array> {
     const fullPath = this.resolvePath(path)
     let nodeStream: ReturnType<typeof fsCreateWriteStream> | null = null
     let streamError: Error | null = null

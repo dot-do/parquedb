@@ -467,7 +467,7 @@ export class ParqueDBDurableRPC extends DurableObject<Env> {
   /**
    * Handle WebSocket close (hibernation callback)
    */
-  override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+  override async webSocketClose(_ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
     // Clean up any resources associated with this connection
     if (this.config.debug) {
       logger.debug(`WebSocket closed: code=${code}, reason=${reason}, wasClean=${wasClean}`)
@@ -511,7 +511,7 @@ export class ParqueDBDurableRPC extends DurableObject<Env> {
     const durableRpc = this
 
     return {
-      async find(filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity>> {
+      async find(_filter?: Filter, _options?: FindOptions): Promise<PaginatedResult<Entity>> {
         // Note: ParqueDBDO doesn't have a direct find method
         // In a real implementation, we'd use QueryExecutor against R2
         // For now, return empty result
@@ -743,7 +743,7 @@ interface JsonRpcResponse {
  * ```
  */
 export function createParqueDBDurableRPC(
-  config: ParqueDBDurableRPCConfig = {}
+  _config: ParqueDBDurableRPCConfig = {}
 ): typeof ParqueDBDurableRPC {
   return class ConfiguredParqueDBDurableRPC extends ParqueDBDurableRPC {
     constructor(ctx: DurableObjectState, env: Env) {

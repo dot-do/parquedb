@@ -102,7 +102,7 @@ export class CollectionDefinitionError extends Error {
 /**
  * Validate MV name and throw if invalid
  */
-function validateNameStrict(name: string): void {
+export function validateNameStrict(name: string): void {
   if (!name || typeof name !== 'string') {
     throw new MVDefinitionError(
       'INVALID_NAME',
@@ -991,9 +991,9 @@ export function validateSchema(schema: Record<string, unknown>): Map<string, MVV
 
   // Check for cycles first
   const cycle = detectMVCycles(schema)
-  if (cycle) {
+  if (cycle && cycle.length > 0) {
     // Report the cycle error on the first view in the cycle
-    const firstView = cycle[0]
+    const firstView = cycle[0] as string
     const isSelfRef = cycle.length === 2 && cycle[0] === cycle[1]
     const cycleMessage = isSelfRef
       ? `Circular dependency detected: MV "${firstView}" references itself`

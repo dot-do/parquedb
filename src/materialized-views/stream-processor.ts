@@ -397,7 +397,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
   private buffer: T[] = []
   private pendingWrites = 0
   private batchCounter = 0
-  private flushTimer: ReturnType<typeof setTimeout> | null = null
+  private flushTimer: ReturnType<typeof setTimeout> | null | undefined = null
   private writer: ParquetWriter
 
   // Backpressure management
@@ -1442,16 +1442,16 @@ export class MVStreamProcessor<T extends Record<string, unknown> = Record<string
   private schema: ParquetSchema
   private batchSize: number
   private flushIntervalMs: number
-  private filter?: Filter
-  private project?: MVProjection
+  private filter?: Filter | undefined
+  private project?: MVProjection | undefined
   private updateMetadataOnBatch: boolean
-  private onBatchWritten?: (result: MVBatchWriteResult) => void
-  private onStateChange?: (newState: ViewState, oldState: ViewState) => void
-  private onError?: (context: MVErrorContext<T>) => void
+  private onBatchWritten?: ((result: MVBatchWriteResult) => void) | undefined
+  private onStateChange?: ((newState: ViewState, oldState: ViewState) => void) | undefined
+  private onError?: ((context: MVErrorContext<T>) => void) | undefined
 
   private buffer: T[] = []
   private running = false
-  private flushTimer?: ReturnType<typeof setTimeout>
+  private flushTimer?: ReturnType<typeof setTimeout> | undefined
   private stats: MVStreamProcessorStats
   private totalRecords = 0
   private batchCount = 0

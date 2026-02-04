@@ -152,7 +152,7 @@ export function toParquetSchema(typeDef: TypeDefinition): ParquetSchema {
  * Parse a field definition to Parquet schema
  */
 /** @internal Reserved for future schema parsing */
-export function _parseFieldDef(fieldName: string, fieldDef: FieldDef): ParquetFieldSchema | null {
+export function _parseFieldDef(_fieldName: string, fieldDef: FieldDef): ParquetFieldSchema | null {
   if (typeof fieldDef === 'string') {
     // String shorthand: 'string!', 'int?', etc.
     if (isRelationString(fieldDef)) {

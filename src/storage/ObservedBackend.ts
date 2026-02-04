@@ -530,10 +530,10 @@ function extractNamespaceFromPath(path: string): string {
   const parts = path.split('/')
   if (parts.length >= 2) {
     // For 'data/{ns}/...', extract ns
-    if (parts[0] === 'data') return parts[1]
+    if (parts[0] === 'data') return parts[1] ?? 'unknown'
     // For 'rels/forward/{ns}.parquet', extract ns
     if (parts[0] === 'rels' && parts.length >= 3) {
-      return parts[2].replace(/\.parquet$/, '')
+      return (parts[2] ?? '').replace(/\.parquet$/, '')
     }
     // For 'events/...', use 'events'
     if (parts[0] === 'events') return 'events'

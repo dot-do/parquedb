@@ -7,6 +7,7 @@
 
 import type {
   Entity,
+  EntityData,
   EntityId,
   UpdateInput,
   Schema,
@@ -107,7 +108,7 @@ export function unindexRelationshipsForEntity(
  * @param update - The update input containing relationship operators
  * @returns The modified entity
  */
-export function applyRelationshipOperators<T = Record<string, unknown>>(
+export function applyRelationshipOperators<T extends EntityData = EntityData>(
   ctx: RelationshipOperationsContext,
   entity: Entity,
   fullId: string,
@@ -518,7 +519,7 @@ export function applyMaxInboundToEntity<T>(
  * @param options - Pagination and filtering options
  * @returns Paginated related entities
  */
-export async function getRelatedEntities<T = Record<string, unknown>>(
+export async function getRelatedEntities<T extends EntityData = EntityData>(
   ctx: RelationshipOperationsContext,
   namespace: string,
   id: string,

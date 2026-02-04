@@ -50,6 +50,8 @@ import {
   DEFAULT_EMBEDDING_PROCESS_DELAY,
   DEFAULT_EMBEDDING_PRIORITY,
   DEFAULT_MAX_RETRIES,
+  EMBEDDING_RETRY_DELAY_MS,
+  EMBEDDING_BATCH_PROCESSING_DELAY_MS,
 } from '../constants'
 import { logger } from '../utils/logger'
 
@@ -278,7 +280,7 @@ export class EmbeddingQueue {
   private static readonly METRICS_KEY = 'embed_queue_metrics'
 
   /** Stats key (deprecated, kept for backwards compat) */
-  private static readonly STATS_KEY = 'embed_queue_stats'
+  private static readonly _STATS_KEY = 'embed_queue_stats'
 
   /**
    * Create a new EmbeddingQueue
@@ -367,7 +369,7 @@ export class EmbeddingQueue {
    */
   async enqueueBatch(
     items: Array<[string, string]>,
-    priority = 100
+    priority = DEFAULT_EMBEDDING_PRIORITY
   ): Promise<void> {
     if (items.length === 0) return
 
@@ -555,7 +557,7 @@ export class EmbeddingQueue {
       // Schedule retry if there are items with remaining attempts
       const hasRetriable = batch.some(item => item.attempts + 1 < this.config.retryAttempts)
       if (hasRetriable) {
-        await this.ensureAlarmScheduled(5000) // Retry after 5 seconds
+        await this.ensureAlarmScheduled(EMBEDDING_RETRY_DELAY_MS) // Retry after 5 seconds
       }
 
       result.failed = batch.length
@@ -628,7 +630,7 @@ export class EmbeddingQueue {
     result.remaining = remainingItems.size
     if (result.remaining > 0) {
       // Schedule next batch processing
-      await this.ensureAlarmScheduled(100) // Process next batch quickly
+      await this.ensureAlarmScheduled(EMBEDDING_BATCH_PROCESSING_DELAY_MS) // Process next batch quickly
     }
 
     const processingTime = Date.now() - startTime

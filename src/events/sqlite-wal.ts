@@ -10,7 +10,7 @@
 
 import type { Event } from '../types/entity'
 import type { EventBatch, SerializedBatch, WalRow } from './types'
-import { isValidTableName } from '../utils/sql-security'
+import { isValidTableName, escapeIdentifier } from '../utils/sql-security'
 
 // =============================================================================
 // Types
@@ -34,9 +34,17 @@ export interface SqliteWalOptions {
 }
 
 /**
+ * Resolved options with all values defined
+ */
+interface ResolvedSqliteWalOptions {
+  tableName: string
+  maxBlobSize: number
+}
+
+/**
  * Default options
  */
-const DEFAULT_OPTIONS: Required<SqliteWalOptions> = {
+const DEFAULT_OPTIONS: ResolvedSqliteWalOptions = {
   tableName: 'events_wal',
   maxBlobSize: 2 * 1024 * 1024, // 2MB
 }
@@ -65,20 +73,32 @@ const DEFAULT_OPTIONS: Required<SqliteWalOptions> = {
  */
 export class SqliteWal {
   private sql: SqliteInterface
-  private options: Required<SqliteWalOptions>
+  private options: ResolvedSqliteWalOptions
   private tableCreated = false
+  /** Escaped table name for safe SQL interpolation */
+  private escapedTableName: string
 
   constructor(sql: SqliteInterface, options: SqliteWalOptions = {}) {
     this.sql = sql
-    this.options = { ...DEFAULT_OPTIONS, ...options }
+    // Merge with defaults - spread order ensures user options override defaults
+    this.options = {
+      tableName: options.tableName ?? DEFAULT_OPTIONS.tableName,
+      maxBlobSize: options.maxBlobSize ?? DEFAULT_OPTIONS.maxBlobSize,
+    }
+
+    // Get the table name (guaranteed to exist after merging with defaults)
+    const tableName = this.options.tableName
 
     // Validate table name to prevent SQL injection
     // Table names must be alphanumeric with underscores only
-    if (!isValidTableName(this.options.tableName)) {
+    if (!isValidTableName(tableName)) {
       throw new Error(
-        `Invalid table name "${this.options.tableName}": must contain only alphanumeric characters and underscores, and start with a letter or underscore`
+        `Invalid table name "${tableName}": must contain only alphanumeric characters and underscores, and start with a letter or underscore`
       )
     }
+
+    // Pre-escape the table name for defense in depth
+    this.escapedTableName = escapeIdentifier(tableName)
   }
 
   // ===========================================================================
@@ -91,8 +111,9 @@ export class SqliteWal {
   ensureTable(): void {
     if (this.tableCreated) return
 
+    // Use escaped table name for defense in depth (already validated in constructor)
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS ${this.options.tableName} (
+      CREATE TABLE IF NOT EXISTS ${this.escapedTableName} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         batch BLOB NOT NULL,
         min_ts INTEGER NOT NULL,
@@ -104,9 +125,11 @@ export class SqliteWal {
     `)
 
     // Index for reading unflushed batches
+    // Index names use validated (not escaped) name since they're internal identifiers
+    const indexName = escapeIdentifier(`idx_${this.options.tableName}_flushed`)
     this.sql.exec(`
-      CREATE INDEX IF NOT EXISTS idx_${this.options.tableName}_flushed
-      ON ${this.options.tableName} (flushed, min_ts)
+      CREATE INDEX IF NOT EXISTS ${indexName}
+      ON ${this.escapedTableName} (flushed, min_ts)
     `)
 
     this.tableCreated = true
@@ -131,7 +154,7 @@ export class SqliteWal {
     }
 
     this.sql.exec(
-      `INSERT INTO ${this.options.tableName} (batch, min_ts, max_ts, count)
+      `INSERT INTO ${this.escapedTableName} (batch, min_ts, max_ts, count)
        VALUES (?, ?, ?, ?)`,
       serialized.data,
       serialized.minTs,
@@ -165,7 +188,7 @@ export class SqliteWal {
 
     const rows = [...this.sql.exec<WalRow>(
       `SELECT id, batch, min_ts, max_ts, count
-       FROM ${this.options.tableName}
+       FROM ${this.escapedTableName}
        WHERE flushed = 0
        ORDER BY min_ts ASC`
     )]
@@ -181,7 +204,7 @@ export class SqliteWal {
 
     const rows = [...this.sql.exec<WalRow>(
       `SELECT id, batch, min_ts, max_ts, count
-       FROM ${this.options.tableName}
+       FROM ${this.escapedTableName}
        WHERE max_ts >= ? AND min_ts <= ?
        ORDER BY min_ts ASC`,
       minTs,
@@ -199,7 +222,7 @@ export class SqliteWal {
 
     const rows = [...this.sql.exec<{ total: number }>(
       `SELECT SUM(count) as total
-       FROM ${this.options.tableName}
+       FROM ${this.escapedTableName}
        WHERE flushed = 0`
     )]
 
@@ -214,7 +237,7 @@ export class SqliteWal {
 
     const rows = [...this.sql.exec<{ count: number }>(
       `SELECT COUNT(*) as count
-       FROM ${this.options.tableName}
+       FROM ${this.escapedTableName}
        WHERE flushed = 0`
     )]
 
@@ -233,11 +256,11 @@ export class SqliteWal {
 
     this.ensureTable()
 
-    // SQLite doesn't have a good way to do IN with parameters,
-    // so we use a simple approach for small arrays
+    // Use parameterized query with ? placeholders for each ID
+    // The placeholders string is generated from array length, not user input
     const placeholders = batchIds.map(() => '?').join(',')
     this.sql.exec(
-      `UPDATE ${this.options.tableName}
+      `UPDATE ${this.escapedTableName}
        SET flushed = 1
        WHERE id IN (${placeholders})`,
       ...batchIds
@@ -251,12 +274,12 @@ export class SqliteWal {
     this.ensureTable()
 
     const countResult = [...this.sql.exec<{ count: number }>(
-      `SELECT COUNT(*) as count FROM ${this.options.tableName} WHERE flushed = 1`
+      `SELECT COUNT(*) as count FROM ${this.escapedTableName} WHERE flushed = 1`
     )]
     const count = countResult[0]?.count ?? 0
 
     this.sql.exec(
-      `DELETE FROM ${this.options.tableName} WHERE flushed = 1`
+      `DELETE FROM ${this.escapedTableName} WHERE flushed = 1`
     )
 
     return count
@@ -269,13 +292,13 @@ export class SqliteWal {
     this.ensureTable()
 
     const countResult = [...this.sql.exec<{ count: number }>(
-      `SELECT COUNT(*) as count FROM ${this.options.tableName} WHERE max_ts < ?`,
+      `SELECT COUNT(*) as count FROM ${this.escapedTableName} WHERE max_ts < ?`,
       timestamp
     )]
     const count = countResult[0]?.count ?? 0
 
     this.sql.exec(
-      `DELETE FROM ${this.options.tableName} WHERE max_ts < ?`,
+      `DELETE FROM ${this.escapedTableName} WHERE max_ts < ?`,
       timestamp
     )
 
@@ -364,4 +387,4 @@ export function createSqliteFlushHandler(wal: SqliteWal) {
 }
 
 // Re-export for backward compatibility
-export { isValidTableName } from '../utils/sql-security'
+export { isValidTableName, escapeIdentifier } from '../utils/sql-security'

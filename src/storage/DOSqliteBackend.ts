@@ -319,7 +319,8 @@ export class DOSqliteBackend implements StorageBackend {
       const filteredRows: Omit<ParquetBlockRow, 'data'>[] = []
 
       for (let i = 0; i < files.length; i++) {
-        const file = files[i]
+        const file = files[i]!
+        const row = rows[i]!
         const relativePath = file.startsWith(prefix) ? file.slice(prefix.length) : file
         const delimIndex = relativePath.indexOf(options.delimiter)
 
@@ -332,7 +333,7 @@ export class DOSqliteBackend implements StorageBackend {
           }
         } else {
           filteredFiles.push(file)
-          filteredRows.push(rows[i])
+          filteredRows.push(row)
         }
       }
 
@@ -347,11 +348,12 @@ export class DOSqliteBackend implements StorageBackend {
       const filteredRows: Omit<ParquetBlockRow, 'data'>[] = []
 
       for (let i = 0; i < files.length; i++) {
-        const file = files[i]
+        const file = files[i]!
+        const row = rows[i]!
         const filename = file.split('/').pop() || file
         if (regex.test(filename)) {
           filteredFiles.push(file)
-          filteredRows.push(rows[i])
+          filteredRows.push(row)
         }
       }
 

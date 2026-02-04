@@ -7,8 +7,8 @@
  * @packageDocumentation
  */
 
-import type { ParqueDB, Collection } from '../../ParqueDB'
-import type { Entity, EntityId, Filter, UpdateInput } from '../../types'
+import type { ParqueDB } from '../../ParqueDB'
+import type { Entity, Filter, UpdateInput } from '../../types'
 import { RelationshipBatchLoader, type BatchLoaderOptions, type BatchLoaderDB } from '../../relationships/batch-loader'
 import type { EmbeddingProvider } from '../../embeddings/provider'
 

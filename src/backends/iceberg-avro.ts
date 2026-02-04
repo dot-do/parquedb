@@ -142,8 +142,9 @@ export function encodeManifestListToAvro(manifests: ManifestFile[]): Uint8Array 
 /**
  * Parse Avro container file header to extract block data.
  * Returns the offset after the header and sync marker, plus the sync marker itself.
+ * @internal Reserved for future use
  */
-function _parseAvroContainerHeader(data: Uint8Array): { dataOffset: number; syncMarker: Uint8Array } | null {
+export function parseAvroContainerHeader(data: Uint8Array): { dataOffset: number; syncMarker: Uint8Array } | null {
   if (!isAvroFormat(data)) return null
 
   let offset = 4 // Skip magic bytes

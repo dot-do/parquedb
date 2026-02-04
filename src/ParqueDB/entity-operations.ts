@@ -7,6 +7,7 @@
 
 import type {
   Entity,
+  EntityData,
   EntityId,
   CreateInput,
   PaginatedResult,
@@ -50,26 +51,40 @@ import {
 import { validateNamespace, validateFilter, validateUpdateOperators, toFullId } from './validation'
 
 // =============================================================================
-// Types
+// Types - Focused Context Interfaces
 // =============================================================================
 
 /**
- * Context object for entity operations.
- * Provides access to shared state and dependencies.
+ * Minimal context for entity store operations.
+ * Used by functions that only need to read/write entities.
  */
-export interface EntityOperationsContext {
-  storage: StorageBackend
-  schema: Schema
-  schemaValidator: SchemaValidator | null
+export interface EntityStoreContext {
   entities: Map<string, Entity>
+}
+
+/**
+ * Context for query operations.
+ * Used by find and get operations.
+ */
+export interface EntityQueryContext extends EntityStoreContext {
+  storage: StorageBackend
   events: Event[]
   snapshots: Snapshot[]
   queryStats: Map<string, SnapshotQueryStats>
   indexManager: IndexManager
-  snapshotConfig: SnapshotConfig
   embeddingProvider: import('../embeddings/provider').EmbeddingProvider | null
+  reconstructEntityAtTime: (fullId: string, asOf: Date) => Entity | null
+  detectParquetCorruption: (data: Uint8Array, filePath: string) => void
+}
 
-  // Callbacks for integration
+/**
+ * Context for entity mutation operations (create/update/delete).
+ * Extends query context with mutation-specific dependencies.
+ */
+export interface EntityMutationContext extends EntityQueryContext {
+  schema: Schema
+  schemaValidator: SchemaValidator | null
+  snapshotConfig: SnapshotConfig
   recordEvent: (
     op: import('../types').EventOp,
     target: string,
@@ -78,13 +93,21 @@ export interface EntityOperationsContext {
     actor?: EntityId | undefined,
     meta?: Record<string, unknown> | undefined
   ) => Promise<void>
-
-  reconstructEntityAtTime: (fullId: string, asOf: Date) => Entity | null
-
   indexRelationshipsForEntity: (sourceId: string, entity: Entity) => void
   unindexRelationshipsForEntity: (sourceId: string, entity: Entity) => void
-  applyRelationshipOperators: <T>(entity: Entity, fullId: string, update: UpdateInput<T>) => Entity
-  detectParquetCorruption: (data: Uint8Array, filePath: string) => void
+  applyRelationshipOperators: <T extends Record<string, unknown> = Record<string, unknown>>(entity: Entity, fullId: string, update: UpdateInput<T>) => Entity
+}
+
+/**
+ * Full context object for entity operations.
+ * Provides access to all shared state and dependencies.
+ *
+ * @deprecated Prefer using focused contexts (EntityQueryContext, EntityMutationContext)
+ * where possible for better testability and reduced coupling.
+ */
+export interface EntityOperationsContext extends EntityMutationContext {
+  // All properties are inherited from EntityMutationContext
+  // This interface exists for backward compatibility
 }
 
 // =============================================================================
@@ -277,9 +300,11 @@ export function applySchemaDefaults<T>(
 
 /**
  * Find entities in a namespace
+ *
+ * Uses EntityQueryContext - only requires query-related dependencies.
  */
 export async function findEntities<T = Record<string, unknown>>(
-  ctx: EntityOperationsContext,
+  ctx: EntityQueryContext,
   namespace: string,
   filter?: Filter,
   options?: FindOptions
@@ -438,9 +463,11 @@ export async function findEntities<T = Record<string, unknown>>(
 
 /**
  * Get a single entity
+ *
+ * Uses EntityQueryContext - only requires query-related dependencies.
  */
 export async function getEntity<T = Record<string, unknown>>(
-  ctx: EntityOperationsContext,
+  ctx: EntityQueryContext,
   namespace: string,
   id: string,
   options?: GetOptions
@@ -520,9 +547,11 @@ export async function getEntity<T = Record<string, unknown>>(
 
 /**
  * Create a new entity
+ *
+ * Uses EntityMutationContext - requires mutation-related dependencies.
  */
 export async function createEntity<T = Record<string, unknown>>(
-  ctx: EntityOperationsContext,
+  ctx: EntityMutationContext,
   namespace: string,
   data: CreateInput<T>,
   options?: CreateOptions,
@@ -598,9 +627,11 @@ export async function createEntity<T = Record<string, unknown>>(
 
 /**
  * Update an entity
+ *
+ * Uses EntityMutationContext - requires mutation-related dependencies.
  */
-export async function updateEntity<T = Record<string, unknown>>(
-  ctx: EntityOperationsContext,
+export async function updateEntity<T extends EntityData = EntityData>(
+  ctx: EntityMutationContext,
   namespace: string,
   id: string,
   update: UpdateInput<T>,
@@ -710,9 +741,11 @@ export async function updateEntity<T = Record<string, unknown>>(
 
 /**
  * Delete an entity
+ *
+ * Uses EntityMutationContext - requires mutation-related dependencies.
  */
 export async function deleteEntity(
-  ctx: EntityOperationsContext,
+  ctx: EntityMutationContext,
   namespace: string,
   id: string,
   options?: DeleteOptions
@@ -793,9 +826,11 @@ export async function deleteEntity(
 
 /**
  * Delete multiple entities matching a filter
+ *
+ * Uses EntityMutationContext - requires mutation-related dependencies.
  */
 export async function deleteManyEntities(
-  ctx: EntityOperationsContext,
+  ctx: EntityMutationContext,
   namespace: string,
   filter: Filter,
   options?: DeleteOptions
@@ -816,9 +851,11 @@ export async function deleteManyEntities(
 
 /**
  * Restore a soft-deleted entity
+ *
+ * Uses EntityMutationContext - requires mutation-related dependencies.
  */
 export async function restoreEntity<T = Record<string, unknown>>(
-  ctx: EntityOperationsContext,
+  ctx: EntityMutationContext,
   namespace: string,
   id: string,
   options?: { actor?: EntityId | undefined }

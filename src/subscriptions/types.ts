@@ -8,6 +8,7 @@
 
 import type { Filter } from '../types/filter'
 import type { Event, EventOp, EntityId, Variant } from '../types/entity'
+import type { ConnectionMetadata } from '../types/common'
 
 // =============================================================================
 // Subscription Event Types
@@ -131,7 +132,7 @@ export interface Connection {
   /** WebSocket or SSE response writer */
   writer: SubscriptionWriter
   /** Connection metadata */
-  metadata?: Record<string, unknown> | undefined
+  metadata?: ConnectionMetadata | undefined
 }
 
 // =============================================================================

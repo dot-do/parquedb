@@ -24,7 +24,6 @@ import {
   type MigrationConfig,
   type BackendType,
 } from '../../backends'
-import { logger } from '../../utils/logger'
 
 export interface MigrateBackendArgs {
   /** Target format */
@@ -82,7 +81,7 @@ export async function migrateBackendCommand(args: MigrateBackendArgs): Promise<v
   }> = []
 
   for (const ns of allNamespaces) {
-    const { formats, primary } = await detectExistingFormat(storage, ns)
+    const { formats: _formats, primary } = await detectExistingFormat(storage, ns)
 
     let willMigrate = false
     let reason = ''

@@ -75,6 +75,7 @@ export { normalizeNamespace } from './ParqueDB/validation'
 
 import type {
   Entity,
+  EntityData,
   EntityId,
   CreateInput,
   PaginatedResult,
@@ -133,28 +134,28 @@ export interface IParqueDB {
   registerSchema(schema: Schema): void
 
   // Collection Access
-  collection<T = Record<string, unknown>>(namespace: string): Collection<T>
+  collection<T extends EntityData = EntityData>(namespace: string): Collection<T>
 
   // CRUD Operations
-  find<T = Record<string, unknown>>(
+  find<T extends EntityData = EntityData>(
     namespace: string,
     filter?: Filter | undefined,
     options?: FindOptions | undefined
   ): Promise<PaginatedResult<Entity<T>>>
 
-  get<T = Record<string, unknown>>(
+  get<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     options?: GetOptions | undefined
   ): Promise<Entity<T> | null>
 
-  create<T = Record<string, unknown>>(
+  create<T extends EntityData = EntityData>(
     namespace: string,
     data: CreateInput<T>,
     options?: CreateOptions | undefined
   ): Promise<Entity<T>>
 
-  update<T = Record<string, unknown>>(
+  update<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     update: UpdateInput<T>,
@@ -164,14 +165,14 @@ export interface IParqueDB {
   delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
 
   // Bulk Operations
-  upsert<T = Record<string, unknown>>(
+  upsert<T extends EntityData = EntityData>(
     namespace: string,
     filter: Filter,
     update: UpdateInput<T>,
     options?: { returnDocument?: 'before' | 'after' | undefined } | undefined
   ): Promise<Entity<T> | null>
 
-  upsertMany<T = Record<string, unknown>>(
+  upsertMany<T extends EntityData = EntityData>(
     namespace: string,
     items: UpsertManyItem<T>[],
     options?: UpsertManyOptions | undefined
@@ -179,13 +180,13 @@ export interface IParqueDB {
 
   deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
 
-  restore<T = Record<string, unknown>>(
+  restore<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     options?: { actor?: EntityId | undefined } | undefined
   ): Promise<Entity<T> | null>
 
-  ingestStream<T = Record<string, unknown>>(
+  ingestStream<T extends EntityData = EntityData>(
     namespace: string,
     source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>,
     options?: IngestStreamOptions<Partial<T>> | undefined
@@ -196,7 +197,7 @@ export interface IParqueDB {
 
   getHistory(namespace: string, id: string, options?: HistoryOptions): Promise<HistoryResult>
 
-  getAtVersion<T = Record<string, unknown>>(
+  getAtVersion<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     version: number
@@ -204,7 +205,7 @@ export interface IParqueDB {
 
   diff(namespace: string, id: string, fromVersion: number, toVersion: number): Promise<DiffResult>
 
-  revert<T = Record<string, unknown>>(
+  revert<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     toVersion: number,
@@ -212,7 +213,7 @@ export interface IParqueDB {
   ): Promise<Entity<T> | null>
 
   // Relationships
-  getRelated<T = Record<string, unknown>>(
+  getRelated<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     relationField: string,

@@ -693,10 +693,11 @@ export class VectorIndex {
             `is smaller than 2x topK (${k * 2}), brute-force is optimal`
         }
 
-        // Edge case: very large candidate sets (>80%) should use post-filter
-        if (selectivity > 0.8 && candidateCount > 1000) {
+        // Edge case: large candidate sets (>50% selectivity) should use post-filter
+        // because HNSW search will efficiently find top results and most will pass the filter
+        if (selectivity > 0.5) {
           actualStrategy = 'post-filter'
-          strategyReason = `Post-filter selected: selectivity ${(selectivity * 100).toFixed(1)}% is too high, ` +
+          strategyReason = `Post-filter selected: selectivity ${(selectivity * 100).toFixed(1)}% is high, ` +
             `HNSW search with filtering is more efficient`
         }
       } else {
@@ -1700,7 +1701,7 @@ export class VectorIndex {
    * Select M best neighbors from candidates
    */
   private selectNeighbors(
-    vector: number[],
+    _vector: number[],
     candidates: SearchCandidate[],
     m: number
   ): SearchCandidate[] {

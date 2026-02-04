@@ -21,7 +21,6 @@ import type {
   RmdirOptions,
 } from '../types/storage'
 import { MemoryBackend } from './MemoryBackend'
-import { NotFoundError } from './errors'
 
 /**
  * Default chunk size for streaming reads (64KB)

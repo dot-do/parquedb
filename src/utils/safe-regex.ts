@@ -52,7 +52,9 @@ export interface SafeRegexOptions {
   maxAlternationBranches?: number | undefined
 }
 
-const DEFAULT_OPTIONS: Required<SafeRegexOptions> = {
+type ResolvedSafeRegexOptions = { [K in keyof SafeRegexOptions]-?: NonNullable<SafeRegexOptions[K]> }
+
+const DEFAULT_OPTIONS: ResolvedSafeRegexOptions = {
   maxLength: 1000,
   maxQuantifierDepth: 2,
   allowBackreferences: false,
@@ -515,7 +517,7 @@ function detectDeeplyNestedStructures(pattern: string): { depth: number; hasQuan
  * Higher scores indicate more dangerous patterns
  */
 export function calculateComplexityScore(pattern: string, options: SafeRegexOptions = {}): ComplexityAnalysis {
-  const opts = { ...DEFAULT_OPTIONS, ...options }
+  const opts: ResolvedSafeRegexOptions = { ...DEFAULT_OPTIONS, ...options } as ResolvedSafeRegexOptions
   const warnings: string[] = []
 
   // Calculate individual factors
@@ -578,7 +580,7 @@ export function validateRegexPattern(
   pattern: string,
   options: SafeRegexOptions = {}
 ): void {
-  const opts = { ...DEFAULT_OPTIONS, ...options }
+  const opts: ResolvedSafeRegexOptions = { ...DEFAULT_OPTIONS, ...options } as ResolvedSafeRegexOptions
 
   // Check pattern length
   if (pattern.length > opts.maxLength) {
@@ -961,7 +963,7 @@ export function analyzeRegexSafety(
   violations: string[]
   recommendations: string[]
 } {
-  const opts = { ...DEFAULT_OPTIONS, ...options }
+  const opts: ResolvedSafeRegexOptions = { ...DEFAULT_OPTIONS, ...options } as ResolvedSafeRegexOptions
   const violations: string[] = []
   const recommendations: string[] = []
 

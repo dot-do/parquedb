@@ -245,7 +245,7 @@ export async function handleGitHubWebhook(
  */
 async function handleIssueComment(
   payload: IssueCommentPayload,
-  env: GitHubAppEnv,
+  _env: GitHubAppEnv,
   _databaseIndex: DatabaseIndexService,
   parqueDB: ParqueDBService,
   octokit: OctokitClient
@@ -323,7 +323,7 @@ async function handleIssueComment(
  * Get PR details from GitHub API
  */
 async function getPullRequestDetails(
-  octokit: OctokitClient,
+  _octokit: OctokitClient,
   owner: string,
   repo: string,
   prNumber: number

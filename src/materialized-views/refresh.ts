@@ -321,9 +321,10 @@ export async function fullRefresh(
 
     if (isPipelineQuery(definition.query)) {
       // Use aggregation pipeline
+      // Cast to AggregationStage[] since PipelineStage is compatible
       processedData = executeAggregation<Record<string, unknown>>(
         sourceData,
-        definition.query.pipeline!
+        definition.query.pipeline as unknown as AggregationStage[]
       )
     } else {
       // Apply filter/project/sort
@@ -891,15 +892,21 @@ async function fullRefreshChunkedAggregation(
     for (const doc of chunkData) {
       const groupKey = extractGroupKey(doc, groupSpec._id)
       const keyStr = JSON.stringify(groupKey)
-      if (!chunkGroups.has(keyStr)) chunkGroups.set(keyStr, [])
-      chunkGroups.get(keyStr)!.push(doc)
+      let group = chunkGroups.get(keyStr)
+      if (!group) {
+        group = []
+        chunkGroups.set(keyStr, group)
+      }
+      group.push(doc)
     }
 
     for (const [keyStr, items] of chunkGroups) {
-      if (!partialStates.has(keyStr)) {
-        partialStates.set(keyStr, { key: JSON.parse(keyStr), state: createEmptyPartialState() })
+      let partialState = partialStates.get(keyStr)
+      if (!partialState) {
+        partialState = { key: JSON.parse(keyStr), state: createEmptyPartialState() }
+        partialStates.set(keyStr, partialState)
       }
-      updatePartialState(partialStates.get(keyStr)!.state, items, groupSpec)
+      updatePartialState(partialState.state, items, groupSpec)
     }
 
     options.onProgress?.({
@@ -1104,7 +1111,7 @@ async function createEmptyView(
 
   const writer = new ParquetWriter(storage)
   const schema: ParquetSchema = options.outputSchema ?? {
-    $id: { type: 'UTF8', optional: false },
+    $id: { type: 'STRING', optional: false },
   }
 
   await writer.write(finalPath, [], schema)
@@ -1139,7 +1146,7 @@ function createErrorResult(error: string, startTime: number): FullRefreshResult 
  */
 function inferSchema(data: Record<string, unknown>[]): ParquetSchema {
   if (data.length === 0) {
-    return { $id: { type: 'UTF8', optional: false } }
+    return { $id: { type: 'STRING', optional: false } }
   }
 
   const schema: ParquetSchema = {}
@@ -1162,13 +1169,13 @@ function inferSchema(data: Record<string, unknown>[]): ParquetSchema {
  * Infer Parquet type from a JavaScript value
  */
 function inferParquetType(value: unknown): ParquetSchema[string]['type'] {
-  if (value === null || value === undefined) return 'UTF8'
-  if (typeof value === 'string') return 'UTF8'
+  if (value === null || value === undefined) return 'STRING'
+  if (typeof value === 'string') return 'STRING'
   if (typeof value === 'number') return Number.isInteger(value) ? 'INT64' : 'DOUBLE'
   if (typeof value === 'boolean') return 'BOOLEAN'
   if (value instanceof Date) return 'TIMESTAMP_MILLIS'
-  if (Array.isArray(value) || typeof value === 'object') return 'UTF8'
-  return 'UTF8'
+  if (Array.isArray(value) || typeof value === 'object') return 'STRING'
+  return 'STRING'
 }
 
 // =============================================================================
@@ -1351,7 +1358,7 @@ export async function recoverAllViewsFromCrash(
     for (const filePath of listing.files) {
       // Path format: _views/{viewName}/...
       const match = filePath.match(/^_views\/([^/]+)\//)
-      if (match) {
+      if (match && match[1]) {
         viewNames.add(match[1])
       }
     }

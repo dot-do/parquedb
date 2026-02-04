@@ -29,7 +29,6 @@ import { initializeAsyncBuffer } from '../parquet/reader'
 import { parquetMetadataAsync, parquetReadObjects } from 'hyparquet'
 import { compressors } from '../parquet/compression'
 import type { StorageBackend } from '../types/storage'
-import type { Compressors } from 'hyparquet'
 import { logger } from '../utils/logger'
 
 // =============================================================================
@@ -269,19 +268,11 @@ async function* createChunkedParquetReader(
 
     // Read row groups one at a time
     for (let rgIndex = 0; rgIndex < numRowGroups; rgIndex++) {
-      const readOptions: {
-        file: typeof asyncBuffer
-        compressors: Compressors
-        columns?: string[] | undefined
-        rowGroups: number[]
-      } = {
+      const readOptions = {
         file: asyncBuffer,
         compressors,
         rowGroups: [rgIndex],
-      }
-
-      if (columns && columns.length > 0) {
-        readOptions.columns = columns
+        ...(columns && columns.length > 0 ? { columns } : {}),
       }
 
       const rows = (await parquetReadObjects(readOptions)) as Row[]
@@ -310,7 +301,14 @@ async function* createChunkedParquetReader(
  */
 export class StreamingMergeSorter {
   private storage: StorageBackend
-  private options: Required<Omit<StreamingMergeOptions, 'columns'>> & { columns?: string[] | undefined }
+  private options: {
+    chunkSize: number
+    maxMemoryBytes: number
+    sortKey: string
+    sortDirection: 'asc' | 'desc'
+    outputBufferSize: number
+    columns?: string[]
+  }
 
   constructor(storage: StorageBackend, options: StreamingMergeOptions = {}) {
     this.storage = storage
@@ -320,7 +318,7 @@ export class StreamingMergeSorter {
       sortKey: options.sortKey ?? 'createdAt',
       sortDirection: options.sortDirection ?? 'asc',
       outputBufferSize: options.outputBufferSize ?? options.chunkSize ?? 10000,
-      columns: options.columns,
+      ...(options.columns ? { columns: options.columns } : {}),
     }
   }
 

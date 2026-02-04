@@ -58,7 +58,7 @@ export function isBoolean(value: unknown): value is boolean {
  */
 export class JsonParseError extends Error {
   public readonly input: string
-  public override readonly cause?: Error
+  public override readonly cause?: Error | undefined
 
   constructor(
     message: string,

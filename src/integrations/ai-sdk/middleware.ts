@@ -44,7 +44,6 @@ import type {
   LanguageModelCallOptions,
   LanguageModelGenerateResult,
   LanguageModelStreamResult,
-  LanguageModel,
   CacheEntry,
   LogEntry,
 } from './types'
@@ -210,7 +209,6 @@ export function createParqueDBMiddleware(
      */
     wrapGenerate: async ({ doGenerate, params, model }) => {
       const startTime = Date.now()
-      let cached = false
       let cacheKey: string | undefined
 
       // Try to get from cache
@@ -234,7 +232,7 @@ export function createParqueDBMiddleware(
               })
             }
 
-            cached = true
+            _cached = true
             const result = asTypedResult<CacheEntry>(cacheResult).response as LanguageModelGenerateResult
 
             // Log the cache hit if logging is enabled

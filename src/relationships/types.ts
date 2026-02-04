@@ -9,6 +9,8 @@
  * @packageDocumentation
  */
 
+import type { EdgeData } from '../types/common'
+
 // =============================================================================
 // Match Mode Types
 // =============================================================================
@@ -254,7 +256,7 @@ export interface RelationshipWithMetadata {
   // ===========================================================================
 
   /** Additional edge properties stored in Variant column */
-  data?: Record<string, unknown> | undefined
+  data?: EdgeData | undefined
 
   // ===========================================================================
   // Audit Fields
@@ -287,7 +289,7 @@ export interface RelationshipWithMetadata {
  */
 export function extractShreddedFields(metadata: RelationshipMetadata): {
   shredded: ShreddedRelationshipFields
-  data: Record<string, unknown>
+  data: EdgeData
 } {
   const { matchMode, similarity, ...data } = metadata
 
@@ -313,7 +315,7 @@ export function extractShreddedFields(metadata: RelationshipMetadata): {
  */
 export function mergeShreddedFields(
   shredded: ShreddedRelationshipFields,
-  data?: Record<string, unknown>
+  data?: EdgeData
 ): RelationshipMetadata {
   return {
     ...data,

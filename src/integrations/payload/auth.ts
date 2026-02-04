@@ -526,7 +526,7 @@ export function oauthUsers(config: OAuthConfig) {
       strategies: [
         {
           name: 'oauth.do',
-          authenticate: async ({ payload, headers }: { payload: unknown; headers: Headers }) => {
+          authenticate: async ({ payload: _payload, headers }: { payload: unknown; headers: Headers }) => {
             const request = new Request('http://localhost', { headers })
             const token = extractToken(request, resolvedConfig.cookieName)
 

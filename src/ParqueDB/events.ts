@@ -56,13 +56,15 @@ export function recordEvent(
     return JSON.parse(JSON.stringify(obj))
   }
 
+  const beforeCopy = deepCopy(before)
+  const afterCopy = deepCopy(after)
   const event: Event = {
     id: generateId(),
     ts: Date.now(),
     op,
     target,
-    before: deepCopy(before) as import('../types').Variant | null | undefined,
-    after: deepCopy(after) as import('../types').Variant | null | undefined,
+    before: beforeCopy === null ? undefined : (beforeCopy as import('../types').Variant | undefined),
+    after: afterCopy === null ? undefined : (afterCopy as import('../types').Variant | undefined),
     actor: actor as string | undefined,
     metadata: meta as import('../types').Variant | undefined,
   }
@@ -164,7 +166,10 @@ export function maybeRotateEventLog(
   archivedEvents: Event[],
   eventLogConfig: Required<EventLogConfig>
 ): void {
-  const { maxEvents, maxAge, archiveOnRotation, maxArchivedEvents } = eventLogConfig
+  const maxEvents = eventLogConfig.maxEvents ?? 10000
+  const maxAge = eventLogConfig.maxAge ?? 7 * 24 * 60 * 60 * 1000
+  const archiveOnRotation = eventLogConfig.archiveOnRotation ?? false
+  const maxArchivedEvents = eventLogConfig.maxArchivedEvents ?? 50000
   const now = Date.now()
 
   // Calculate cutoff time for age-based rotation
@@ -245,9 +250,12 @@ export function archiveEvents(
   eventLogConfig: Required<EventLogConfig>
 ): ArchiveEventsResult {
   const now = Date.now()
-  const olderThanTs = options?.olderThan?.getTime() ?? (now - eventLogConfig.maxAge)
-  const maxEventsToKeep = options?.maxEvents ?? eventLogConfig.maxEvents
-  const { archiveOnRotation, maxArchivedEvents } = eventLogConfig
+  const configMaxAge = eventLogConfig.maxAge ?? 7 * 24 * 60 * 60 * 1000
+  const configMaxEvents = eventLogConfig.maxEvents ?? 10000
+  const archiveOnRotation = eventLogConfig.archiveOnRotation ?? false
+  const maxArchivedEvents = eventLogConfig.maxArchivedEvents ?? 50000
+  const olderThanTs = options?.olderThan?.getTime() ?? (now - configMaxAge)
+  const maxEventsToKeep = options?.maxEvents ?? configMaxEvents
 
   let archivedCount = 0
   let droppedCount = 0
@@ -836,7 +844,7 @@ export async function revertEntity<T = Record<string, unknown>>(
   // Get current entity
   const currentEntity = entities.get(fullId)
   if (!currentEntity) {
-    throw new EventError('Revert entity', 'Entity not found', { entityId: fullId, namespace: ns, id })
+    throw new EventError('Revert entity', `Entity not found: ${ns}/${id}`, { entityId: fullId })
   }
 
   // Apply the revert as an update with metadata marking it as a revert

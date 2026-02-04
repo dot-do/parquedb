@@ -218,7 +218,7 @@ function normalizeModelId(modelId: string): string {
  */
 function createDefaultPricingWithMetadata(): PricingWithMetadata[] {
   const now = new Date()
-  return DEFAULT_MODEL_PRICING.map((p, index) => ({
+  return DEFAULT_MODEL_PRICING.map((p, _index) => ({
     ...p,
     source: 'default' as PricingSource,
     lastUpdated: now,
@@ -259,7 +259,7 @@ export class ModelPricingService {
   private readonly config: ResolvedPricingServiceConfig
   private pricingMap: Map<string, PricingWithMetadata> = new Map()
   private cache: PricingCache
-  private autoRefreshTimer?: ReturnType<typeof setInterval>
+  private autoRefreshTimer?: ReturnType<typeof setInterval> | undefined
   private lastRefreshResult?: PricingFetchResult
 
   /**
@@ -651,7 +651,7 @@ export class ModelPricingService {
 
         // Convert to PricingWithMetadata
         const now = new Date()
-        const entries: PricingWithMetadata[] = prices.map((p, index) => ({
+        const entries: PricingWithMetadata[] = prices.map((p, _index) => ({
           modelId: p.modelId,
           providerId: p.providerId,
           inputPricePerMillion: p.inputPricePerMillion,

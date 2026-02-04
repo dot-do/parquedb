@@ -6,7 +6,8 @@
 
 import type {
   Entity,
-  EntityId,
+  EntityData,
+  EntityId as _EntityId,
   CreateInput,
   Filter,
   UpdateInput,
@@ -39,7 +40,7 @@ export function extractFilterFields(filter: Filter): Record<string, unknown> {
  * Build create data for upsert insert operations
  * Combines filter fields, $set, $setOnInsert, and applies other operators
  */
-export function buildUpsertCreateData<T = Record<string, unknown>>(
+export function buildUpsertCreateData<T extends EntityData = EntityData>(
   filterFields: Record<string, unknown>,
   update: UpdateInput<T>
 ): Record<string, unknown> {
@@ -89,15 +90,15 @@ export function buildUpsertCreateData<T = Record<string, unknown>>(
 }
 
 export interface UpsertContext {
-  find<T>(namespace: string, filter?: Filter, options?: { limit?: number | undefined }): Promise<PaginatedResult<Entity<T>>>
-  create<T>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
-  update<T>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
+  find<T extends EntityData>(namespace: string, filter?: Filter, options?: { limit?: number | undefined }): Promise<PaginatedResult<Entity<T>>>
+  create<T extends EntityData>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
+  update<T extends EntityData>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
 }
 
 /**
  * Upsert an entity (filter-based: update if exists, create if not)
  */
-export async function upsertEntity<T = Record<string, unknown>>(
+export async function upsertEntity<T extends EntityData = EntityData>(
   namespace: string,
   filter: Filter,
   update: UpdateInput<T>,
@@ -124,7 +125,7 @@ export async function upsertEntity<T = Record<string, unknown>>(
 /**
  * Upsert multiple entities in a single operation
  */
-export async function upsertManyEntities<T = Record<string, unknown>>(
+export async function upsertManyEntities<T extends EntityData = EntityData>(
   namespace: string,
   items: UpsertManyItem<T>[],
   options: UpsertManyOptions | undefined,

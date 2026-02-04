@@ -47,38 +47,75 @@ import { validateNamespace, toFullId } from './validation'
 import { pruneArchivedEvents } from './events'
 
 // =============================================================================
-// Types
+// Types - Focused Context Interfaces
 // =============================================================================
 
 /**
- * Context object for event operations.
- * Provides access to shared state and dependencies.
+ * Minimal context for event log read operations.
+ * Used by functions that only need to read events.
  */
-export interface EventOperationsContext {
-  storage: StorageBackend
-  entities: Map<string, Entity>
+export interface EventReadContext {
   events: Event[]
-  archivedEvents: Event[]
+  entities: Map<string, Entity>
+}
+
+/**
+ * Context for event time-travel reconstruction.
+ * Used by functions that reconstruct entity state from events.
+ */
+export interface EventReconstructionContext extends EventReadContext {
   snapshots: Snapshot[]
   queryStats: Map<string, SnapshotQueryStats>
   entityEventIndex: Map<string, Event[]>
   reconstructionCache: Map<string, { entity: Entity | null; timestamp: number }>
-  snapshotConfig: SnapshotConfig
-  eventLogConfig: Required<EventLogConfig>
-  pendingEvents: Event[]
-  inTransaction: boolean
-  flushPromise: Promise<void> | null
+}
 
-  // Callbacks
+/**
+ * Context for event flush operations.
+ * Used by functions that flush pending events to storage.
+ */
+export interface EventFlushContext extends EventReconstructionContext {
+  storage: StorageBackend
+  pendingEvents: Event[]
+  flushPromise: Promise<void> | null
   setFlushPromise: (promise: Promise<void> | null) => void
   setPendingEvents: (events: Event[]) => void
-  getSnapshotManager: () => SnapshotManager
+}
 
+/**
+ * Context for event archival operations.
+ * Used by functions that manage event log rotation and archival.
+ */
+export interface EventArchivalContext extends EventFlushContext {
+  archivedEvents: Event[]
+  eventLogConfig: Required<EventLogConfig>
+}
+
+/**
+ * Context for event recording operations.
+ * Used by functions that write events.
+ */
+export interface EventRecordingContext extends EventArchivalContext {
+  snapshotConfig: SnapshotConfig
+  inTransaction: boolean
+  getSnapshotManager: () => SnapshotManager
   /**
    * Optional callback invoked after each event is recorded.
    * Used for materialized view integration to emit events to the MV system.
    */
   onEvent?: ((event: Event) => void | Promise<void>) | undefined
+}
+
+/**
+ * Full context object for event operations.
+ * Provides access to all shared state and dependencies.
+ *
+ * @deprecated Prefer using focused contexts (EventReadContext, EventReconstructionContext, etc.)
+ * where possible for better testability and reduced coupling.
+ */
+export interface EventOperationsContext extends EventRecordingContext {
+  // All properties are inherited from EventRecordingContext
+  // This interface exists for backward compatibility
 }
 
 // =============================================================================
@@ -88,9 +125,11 @@ export interface EventOperationsContext {
 /**
  * Record an event for an entity operation.
  * Returns a promise that resolves when the event is flushed to storage.
+ *
+ * Uses EventRecordingContext - requires event recording dependencies.
  */
 export function recordEvent(
-  ctx: EventOperationsContext,
+  ctx: EventRecordingContext,
   op: EventOp,
   target: string,
   before: Entity | null,
@@ -187,8 +226,10 @@ export function recordEvent(
 
 /**
  * Schedule a batched flush of pending events using microtask timing.
+ *
+ * Uses EventFlushContext - requires flush dependencies.
  */
-export function scheduleFlush(ctx: EventOperationsContext): Promise<void> {
+export function scheduleFlush(ctx: EventFlushContext): Promise<void> {
   if (ctx.flushPromise) return ctx.flushPromise
 
   const promise = Promise.resolve().then(() => flushEvents(ctx))
@@ -198,8 +239,10 @@ export function scheduleFlush(ctx: EventOperationsContext): Promise<void> {
 
 /**
  * Flush pending events to storage in a transactional manner.
+ *
+ * Uses EventFlushContext - requires flush dependencies.
  */
-export async function flushEvents(ctx: EventOperationsContext): Promise<void> {
+export async function flushEvents(ctx: EventFlushContext): Promise<void> {
   if (ctx.pendingEvents.length === 0) {
     ctx.setFlushPromise(null)
     return
@@ -285,9 +328,14 @@ export async function flushEvents(ctx: EventOperationsContext): Promise<void> {
 
 /**
  * Check and perform event log rotation if configured limits are exceeded.
+ *
+ * Uses EventArchivalContext - requires archival dependencies.
  */
-export function maybeRotateEventLog(ctx: EventOperationsContext): void {
-  const { maxEvents, maxAge, archiveOnRotation, maxArchivedEvents } = ctx.eventLogConfig
+export function maybeRotateEventLog(ctx: EventArchivalContext): void {
+  const maxEvents = ctx.eventLogConfig.maxEvents ?? 10000
+  const maxAge = ctx.eventLogConfig.maxAge ?? 7 * 24 * 60 * 60 * 1000
+  const archiveOnRotation = ctx.eventLogConfig.archiveOnRotation ?? false
+  const maxArchivedEvents = ctx.eventLogConfig.maxArchivedEvents ?? 50000
   const now = Date.now()
   const ageCutoff = now - maxAge
 
@@ -323,15 +371,20 @@ export function maybeRotateEventLog(ctx: EventOperationsContext): void {
 
 /**
  * Archive events manually based on criteria.
+ *
+ * Uses EventArchivalContext - requires archival dependencies.
  */
 export function archiveEvents(
-  ctx: EventOperationsContext,
+  ctx: EventArchivalContext,
   options?: { olderThan?: Date | undefined; maxEvents?: number | undefined }
 ): ArchiveEventsResult {
   const now = Date.now()
-  const olderThanTs = options?.olderThan?.getTime() ?? (now - ctx.eventLogConfig.maxAge)
-  const maxEventsToKeep = options?.maxEvents ?? ctx.eventLogConfig.maxEvents
-  const { archiveOnRotation, maxArchivedEvents } = ctx.eventLogConfig
+  const configMaxAge = ctx.eventLogConfig.maxAge ?? 7 * 24 * 60 * 60 * 1000
+  const configMaxEvents = ctx.eventLogConfig.maxEvents ?? 10000
+  const archiveOnRotation = ctx.eventLogConfig.archiveOnRotation ?? false
+  const maxArchivedEvents = ctx.eventLogConfig.maxArchivedEvents ?? 50000
+  const olderThanTs = options?.olderThan?.getTime() ?? (now - configMaxAge)
+  const maxEventsToKeep = options?.maxEvents ?? configMaxEvents
 
   let archivedCount = 0
   let droppedCount = 0
@@ -394,9 +447,11 @@ export function archiveEvents(
 
 /**
  * Reconstruct entity state at a specific point in time using event sourcing.
+ *
+ * Uses EventReconstructionContext - only needs reconstruction-related dependencies.
  */
 export function reconstructEntityAtTime(
-  ctx: EventOperationsContext,
+  ctx: EventReconstructionContext,
   fullId: string,
   asOf: Date
 ): Entity | null {
@@ -446,9 +501,11 @@ export function reconstructEntityAtTime(
 
 /**
  * Helper method to reconstruct entity state from a sorted array of events.
+ *
+ * Uses EventReconstructionContext - only needs reconstruction-related dependencies.
  */
 export function reconstructFromEvents(
-  ctx: EventOperationsContext,
+  ctx: EventReconstructionContext,
   fullId: string,
   asOfTime: number,
   allEvents: Event[]
@@ -540,9 +597,11 @@ export function binarySearchLastEventBeforeTime(events: Event[], targetTime: num
 
 /**
  * Get entity history.
+ *
+ * Uses EventReadContext - only needs read access to events.
  */
 export async function getEntityHistory(
-  ctx: EventOperationsContext,
+  ctx: EventReadContext,
   entityId: EntityId,
   options?: HistoryOptions
 ): Promise<HistoryResult> {
@@ -613,9 +672,11 @@ export async function getEntityHistory(
 
 /**
  * Get entity at a specific version.
+ *
+ * Uses EventReadContext - only needs read access to events.
  */
 export async function getEntityAtVersion<T = Record<string, unknown>>(
-  ctx: EventOperationsContext,
+  ctx: EventReadContext,
   namespace: string,
   id: string,
   version: number
@@ -669,9 +730,11 @@ export async function getEntityAtVersion<T = Record<string, unknown>>(
 
 /**
  * Compute diff between entity states at two timestamps.
+ *
+ * Uses EventReconstructionContext - needs reconstruction to compute diffs.
  */
 export async function computeDiff(
-  ctx: EventOperationsContext,
+  ctx: EventReconstructionContext,
   entityId: EntityId,
   t1: Date,
   t2: Date
@@ -742,9 +805,11 @@ export async function computeDiff(
 
 /**
  * Revert entity to its state at a specific timestamp.
+ *
+ * Uses EventReconstructionContext - needs reconstruction plus entity access.
  */
 export async function revertEntity<T = Record<string, unknown>>(
-  ctx: EventOperationsContext,
+  ctx: EventReconstructionContext,
   recordEventFn: (op: EventOp, target: string, before: Entity | null, after: Entity | null, actor?: EntityId, meta?: Record<string, unknown>) => Promise<void>,
   entityId: EntityId,
   targetTime: Date,

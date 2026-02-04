@@ -71,7 +71,7 @@ export class SubscriptionManager {
   private connections: Map<string, Connection> = new Map()
   private eventSource?: SubscriptionEventSource
   private eventSourceUnsubscribe?: () => void
-  private heartbeatTimer?: ReturnType<typeof setInterval>
+  private heartbeatTimer?: ReturnType<typeof setInterval> | undefined
   private stats: SubscriptionStats = {
     activeConnections: 0,
     totalSubscriptions: 0,

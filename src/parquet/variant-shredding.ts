@@ -87,7 +87,7 @@ export async function prepareShreddedVariantData(
   })
 
   // Create shredded Variant column
-  const { schema, columnData, shredPaths } = createShreddedVariantColumn(
+  const { schema, columnData, _shredPaths } = createShreddedVariantColumn(
     columnName,
     objects,
     shredFields,

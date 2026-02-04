@@ -4,6 +4,8 @@
  * Core interfaces for secondary indexes and full-text search.
  */
 
+import type { IndexMetadataData, Metadata } from '../types/common'
+
 // =============================================================================
 // Index Definition
 // =============================================================================
@@ -50,7 +52,7 @@ export interface IndexDefinition {
   /** Geo-specific options */
   geoOptions?: GeoIndexOptions | undefined
   /** Index metadata */
-  metadata?: Record<string, unknown> | undefined
+  metadata?: Metadata | undefined
 }
 
 /**
@@ -113,7 +115,7 @@ export interface IndexEntry {
   /** Row offset within the row group */
   rowOffset: number
   /** Additional metadata (e.g., score for FTS) */
-  metadata?: Record<string, unknown> | undefined
+  metadata?: IndexMetadataData | undefined
 }
 
 /**

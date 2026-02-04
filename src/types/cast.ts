@@ -57,7 +57,7 @@ export function castEntity<R>(entity: Record<string, unknown>): Entity<R> {
  *
  * @remarks Safe because Proxy allows dynamic property access by design.
  */
-export function proxyTarget<T>(target: object): Record<string, T> {
+export function proxyTarget<T, O extends Record<string, unknown> = Record<string, unknown>>(target: O): Record<string, T> {
   return target as unknown as Record<string, T>
 }
 
@@ -67,7 +67,7 @@ export function proxyTarget<T>(target: object): Record<string, T> {
  *
  * @remarks Safe when the proxy correctly implements the interface.
  */
-export function asProxyResult<T>(proxy: object): T {
+export function asProxyResult<T, P extends Record<string, unknown> = Record<string, unknown>>(proxy: P): T {
   return proxy as unknown as T
 }
 
@@ -564,9 +564,15 @@ export function opsAsVariant<T>(ops: T): import('./entity').Variant {
  *
  * @remarks Safe when the collection schema matches the expected type.
  * Commonly used with observability MVs (AIRequestRecord, LogEntry, etc.)
+ * Handles both array results and { items: T[] } wrapper objects.
  */
-export function asTypedResults<T>(items: unknown): T[] {
-  return items as T[]
+export function asTypedResults<T>(result: unknown): T[] {
+  // Handle { items: T[] } wrapper from collection.find()
+  if (result !== null && typeof result === 'object' && 'items' in result) {
+    return (result as { items: T[] }).items
+  }
+  // Handle direct array results
+  return result as T[]
 }
 
 /**
@@ -880,4 +886,76 @@ export function safeAsRecord(value: unknown): Record<string, unknown> | undefine
  */
 export function asRecordOrEmpty(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {}
+}
+
+// =============================================================================
+// R2Bucket Type Guards
+// =============================================================================
+
+/**
+ * Type guard to check if a value looks like an R2Bucket
+ *
+ * Validates that the value has the essential R2Bucket methods (get, put, delete, list).
+ * This is useful for validating environment bindings at runtime.
+ *
+ * @param value - The value to check
+ * @returns true if the value has the required R2Bucket methods
+ */
+export function isR2BucketLike(value: unknown): value is R2Bucket {
+  if (value === null || value === undefined) return false
+  if (typeof value !== 'object') return false
+  const obj = value as Record<string, unknown>
+  return (
+    typeof obj.get === 'function' &&
+    typeof obj.put === 'function' &&
+    typeof obj.delete === 'function' &&
+    typeof obj.list === 'function'
+  )
+}
+
+/**
+ * Assert that a value is a valid R2Bucket binding
+ *
+ * Throws a descriptive error if the value is not a valid R2Bucket.
+ *
+ * @param value - The value to check
+ * @param name - Name of the binding for error messages (default: 'BUCKET')
+ * @throws Error if the value is not a valid R2Bucket
+ */
+export function assertR2Bucket(value: unknown, name = 'BUCKET'): asserts value is R2Bucket {
+  if (!isR2BucketLike(value)) {
+    throw new Error(`${name} is not a valid R2Bucket binding`)
+  }
+}
+
+/**
+ * Require a valid R2Bucket binding with runtime validation
+ *
+ * Validates the value at runtime and returns it typed as R2Bucket.
+ * Throws a descriptive error if the value is not a valid R2Bucket.
+ *
+ * @param value - The value to convert (usually from env.BUCKET)
+ * @param name - Name of the binding for error messages (default: 'BUCKET')
+ * @returns The value typed as R2Bucket
+ * @throws Error if the value is not a valid R2Bucket
+ */
+export function requireR2Bucket(value: unknown, name = 'BUCKET'): R2Bucket {
+  assertR2Bucket(value, name)
+  return value
+}
+
+/**
+ * Safely convert a value to R2Bucket if valid, otherwise return undefined
+ *
+ * This is useful for optional bucket bindings where you want to check
+ * if the bucket is configured without throwing an error.
+ *
+ * @param value - The value to convert
+ * @returns The value typed as R2Bucket, or undefined if invalid
+ */
+export function toR2BucketOrUndefined(value: unknown): R2Bucket | undefined {
+  if (isR2BucketLike(value)) {
+    return value
+  }
+  return undefined
 }

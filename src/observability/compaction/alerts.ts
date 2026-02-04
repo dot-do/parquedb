@@ -625,7 +625,6 @@ export class CompactionAlertManager {
     health: HealthIndicator
   ): Promise<AlertDeliveryResult[]> {
     const alerts: AlertEvent[] = []
-    const now = Date.now()
 
     // Check for stuck windows
     if (metrics.windows_stuck > 0) {

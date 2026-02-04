@@ -34,7 +34,7 @@ export class NotFoundError extends Error {
 export class ReadError extends Error {
   override readonly name = 'ReadError'
   public readonly path: string
-  public override readonly cause?: Error
+  public override readonly cause?: Error | undefined
 
   constructor(
     message: string,

@@ -9,6 +9,7 @@ import type {
   Entity,
   EntityId,
   ValidationMode,
+  EntityState,
 } from '../types'
 
 // =============================================================================
@@ -144,10 +145,10 @@ export interface MutationEvent {
   target: string
 
   /** State before the change */
-  before: Record<string, unknown> | null
+  before: EntityState | null
 
   /** State after the change */
-  after: Record<string, unknown> | null
+  after: EntityState | null
 
   /** Actor who made the change */
   actor: EntityId
@@ -208,7 +209,7 @@ export type MutationErrorCode = typeof MutationErrorCodes[keyof typeof MutationE
  */
 export class MutationOperationError extends Error {
   readonly code: MutationErrorCode
-  readonly entityId?: EntityId
+  readonly entityId?: EntityId | undefined
 
   constructor(code: MutationErrorCode, message: string, entityId?: EntityId) {
     super(message)
@@ -290,7 +291,7 @@ export interface ApplyOperatorsOptions {
  */
 export interface ApplyOperatorsResult {
   /** The updated document */
-  document: Record<string, unknown>
+  document: EntityState
 
   /** Fields that were modified */
   modifiedFields: string[]

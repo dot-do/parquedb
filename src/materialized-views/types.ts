@@ -37,7 +37,15 @@ export {
 // Branded Types
 // =============================================================================
 
-/** Materialized view identifier */
+/**
+ * Materialized view unique identifier (branded type)
+ *
+ * MVId is a unique, immutable identifier for a materialized view instance.
+ * Used for internal tracking and referencing specific view versions.
+ *
+ * @example
+ * const id = mvId('mv_01HXYZ...')  // ULID or UUID format
+ */
 export type MVId = string & { readonly __brand: unique symbol }
 
 /** Create an MVId from a string */
@@ -45,7 +53,16 @@ export function mvId(id: string): MVId {
   return id as MVId
 }
 
-/** View name (branded type) */
+/**
+ * Materialized view name (branded type)
+ *
+ * ViewName is the human-readable name used to reference a view in queries
+ * and API calls. Must be a valid identifier (alphanumeric + underscore).
+ *
+ * @example
+ * const name = viewName('active_users')
+ * const name = viewName('DailySales')
+ */
 export type ViewName = string & { readonly __brand: unique symbol }
 
 /** Create a ViewName from a string */

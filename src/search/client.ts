@@ -63,7 +63,7 @@ export interface SearchOptions {
 // =============================================================================
 
 /** Define a searchable field */
-export interface SearchField<T = unknown> {
+export interface SearchField<_T = unknown> {
   type: 'text' | 'keyword' | 'number' | 'date' | 'boolean' | 'array'
   filterable?: boolean | undefined
   facetable?: boolean | undefined
@@ -343,11 +343,11 @@ export function createSearchClient<
 } {
   const baseUrl = config.baseUrl ?? DEFAULT_BASE_URL
 
-  return new Proxy({} as any, {
+  return new Proxy({} as Record<string, never>, {
     get(_, dataset: string) {
       return createDatasetClient(baseUrl, dataset)
     }
-  })
+  }) as { [K in keyof Datasets]: DatasetClient<Datasets[K][0], Datasets[K][1]> }
 }
 
 // =============================================================================

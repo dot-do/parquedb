@@ -12,17 +12,13 @@
  * - No compaction occurred on source tables since last refresh
  */
 
-import type { Event, Variant } from '../types/entity'
-import type { EventSource, ReplayResult } from '../events/replay'
-import type { EventBatch, EventSegment } from '../events/types'
+import type { Event, Variant, VariantValue } from '../types/entity'
+import type { EventSource } from '../events/replay'
 import type { ManifestManager } from '../events/manifest'
 import type { SegmentStorage } from '../events/segment'
 import type {
   ViewDefinition,
-  ViewMetadata,
-  ViewState,
   ViewQuery,
-  RefreshStrategy,
 } from './types'
 import type { Filter } from '../types/filter'
 import type { AggregationStage } from '../aggregation/types'
@@ -195,7 +191,7 @@ export class IncrementalRefresher {
 
     // Check if aggregations are incrementally refreshable
     if (view.query.pipeline) {
-      const unsupportedStages = this.findUnsupportedIncrementalStages(view.query.pipeline)
+      const unsupportedStages = this.findUnsupportedIncrementalStages(view.query.pipeline as unknown as AggregationStage[])
       if (unsupportedStages.length > 0) {
         return {
           canIncremental: false,
@@ -326,7 +322,7 @@ export class IncrementalRefresher {
    */
   async fullRefresh(
     view: ViewDefinition,
-    lineage: IncrementalLineage,
+    _lineage: IncrementalLineage,
     options: IncrementalRefreshOptions & { wasFullRefresh?: boolean | undefined; fullRefreshReason?: string | undefined } = {}
   ): Promise<IncrementalRefreshResult> {
     const startTime = Date.now()
@@ -362,7 +358,7 @@ export class IncrementalRefresher {
 
     // Convert entity states to rows, filtering out deleted entities
     const rows: Variant[] = []
-    for (const [entityId, state] of entityStates) {
+    for (const [_entityId, state] of entityStates) {
       if (state !== null) {
         // Apply filter if defined
         if (this.matchesFilter(state, view.query.filter)) {
@@ -376,7 +372,7 @@ export class IncrementalRefresher {
     // If pipeline is defined, execute aggregation
     let finalRows = rows
     if (view.query.pipeline) {
-      finalRows = await this.executePipeline(rows, view.query.pipeline)
+      finalRows = await this.executePipeline(rows, view.query.pipeline as unknown as AggregationStage[])
     }
 
     // Replace all data in storage
@@ -658,14 +654,14 @@ export class IncrementalRefresher {
 
       const keyStr = JSON.stringify(keyValue)
 
-      if (!groups.has(keyStr)) {
-        groups.set(keyStr, {
+      let groupData = groups.get(keyStr)
+      if (!groupData) {
+        groupData = {
           key: { _id: keyValue } as Variant,
           accumulators: {},
-        })
+        }
+        groups.set(keyStr, groupData)
       }
-
-      const groupData = groups.get(keyStr)!
 
       // Update accumulators
       for (const [field, expr] of Object.entries(group)) {
@@ -732,7 +728,7 @@ export class IncrementalRefresher {
   /**
    * Get final value from accumulator state
    */
-  private getAccumulatorValue(state: AggregateState): unknown {
+  private getAccumulatorValue(state: AggregateState): VariantValue {
     if (state.count !== undefined && state.sum !== undefined) {
       // This is an $avg
       return state.count > 0 ? state.sum / state.count : 0
@@ -750,11 +746,11 @@ export class IncrementalRefresher {
   private executeSort(rows: Variant[], sort: Record<string, 1 | -1>): Variant[] {
     return [...rows].sort((a, b) => {
       for (const [field, direction] of Object.entries(sort)) {
-        const aVal = this.getFieldValue(a, field)
-        const bVal = this.getFieldValue(b, field)
+        const aVal = this.getFieldValue(a, field) as string | number | boolean | null | undefined
+        const bVal = this.getFieldValue(b, field) as string | number | boolean | null | undefined
 
-        if (aVal < bVal) return -1 * direction
-        if (aVal > bVal) return 1 * direction
+        if (aVal != null && bVal != null && aVal < bVal) return -1 * direction
+        if (aVal != null && bVal != null && aVal > bVal) return 1 * direction
       }
       return 0
     })
@@ -925,10 +921,9 @@ export class IncrementalRefresher {
     return {
       lastEventIds,
       sourceSnapshots: new Map([[view.source, generateULID()]]),
-      definitionVersionId: generateULID(),
+      refreshVersionId: generateULID(),
       lastRefreshTime: Date.now(),
       lastEventCount: events.length,
-      sourceVersions: new Map(),
     }
   }
 }

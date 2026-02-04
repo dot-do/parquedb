@@ -20,6 +20,11 @@ import type { EventBatch, EventSegment, CompactionConfig } from './types'
 import type { SegmentStorage } from './segment'
 import type { ManifestManager } from './manifest'
 import { EventReplayer as _EventReplayer, BatchEventSource as _BatchEventSource } from './replay'
+import {
+  DEFAULT_COMPACTION_MIN_EVENTS,
+  DEFAULT_COMPACTION_MAX_SEGMENT_AGE,
+  DEFAULT_COMPACTION_RETENTION,
+} from '../constants'
 
 // =============================================================================
 // Types
@@ -113,9 +118,9 @@ export interface StateWriter {
  * Default compaction config
  */
 const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
-  minEvents: 10000,
-  maxSegmentAge: '24h',
-  retention: '30d',
+  minEvents: DEFAULT_COMPACTION_MIN_EVENTS,
+  maxSegmentAge: DEFAULT_COMPACTION_MAX_SEGMENT_AGE,
+  retention: DEFAULT_COMPACTION_RETENTION,
 }
 
 // =============================================================================

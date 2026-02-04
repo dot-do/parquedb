@@ -25,7 +25,7 @@ import { toPayloadDoc, toPayloadDocs, buildPaginationInfo, toPayloadGlobal } fro
  */
 export async function find<T = Record<string, unknown>>(
   db: ParqueDB,
-  config: ResolvedAdapterConfig,
+  _config: ResolvedAdapterConfig,
   args: FindArgs
 ): Promise<PayloadPaginatedDocs<T>> {
   const {
@@ -85,7 +85,7 @@ export async function find<T = Record<string, unknown>>(
  */
 export async function findOne<T = Record<string, unknown>>(
   db: ParqueDB,
-  config: ResolvedAdapterConfig,
+  _config: ResolvedAdapterConfig,
   args: FindOneArgs
 ): Promise<T | null> {
   const { collection, where, draft, locale, select } = args
@@ -118,7 +118,7 @@ export async function findOne<T = Record<string, unknown>>(
  */
 export async function count(
   db: ParqueDB,
-  config: ResolvedAdapterConfig,
+  _config: ResolvedAdapterConfig,
   args: CountArgs
 ): Promise<number> {
   const { collection, where, locale } = args
@@ -140,7 +140,7 @@ export async function count(
  */
 export async function findDistinct<T = unknown>(
   db: ParqueDB,
-  config: ResolvedAdapterConfig,
+  _config: ResolvedAdapterConfig,
   args: DistinctArgs
 ): Promise<T[]> {
   const { collection, field, where } = args
@@ -174,7 +174,7 @@ export async function findDistinct<T = unknown>(
  */
 export async function queryDrafts<T = Record<string, unknown>>(
   db: ParqueDB,
-  config: ResolvedAdapterConfig,
+  _config: ResolvedAdapterConfig,
   args: QueryDraftsArgs
 ): Promise<PayloadPaginatedDocs<T>> {
   const {
@@ -238,7 +238,8 @@ export async function findVersions<T = Record<string, unknown>>(
     skip,
   } = args
 
-  const versionsCollection = `${collection}${config.versionsSuffix}`
+  const { versionsSuffix } = config
+  const versionsCollection = `${collection}${versionsSuffix}`
 
   // Build filter
   let filter = translatePayloadFilter(where)

@@ -16,9 +16,6 @@ export type {
 // Import types for use in this module
 import type {
   SchemaSnapshot,
-  CollectionState,
-  RelationshipState,
-  EventLogPosition,
   CommitState,
   DatabaseCommit,
   CommitOptions,

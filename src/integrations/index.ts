@@ -223,3 +223,25 @@ export {
   type Transport as RPCTransport,
   type RPCBatchLoaderDB,
 } from './rpc-do'
+
+// Express integration (middleware)
+export {
+  createParqueDBMiddleware as createExpressMiddleware,
+  createErrorMiddleware as createExpressErrorMiddleware,
+  getSharedDB as getExpressSharedDB,
+  resetSharedDB as resetExpressSharedDB,
+  type ParqueDBMiddlewareOptions as ExpressMiddlewareOptions,
+  type ParqueDBRequest as ExpressParqueDBRequest,
+  type ExpressMiddleware,
+  type ExpressErrorMiddleware,
+} from './express'
+
+// Fastify integration (plugin)
+export {
+  parquedbPlugin as fastifyPlugin,
+  parquedbErrorHandler as fastifyErrorHandler,
+  createParqueDBHook as createFastifyHook,
+  type ParqueDBPluginOptions as FastifyPluginOptions,
+  type FastifyInstance,
+  type FastifyPluginAsync,
+} from './fastify'

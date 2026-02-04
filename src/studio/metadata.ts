@@ -140,7 +140,7 @@ export function generateCollectionMetadata(
  */
 function generateFieldMetadata(
   name: string,
-  type: string,
+  _type: string,
   isParqueDB: boolean
 ): FieldUIMetadata {
   const meta: FieldUIMetadata = {}

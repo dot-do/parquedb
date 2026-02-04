@@ -18,7 +18,6 @@
 import type { UpdateInput } from '../types/update'
 import {
   applyOperators,
-  getField,
   validateUpdateOperators,
 } from '../mutation/operators'
 // Re-export types for consumers

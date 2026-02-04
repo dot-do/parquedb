@@ -29,7 +29,6 @@ import type {
   CollectionInfo,
 } from './types'
 import {
-  ValidationError,
   validateCollectionName,
   validateEntityId,
   validateFilter,
@@ -190,7 +189,6 @@ export function createParqueDBMCPServer(
             }],
           }
         } catch (error) {
-          const isValidationError = error instanceof ValidationError
           return {
             content: [{
               type: 'text',

@@ -13,20 +13,18 @@
  * Parquet's columnar format and available indexes.
  */
 
-import type { Filter, FindOptions, Projection, SortSpec } from '../types'
+import type { Filter, FindOptions, Projection } from '../types'
 import type { IndexManager, SelectedIndex } from '../indexes/manager'
 import type { IndexDefinition } from '../indexes/types'
 import {
   extractFilterFields,
   type RowGroupStats,
-  type ColumnStats,
   selectRowGroups,
 } from './predicate'
 import {
   filterToPredicates,
   analyzeFilterForPushdown,
   type ParquetPredicate,
-  type PredicatePushdownResult,
 } from './predicate-pushdown'
 
 // =============================================================================
@@ -675,7 +673,7 @@ export class QueryOptimizer {
   /**
    * Estimate cost of pre-filter strategy
    */
-  private estimatePreFilterCost(selectivity: number, indexSize: number, topK: number): number {
+  private estimatePreFilterCost(selectivity: number, indexSize: number, _topK: number): number {
     // Pre-filter: scan parquet for filter, then brute-force vector search on candidates
     const candidateCount = Math.floor(indexSize * selectivity)
     const parquetScanCost = indexSize * COST_CONSTANTS.ROW_READ * 0.1 // Fast filter scan
@@ -760,7 +758,7 @@ export class QueryOptimizer {
    * Estimate query execution cost
    */
   private estimateCost<T>(
-    filter: Filter,
+    _filter: Filter,
     options: FindOptions<T>,
     predicatePushdown: PredicatePushdownAnalysis,
     columnPruning: ColumnPruningResult,
@@ -847,7 +845,7 @@ export class QueryOptimizer {
    * Generate optimization suggestions
    */
   private generateSuggestions<T>(
-    filter: Filter,
+    _filter: Filter,
     options: FindOptions<T>,
     predicatePushdown: PredicatePushdownAnalysis,
     columnPruning: ColumnPruningResult,
@@ -1024,7 +1022,7 @@ export class QueryOptimizer {
    * Estimate selectivity for an index
    */
   private estimateSelectivity(
-    filter: Filter,
+    _filter: Filter,
     selectedIndex: SelectedIndex,
     statistics?: TableStatistics
   ): number {
@@ -1238,7 +1236,6 @@ export function quickEstimateCost(
   filter: Filter,
   statistics: TableStatistics
 ): number {
-  const filterFields = extractFilterFields(filter)
   const predicates = filterToPredicates(filter)
 
   // Base cost from total rows
@@ -1302,7 +1299,7 @@ export function wouldBenefitFromIndex(filter: Filter, statistics?: TableStatisti
 // Materialized View Routing
 // =============================================================================
 
-import type { MVDefinition, MVMetadata } from '../materialized-views/types'
+import type { MVDefinition } from '../materialized-views/types'
 import type { StalenessState } from '../materialized-views/staleness'
 import { logger } from '../utils/logger'
 
@@ -1586,8 +1583,6 @@ export class MVRouter {
 
     // Check if MV filter is a subset of query filter (MV is more restrictive)
     // In this case, MV may not have all the data we need
-    const mvFilterFields = this.extractFilterFields(mvFilter)
-    const queryFilterFields = this.extractFilterFields(queryFilter)
 
     // Check for conflicts: if MV filters on a field with a different value
     for (const [field, mvCondition] of Object.entries(mvFilter)) {
@@ -1741,7 +1736,7 @@ export class MVRouter {
   /**
    * Extract field names from a filter
    */
-  private extractFilterFields(filter: Filter): Set<string> {
+  private _extractFilterFields(filter: Filter): Set<string> {
     const fields = new Set<string>()
 
     for (const key of Object.keys(filter)) {
@@ -1750,7 +1745,7 @@ export class MVRouter {
       } else if (key === '$and' || key === '$or') {
         const nested = filter[key] as Filter[]
         for (const f of nested) {
-          const nestedFields = this.extractFilterFields(f)
+          const nestedFields = this._extractFilterFields(f)
           nestedFields.forEach(field => fields.add(field))
         }
       }

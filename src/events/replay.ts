@@ -149,8 +149,8 @@ export interface ExtendedReplayResult extends ReplayResult {
  */
 export class EventReplayer {
   private eventSource: EventSource
-  private snapshotStorage?: SnapshotStorage
-  private versioning?: VersioningConfig
+  private snapshotStorage?: SnapshotStorage | undefined
+  private versioning?: VersioningConfig | undefined
 
   constructor(
     eventSource: EventSource,

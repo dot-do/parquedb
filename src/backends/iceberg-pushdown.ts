@@ -13,7 +13,7 @@
 import type { Filter } from '../types/filter'
 import type { FindOptions } from '../types/options'
 import type { ManifestEntry, ManifestFile } from '@dotdo/iceberg'
-import type { ParquetMetadata, RowGroupMetadata, ColumnStatistics } from '../parquet/types'
+import type { RowGroupMetadata, ColumnStatistics } from '../parquet/types'
 import { compareValues } from '../utils'
 
 // =============================================================================

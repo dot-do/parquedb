@@ -316,7 +316,7 @@ async function checkSchemaCommand(args: ParsedArgs): Promise<number> {
 /**
  * Parse option from args
  */
-function parseOption(args: ParsedArgs, name: string): string | undefined {
+function parseOption(_args: ParsedArgs, name: string): string | undefined {
   const rawArgs = process.argv.slice(2)
 
   for (let i = 0; i < rawArgs.length; i++) {
@@ -331,7 +331,7 @@ function parseOption(args: ParsedArgs, name: string): string | undefined {
 /**
  * Check if flag is present
  */
-function hasFlag(args: ParsedArgs, name: string): boolean {
+function hasFlag(_args: ParsedArgs, name: string): boolean {
   const rawArgs = process.argv.slice(2)
   return rawArgs.includes(`--${name}`)
 }

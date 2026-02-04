@@ -165,7 +165,6 @@ function buildMergedState(
   // For now, we track which conflicts were resolved and how
   for (const conflict of mergeState.conflicts) {
     if (conflict.resolved) {
-      const _resolvedValue = getResolvedValue(conflict)
       // The resolved value would be applied to the entity in the collection
       // This requires modifying the parquet data files, which is a more complex operation
       // For now, the merge commit records the resolution in its state

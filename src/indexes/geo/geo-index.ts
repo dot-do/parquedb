@@ -7,7 +7,7 @@
 
 import type { StorageBackend } from '../../types/storage'
 import type { IndexDefinition, IndexStats } from '../types'
-import { encodeGeohash, geohashesInRadius, decodeGeohash } from './geohash'
+import { encodeGeohash, geohashesInRadius, decodeGeohash as _decodeGeohash } from './geohash'
 import { haversineDistance, boundingBox, isWithinBoundingBox } from './distance'
 import { logger } from '../../utils/logger'
 
@@ -347,7 +347,7 @@ export class GeoIndex {
   /**
    * Ensure a directory exists
    */
-  private async ensureDirectory(path: string): Promise<void> {
+  private async ensureDirectory(_path: string): Promise<void> {
     // Most storage backends create directories implicitly on write
     // This is a no-op for now but can be extended
   }

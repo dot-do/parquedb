@@ -500,7 +500,7 @@ export function setDatabaseContext(
  * ```
  */
 export function clearDatabaseContext(
-  c: Context,
+  _c: Context,
   redirectTo?: string,
   config: Partial<DatabaseContextConfig> = {}
 ): Response {

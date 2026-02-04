@@ -17,7 +17,7 @@ export function sha256(data: string | Uint8Array): string {
  * @param obj Object to hash
  * @returns Hex-encoded SHA256 hash
  */
-export function hashObject(obj: object): string {
+export function hashObject(obj: Record<string, unknown>): string {
   // Deterministic JSON serialization with sorted keys
   const json = JSON.stringify(obj, Object.keys(obj).sort())
   return sha256(json)

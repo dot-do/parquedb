@@ -13,7 +13,7 @@
  */
 
 import type { Event } from '../types/entity'
-import type { MVHandler, StreamingStats } from './types'
+import type { MVHandler } from './types'
 
 // =============================================================================
 // Eval Score Types

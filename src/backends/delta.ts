@@ -739,7 +739,6 @@ export class DeltaBackend implements EntityBackend {
     await this.cleanupOrphanedFile(dataFilePath)
     const finalVersion = await this.getCurrentVersion(ns)
     throw new CommitConflictError(
-      `Compact conflict for namespace '${ns}' at version ${finalVersion + 1} after ${retries} retries exceeded`,
       ns,
       finalVersion + 1,
       retries
@@ -1272,7 +1271,6 @@ export class DeltaBackend implements EntityBackend {
     await this.cleanupOrphanedFile(dataFilePath)
     const finalVersion = await this.getCurrentVersion(ns)
     throw new CommitConflictError(
-      `Commit conflict for namespace '${ns}' at version ${finalVersion + 1} after ${retries} retries exceeded`,
       ns,
       finalVersion + 1,
       retries
@@ -1689,7 +1687,6 @@ export class DeltaBackend implements EntityBackend {
     await this.cleanupOrphanedFile(dataFilePath)
     const finalVersion = await this.getCurrentVersion(ns)
     throw new CommitConflictError(
-      `Hard delete conflict for namespace '${ns}' at version ${finalVersion + 1} after ${retries} retries exceeded`,
       ns,
       finalVersion + 1,
       retries

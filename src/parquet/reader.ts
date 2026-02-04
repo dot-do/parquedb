@@ -36,9 +36,9 @@ import type {
  */
 interface HyparquetReadOptions {
   file: AsyncBuffer
-  compressors?: Compressors | undefined
-  columns?: string[] | undefined
-  rowGroups?: number[] | undefined
+  compressors?: Compressors
+  columns?: string[]
+  rowGroups?: number[]
 }
 
 // =============================================================================
@@ -151,8 +151,8 @@ export async function initializeAsyncBuffer(
  */
 export class ParquetReader {
   private storage: StorageBackend
-  private defaultColumns?: string[]
-  private defaultRowGroups?: number[]
+  private defaultColumns?: string[] | undefined
+  private defaultRowGroups?: number[] | undefined
 
   /**
    * Create a new ParquetReader

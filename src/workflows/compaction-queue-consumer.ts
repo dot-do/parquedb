@@ -971,6 +971,10 @@ export async function handleCompactionQueue(
 
   await Promise.all(
     Array.from(updatesByDOId.entries()).map(async ([doId, updates]) => {
+      if (!env.COMPACTION_STATE) {
+        logger.error('COMPACTION_STATE binding not available')
+        return
+      }
       // Get DO instance using the (possibly time-bucket-sharded) ID
       const stateId = env.COMPACTION_STATE.idFromName(doId)
       const stateDO = env.COMPACTION_STATE.get(stateId)
@@ -1012,6 +1016,10 @@ export async function handleCompactionQueue(
   // Phase 2: Trigger workflows for ready windows with two-phase commit
   // Use BackpressureManager for rate limiting, circuit breaker, and overload protection
   for (const window of allWindowsReady) {
+    if (!env.COMPACTION_STATE) {
+      logger.error('COMPACTION_STATE binding not available')
+      continue
+    }
     // Use the doId that was tracked with the ready window
     const stateId = env.COMPACTION_STATE.idFromName(window.doId)
     const stateDO = env.COMPACTION_STATE.get(stateId)
@@ -1172,6 +1180,11 @@ export async function recoverStuckWindows(
   let recovered = 0
   let failed = 0
 
+  if (!env.COMPACTION_STATE) {
+    logger.error('COMPACTION_STATE binding not available')
+    return { recovered, failed }
+  }
+
   for (const doId of doIds) {
     try {
       const stateId = env.COMPACTION_STATE.idFromName(doId)
@@ -1188,7 +1201,14 @@ export async function recoverStuckWindows(
           let workflowRunning = false
 
           try {
-            const workflow = await env.COMPACTION_WORKFLOW.get(stuckWindow.provisionalWorkflowId)
+            if (!env.COMPACTION_WORKFLOW) {
+              throw new Error('COMPACTION_WORKFLOW binding not available')
+            }
+            // Use type assertion since the Workflow type definition is incomplete
+            const workflowBinding = env.COMPACTION_WORKFLOW as unknown as {
+              get(id: string): { status(): Promise<{ status: string }> }
+            }
+            const workflow = workflowBinding.get(stuckWindow.provisionalWorkflowId)
             const status = await workflow.status()
             workflowExists = true
             workflowRunning = status.status === 'queued' || status.status === 'running' || status.status === 'complete'

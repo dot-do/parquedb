@@ -12,6 +12,12 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import {
+  DEFAULT_STUDIO_PAGE_SIZE,
+  DEFAULT_STUDIO_CONNECTION_TIMEOUT_MS,
+  DEFAULT_STUDIO_RETRY_ATTEMPTS,
+  DEFAULT_STUDIO_IDLE_TIMEOUT_MINUTES,
+} from '../../constants'
 
 // =============================================================================
 // Types
@@ -89,7 +95,7 @@ export interface SettingsPageProps {
 
 const DEFAULT_SETTINGS: StudioSettings = {
   display: {
-    pageSize: 25,
+    pageSize: DEFAULT_STUDIO_PAGE_SIZE,
     dateFormat: 'YYYY-MM-DD',
     timeFormat: '24h',
     theme: 'auto',
@@ -98,15 +104,15 @@ const DEFAULT_SETTINGS: StudioSettings = {
   },
   connection: {
     apiEndpoint: '/api',
-    timeout: 30000,
+    timeout: DEFAULT_STUDIO_CONNECTION_TIMEOUT_MS,
     retryOnFailure: true,
-    retryAttempts: 3,
+    retryAttempts: DEFAULT_STUDIO_RETRY_ATTEMPTS,
   },
   auth: {
     rememberSession: true,
     sessionTimeout: 0,
     autoLogoutOnIdle: false,
-    idleTimeout: 30,
+    idleTimeout: DEFAULT_STUDIO_IDLE_TIMEOUT_MINUTES,
   },
   exportImport: {
     defaultExportFormat: 'json',

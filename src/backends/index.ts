@@ -223,8 +223,8 @@ export async function createBackend(config: BackendConfig): Promise<EntityBacken
       throw new Error('Native backend not supported as EntityBackend - use createBackendWithMigration to auto-migrate to iceberg or delta')
 
     default: {
-      const _exhaustive: never = config.type
-      throw new Error(`Unknown backend type: ${_exhaustive}`)
+      const _exhaustive: never = config
+      throw new Error(`Unknown backend type: ${(_exhaustive as { type: string }).type}`)
     }
   }
 

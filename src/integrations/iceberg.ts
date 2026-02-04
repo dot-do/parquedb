@@ -169,6 +169,50 @@ export interface IcebergCommitResult {
 }
 
 // =============================================================================
+// Internal Iceberg Metadata Types
+// =============================================================================
+
+/**
+ * Internal Iceberg schema format (for metadata files)
+ */
+interface IcebergMetadataSchema {
+  type: 'struct'
+  'schema-id': number
+  fields: Array<{
+    id: number
+    name: string
+    required: boolean
+    type: string
+  }>
+}
+
+/**
+ * Internal Iceberg partition spec format (for metadata files)
+ */
+interface IcebergPartitionSpec {
+  'spec-id': number
+  fields: Array<{
+    'source-id': number
+    'field-id': number
+    name: string
+    transform: string
+  }>
+}
+
+/**
+ * Internal Iceberg sort order format (for metadata files)
+ */
+interface IcebergSortOrder {
+  'order-id': number
+  fields: Array<{
+    'source-id': number
+    transform: string
+    direction: string
+    'null-order': string
+  }>
+}
+
+// =============================================================================
 // Storage Adapter
 // =============================================================================
 
@@ -331,7 +375,7 @@ export class IcebergMetadataManager {
    * Create a new snapshot from ParqueDB events
    */
   async createSnapshot(
-    eventSegments: EventSegment[],
+    _eventSegments: EventSegment[],
     dataFiles: IcebergDataFile[]
   ): Promise<IcebergCommitResult> {
     const snapshotId = BigInt(Date.now())
@@ -543,7 +587,7 @@ export class IcebergMetadataManager {
     return 100
   }
 
-  private createDefaultSchema(): object {
+  private createDefaultSchema(): IcebergMetadataSchema {
     return {
       type: 'struct',
       'schema-id': 0,
@@ -559,7 +603,7 @@ export class IcebergMetadataManager {
     }
   }
 
-  private createPartitionSpec(): object {
+  private createPartitionSpec(): IcebergPartitionSpec {
     const fields = this.options.partitionBy.map((field, i) => ({
       'source-id': i + 1,
       'field-id': 1000 + i,
@@ -573,8 +617,8 @@ export class IcebergMetadataManager {
     }
   }
 
-  private createSortOrder(): object {
-    const fields = this.options.sortBy.map((field, i) => ({
+  private createSortOrder(): IcebergSortOrder {
+    const fields = this.options.sortBy.map((_field, i) => ({
       'source-id': i + 1,
       transform: 'identity',
       direction: 'asc',

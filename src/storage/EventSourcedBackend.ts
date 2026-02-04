@@ -21,8 +21,8 @@
  * @see docs/architecture/entity-storage.md
  */
 
-import type { StorageBackend, WriteResult, WriteOptions } from '../types/storage'
-import type { Entity, EntityId, Event, EventOp, Variant, CreateInput, UpdateInput } from '../types'
+import type { StorageBackend } from '../types/storage'
+import type { Entity, EntityId, Event, Variant } from '../types'
 import { generateId } from '../utils'
 
 // =============================================================================
@@ -68,15 +68,15 @@ export interface EntitySnapshot {
  */
 export interface EventSourcedConfig {
   /** Maximum events before auto-flush */
-  maxBufferedEvents?: number | undefined
+  maxBufferedEvents?: number
   /** Maximum bytes before auto-flush */
-  maxBufferedBytes?: number | undefined
+  maxBufferedBytes?: number
   /** Auto-snapshot after this many events per entity */
-  autoSnapshotThreshold?: number | undefined
+  autoSnapshotThreshold?: number
   /** Maximum cached entities */
-  maxCachedEntities?: number | undefined
+  maxCachedEntities?: number
   /** Cache TTL in milliseconds */
-  cacheTtlMs?: number | undefined
+  cacheTtlMs?: number
 }
 
 /**
@@ -228,17 +228,7 @@ export class EventSourcedBackend implements EventSourcedOperations {
     }
 
     // Get or create buffer for this namespace
-    let buffer = this.eventBuffers.get(ns)
-    if (!buffer) {
-      const seq = this.getSequence(ns)
-      buffer = {
-        events: [],
-        firstSeq: seq,
-        lastSeq: seq - 1,
-        sizeBytes: 0,
-      }
-      this.eventBuffers.set(ns, buffer)
-    }
+    const buffer = this.getOrCreateBuffer(ns)
 
     // Add event to buffer
     buffer.events.push(event)
@@ -301,8 +291,9 @@ export class EventSourcedBackend implements EventSourcedOperations {
     const cacheKey = `${ns}/${id}`
 
     // Check cache first
-    if (this.snapshotCache.has(cacheKey)) {
-      return this.snapshotCache.get(cacheKey)!
+    const cached = this.snapshotCache.get(cacheKey)
+    if (cached !== undefined) {
+      return cached
     }
 
     // Read from storage
@@ -479,6 +470,24 @@ export class EventSourcedBackend implements EventSourcedOperations {
   // ===========================================================================
   // Private Helpers
   // ===========================================================================
+
+  /**
+   * Get or create an event buffer for a namespace
+   */
+  private getOrCreateBuffer(ns: string): EventBuffer {
+    const existing = this.eventBuffers.get(ns)
+    if (existing) return existing
+
+    const seq = this.getSequence(ns)
+    const buffer: EventBuffer = {
+      events: [],
+      firstSeq: seq,
+      lastSeq: seq - 1,
+      sizeBytes: 0,
+    }
+    this.eventBuffers.set(ns, buffer)
+    return buffer
+  }
 
   /**
    * Parse namespace from event target

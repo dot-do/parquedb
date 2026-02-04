@@ -197,8 +197,8 @@ export interface BloomFilterReader {
  * Executes queries against Parquet files with predicate pushdown
  */
 export class QueryExecutor {
-  private indexManager?: IndexManager
-  private mvRouter?: MVRouter
+  private indexManager?: IndexManager | undefined
+  private mvRouter?: MVRouter | undefined
 
   constructor(
     private reader: ParquetReader,

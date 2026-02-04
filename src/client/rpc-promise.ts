@@ -331,7 +331,7 @@ function extractPropertyPath(fnString: string): string | null {
  * @returns Serialized mapper string
  * @throws Error if function cannot be safely serialized as a property path
  */
-function serializeFunction(fn: Function): string {
+function serializeFunction(fn: (...args: unknown[]) => unknown): string {
   const fnString = fn.toString()
   const isAsync = fnString.startsWith('async')
 

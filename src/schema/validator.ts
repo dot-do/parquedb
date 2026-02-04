@@ -171,7 +171,7 @@ export class SchemaValidator {
   validate(
     typeName: string,
     data: unknown,
-    skipCoreFields = false
+    _skipCoreFields = false
   ): ValidationResult {
     const errors: ValidationError[] = []
 
@@ -615,7 +615,7 @@ export class SchemaValidator {
    */
   private validateRelationshipObject(
     path: string,
-    value: object,
+    value: Record<string, unknown>,
     _field: ParsedField
   ): ValidationError[] {
     const errors: ValidationError[] = []

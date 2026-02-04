@@ -226,7 +226,7 @@ async function diffTypesCommand(args: ParsedArgs): Promise<number> {
 /**
  * Parse option from args (supports both --long and -short forms)
  */
-function parseOption(args: ParsedArgs, longName: string, shortName?: string): string | undefined {
+function parseOption(_args: ParsedArgs, longName: string, shortName?: string): string | undefined {
   const rawArgs = process.argv.slice(2)
 
   for (let i = 0; i < rawArgs.length; i++) {

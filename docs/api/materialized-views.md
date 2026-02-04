@@ -619,8 +619,8 @@ async alarm() {
 
 ```typescript
 interface MVMetadata {
-  viewId: string
-  name: string
+  id: MVId        // Unique identifier (branded type)
+  name: string    // Human-readable view name
 
   definition: {
     $type: string

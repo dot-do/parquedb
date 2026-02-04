@@ -33,7 +33,6 @@ import type {
   WriteResult,
   RmdirOptions,
 } from '../types/storage'
-import { generateEtag } from './utils'
 import { NotFoundError } from './errors'
 
 // =============================================================================
@@ -360,7 +359,7 @@ class TransactionImpl implements Transaction {
 
       // Rollback in reverse order
       for (let i = appliedOperations.length - 1; i >= 0; i--) {
-        const op = appliedOperations[i]
+        const op = appliedOperations[i]!
         const original = originalStates.find((s) => s.path === op.path)
 
         if (!original) {

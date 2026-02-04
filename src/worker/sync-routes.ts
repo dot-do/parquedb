@@ -552,7 +552,7 @@ async function handleUploadUrls(
     const expiresAt = new Date(Date.now() + SYNC_TOKEN_URL_EXPIRY_MS).toISOString() // 1 hour
 
     const urls = await Promise.all(body.files.map(async file => {
-      const uploadPath = database.prefix
+      const _uploadPath = database.prefix
         ? `${database.prefix}/${file.path}`
         : file.path
 

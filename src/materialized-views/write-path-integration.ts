@@ -201,10 +201,11 @@ export class MVEventEmitter {
    * Get current statistics
    */
   getStats(): MVEventEmitterStats {
+    const maxQueueSize = this.options.maxQueueSize ?? 1000
     return {
       ...this.stats,
       queuedEvents: this.queue.length,
-      backpressureActive: this.queue.length >= this.options.maxQueueSize,
+      backpressureActive: this.queue.length >= maxQueueSize,
     }
   }
 
@@ -277,14 +278,17 @@ export class MVEventEmitter {
         await subscriber(event)
       } catch (error) {
         this.stats.subscriberErrors++
-        this.options.onError(error instanceof Error ? error : new Error(String(error)), event)
+        if (this.options.onError) {
+          this.options.onError(error instanceof Error ? error : new Error(String(error)), event)
+        }
       }
     }
   }
 
   private async emitAsync(event: Event): Promise<void> {
     // Apply backpressure if queue is full
-    while (this.queue.length >= this.options.maxQueueSize) {
+    const maxQueueSize = this.options.maxQueueSize ?? 10000
+    while (this.queue.length >= maxQueueSize) {
       await this.processQueue()
     }
 
@@ -589,7 +593,7 @@ export function createMVEventSourceAdapter(
  */
 export function createMVIntegration(options?: {
   emitterOptions?: MVEventEmitterOptions | undefined
-  engineOptions?: Parameters<typeof StreamingRefreshEngine>[0] | undefined
+  engineOptions?: ConstructorParameters<typeof StreamingRefreshEngine>[0] | undefined
 }): {
   emitter: MVEventEmitter
   engine: StreamingRefreshEngine
@@ -669,7 +673,7 @@ export function attachMVIntegration(
   db: { setEventCallback: (cb: ((event: Event) => void | Promise<void>) | null) => void },
   options?: {
     emitterOptions?: MVEventEmitterOptions | undefined
-    engineOptions?: Parameters<typeof StreamingRefreshEngine>[0] | undefined
+    engineOptions?: ConstructorParameters<typeof StreamingRefreshEngine>[0] | undefined
   }
 ): AttachMVResult {
   const integration = createMVIntegration(options)

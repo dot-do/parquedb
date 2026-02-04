@@ -7,6 +7,7 @@
 
 import type {
   Entity,
+  EntityData,
   EntityId,
   CreateInput,
   DeleteResult,
@@ -19,22 +20,22 @@ import type {
   Event,
 } from '../types'
 
-import { entityTarget, asEntityId, entityId, relTarget, parseEntityTarget, isRelationshipTarget } from '../types'
+import { entityTarget, asEntityId, entityId, relTarget, parseEntityTarget as _parseEntityTarget, isRelationshipTarget as _isRelationshipTarget } from '../types'
 import { generateId, deepClone } from '../utils'
 import { applyOperators } from '../mutation/operators'
-import { parseFieldType, isRelationString, parseRelation } from '../types/schema'
+import { parseFieldType, isRelationString, parseRelation as _parseRelation } from '../types/schema'
 import { IndexManager } from '../indexes/manager'
 import { SchemaValidator } from '../schema/validator'
 import { asRelEventPayload } from '../types/cast'
 import pluralize from 'pluralize'
 
-import type { SnapshotQueryStats, Snapshot, HistoryOptions, HistoryResult } from './types'
-import { VersionConflictError, EntityNotFoundError, ValidationError } from './types'
+import type { SnapshotQueryStats, Snapshot, HistoryOptions as _HistoryOptions, HistoryResult as _HistoryResult } from './types'
+import { VersionConflictError, EntityNotFoundError as _EntityNotFoundError, ValidationError } from './types'
 
 import {
-  addToReverseRelIndex,
-  removeFromReverseRelIndex,
-  removeAllFromReverseRelIndex,
+  addToReverseRelIndex as _addToReverseRelIndex,
+  removeFromReverseRelIndex as _removeFromReverseRelIndex,
+  removeAllFromReverseRelIndex as _removeAllFromReverseRelIndex,
 } from './store'
 
 import type { ReverseRelIndex } from './relationships'
@@ -358,20 +359,22 @@ export async function createEntity<T = Record<string, unknown>>(
 export function validateAgainstSchema(
   _namespace: string,
   data: CreateInput,
-  validateOnWrite: boolean | 'strict' | 'permissive' | undefined,
+  validateOnWrite: boolean | import('../types').ValidationMode | undefined,
   schema: Schema,
   schemaValidator: SchemaValidator | null
 ): void {
   const typeName = data.$type
   if (!typeName) return
 
-  // Determine validation mode
-  type ValidationMode = 'strict' | 'permissive'
-  let mode: ValidationMode
+  // Determine validation mode - 'warn' mode is treated as 'permissive' with logging
+  type LocalValidationMode = 'strict' | 'permissive'
+  let mode: LocalValidationMode
   if (validateOnWrite === false) {
     return // Skip validation
   } else if (validateOnWrite === true || validateOnWrite === undefined) {
     mode = 'strict'
+  } else if (validateOnWrite === 'warn') {
+    mode = 'permissive' // 'warn' behaves like permissive but with logging
   } else {
     mode = validateOnWrite
   }
@@ -400,7 +403,7 @@ export function validateAgainstSchema(
 /**
  * Update an entity
  */
-export async function updateEntity<T = Record<string, unknown>>(
+export async function updateEntity<T extends EntityData = EntityData>(
   namespace: string,
   id: string,
   update: UpdateInput<T>,

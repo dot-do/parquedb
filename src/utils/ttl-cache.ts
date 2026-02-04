@@ -113,7 +113,7 @@ export class LRUCache<K, V> {
   private readonly _maxEntries: number
   private readonly _maxBytes: number
   private readonly _ttlMs: number
-  private readonly _onEvict?: (key: K, value: V) => void
+  private readonly _onEvict?: ((key: K, value: V) => void) | undefined
   private readonly _sizeCalculator: (value: V) => number
   private readonly _cacheId: string | undefined
 

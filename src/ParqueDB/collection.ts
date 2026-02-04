@@ -6,6 +6,7 @@
 
 import type {
   Entity,
+  EntityData,
   PaginatedResult,
   DeleteResult,
   Filter,
@@ -25,6 +26,9 @@ import type {
   UpsertManyResult,
   IngestStreamOptions,
   IngestStreamResult,
+  SemanticSearchOptions,
+  SemanticSearchResult,
+  HybridSearchOptionsCollection,
 } from './types'
 
 /**
@@ -32,15 +36,15 @@ import type {
  * This avoids circular dependencies with ParqueDBImpl while providing type safety.
  */
 interface ParqueDBMethods {
-  find<T>(namespace: string, filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
-  get<T>(namespace: string, id: string, options?: GetOptions): Promise<Entity<T> | null>
-  create<T>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
-  update<T>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
+  find<T extends EntityData>(namespace: string, filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
+  get<T extends EntityData>(namespace: string, id: string, options?: GetOptions): Promise<Entity<T> | null>
+  create<T extends EntityData>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
+  update<T extends EntityData>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
   delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
   deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
-  upsert<T>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: { returnDocument?: 'before' | 'after' | undefined }): Promise<Entity<T> | null>
-  upsertMany<T>(namespace: string, items: UpsertManyItem<T>[], options?: UpsertManyOptions): Promise<UpsertManyResult>
-  ingestStream<T>(namespace: string, source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>, options?: IngestStreamOptions<Partial<T>>): Promise<IngestStreamResult>
+  upsert<T extends EntityData>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: { returnDocument?: 'before' | 'after' | undefined }): Promise<Entity<T> | null>
+  upsertMany<T extends EntityData>(namespace: string, items: UpsertManyItem<T>[], options?: UpsertManyOptions): Promise<UpsertManyResult>
+  ingestStream<T extends EntityData>(namespace: string, source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>, options?: IngestStreamOptions<Partial<T>>): Promise<IngestStreamResult>
 }
 
 // =============================================================================
@@ -66,7 +70,7 @@ interface ParqueDBMethods {
  * const post = await collection.get('01HX...')
  * ```
  */
-export class CollectionImpl<T = Record<string, unknown>> implements Collection<T> {
+export class CollectionImpl<T extends EntityData = EntityData> implements Collection<T> {
   /**
    * Creates a new CollectionImpl instance.
    *
@@ -466,5 +470,27 @@ export class CollectionImpl<T = Record<string, unknown>> implements Collection<T
     options?: IngestStreamOptions<Partial<T>>
   ): Promise<IngestStreamResult> {
     return this.db.ingestStream<T>(this.namespace, source, options)
+  }
+
+  /**
+   * Semantic search using vector similarity.
+   * Currently not implemented at the collection level - use ParqueDB.find with $vector filter.
+   */
+  async semanticSearch(
+    _query: string | number[],
+    _options?: SemanticSearchOptions
+  ): Promise<SemanticSearchResult<T>[]> {
+    throw new Error('semanticSearch is not yet implemented at collection level. Use ParqueDB.find with $vector filter instead.')
+  }
+
+  /**
+   * Hybrid search combining vector similarity with metadata filtering.
+   * Currently not implemented at the collection level - use ParqueDB.find with $vector and regular filters.
+   */
+  async hybridSearch(
+    _query: string | number[],
+    _options?: HybridSearchOptionsCollection
+  ): Promise<SemanticSearchResult<T>[]> {
+    throw new Error('hybridSearch is not yet implemented at collection level. Use ParqueDB.find with $vector and regular filters instead.')
   }
 }

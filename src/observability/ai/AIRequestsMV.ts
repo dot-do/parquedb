@@ -708,8 +708,8 @@ export class AIRequestsMV {
     // Use input tenantId or fall back to config tenantId
     const tenantId = input.tenantId ?? this.config.tenantId
 
-    const data: Omit<AIRequestRecord, '$id'> = {
-      $type: 'AIRequest',
+    const data = {
+      $type: 'AIRequest' as const,
       name: requestId,
       requestId,
       timestamp,
@@ -739,11 +739,11 @@ export class AIRequestsMV {
       completionSample,
       promptFingerprint,
       completionFingerprint,
-      contentId: shouldSample ? input.contentId : undefined,
-      tenantId,
+      ...(shouldSample && input.contentId ? { contentId: input.contentId } : {}),
+      ...(tenantId ? { tenantId } : {}),
     }
 
-    const created = await collection.create(data as Record<string, unknown>)
+    const created = await collection.create(data)
     return asCreatedRecord<AIRequestRecord>(created)
   }
 
@@ -812,8 +812,8 @@ export class AIRequestsMV {
       // Use input tenantId or fall back to config tenantId
       const tenantId = input.tenantId ?? this.config.tenantId
 
-      return {
-        $type: 'AIRequest',
+      const data = {
+        $type: 'AIRequest' as const,
         name: requestId,
         requestId,
         timestamp,
@@ -843,12 +843,13 @@ export class AIRequestsMV {
         completionSample,
         promptFingerprint,
         completionFingerprint,
-        contentId: shouldSample ? input.contentId : undefined,
-        tenantId,
+        ...(shouldSample && input.contentId ? { contentId: input.contentId } : {}),
+        ...(tenantId ? { tenantId } : {}),
       }
+      return collection.create(data)
     }))
 
-    const created = await collection.createMany(records as Record<string, unknown>[])
+    const created = await Promise.all(records)
     return asTypedResults<AIRequestRecord>(created)
   }
 
@@ -947,11 +948,11 @@ export class AIRequestsMV {
     const collection = this.db.collection(this.config.collection)
     const results = await collection.find({ requestId }, { limit: 1 })
 
-    if (results.length === 0) {
+    if (results.items.length === 0) {
       return null
     }
 
-    return asTypedResult<AIRequestRecord>(results[0])
+    return asTypedResult<AIRequestRecord>(results.items[0])
   }
 
   /**
@@ -1265,29 +1266,37 @@ export class AIRequestsMV {
     const startTime = Date.now()
 
     try {
-      // Count total to delete
+      // Find and delete records
       const filter = { timestamp: { $lt: cutoffDate } }
-      const totalToDelete = await collection.count(filter)
+      let deletedCount = 0
+      let hasMore = true
+      const batchSize = 100
 
-      if (totalToDelete === 0) {
-        return {
-          success: true,
-          deletedCount: 0,
-          durationMs: Date.now() - startTime,
+      while (hasMore) {
+        const batch = await collection.find(filter, { limit: batchSize })
+        if (batch.items.length === 0) {
+          hasMore = false
+          break
+        }
+
+        for (const entity of batch.items) {
+          await collection.delete(entity.$id, { hard: true })
+          deletedCount++
+        }
+
+        options?.onProgress?.({
+          deletedSoFar: deletedCount,
+          percentage: batch.items.length < batchSize ? 100 : 50, // Approximate
+        })
+
+        if (batch.items.length < batchSize) {
+          hasMore = false
         }
       }
 
-      // Use batch delete for efficiency
-      const result = await collection.deleteMany(filter, { hard: true })
-
-      options?.onProgress?.({
-        deletedSoFar: result.deletedCount,
-        percentage: 100,
-      })
-
       return {
         success: true,
-        deletedCount: result.deletedCount,
+        deletedCount,
         durationMs: Date.now() - startTime,
       }
     } catch (error) {

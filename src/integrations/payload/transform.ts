@@ -61,7 +61,7 @@ export function toParqueDBInput(
  */
 export function toParqueDBUpdate(
   data: Record<string, unknown>,
-  options: ToParqueDBOptions
+  _options: ToParqueDBOptions
 ): Record<string, unknown> {
   const update: Record<string, unknown> = {}
 
@@ -333,7 +333,7 @@ export function buildGlobalInput(
  */
 export function toPayloadGlobal<T = Record<string, unknown>>(
   entity: Entity | null,
-  slug: string
+  _slug: string
 ): T | null {
   if (!entity) {
     return null

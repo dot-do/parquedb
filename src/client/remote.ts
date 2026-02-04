@@ -195,6 +195,9 @@ class RemoteCollectionImpl<T = Record<string, unknown>> implements RemoteCollect
 
       // For now, return empty results
       // Full implementation would use hyparquet to read and filter
+      // TODO: Implement filter evaluation and options (limit, skip, sort) support
+      void filter // Placeholder until filter evaluation is implemented
+      void options // Placeholder until options support is implemented
       return { items: [], total: 0, hasMore: false }
     } catch {
       return { items: [], total: 0, hasMore: false }

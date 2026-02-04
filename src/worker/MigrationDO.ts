@@ -37,6 +37,13 @@ import {
 } from '../backends'
 import { logger } from '../utils/logger'
 import { extractBearerToken, verifyJWT } from './jwt-utils'
+import {
+  DEFAULT_MIGRATION_BATCH_SIZE,
+  MIGRATION_BATCH_DELAY_MS,
+  DEFAULT_MAX_RETRIES,
+  MIGRATION_DO_ALARM_INITIAL_DELAY_MS,
+  MS_PER_SECOND,
+} from '../constants'
 
 // =============================================================================
 // Types
@@ -80,21 +87,11 @@ interface Env {
 // Constants
 // =============================================================================
 
-/**
- * Batch size for migration operations.
- * Stay well under 1,000 subrequests (read + write = 2 per entity)
- */
-const DEFAULT_BATCH_SIZE = 400
-
-/**
- * Delay between batches to avoid overwhelming R2
- */
-const BATCH_DELAY_MS = 100
-
-/**
- * Maximum retries for failed operations
- */
-const MAX_RETRIES = 3
+// Constants imported from src/constants.ts:
+// - DEFAULT_MIGRATION_BATCH_SIZE: Batch size for migration operations (400)
+// - MIGRATION_BATCH_DELAY_MS: Delay between batches (100ms)
+// - DEFAULT_MAX_RETRIES: Maximum retries for failed operations (3)
+// - MIGRATION_DO_ALARM_INITIAL_DELAY_MS: Initial alarm delay (1000ms)
 
 // =============================================================================
 // Migration Durable Object
@@ -232,12 +229,12 @@ export class MigrationDO extends DurableObject<Env> {
       currentJob.updatedAt = Date.now()
 
       // Retry or fail
-      if (currentJob.progress.errors.length >= MAX_RETRIES) {
+      if (currentJob.progress.errors.length >= DEFAULT_MAX_RETRIES) {
         currentJob.status = 'failed'
         currentJob.completedAt = Date.now()
       } else {
         // Schedule retry with backoff
-        const delay = Math.pow(2, currentJob.progress.errors.length) * 1000
+        const delay = Math.pow(2, currentJob.progress.errors.length) * MS_PER_SECOND
         await this.ctx.storage.setAlarm(Date.now() + delay)
       }
 
@@ -285,7 +282,7 @@ export class MigrationDO extends DurableObject<Env> {
       from: body.from ?? 'auto',
       to: body.to,
       namespaces,
-      batchSize: body.batchSize ?? DEFAULT_BATCH_SIZE,
+      batchSize: body.batchSize ?? DEFAULT_MIGRATION_BATCH_SIZE,
       deleteSource: body.deleteSource ?? false,
       status: 'running',
       progress: {
@@ -303,8 +300,8 @@ export class MigrationDO extends DurableObject<Env> {
     await this.storage.put('currentJob', job)
 
     // Schedule processing via alarm
-    // Note: Using 1000ms to ensure alarm fires reliably
-    await this.ctx.storage.setAlarm(Date.now() + 1000)
+    // Note: Using MIGRATION_DO_ALARM_INITIAL_DELAY_MS to ensure alarm fires reliably
+    await this.ctx.storage.setAlarm(Date.now() + MIGRATION_DO_ALARM_INITIAL_DELAY_MS)
     logger.info('Alarm set for migration processing')
 
     // Also use waitUntil to ensure the alarm gets set before response
@@ -420,7 +417,7 @@ export class MigrationDO extends DurableObject<Env> {
 
     if (nextNamespace) {
       // Schedule next batch
-      await this.ctx.storage.setAlarm(Date.now() + BATCH_DELAY_MS)
+      await this.ctx.storage.setAlarm(Date.now() + MIGRATION_BATCH_DELAY_MS)
     } else {
       // All namespaces done
       job.status = 'completed'

@@ -8,7 +8,12 @@
  * @module worker/tail-validation
  */
 
-import { ValidationError, ErrorCode } from '../errors'
+import { ValidationError } from '../errors'
+import {
+  DEFAULT_TAIL_MAX_ITEMS,
+  DEFAULT_TAIL_MAX_LOGS_PER_ITEM,
+  DEFAULT_TAIL_MAX_EXCEPTIONS_PER_ITEM,
+} from '../constants'
 
 // =============================================================================
 // Validation Result Types
@@ -125,9 +130,9 @@ export interface TailValidationConfig {
 export const DEFAULT_VALIDATION_CONFIG: Required<TailValidationConfig> = {
   throwOnError: false,
   skipInvalidItems: true,
-  maxItems: 10000,
-  maxLogsPerItem: 1000,
-  maxExceptionsPerItem: 100,
+  maxItems: DEFAULT_TAIL_MAX_ITEMS,
+  maxLogsPerItem: DEFAULT_TAIL_MAX_LOGS_PER_ITEM,
+  maxExceptionsPerItem: DEFAULT_TAIL_MAX_EXCEPTIONS_PER_ITEM,
 }
 
 // =============================================================================
@@ -137,7 +142,7 @@ export const DEFAULT_VALIDATION_CONFIG: Required<TailValidationConfig> = {
 /**
  * Validate that a value is an array
  */
-function validateIsArray(value: unknown, fieldName: string): ValidationError | null {
+function _validateIsArray(value: unknown, fieldName: string): ValidationError | null {
   if (!Array.isArray(value)) {
     return new ValidationError(
       `${fieldName} must be an array`,

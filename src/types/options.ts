@@ -92,7 +92,7 @@ export type PopulateSpec =
  *   asOf: new Date('2024-01-01')
  * }
  */
-export interface FindOptions<T = unknown> {
+export interface FindOptions<_T = unknown> {
   /** Filter (alternative to passing filter as first arg) */
   filter?: Filter | undefined
 

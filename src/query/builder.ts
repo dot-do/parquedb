@@ -134,7 +134,7 @@ interface BuilderState {
  * @typeParam T - The entity type being queried
  */
 export class QueryBuilder<T = Record<string, unknown>> {
-  private collection?: QueryableCollection<T>
+  private collection?: QueryableCollection<T> | undefined
   private state: BuilderState
 
   /**

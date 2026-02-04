@@ -27,9 +27,6 @@ import { logger } from '../utils/logger'
 import { R2Backend } from '../storage/R2Backend'
 import {
   migrateBackend,
-  detectExistingFormat,
-  discoverNamespaces,
-  type BackendType,
 } from '../backends'
 
 // =============================================================================
@@ -402,7 +399,7 @@ async function autoMigrateDatasets(
 
 async function benchmarkNativeQueries(
   bucket: R2Bucket,
-  datasetId: string,
+  _datasetId: string,
   dataset: typeof DATASETS[string],
   config: DatasetBackendConfig
 ): Promise<BackendDatasetResult> {
@@ -507,7 +504,7 @@ async function benchmarkNativeQueries(
 
 async function benchmarkIcebergQueries(
   bucket: R2Bucket,
-  datasetId: string,
+  _datasetId: string,
   dataset: typeof DATASETS[string],
   config: DatasetBackendConfig
 ): Promise<BackendDatasetResult> {
@@ -621,7 +618,7 @@ async function benchmarkIcebergQueries(
 
 async function benchmarkDeltaQueries(
   bucket: R2Bucket,
-  datasetId: string,
+  _datasetId: string,
   dataset: typeof DATASETS[string],
   config: DatasetBackendConfig
 ): Promise<BackendDatasetResult> {
@@ -668,7 +665,6 @@ async function benchmarkDeltaQueries(
 
     // Parse commit log
     const logText = new TextDecoder().decode(logBytes)
-    const entries = logText.trim().split('\n').map(line => JSON.parse(line))
 
     // For now, report that Delta is available
     const queriesToRun = dataset.queries.slice(0, config.maxQueries)

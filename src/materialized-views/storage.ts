@@ -20,6 +20,15 @@ import type {
   ViewState,
   ViewStats,
 } from './types'
+import {
+  MVError,
+  MVNotFoundError as BaseMVNotFoundError,
+  MVAlreadyExistsError as BaseMVAlreadyExistsError,
+  MVManifestError as BaseMVManifestError,
+  ErrorCode,
+  isMVError,
+  isMVNotFoundError,
+} from '../errors'
 
 // =============================================================================
 // Storage Paths
@@ -96,42 +105,69 @@ export const MV_MANIFEST_VERSION = 1
 // =============================================================================
 // Errors
 // =============================================================================
+// Re-export error classes from the centralized errors module.
+// These provide consistent error handling with error codes and serialization.
 
-/** Base error for MV storage operations */
-export class MVStorageError extends Error {
+/**
+ * Base error for MV storage operations
+ *
+ * @deprecated Use MVError from '../errors' instead
+ */
+export class MVStorageError extends MVError {
   constructor(
     message: string,
-    public readonly code: string,
-    public readonly viewName?: string
+    code: string,
+    viewName?: string
   ) {
-    super(message)
-    this.name = 'MVStorageError'
+    // Map legacy string codes to ErrorCode
+    const errorCode = code === 'MV_NOT_FOUND' ? ErrorCode.MV_NOT_FOUND
+      : code === 'MV_ALREADY_EXISTS' ? ErrorCode.MV_ALREADY_EXISTS
+      : code === 'MV_MANIFEST_ERROR' ? ErrorCode.MV_MANIFEST_ERROR
+      : ErrorCode.MV_ERROR
+
+    super(message, errorCode, { viewName })
+    Object.setPrototypeOf(this, MVStorageError.prototype)
   }
 }
 
-/** Error when a view is not found */
-export class MVNotFoundError extends MVStorageError {
+/**
+ * Error when a view is not found
+ *
+ * Re-exports MVNotFoundError from '../errors' with backward compatibility
+ */
+export class MVNotFoundError extends BaseMVNotFoundError {
   constructor(name: string) {
-    super(`Materialized view not found: ${name}`, 'MV_NOT_FOUND', name)
-    this.name = 'MVNotFoundError'
+    super(name)
+    Object.setPrototypeOf(this, MVNotFoundError.prototype)
   }
 }
 
-/** Error when a view already exists */
-export class MVAlreadyExistsError extends MVStorageError {
+/**
+ * Error when a view already exists
+ *
+ * Re-exports MVAlreadyExistsError from '../errors' with backward compatibility
+ */
+export class MVAlreadyExistsError extends BaseMVAlreadyExistsError {
   constructor(name: string) {
-    super(`Materialized view already exists: ${name}`, 'MV_ALREADY_EXISTS', name)
-    this.name = 'MVAlreadyExistsError'
+    super(name)
+    Object.setPrototypeOf(this, MVAlreadyExistsError.prototype)
   }
 }
 
-/** Error when manifest is corrupted or invalid */
-export class MVManifestError extends MVStorageError {
+/**
+ * Error when manifest is corrupted or invalid
+ *
+ * Re-exports MVManifestError from '../errors' with backward compatibility
+ */
+export class MVManifestError extends BaseMVManifestError {
   constructor(message: string) {
-    super(message, 'MV_MANIFEST_ERROR')
-    this.name = 'MVManifestError'
+    super(message)
+    Object.setPrototypeOf(this, MVManifestError.prototype)
   }
 }
+
+// Re-export type guards
+export { isMVError, isMVNotFoundError }
 
 // =============================================================================
 // Helper Functions

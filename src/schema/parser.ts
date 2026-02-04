@@ -1032,7 +1032,7 @@ function inferValueType(value: unknown): string {
  * @returns TypeDefinition that can be used in a Schema
  */
 export function inferredToTypeDefinition(
-  name: string,
+  _name: string,
   schema: InferredSchema
 ): TypeDefinition {
   const typeDef: TypeDefinition = {}

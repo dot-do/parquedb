@@ -549,7 +549,7 @@ export class IcebergCommitter {
     const snapshotBuilder = new SnapshotBuilder({
       sequenceNumber,
       snapshotId,
-      parentSnapshotId: currentSnapshotId ?? undefined,
+      ...(currentSnapshotId != null ? { parentSnapshotId: currentSnapshotId } : {}),
       manifestListPath,
       operation: 'append',
       schemaId: metadata['current-schema-id'],

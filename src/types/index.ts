@@ -73,6 +73,9 @@ export * from './entity'
 // Filter types (MongoDB-style query operators)
 export * from './filter'
 
+// Common interfaces (typed replacements for Record<string, unknown>)
+export * from './common'
+
 // =============================================================================
 // Layer 1: Types that depend only on Layer 0
 // =============================================================================

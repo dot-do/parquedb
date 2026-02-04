@@ -225,7 +225,7 @@ export class MigrationWorkflow extends WorkflowEntrypoint<Env, MigrationWorkflow
 
       // Optional: Add a small sleep between namespaces to avoid overwhelming R2
       if (currentState.currentIndex < currentState.namespaces.length) {
-        await step.sleep('cooldown', { seconds: 0.1 })
+        await step.sleep('cooldown', 100) // 100ms
       }
     }
 

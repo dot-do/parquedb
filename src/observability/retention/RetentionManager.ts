@@ -40,7 +40,7 @@
 
 import type { ParqueDB } from '../../ParqueDB'
 import type { TimeGranularity } from '../ai/types'
-import { MAX_BATCH_SIZE, MS_PER_HOUR, MS_PER_MINUTE } from '../../constants'
+import { MAX_BATCH_SIZE, MS_PER_HOUR } from '../../constants'
 import { logger } from '../../utils/logger'
 
 // =============================================================================
@@ -225,7 +225,7 @@ function resolveConfig(config: RetentionManagerConfig): ResolvedRetentionConfig 
 /**
  * Get retention policy for a specific granularity
  */
-function getPolicyForGranularity(
+function _getPolicyForGranularity(
   policies: TieredRetentionPolicies,
   granularity: TimeGranularity | undefined
 ): RetentionPolicy | null {

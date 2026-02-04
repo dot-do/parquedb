@@ -196,8 +196,12 @@ export class SnapshotManagerImpl implements SnapshotManager {
 
     for (const snapshot of this.snapshots) {
       const eid = snapshot.entityId as string
-      if (!snapshotsByEntity.has(eid)) snapshotsByEntity.set(eid, [])
-      snapshotsByEntity.get(eid)!.push(snapshot)
+      let entitySnapshots = snapshotsByEntity.get(eid)
+      if (!entitySnapshots) {
+        entitySnapshots = []
+        snapshotsByEntity.set(eid, entitySnapshots)
+      }
+      entitySnapshots.push(snapshot)
     }
 
     // Collect snapshots to prune first, then delete them

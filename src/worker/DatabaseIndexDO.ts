@@ -303,7 +303,7 @@ export class DatabaseIndexDO extends DurableObject<DatabaseIndexEnv> {
     visibility: Visibility,
     slug?: string
   ): Promise<DatabaseInfo | null> {
-    return this.update(id, { visibility, slug })
+    return await this.update(id, { visibility, slug })
   }
 
   /**

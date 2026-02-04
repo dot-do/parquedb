@@ -7,7 +7,7 @@
  * @module observability/hooks
  */
 
-import type { Filter, FindOptions, UpdateInput, CreateInput } from '../types'
+import type { Filter, FindOptions, UpdateInput, CreateInput, Metadata } from '../types'
 
 // =============================================================================
 // Hook Context Types
@@ -24,7 +24,7 @@ export interface HookContext {
   /** Namespace/collection being accessed */
   namespace?: string | undefined
   /** Additional metadata */
-  metadata?: Record<string, unknown> | undefined
+  metadata?: Metadata | undefined
 }
 
 /**

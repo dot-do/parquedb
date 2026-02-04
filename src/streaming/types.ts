@@ -16,6 +16,8 @@ export type {
   WarningHandler,
 } from '../materialized-views/streaming'
 
+import type { Metadata } from '../types/common'
+
 // =============================================================================
 // Worker Error Types
 // =============================================================================
@@ -68,7 +70,7 @@ export interface WorkerError {
   /** Datacenter/colo location */
   colo?: string | undefined
   /** Additional metadata */
-  metadata?: Record<string, unknown> | undefined
+  metadata?: Metadata | undefined
 }
 
 /**

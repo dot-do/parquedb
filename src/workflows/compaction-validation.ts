@@ -370,8 +370,9 @@ export class CompactionValidator {
     }
 
     // Check: Required columns exist
-    if (this.config.validateDataIntegrity && this.config.requiredColumns.length > 0) {
-      const requiredColsCheck = this.checkRequiredColumns(schema, this.config.requiredColumns)
+    const requiredColumns = this.config.requiredColumns ?? []
+    if (this.config.validateDataIntegrity && requiredColumns.length > 0) {
+      const requiredColsCheck = this.checkRequiredColumns(schema, requiredColumns)
       checks.push(requiredColsCheck)
     }
 
@@ -522,7 +523,7 @@ export class CompactionValidator {
       const rowCountCheck = this.compareRowCounts(
         preValidation.totalRowCount,
         postValidation.totalRowCount,
-        this.config.rowCountTolerance
+        this.config.rowCountTolerance ?? 0
       )
       comparisonChecks.push(rowCountCheck)
 
@@ -827,7 +828,7 @@ export class CompactionValidator {
       // Read a sample of rows to check for null values in required columns
       const rows = await readParquet<Record<string, unknown>>(this.storage, file, { limit: 1000 })
 
-      for (const col of this.config.requiredColumns) {
+      for (const col of this.config.requiredColumns ?? []) {
         const nullCount = rows.filter(row => row[col] === null || row[col] === undefined).length
         if (nullCount > 0) {
           issues.push(`Column '${col}' has ${nullCount} null values in sample`)
@@ -897,8 +898,8 @@ export class CompactionValidator {
     const hasNew = newInOutput.length > 0
 
     const passed = (
-      (!hasMissing || this.config.allowMissingColumns) &&
-      (!hasNew || this.config.allowNewColumns)
+      (!hasMissing || (this.config.allowMissingColumns ?? false)) &&
+      (!hasNew || (this.config.allowNewColumns ?? false))
     )
 
     let error: string | undefined

@@ -10,7 +10,7 @@
  */
 
 import type { StorageBackend } from '../types/storage'
-import { loadCommit, type DatabaseCommit } from './commit'
+import { loadCommit } from './commit'
 
 // =============================================================================
 // Types

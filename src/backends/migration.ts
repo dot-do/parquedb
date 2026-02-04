@@ -32,7 +32,13 @@ import { parquetQuery } from 'hyparquet'
 import { compressors } from '../parquet/compressors'
 import type { StorageBackend } from '../types/storage'
 import type { Entity } from '../types/entity'
-import type { BackendType, EntityBackend, BackendConfig } from './types'
+import type {
+  BackendType,
+  EntityBackend,
+  IcebergBackendConfig,
+  DeltaBackendConfig,
+  NativeBackendConfig,
+} from './types'
 import { IcebergBackend } from './iceberg'
 import { DeltaBackend } from './delta'
 import { logger } from '../utils/logger'
@@ -75,10 +81,11 @@ export interface MigrationResult {
   errors: string[]
 }
 
-export interface BackendConfigWithMigration extends BackendConfig {
-  /** Automatically migrate from this format if data exists */
-  migrateFrom?: BackendType | 'auto' | undefined
-}
+/** Migration-enabled backend configuration */
+export type BackendConfigWithMigration =
+  | (IcebergBackendConfig & { migrateFrom?: BackendType | 'auto' | undefined })
+  | (DeltaBackendConfig & { migrateFrom?: BackendType | 'auto' | undefined })
+  | (NativeBackendConfig & { migrateFrom?: BackendType | 'auto' | undefined })
 
 // =============================================================================
 // Format Detection
@@ -157,8 +164,8 @@ export async function discoverNamespaces(
 
   // List data/ directory for native format
   try {
-    const dataFiles = await storage.list('data/')
-    for (const file of dataFiles) {
+    const dataResult = await storage.list('data/')
+    for (const file of dataResult.files) {
       // Extract namespace from data/{ns}/data.parquet
       const match = file.match(/^data\/([^/]+)\//)
       if (match?.[1]) {
@@ -171,8 +178,8 @@ export async function discoverNamespaces(
 
   // List root for {ns}.parquet or {ns}/ directories
   try {
-    const rootFiles = await storage.list('')
-    for (const file of rootFiles) {
+    const rootResult = await storage.list('')
+    for (const file of rootResult.files) {
       // Look for metadata.json (Iceberg) or _delta_log (Delta)
       const icebergMatch = file.match(/^([^/]+)\/metadata\//)
       const deltaMatch = file.match(/^([^/]+)\/_delta_log\//)
@@ -266,8 +273,8 @@ async function deleteSourceData(
     }
     // Try to delete the namespace directory if empty
     try {
-      const dirFiles = await storage.list(`data/${namespace}/`)
-      if (dirFiles.length === 0) {
+      const dirResult = await storage.list(`data/${namespace}/`)
+      if (dirResult.files.length === 0) {
         // Directory is empty, safe to leave (storage backends typically don't have explicit directory deletion)
       }
     } catch {
@@ -283,12 +290,12 @@ async function deleteSourceData(
     ]
     for (const prefix of icebergPrefixes) {
       try {
-        const files = await storage.list(prefix)
-        for (const file of files) {
+        const result = await storage.list(prefix)
+        for (const file of result.files) {
           await storage.delete(file)
         }
-        if (files.length > 0) {
-          logger.info(`Deleted ${files.length} Iceberg files from ${prefix}`)
+        if (result.files.length > 0) {
+          logger.info(`Deleted ${result.files.length} Iceberg files from ${prefix}`)
         }
       } catch {
         // Ignore - prefix may not exist
@@ -304,12 +311,12 @@ async function deleteSourceData(
     ]
     for (const prefix of deltaPrefixes) {
       try {
-        const files = await storage.list(prefix)
-        for (const file of files) {
+        const result = await storage.list(prefix)
+        for (const file of result.files) {
           await storage.delete(file)
         }
-        if (files.length > 0) {
-          logger.info(`Deleted ${files.length} Delta files from ${prefix}`)
+        if (result.files.length > 0) {
+          logger.info(`Deleted ${result.files.length} Delta files from ${prefix}`)
         }
       } catch {
         // Ignore - prefix may not exist
@@ -563,7 +570,7 @@ export async function createBackendWithMigration(
     const namespaces = await discoverNamespaces(config.storage)
 
     for (const namespace of namespaces) {
-      const { formats, primary } = await detectExistingFormat(config.storage, namespace)
+      const { primary } = await detectExistingFormat(config.storage, namespace)
 
       // If data exists in a different format, migrate it
       if (primary && primary !== config.type) {
@@ -602,7 +609,7 @@ export async function createBackendWithMigration(
       throw new Error('Native backend not supported as EntityBackend - use createBackendWithMigration to auto-migrate to iceberg or delta')
 
     default:
-      throw new Error(`Unknown backend type: ${(config as BackendConfig).type}`)
+      throw new Error(`Unknown backend type: ${(config as BackendConfigWithMigration).type}`)
   }
 
   await backend.initialize()

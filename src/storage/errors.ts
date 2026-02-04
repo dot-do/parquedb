@@ -1,12 +1,13 @@
 /**
  * Shared error classes for storage backends
  *
- * Provides a consistent error hierarchy for all storage backend implementations.
- * Each backend can use these shared errors instead of defining their own,
- * ensuring consistent error handling across the codebase.
+ * All storage errors extend from ParqueDBError via StorageError, providing:
+ * - Consistent error codes for programmatic handling
+ * - Serialization support for RPC
+ * - Cause chaining for debugging
  *
- * Error Hierarchy:
- * - StorageError (base class with error code)
+ * Error Hierarchy (extends ParqueDBError):
+ * - StorageError (base class)
  *   - NotFoundError (file/object not found)
  *   - AlreadyExistsError (file already exists)
  *   - ETagMismatchError (conditional write failed)
@@ -17,10 +18,32 @@
  *   - DirectoryNotEmptyError (rmdir on non-empty dir)
  *   - DirectoryNotFoundError (directory does not exist)
  *   - PathTraversalError (security: path traversal attempt)
+ *
+ * @module storage/errors
  */
 
+import {
+  ParqueDBError,
+  ErrorCode,
+  StorageError as _BaseStorageError,
+  FileNotFoundError as _BaseFileNotFoundError,
+  QuotaExceededError as _BaseQuotaExceededError,
+  InvalidPathError as _BaseInvalidPathError,
+  PathTraversalError as _BasePathTraversalError,
+  NetworkError as _BaseNetworkError,
+  ETagMismatchError as _BaseETagMismatchError,
+  AlreadyExistsError as _BaseAlreadyExistsError,
+  isParqueDBError,
+} from '../errors'
+
+// =============================================================================
+// Storage Error Codes (Legacy - mapped to ErrorCode)
+// =============================================================================
+
 /**
- * Error codes for storage operations
+ * Legacy storage error codes - mapped to ErrorCode for backward compatibility.
+ *
+ * @deprecated Use ErrorCode from '../errors' instead
  */
 export enum StorageErrorCode {
   /** File or object not found */
@@ -46,59 +69,105 @@ export enum StorageErrorCode {
 }
 
 /**
- * Base error class for all storage operations
- *
- * Provides structured error information including:
- * - Error code for programmatic handling
- * - Optional path for context
- * - Optional cause for error chaining
+ * Map legacy StorageErrorCode to ErrorCode
  */
-export class StorageError extends Error {
-  override readonly name: string = 'StorageError'
-  readonly code: StorageErrorCode
-  readonly path: string | undefined
-  override readonly cause: Error | undefined
+function mapStorageErrorCode(code: StorageErrorCode): ErrorCode {
+  switch (code) {
+    case StorageErrorCode.NOT_FOUND:
+      return ErrorCode.FILE_NOT_FOUND
+    case StorageErrorCode.ALREADY_EXISTS:
+      return ErrorCode.ALREADY_EXISTS
+    case StorageErrorCode.ETAG_MISMATCH:
+      return ErrorCode.ETAG_MISMATCH
+    case StorageErrorCode.PERMISSION_DENIED:
+      return ErrorCode.PERMISSION_DENIED
+    case StorageErrorCode.NETWORK_ERROR:
+      return ErrorCode.NETWORK_ERROR
+    case StorageErrorCode.INVALID_PATH:
+      return ErrorCode.INVALID_PATH
+    case StorageErrorCode.QUOTA_EXCEEDED:
+      return ErrorCode.QUOTA_EXCEEDED
+    case StorageErrorCode.DIRECTORY_NOT_EMPTY:
+      return ErrorCode.DIRECTORY_NOT_EMPTY
+    case StorageErrorCode.DIRECTORY_NOT_FOUND:
+      return ErrorCode.DIRECTORY_NOT_FOUND
+    case StorageErrorCode.OPERATION_ERROR:
+      return ErrorCode.STORAGE_ERROR
+    default:
+      return ErrorCode.STORAGE_ERROR
+  }
+}
+
+// =============================================================================
+// Base Storage Error (Extends ParqueDBError)
+// =============================================================================
+
+/**
+ * Base error class for all storage operations.
+ *
+ * Extends ParqueDBError to provide:
+ * - Unified error code system (ErrorCode)
+ * - Serialization for RPC
+ * - Cause chaining
+ *
+ * Also provides legacy compatibility with StorageErrorCode.
+ */
+export class StorageError extends ParqueDBError {
+  override name: string = 'StorageError'
+
+  /** Legacy storage error code for backward compatibility */
+  readonly storageCode: StorageErrorCode
 
   constructor(
     message: string,
-    code: StorageErrorCode,
+    storageCode: StorageErrorCode,
     path?: string,
     cause?: Error
   ) {
-    super(message)
-    this.code = code
-    this.path = path
-    this.cause = cause
+    super(message, mapStorageErrorCode(storageCode), { path, operation: 'storage' }, cause)
+    this.storageCode = storageCode
     Object.setPrototypeOf(this, StorageError.prototype)
+  }
+
+  /**
+   * Get the path associated with this error
+   */
+  get path(): string | undefined {
+    return this.context.path as string | undefined
   }
 
   /**
    * Check if this error represents a "not found" condition
    */
   isNotFound(): boolean {
-    return this.code === StorageErrorCode.NOT_FOUND
+    return this.storageCode === StorageErrorCode.NOT_FOUND ||
+           this.storageCode === StorageErrorCode.DIRECTORY_NOT_FOUND
   }
 
   /**
    * Check if this error represents a precondition failure (etag mismatch)
    */
   isPreconditionFailed(): boolean {
-    return this.code === StorageErrorCode.ETAG_MISMATCH
+    return this.storageCode === StorageErrorCode.ETAG_MISMATCH
   }
 
   /**
    * Check if this error represents a conflict (already exists)
    */
   isConflict(): boolean {
-    return this.code === StorageErrorCode.ALREADY_EXISTS
+    return this.storageCode === StorageErrorCode.ALREADY_EXISTS
   }
 }
+
+// =============================================================================
+// Specific Storage Errors
+// =============================================================================
 
 /**
  * Error thrown when a file or object is not found
  */
 export class NotFoundError extends StorageError {
-  override readonly name = 'NotFoundError'
+  override name = 'NotFoundError'
 
   constructor(path: string, cause?: Error) {
     super(`File not found: ${path}`, StorageErrorCode.NOT_FOUND, path, cause)
@@ -114,7 +183,7 @@ export class NotFoundError extends StorageError {
  * - Attempting to create a file that already exists
  */
 export class AlreadyExistsError extends StorageError {
-  override readonly name = 'AlreadyExistsError'
+  override name = 'AlreadyExistsError'
 
   constructor(path: string, cause?: Error) {
     super(`File already exists: ${path}`, StorageErrorCode.ALREADY_EXISTS, path, cause)
@@ -130,12 +199,15 @@ export class AlreadyExistsError extends StorageError {
  * - Optimistic concurrency control detects conflict
  */
 export class ETagMismatchError extends StorageError {
-  override readonly name = 'ETagMismatchError'
+  override name = 'ETagMismatchError'
+
+  readonly expectedEtag: string | null
+  readonly actualEtag: string | null
 
   constructor(
     path: string,
-    public readonly expectedEtag: string | null,
-    public readonly actualEtag: string | null,
+    expectedEtag: string | null,
+    actualEtag: string | null,
     cause?: Error
   ) {
     super(
@@ -144,6 +216,11 @@ export class ETagMismatchError extends StorageError {
       path,
       cause
     )
+    this.expectedEtag = expectedEtag
+    this.actualEtag = actualEtag
+    // Add to context for serialization
+    this.context.expectedEtag = expectedEtag
+    this.context.actualEtag = actualEtag
     Object.setPrototypeOf(this, ETagMismatchError.prototype)
   }
 }
@@ -152,7 +229,7 @@ export class ETagMismatchError extends StorageError {
  * Error thrown when access to a resource is denied
  */
 export class PermissionDeniedError extends StorageError {
-  override readonly name = 'PermissionDeniedError'
+  override name = 'PermissionDeniedError'
 
   constructor(path: string, operation?: string, cause?: Error) {
     const opPart = operation ? ` (${operation})` : ''
@@ -162,6 +239,9 @@ export class PermissionDeniedError extends StorageError {
       path,
       cause
     )
+    if (operation) {
+      this.context.operation = operation
+    }
     Object.setPrototypeOf(this, PermissionDeniedError.prototype)
   }
 }
@@ -170,7 +250,7 @@ export class PermissionDeniedError extends StorageError {
  * Error thrown for network-related failures
  */
 export class NetworkError extends StorageError {
-  override readonly name = 'NetworkError'
+  override name = 'NetworkError'
 
   constructor(message: string, path?: string, cause?: Error) {
     super(message, StorageErrorCode.NETWORK_ERROR, path, cause)
@@ -187,7 +267,7 @@ export class NetworkError extends StorageError {
  * - Path traversal attempts (e.g., containing "..")
  */
 export class InvalidPathError extends StorageError {
-  override readonly name = 'InvalidPathError'
+  override name = 'InvalidPathError'
 
   constructor(path: string, reason?: string, cause?: Error) {
     const reasonPart = reason ? `: ${reason}` : ''
@@ -197,6 +277,9 @@ export class InvalidPathError extends StorageError {
       path,
       cause
     )
+    if (reason) {
+      this.context.reason = reason
+    }
     Object.setPrototypeOf(this, InvalidPathError.prototype)
   }
 }
@@ -205,12 +288,15 @@ export class InvalidPathError extends StorageError {
  * Error thrown when storage quota is exceeded
  */
 export class QuotaExceededError extends StorageError {
-  override readonly name = 'QuotaExceededError'
+  override name = 'QuotaExceededError'
+
+  readonly quotaBytes: number | undefined
+  readonly usedBytes: number | undefined
 
   constructor(
     path: string,
-    public readonly quotaBytes?: number,
-    public readonly usedBytes?: number,
+    quotaBytes?: number,
+    usedBytes?: number,
     cause?: Error
   ) {
     let message = `Quota exceeded for ${path}`
@@ -218,6 +304,14 @@ export class QuotaExceededError extends StorageError {
       message += ` (used ${usedBytes} of ${quotaBytes} bytes)`
     }
     super(message, StorageErrorCode.QUOTA_EXCEEDED, path, cause)
+    this.quotaBytes = quotaBytes
+    this.usedBytes = usedBytes
+    if (quotaBytes !== undefined) {
+      this.context.quotaBytes = quotaBytes
+    }
+    if (usedBytes !== undefined) {
+      this.context.usedBytes = usedBytes
+    }
     Object.setPrototypeOf(this, QuotaExceededError.prototype)
   }
 }
@@ -226,7 +320,7 @@ export class QuotaExceededError extends StorageError {
  * Error thrown when attempting to remove a non-empty directory without recursive flag
  */
 export class DirectoryNotEmptyError extends StorageError {
-  override readonly name = 'DirectoryNotEmptyError'
+  override name = 'DirectoryNotEmptyError'
 
   constructor(path: string, cause?: Error) {
     super(`Directory not empty: ${path}`, StorageErrorCode.DIRECTORY_NOT_EMPTY, path, cause)
@@ -238,7 +332,7 @@ export class DirectoryNotEmptyError extends StorageError {
  * Error thrown when a directory does not exist
  */
 export class DirectoryNotFoundError extends StorageError {
-  override readonly name = 'DirectoryNotFoundError'
+  override name = 'DirectoryNotFoundError'
 
   constructor(path: string, cause?: Error) {
     super(`Directory not found: ${path}`, StorageErrorCode.DIRECTORY_NOT_FOUND, path, cause)
@@ -253,7 +347,7 @@ export class DirectoryNotFoundError extends StorageError {
  * outside the allowed root directory.
  */
 export class PathTraversalError extends StorageError {
-  override readonly name = 'PathTraversalError'
+  override name = 'PathTraversalError'
 
   constructor(path: string, cause?: Error) {
     super(
@@ -273,15 +367,19 @@ export class PathTraversalError extends StorageError {
  * context about what operation failed.
  */
 export class OperationError extends StorageError {
-  override readonly name = 'OperationError'
+  override name = 'OperationError'
+
+  readonly operation: string
 
   constructor(
     message: string,
-    public readonly operation: string,
+    operation: string,
     path?: string,
     cause?: Error
   ) {
     super(message, StorageErrorCode.OPERATION_ERROR, path, cause)
+    this.operation = operation
+    this.context.operation = operation
     Object.setPrototypeOf(this, OperationError.prototype)
   }
 }
@@ -315,18 +413,40 @@ export const FileExistsError = AlreadyExistsError
 // =============================================================================
 
 /**
- * Check if an error is a StorageError
+ * Check if an error is a StorageError (includes ParqueDBError storage errors)
  */
 export function isStorageError(error: unknown): error is StorageError {
-  return error instanceof StorageError
+  return error instanceof StorageError ||
+    (isParqueDBError(error) && (
+      error.code === ErrorCode.STORAGE_ERROR ||
+      error.code === ErrorCode.STORAGE_READ_ERROR ||
+      error.code === ErrorCode.STORAGE_WRITE_ERROR ||
+      error.code === ErrorCode.FILE_NOT_FOUND ||
+      error.code === ErrorCode.DIRECTORY_NOT_FOUND ||
+      error.code === ErrorCode.DIRECTORY_NOT_EMPTY ||
+      error.code === ErrorCode.INVALID_PATH ||
+      error.code === ErrorCode.PATH_TRAVERSAL ||
+      error.code === ErrorCode.QUOTA_EXCEEDED ||
+      error.code === ErrorCode.NETWORK_ERROR ||
+      error.code === ErrorCode.ETAG_MISMATCH ||
+      error.code === ErrorCode.ALREADY_EXISTS
+    ))
 }
 
 /**
- * Check if an error is a NotFoundError
+ * Check if an error is a NotFoundError (file not found)
  */
 export function isNotFoundError(error: unknown): error is NotFoundError {
   return error instanceof NotFoundError ||
-    (isStorageError(error) && error.code === StorageErrorCode.NOT_FOUND)
+    error instanceof DirectoryNotFoundError ||
+    (error instanceof StorageError && (
+      error.storageCode === StorageErrorCode.NOT_FOUND ||
+      error.storageCode === StorageErrorCode.DIRECTORY_NOT_FOUND
+    )) ||
+    (isParqueDBError(error) && (
+      error.code === ErrorCode.FILE_NOT_FOUND ||
+      error.code === ErrorCode.DIRECTORY_NOT_FOUND
+    ))
 }
 
 /**
@@ -334,7 +454,7 @@ export function isNotFoundError(error: unknown): error is NotFoundError {
  */
 export function isETagMismatchError(error: unknown): error is ETagMismatchError {
   return error instanceof ETagMismatchError ||
-    (isStorageError(error) && error.code === StorageErrorCode.ETAG_MISMATCH)
+    (isParqueDBError(error) && error.code === ErrorCode.ETAG_MISMATCH)
 }
 
 /**
@@ -342,5 +462,56 @@ export function isETagMismatchError(error: unknown): error is ETagMismatchError 
  */
 export function isAlreadyExistsError(error: unknown): error is AlreadyExistsError {
   return error instanceof AlreadyExistsError ||
-    (isStorageError(error) && error.code === StorageErrorCode.ALREADY_EXISTS)
+    (isParqueDBError(error) && error.code === ErrorCode.ALREADY_EXISTS)
 }
+
+/**
+ * Check if an error is a PermissionDeniedError
+ */
+export function isPermissionDeniedError(error: unknown): error is PermissionDeniedError {
+  return error instanceof PermissionDeniedError ||
+    (isParqueDBError(error) && error.code === ErrorCode.PERMISSION_DENIED)
+}
+
+/**
+ * Check if an error is a NetworkError
+ */
+export function isNetworkError(error: unknown): error is NetworkError {
+  return error instanceof NetworkError ||
+    (isParqueDBError(error) && error.code === ErrorCode.NETWORK_ERROR)
+}
+
+/**
+ * Check if an error is an InvalidPathError (includes PathTraversalError)
+ */
+export function isInvalidPathError(error: unknown): error is InvalidPathError {
+  return error instanceof InvalidPathError ||
+    error instanceof PathTraversalError ||
+    (isParqueDBError(error) && (
+      error.code === ErrorCode.INVALID_PATH ||
+      error.code === ErrorCode.PATH_TRAVERSAL
+    ))
+}
+
+/**
+ * Check if an error is a QuotaExceededError
+ */
+export function isQuotaExceededError(error: unknown): error is QuotaExceededError {
+  return error instanceof QuotaExceededError ||
+    (isParqueDBError(error) && error.code === ErrorCode.QUOTA_EXCEEDED)
+}
+
+/**
+ * Check if an error is a DirectoryNotEmptyError
+ */
+export function isDirectoryNotEmptyError(error: unknown): error is DirectoryNotEmptyError {
+  return error instanceof DirectoryNotEmptyError ||
+    (isParqueDBError(error) && error.code === ErrorCode.DIRECTORY_NOT_EMPTY)
+}
+
+// =============================================================================
+// Re-exports from main errors module
+// =============================================================================
+
+// Re-export ErrorCode for convenience
+export { ErrorCode } from '../errors'

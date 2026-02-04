@@ -104,7 +104,7 @@ export class CircuitBreakerBackend implements StorageBackend {
   private readonly writeCircuit: CircuitBreaker
   private readonly separateCircuits: boolean
   private readonly bypassLightweight: boolean
-  private readonly fallback?: StorageBackend
+  private readonly fallback?: StorageBackend | undefined
 
   constructor(backend: StorageBackend, options: CircuitBreakerBackendOptions = {}) {
     this.backend = backend

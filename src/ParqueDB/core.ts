@@ -7,6 +7,7 @@
 
 import type {
   Entity,
+  EntityData,
   EntityId,
   CreateInput,
   PaginatedResult,
@@ -303,7 +304,7 @@ export class ParqueDBImpl {
     unindexRelationshipsForEntity(this.getRelationshipContext(), sourceId, entity)
   }
 
-  private applyRelationshipOperatorsInternal<T>(
+  private applyRelationshipOperatorsInternal<T extends EntityData>(
     entity: Entity,
     fullId: string,
     update: UpdateInput<T>
@@ -405,7 +406,7 @@ export class ParqueDBImpl {
   // Public API - Collection
   // ===========================================================================
 
-  collection<T = Record<string, unknown>>(namespace: string): Collection<T> {
+  collection<T extends EntityData = EntityData>(namespace: string): Collection<T> {
     if (!this.collectionManager) {
       this.collectionManager = new CollectionManager(this)
     }
@@ -451,7 +452,7 @@ export class ParqueDBImpl {
   // Public API - CRUD Operations
   // ===========================================================================
 
-  async find<T = Record<string, unknown>>(
+  async find<T extends EntityData = EntityData>(
     namespace: string,
     filter?: Filter,
     options?: FindOptions
@@ -459,7 +460,7 @@ export class ParqueDBImpl {
     return findEntities<T>(this.getEntityContext(), namespace, filter, options)
   }
 
-  async get<T = Record<string, unknown>>(
+  async get<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     options?: GetOptions
@@ -487,7 +488,7 @@ export class ParqueDBImpl {
     return entity
   }
 
-  async getRelated<T = Record<string, unknown>>(
+  async getRelated<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     relationField: string,
@@ -496,7 +497,7 @@ export class ParqueDBImpl {
     return getRelatedEntities<T>(this.getRelationshipContext(), namespace, id, relationField, options)
   }
 
-  async create<T = Record<string, unknown>>(
+  async create<T extends EntityData = EntityData>(
     namespace: string,
     data: CreateInput<T>,
     options?: CreateOptions
@@ -510,7 +511,7 @@ export class ParqueDBImpl {
     )
   }
 
-  async update<T = Record<string, unknown>>(
+  async update<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     update: UpdateInput<T>,
@@ -579,7 +580,7 @@ export class ParqueDBImpl {
     return deleteManyEntities(this.getEntityContext(), namespace, filter, options)
   }
 
-  async restore<T = Record<string, unknown>>(
+  async restore<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     options?: { actor?: EntityId | undefined }
@@ -600,7 +601,7 @@ export class ParqueDBImpl {
     return getEntityHistory(this.getEventContext(), entityId, options)
   }
 
-  async getAtVersion<T = Record<string, unknown>>(
+  async getAtVersion<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     version: number
@@ -612,7 +613,7 @@ export class ParqueDBImpl {
     return computeDiff(this.getEventContext(), entityId, t1, t2)
   }
 
-  async revert<T = Record<string, unknown>>(
+  async revert<T extends EntityData = EntityData>(
     entityId: EntityId,
     targetTime: Date,
     options?: RevertOptions
@@ -669,7 +670,7 @@ export class ParqueDBImpl {
     const self = this
 
     return {
-      async create<T = Record<string, unknown>>(
+      async create<T extends EntityData = EntityData>(
         namespace: string,
         data: CreateInput<T>,
         options?: CreateOptions
@@ -685,7 +686,7 @@ export class ParqueDBImpl {
         return entity
       },
 
-      async update<T = Record<string, unknown>>(
+      async update<T extends EntityData = EntityData>(
         namespace: string,
         id: string,
         update: UpdateInput<T>,
@@ -808,7 +809,7 @@ export class ParqueDBImpl {
     return filterFields
   }
 
-  private buildUpsertCreateData<T = Record<string, unknown>>(
+  private buildUpsertCreateData<T extends EntityData = EntityData>(
     filterFields: Record<string, unknown>,
     update: UpdateInput<T>
   ): Record<string, unknown> {
@@ -853,7 +854,7 @@ export class ParqueDBImpl {
     return createData
   }
 
-  async upsert<T = Record<string, unknown>>(
+  async upsert<T extends EntityData = EntityData>(
     namespace: string,
     filter: Filter,
     update: UpdateInput<T>,
@@ -877,7 +878,7 @@ export class ParqueDBImpl {
     }
   }
 
-  async upsertMany<T = Record<string, unknown>>(
+  async upsertMany<T extends EntityData = EntityData>(
     namespace: string,
     items: UpsertManyItem<T>[],
     options?: UpsertManyOptions
@@ -972,7 +973,7 @@ export class ParqueDBImpl {
   // Public API - Ingest Stream
   // ===========================================================================
 
-  async ingestStream<T = Record<string, unknown>>(
+  async ingestStream<T extends EntityData = EntityData>(
     namespace: string,
     source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>,
     options?: IngestStreamOptions<Partial<T>>
@@ -1013,7 +1014,7 @@ export class ParqueDBImpl {
           const createData = {
             ...doc,
             ...(entityType ? { $type: entityType } : {}),
-          } as CreateInput<T>
+          } as unknown as CreateInput<T>
 
           const entity = await this.create<T>(namespace, createData, {
             actor,

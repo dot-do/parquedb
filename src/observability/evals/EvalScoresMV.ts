@@ -245,7 +245,7 @@ export class EvalScoresMV {
         sort: { timestamp: 1 },
       })
 
-      if (scores.length === 0) {
+      if (scores.items.length === 0) {
         return {
           success: true,
           recordsProcessed: 0,
@@ -257,7 +257,7 @@ export class EvalScoresMV {
       // Group scores by aggregate key
       const aggregates = new Map<string, WorkingAggregate>()
 
-      for (const score of scores) {
+      for (const score of scores.items) {
         recordsProcessed++
 
         const record = score as Record<string, unknown>
@@ -302,8 +302,8 @@ export class EvalScoresMV {
             { limit: 1 }
           )
 
-          if (existingAggregates.length > 0) {
-            const existing = existingAggregates[0] as unknown as EvalScoreAggregate
+          if (existingAggregates.items.length > 0) {
+            const existing = existingAggregates.items[0] as unknown as EvalScoreAggregate
             aggregate = {
               $id: existing.$id,
               $type: 'EvalScoreAggregate',
@@ -367,8 +367,8 @@ export class EvalScoresMV {
           { limit: 1 }
         )
 
-        if (existing.length > 0) {
-          const existingId = ((existing[0] as Record<string, unknown>).$id as string).split('/').pop()
+        if (existing.items.length > 0) {
+          const existingId = ((existing.items[0] as Record<string, unknown>).$id as string).split('/').pop()
           if (existingId) {
             await targetCollection.update(existingId, {
               $set: {

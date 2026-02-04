@@ -7,17 +7,17 @@
 
 import type { StorageBackend } from '../../types/storage'
 import type { IndexDefinition, FTSSearchOptions, FTSSearchResult, IndexStats } from '../types'
-import type { TokenizerOptions, CorpusStats, Posting } from './types'
+import type { TokenizerOptions, CorpusStats, Posting as _Posting } from './types'
 import { tokenize, tokenizeQuery } from './tokenizer'
 import { InvertedIndex } from './inverted-index'
 import { BM25Scorer } from './scoring'
-import { parseBooleanQuery, isBooleanQuery, parseQuery, isAdvancedQuery, type BooleanQuery, type BooleanClause } from './query-parser'
+import { parseBooleanQuery, isBooleanQuery, parseQuery, isAdvancedQuery, type BooleanQuery as _BooleanQuery, type BooleanClause } from './query-parser'
 import {
   normalizeFuzzyOptions,
   expandQueryTerms,
   fuzzyScorePenalty,
   type NormalizedFuzzyOptions,
-  type FuzzyMatch,
+  type FuzzyMatch as _FuzzyMatch,
 } from './fuzzy'
 import {
   DEFAULT_FTS_MIN_WORD_LENGTH,
@@ -977,7 +977,7 @@ export class FTSIndex {
    * @param fieldTermPositions - Map of field -> term -> positions
    * @returns true if all terms appear consecutively in at least one field
    */
-  private hasConsecutivePositionsInAnyField(
+  private _hasConsecutivePositionsInAnyField(
     terms: string[],
     fieldTermPositions: Map<string, Map<string, number[]>>
   ): boolean {

@@ -7,10 +7,10 @@
  * - Entity hydration with relationships
  */
 
-import type { Entity, EntityId, UpdateInput, RelSet } from '../types'
-import { asEntityId, entityId as makeEntityId } from '../types'
+import type { Entity, EntityData, EntityId, UpdateInput, RelSet } from '../types'
+import { asEntityId, entityId as _makeEntityId } from '../types'
 import { isRelationString, parseRelation } from '../types/schema'
-import { DEFAULT_MAX_INBOUND } from '../constants'
+import { DEFAULT_MAX_INBOUND as _DEFAULT_MAX_INBOUND } from '../constants'
 import type { Schema } from '../types'
 import {
   addToReverseRelIndex,
@@ -38,7 +38,7 @@ export type ReverseRelIndex = Map<string, Map<string, Set<string>>>
  * @param schema - Schema definitions
  * @returns The modified entity
  */
-export function applyRelationshipOperators<T = Record<string, unknown>>(
+export function applyRelationshipOperators<T extends EntityData = EntityData>(
   entity: Entity,
   fullId: string,
   update: UpdateInput<T>,

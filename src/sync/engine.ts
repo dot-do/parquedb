@@ -25,7 +25,6 @@ import {
 } from './manifest'
 import {
   type LockManager,
-  type Lock,
   StorageLockManager,
   LockAcquisitionError,
 } from './lock'
@@ -79,8 +78,8 @@ export class SyncEngine {
   private remote: StorageBackend
   private databaseId: string
   private name: string
-  private owner?: string
-  private onProgress?: (progress: SyncProgress) => void
+  private owner?: string | undefined
+  private onProgress?: ((progress: SyncProgress) => void) | undefined
   private timeout: number
   private lockManager: LockManager
 

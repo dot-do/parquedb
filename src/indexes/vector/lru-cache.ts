@@ -40,7 +40,7 @@ export class LRUCache<V> {
   private currentBytes = 0
   private readonly maxEntries: number
   private readonly maxBytes: number
-  private readonly onEvict?: (key: number, value: V) => void
+  private readonly onEvict?: ((key: number, value: V) => void) | undefined
   private readonly sizeCalculator: (value: V) => number
 
   constructor(

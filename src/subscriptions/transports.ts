@@ -298,7 +298,7 @@ export interface WebSocketHandlerConfig {
  * ```
  */
 export function handleWebSocketUpgrade(
-  request: Request,
+  _request: Request,
   manager: { addConnection: (writer: SubscriptionWriter) => { id: string }; removeConnection: (id: string) => Promise<void>; handlePing: (id: string) => void },
   config: WebSocketHandlerConfig = {}
 ): Response {

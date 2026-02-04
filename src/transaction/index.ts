@@ -625,7 +625,7 @@ export class TransactionManager<TContext = unknown> {
 /**
  * Context provider interface for withTransaction
  */
-export interface TransactionProvider<TContext, TTx extends Transaction = Transaction> {
+export interface TransactionProvider<_TContext, TTx extends Transaction = Transaction> {
   beginTransaction(options?: TransactionOptions): TTx
 }
 
@@ -780,8 +780,8 @@ export type TransactionErrorCode =
  */
 export class TransactionError extends Error {
   readonly code: TransactionErrorCode
-  readonly transactionId?: string
-  readonly cause?: Error
+  readonly transactionId?: string | undefined
+  readonly cause?: Error | undefined
 
   constructor(
     message: string,
@@ -810,7 +810,7 @@ export class TransactionError extends Error {
     transactionId?: string
   ): TransactionError {
     const txError = new TransactionError(error.message, code, transactionId, error)
-    txError.stack = error.stack
+    if (error.stack) txError.stack = error.stack
     return txError
   }
 

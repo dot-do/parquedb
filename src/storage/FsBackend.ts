@@ -512,7 +512,7 @@ export class FsBackend implements StorageBackend {
     path: string,
     data: Uint8Array,
     expectedVersion: string | null,
-    options?: WriteOptions
+    _options?: WriteOptions
   ): Promise<WriteResult> {
     const fullPath = this.resolvePath(path)
     // Use deterministic lock path so all concurrent writes compete for same lock

@@ -24,6 +24,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { DEFAULT_MAX_RETRIES, MS_PER_SECOND, DEFAULT_TIMEOUT_MS } from '../../../constants'
 
 /**
  * Configuration options for useRetry hook
@@ -101,9 +102,9 @@ export function useRetry<T>(
   options: UseRetryOptions = {}
 ): UseRetryResult<T> {
   const {
-    maxRetries = 3,
-    baseDelay = 1000,
-    maxDelay = 30000,
+    maxRetries = DEFAULT_MAX_RETRIES,
+    baseDelay = MS_PER_SECOND,
+    maxDelay = DEFAULT_TIMEOUT_MS,
     jitter = 0.1,
     autoRetry = false,
     fetchOnMount = true,

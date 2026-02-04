@@ -9,12 +9,9 @@
 
 import type {
   PrometheusMetricDef,
-  PrometheusMetricValue,
-  PrometheusHistogram,
   PrometheusHistogramBucket,
 } from './types'
-import type { AIUsageSummary, AIUsageAggregate } from '../ai/types'
-import type { AIRequestsStats } from '../ai/AIRequestsMV'
+import type { AIUsageAggregate } from '../ai/types'
 import type { CompactionMetrics } from '../compaction/types'
 
 // =============================================================================
@@ -120,8 +117,9 @@ function escapeLabel(value: string): string {
 
 /**
  * Format a histogram in Prometheus format
+ * @internal Reserved for future use
  */
-function formatHistogram(
+export function formatHistogram(
   name: string,
   labels: Record<string, string>,
   buckets: PrometheusHistogramBucket[],
@@ -146,8 +144,9 @@ function formatHistogram(
 
 /**
  * Create histogram buckets from latency values
+ * @internal Reserved for future use
  */
-function createHistogramBuckets(
+export function createHistogramBuckets(
   latencies: number[],
   bucketBoundaries: number[] = DEFAULT_LATENCY_BUCKETS
 ): PrometheusHistogramBucket[] {
@@ -196,7 +195,7 @@ export function exportAIUsageToPrometheus(
   lines.push('# TYPE parquedb_ai_requests_total counter')
   for (const [key, aggs] of byModelProvider) {
     const [model, provider] = key.split(':')
-    const total = aggs.reduce((sum, a) => sum + a.requestCount, 0)
+    // Note: total not used directly, but computed separately as success + errors
     const success = aggs.reduce((sum, a) => sum + a.successCount, 0)
     const errors = aggs.reduce((sum, a) => sum + a.errorCount, 0)
 

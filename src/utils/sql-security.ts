@@ -6,6 +6,36 @@
  */
 
 // =============================================================================
+// Identifier Escaping
+// =============================================================================
+
+/**
+ * Escape a SQL identifier (table name, column name) for safe interpolation.
+ *
+ * Uses double-quote escaping which is SQL standard and works in SQLite.
+ * Any embedded double quotes are escaped by doubling them.
+ *
+ * IMPORTANT: This should be used in conjunction with validation, not as a
+ * replacement for it. Always validate identifiers with isValidTableName()
+ * before escaping.
+ *
+ * @param identifier - The identifier to escape
+ * @returns Escaped identifier safe for SQL interpolation
+ *
+ * @example
+ * ```typescript
+ * const table = escapeIdentifier('users')
+ * // Returns: "users"
+ * const query = `SELECT * FROM ${table}`
+ * // Query: SELECT * FROM "users"
+ * ```
+ */
+export function escapeIdentifier(identifier: string): string {
+  // Double any existing double quotes and wrap in double quotes
+  return `"${identifier.replace(/"/g, '""')}"`
+}
+
+// =============================================================================
 // LIKE Pattern Escaping
 // =============================================================================
 

@@ -270,9 +270,10 @@ export async function processWithProgress<T>(
     console.log(label)
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await withProgress(items, fn, {
-    config: { showETA: showEta } as unknown as Omit<ProgressConfig, 'total'>,
-  })
+    config: { showETA: showEta },
+  } as any)
 }
 
 /**

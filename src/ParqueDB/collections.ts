@@ -9,6 +9,7 @@
 
 import type {
   Entity,
+  EntityData,
   PaginatedResult,
   DeleteResult,
   Filter,
@@ -38,15 +39,15 @@ import { normalizeNamespace } from './validation'
  * This mirrors ParqueDBMethods in collection.ts to avoid circular dependencies.
  */
 export interface CollectionManagerContext {
-  find<T>(namespace: string, filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
-  get<T>(namespace: string, id: string, options?: GetOptions): Promise<Entity<T> | null>
-  create<T>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
-  update<T>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
+  find<T extends EntityData>(namespace: string, filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
+  get<T extends EntityData>(namespace: string, id: string, options?: GetOptions): Promise<Entity<T> | null>
+  create<T extends EntityData>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
+  update<T extends EntityData>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
   delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
   deleteMany(namespace: string, filter: Filter, options?: DeleteOptions): Promise<DeleteResult>
-  upsert<T>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: { returnDocument?: 'before' | 'after' | undefined }): Promise<Entity<T> | null>
-  upsertMany<T>(namespace: string, items: UpsertManyItem<T>[], options?: UpsertManyOptions): Promise<UpsertManyResult>
-  ingestStream<T>(namespace: string, source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>, options?: IngestStreamOptions<Partial<T>>): Promise<IngestStreamResult>
+  upsert<T extends EntityData>(namespace: string, filter: Filter, update: UpdateInput<T>, options?: { returnDocument?: 'before' | 'after' | undefined }): Promise<Entity<T> | null>
+  upsertMany<T extends EntityData>(namespace: string, items: UpsertManyItem<T>[], options?: UpsertManyOptions): Promise<UpsertManyResult>
+  ingestStream<T extends EntityData>(namespace: string, source: AsyncIterable<Partial<T>> | Iterable<Partial<T>>, options?: IngestStreamOptions<Partial<T>>): Promise<IngestStreamResult>
 }
 
 /**
@@ -77,16 +78,18 @@ export class CollectionManager {
    * @param namespace - The collection namespace (e.g., 'posts', 'Posts', 'POSTS')
    * @returns A Collection instance for the namespace
    */
-  get<T = Record<string, unknown>>(namespace: string): Collection<T> {
+  get<T extends EntityData = EntityData>(namespace: string): Collection<T> {
     const normalizedNs = normalizeNamespace(namespace)
 
-    if (!this.collections.has(normalizedNs)) {
+    let collection = this.collections.get(normalizedNs)
+    if (!collection) {
       // CollectionImpl expects a db with ParqueDBMethods interface
       // CollectionManagerContext is compatible with ParqueDBMethods
-      this.collections.set(normalizedNs, new CollectionImpl(this.db as never, normalizedNs))
+      collection = new CollectionImpl(this.db as never, normalizedNs)
+      this.collections.set(normalizedNs, collection)
     }
 
-    return this.collections.get(normalizedNs)! as unknown as Collection<T>
+    return collection as unknown as Collection<T>
   }
 
   /**
@@ -126,7 +129,7 @@ export class CollectionManager {
  * @param namespace - The collection namespace
  * @returns A new Collection instance
  */
-export function createCollection<T = Record<string, unknown>>(
+export function createCollection<T extends EntityData = EntityData>(
   db: CollectionManagerContext,
   namespace: string
 ): Collection<T> {

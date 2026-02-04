@@ -55,7 +55,7 @@ export interface FsxBackendOptions {
 export class FsxBackend implements StorageBackend {
   private readonly fsx: Fsx
   private readonly root: string
-  private readonly defaultTier?: FsxStorageTier
+  private readonly defaultTier?: FsxStorageTier | undefined
 
   constructor(fsx: Fsx, options?: FsxBackendOptions) {
     this.fsx = fsx

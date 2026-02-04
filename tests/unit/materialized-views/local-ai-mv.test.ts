@@ -192,7 +192,7 @@ function createMockDB() {
           results = results.slice(0, options.limit)
         }
 
-        return results
+        return { items: results }
       }),
 
       create: vi.fn(async (data: Record<string, unknown>) => {

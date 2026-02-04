@@ -27,12 +27,10 @@
 
 import type {
   ViewName,
-  ViewMetadata,
   ScheduleOptions,
-  RefreshMode,
-  ViewState,
 } from './types'
 import { viewName } from './types'
+import { DEFAULT_MAX_RETRIES, MS_PER_SECOND } from '../constants'
 
 // =============================================================================
 // Types
@@ -94,8 +92,8 @@ export interface RetryConfig {
  * Default retry configuration
  */
 export const DEFAULT_RETRY_CONFIG: RetryConfig = {
-  maxRetries: 3,
-  baseDelayMs: 1000,
+  maxRetries: DEFAULT_MAX_RETRIES,
+  baseDelayMs: MS_PER_SECOND,
   maxDelayMs: 300000, // 5 minutes
   backoffMultiplier: 2,
 }
@@ -185,7 +183,8 @@ export interface SchedulerStats {
 
 const STORAGE_PREFIX = 'mv_schedule:'
 const STATS_KEY = 'mv_scheduler_stats'
-const PROCESSING_KEY = 'mv_scheduler_processing'
+// PROCESSING_KEY reserved for future distributed locking
+void 'mv_scheduler_processing'
 
 // =============================================================================
 // Cron Parser (Simplified)
@@ -610,7 +609,9 @@ export class MVScheduler {
       this.stats.successfulRefreshes++
 
       // Call completion callback
-      await this.config.onRefreshComplete(view.name, duration)
+      if (this.config.onRefreshComplete) {
+        await this.config.onRefreshComplete(view.name, duration)
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
 
@@ -619,12 +620,15 @@ export class MVScheduler {
       view.lastError = errorMessage
 
       // Check if view should be disabled
-      const maxRetries = view.retryConfig?.maxRetries ?? this.config.defaultRetryConfig.maxRetries
+      const defaultMaxRetries = this.config.defaultRetryConfig?.maxRetries ?? DEFAULT_MAX_RETRIES
+      const maxRetries = view.retryConfig?.maxRetries ?? defaultMaxRetries
       if (view.consecutiveFailures >= maxRetries) {
         view.enabled = false
         this.stats.enabledViews--
         this.stats.disabledViews++
-        await this.config.onViewDisabled(view.name, `Disabled after ${view.consecutiveFailures} consecutive failures: ${errorMessage}`)
+        if (this.config.onViewDisabled) {
+          await this.config.onViewDisabled(view.name, `Disabled after ${view.consecutiveFailures} consecutive failures: ${errorMessage}`)
+        }
       } else {
         // Schedule retry with exponential backoff
         view.nextRefreshAt = this.calculateRetryTime(view)
@@ -637,7 +641,9 @@ export class MVScheduler {
       this.stats.failedRefreshes++
 
       // Call error callback
-      await this.config.onRefreshError(view.name, error instanceof Error ? error : new Error(errorMessage))
+      if (this.config.onRefreshError) {
+        await this.config.onRefreshError(view.name, error instanceof Error ? error : new Error(errorMessage))
+      }
 
       throw error
     } finally {
@@ -725,7 +731,7 @@ export class MVScheduler {
    * Calculate retry time with exponential backoff
    */
   private calculateRetryTime(view: ScheduledView): number {
-    const config = view.retryConfig ?? this.config.defaultRetryConfig
+    const config = view.retryConfig ?? this.config.defaultRetryConfig ?? DEFAULT_RETRY_CONFIG
     const delay = Math.min(
       config.baseDelayMs * Math.pow(config.backoffMultiplier, view.consecutiveFailures - 1),
       config.maxDelayMs
@@ -783,7 +789,8 @@ export class MVScheduler {
 
     // Determine when to set the alarm
     const now = Date.now()
-    const alarmTime = Math.max(nextRefreshAt, now + this.config.minAlarmIntervalMs)
+    const minAlarmIntervalMs = this.config.minAlarmIntervalMs ?? 1000
+    const alarmTime = Math.max(nextRefreshAt, now + minAlarmIntervalMs)
 
     // Only set alarm if no alarm exists or if new time is earlier
     if (!currentAlarm || alarmTime < currentAlarm) {

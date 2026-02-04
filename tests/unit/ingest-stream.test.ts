@@ -33,8 +33,7 @@ async function* arrayToAsyncIterable<T>(items: T[]): AsyncIterable<T> {
 
 /**
  * Create an async generator that delays each item
- * Note: Uses vi.advanceTimersByTimeAsync when fake timers are active,
- * but for this test file we use real time since we're testing actual throughput.
+ * Note: Uses a minimal delay for tests - we're testing behavior, not actual timing.
  */
 async function* delayedAsyncIterable<T>(items: T[], delayMs: number): AsyncIterable<T> {
   for (const item of items) {

@@ -31,6 +31,7 @@ import type { SQLQueryResult, SQLQueryOptions } from './types.js'
 import { parseSQL } from './parser.js'
 import { translateSelect, translateInsert, translateUpdate, translateDelete } from './translator.js'
 import { sqlResultAs, sqlItemsAs } from '../../types/cast.js'
+import { escapeIdentifier as escapeIdentifierImpl, escapeLikePattern as escapeLikePatternImpl, isValidTableName } from '../../utils/sql-security.js'
 
 // ============================================================================
 // SQL Template Tag
@@ -284,16 +285,52 @@ export function buildQuery(
 
 /**
  * Escape a SQL identifier (table name, column name)
+ *
+ * Uses double-quote escaping which is SQL standard. Any embedded double
+ * quotes are escaped by doubling them.
+ *
+ * @example
+ * escapeIdentifier('users') // '"users"'
+ * escapeIdentifier('user"name') // '"user""name"'
  */
 export function escapeIdentifier(identifier: string): string {
-  // Double any existing double quotes and wrap in double quotes
-  return `"${identifier.replace(/"/g, '""')}"`
+  return escapeIdentifierImpl(identifier)
 }
 
 /**
  * Escape a SQL string literal
+ *
+ * Escapes single quotes by doubling them and wraps in single quotes.
+ *
+ * WARNING: Prefer using parameterized queries ($1, $2) instead of string
+ * escaping. This function is provided for edge cases only.
+ *
+ * @example
+ * escapeString("O'Reilly") // "'O''Reilly'"
  */
 export function escapeString(value: string): string {
   // Escape single quotes by doubling them
   return `'${value.replace(/'/g, "''")}'`
 }
+
+/**
+ * Escape SQL LIKE pattern special characters
+ *
+ * Escapes %, _, and \ characters that have special meaning in LIKE patterns.
+ * Use with ESCAPE '\' clause.
+ *
+ * @example
+ * // Search for literal "50%" in column
+ * const pattern = escapeLikePattern("50%")
+ * // Use: WHERE column LIKE '%' || ? || '%' ESCAPE '\'
+ */
+export function escapeLikePattern(pattern: string): string {
+  return escapeLikePatternImpl(pattern)
+}
+
+/**
+ * Validate that a table name is safe for SQL use
+ *
+ * @returns true if the table name is valid
+ */
+export { isValidTableName }

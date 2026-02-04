@@ -383,6 +383,9 @@ describe('WebSocket Export', () => {
 
   describe('cleanupWSConnection', () => {
     it('should clear all subscriptions and timers', () => {
+      // Use fake timers to avoid leaking real interval timers
+      vi.useFakeTimers()
+
       const state: WSConnectionState = {
         subscriptions: new Map(),
         onSend: vi.fn(),
@@ -401,6 +404,8 @@ describe('WebSocket Export', () => {
       cleanupWSConnection(state)
 
       expect(state.subscriptions.size).toBe(0)
+
+      vi.useRealTimers()
     })
   })
 })

@@ -21,7 +21,6 @@ import type { CompactionMetrics } from '../../observability/compaction/types'
 
 const CONFIG_FILENAME = 'parquedb.json'
 const COMPACTION_STATE_FILE = '.compaction-state.json'
-const COMPACTION_JOBS_DIR = '.compaction-jobs'
 const DATA_DIR = 'data'
 const EVENTS_DIR = 'events'
 

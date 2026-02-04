@@ -310,7 +310,8 @@ export class StreamingRefreshEngine {
     this.stats.currentBufferSize = this.buffer.length
 
     // Emit warning at 80% buffer capacity (only once until reset)
-    const threshold = Math.floor(this.config.maxBufferSize * 0.8)
+    const maxBufferSize = this.config.maxBufferSize ?? DEFAULT_STREAMING_MAX_BUFFER_SIZE
+    const threshold = Math.floor(maxBufferSize * 0.8)
     if (this.buffer.length >= threshold && !this._warningEmitted80) {
       this._warningEmitted80 = true
       this.emitWarning('Buffer reached 80% capacity', {
@@ -545,7 +546,8 @@ export class StreamingRefreshEngine {
    * Apply backpressure if buffer is full
    */
   private async applyBackpressure(): Promise<void> {
-    while (this.buffer.length >= this.config.maxBufferSize && this.running) {
+    const maxBufferSize = this.config.maxBufferSize ?? DEFAULT_STREAMING_MAX_BUFFER_SIZE
+    while (this.buffer.length >= maxBufferSize && this.running) {
       this.stats.backpressureEvents++
       // Wait for processing to complete
       if (this.processingPromise) {
@@ -574,8 +576,9 @@ export class StreamingRefreshEngine {
 
     // Check if any MV buffer has reached batch size
     let shouldFlush = false
+    const batchSize = this.config.batchSize ?? DEFAULT_STREAMING_BATCH_SIZE
     for (const [_mvName, buffer] of this.bufferByMV) {
-      if (buffer.length >= this.config.batchSize) {
+      if (buffer.length >= batchSize) {
         shouldFlush = true
         break
       }
@@ -682,7 +685,11 @@ export class StreamingRefreshEngine {
     const startTime = Date.now()
     let lastError: Error | null = null
 
-    for (let attempt = 0; attempt < this.config.retry.maxAttempts; attempt++) {
+    const maxAttempts = this.config.retry?.maxAttempts ?? DEFAULT_MAX_RETRIES
+    const baseDelayMs = this.config.retry?.baseDelayMs ?? DEFAULT_RETRY_BASE_DELAY
+    const maxDelayMs = this.config.retry?.maxDelayMs ?? DEFAULT_RETRY_MAX_DELAY
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         await handler.process(events)
 
@@ -701,10 +708,10 @@ export class StreamingRefreshEngine {
         lastError = err instanceof Error ? err : new Error(String(err))
 
         // Exponential backoff
-        if (attempt < this.config.retry.maxAttempts - 1) {
+        if (attempt < maxAttempts - 1) {
           const delay = Math.min(
-            this.config.retry.baseDelayMs * Math.pow(2, attempt),
-            this.config.retry.maxDelayMs
+            baseDelayMs * Math.pow(2, attempt),
+            maxDelayMs
           )
           await new Promise(resolve => setTimeout(resolve, delay))
         }

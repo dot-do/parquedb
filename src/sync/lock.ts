@@ -294,7 +294,6 @@ export class StorageLockManager implements LockManager {
     resource: LockResource,
     options: LockAcquireOptions = {}
   ): Promise<LockAcquireResult> {
-    const timeout = options.timeout ?? DEFAULT_LOCK_TIMEOUT
     const waitTimeout = options.waitTimeout ?? DEFAULT_WAIT_TIMEOUT
     const retryInterval = options.retryInterval ?? DEFAULT_RETRY_INTERVAL
     const holder = options.holder ?? this.holderId

@@ -10,7 +10,7 @@
  */
 
 import { promises as fs } from 'node:fs'
-import { resolve, basename, isAbsolute } from 'node:path'
+import { resolve, isAbsolute } from 'node:path'
 import type { ParsedArgs } from '../types'
 import { print, printError, printSuccess } from '../types'
 import {

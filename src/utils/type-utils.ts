@@ -133,14 +133,14 @@ export function coalesceDefault<T>(defaultValue: T, ...values: (T | null | undef
  * })
  * ```
  */
-export function createTypedProxy<T extends object>(
-  target: object,
+export function createTypedProxy<T extends object, O extends object = object>(
+  target: O,
   handler: ProxyHandler<T>
 ): T {
   // The cast here is necessary because Proxy's type system doesn't support
   // returning a different type than the target. This is the canonical pattern
   // for typed proxies in TypeScript.
-  return new Proxy(target, handler) as T
+  return new Proxy(target, handler as ProxyHandler<O>) as T
 }
 
 // =============================================================================

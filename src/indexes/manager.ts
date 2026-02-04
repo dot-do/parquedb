@@ -83,7 +83,7 @@ export class IndexManager {
   /** Cache for loaded GeoIndex instances */
   private geoIndexes: Map<string, GeoIndex> = new Map()
   private basePath: string
-  private onError?: IndexManagerErrorHandler
+  private onError?: IndexManagerErrorHandler | undefined
   private throwOnListenerError: boolean
 
   constructor(
@@ -1113,7 +1113,7 @@ export class IndexManager {
     ns: string,
     definition: IndexDefinition,
     docId: string,
-    doc: Record<string, unknown>
+    _doc: Record<string, unknown>
   ): Promise<void> {
     switch (definition.type) {
       case 'fts': {

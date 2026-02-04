@@ -572,8 +572,8 @@ export class GeneratedContentMV {
     // Use input tenantId or fall back to config tenantId
     const tenantId = input.tenantId ?? this.config.tenantId
 
-    const data: Omit<GeneratedContentRecord, '$id'> = {
-      $type: 'GeneratedContent',
+    const data = {
+      $type: 'GeneratedContent' as const,
       name: contentId,
       contentId,
       requestId: input.requestId ?? contentId,
@@ -606,10 +606,10 @@ export class GeneratedContentMV {
       parentContentId: input.parentContentId,
       rootContentId,
       versionReason: input.versionReason,
-      tenantId,
+      ...(tenantId ? { tenantId } : {}),
     }
 
-    const created = await collection.create(data as Record<string, unknown>)
+    const created = await collection.create(data)
     return created as unknown as GeneratedContentRecord
   }
 
@@ -651,8 +651,8 @@ export class GeneratedContentMV {
       // Use input tenantId or fall back to config tenantId
       const tenantId = input.tenantId ?? this.config.tenantId
 
-      return {
-        $type: 'GeneratedContent',
+      const data = {
+        $type: 'GeneratedContent' as const,
         name: contentId,
         contentId,
         requestId: input.requestId ?? contentId,
@@ -685,11 +685,12 @@ export class GeneratedContentMV {
         parentContentId: input.parentContentId,
         rootContentId,
         versionReason: input.versionReason,
-        tenantId,
+        ...(tenantId ? { tenantId } : {}),
       }
+      return collection.create(data)
     })
 
-    const created = await collection.createMany(records as Record<string, unknown>[])
+    const created = await Promise.all(records)
     return created as unknown as GeneratedContentRecord[]
   }
 
@@ -796,11 +797,11 @@ export class GeneratedContentMV {
     const collection = this.db.collection(this.config.collection)
     const results = await collection.find({ contentId }, { limit: 1 })
 
-    if (results.length === 0) {
+    if (results.items.length === 0) {
       return null
     }
 
-    return results[0] as unknown as GeneratedContentRecord
+    return results.items[0] as unknown as GeneratedContentRecord
   }
 
   /**
@@ -883,7 +884,7 @@ export class GeneratedContentMV {
     )
 
     // Combine and sort
-    const allVersions = [...rootResults, ...childResults] as unknown as GeneratedContentRecord[]
+    const allVersions = [...rootResults.items, ...childResults.items] as unknown as GeneratedContentRecord[]
 
     // Dedupe by contentId and sort by version
     const seen = new Set<string>()
@@ -1096,29 +1097,37 @@ export class GeneratedContentMV {
     const startTime = Date.now()
 
     try {
-      // Count total to delete
+      // Find and delete records in batches
       const filter = { timestamp: { $lt: cutoffDate } }
-      const totalToDelete = await collection.count(filter)
+      let deletedCount = 0
+      let hasMore = true
+      const batchSize = 100
 
-      if (totalToDelete === 0) {
-        return {
-          success: true,
-          deletedCount: 0,
-          durationMs: Date.now() - startTime,
+      while (hasMore) {
+        const batch = await collection.find(filter, { limit: batchSize })
+        if (batch.items.length === 0) {
+          hasMore = false
+          break
+        }
+
+        for (const entity of batch.items) {
+          await collection.delete(entity.$id, { hard: true })
+          deletedCount++
+        }
+
+        options?.onProgress?.({
+          deletedSoFar: deletedCount,
+          percentage: batch.items.length < batchSize ? 100 : 50,
+        })
+
+        if (batch.items.length < batchSize) {
+          hasMore = false
         }
       }
 
-      // Use batch delete for efficiency
-      const result = await collection.deleteMany(filter, { hard: true })
-
-      options?.onProgress?.({
-        deletedSoFar: result.deletedCount,
-        percentage: 100,
-      })
-
       return {
         success: true,
-        deletedCount: result.deletedCount,
+        deletedCount,
         durationMs: Date.now() - startTime,
       }
     } catch (error) {

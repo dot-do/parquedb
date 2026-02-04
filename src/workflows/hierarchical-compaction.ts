@@ -124,7 +124,10 @@ export class LevelStateDO {
     l1: { level: 'l1', files: [], totalSize: 0, totalRows: 0 },
     l2: { level: 'l2', files: [], totalSize: 0, totalRows: 0 },
   }
-  private config: HierarchicalCompactionLevels = DEFAULT_HIERARCHICAL_CONFIG.levels
+  private config: HierarchicalCompactionLevels = DEFAULT_HIERARCHICAL_CONFIG.levels ?? {
+    l0ToL1Threshold: 24,
+    l1ToL2Threshold: 7,
+  }
   private initialized = false
 
   constructor(state: DurableObjectState) {
@@ -411,11 +414,25 @@ export class LevelStateDO {
  * Uses the same merge-sort logic as CompactionMigrationWorkflow,
  * but writes to a higher-level path.
  */
+/** Type for merge result from step.do */
+type MergeResult = {
+  rows: Record<string, unknown>[]
+  bytesRead: number
+  windowStart: number
+  windowEnd: number
+}
+
+/** Type for write result from step.do */
+type WriteResult = {
+  outputFile: string
+  bytesWritten: number
+}
+
 export class CompactionPromotionWorkflow extends WorkflowEntrypoint<Env, CompactionPromotionParams> {
   /**
    * Main workflow execution
    */
-  async run(event: WorkflowEvent<CompactionPromotionParams>, step: WorkflowStep): Promise<PromotionResult> {
+  override async run(event: WorkflowEvent<CompactionPromotionParams>, step: WorkflowStep): Promise<PromotionResult> {
     const params = event.payload
     const {
       namespace,
@@ -439,7 +456,8 @@ export class CompactionPromotionWorkflow extends WorkflowEntrypoint<Env, Compact
     })
 
     // Step 1: Read and merge all files from source level
-    const mergeResult = await step.do('merge-files', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mergeResult = await step.do('merge-files', async (): Promise<any> => {
       const storage = new R2Backend(toInternalR2Bucket(this.env.BUCKET))
 
       const allRows: Record<string, unknown>[] = []
@@ -497,7 +515,7 @@ export class CompactionPromotionWorkflow extends WorkflowEntrypoint<Env, Compact
         windowStart: windowStart === Infinity ? Date.now() : windowStart,
         windowEnd: windowEnd || Date.now(),
       }
-    })
+    }) as MergeResult
 
     // Step 2: Write to target level
     const writeResult = await step.do('write-output', async () => {
@@ -537,7 +555,7 @@ export class CompactionPromotionWorkflow extends WorkflowEntrypoint<Env, Compact
         outputFile,
         bytesWritten: buffer.byteLength,
       }
-    })
+    }) as WriteResult
 
     // Step 3: Delete source files if requested
     if (deleteSource && writeResult.outputFile) {

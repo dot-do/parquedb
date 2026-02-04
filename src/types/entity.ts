@@ -429,7 +429,7 @@ export interface Relationship {
   version: number
 
   /** Optional edge properties (Variant) - remaining metadata after shredding */
-  data?: Record<string, unknown> | undefined
+  data?: import('./common').EdgeData | undefined
 }
 
 // =============================================================================
@@ -698,7 +698,7 @@ export type StrictEntity<TData extends EntityData> = Entity<StrictEntityData<TDa
  * const post = await db.Posts.create(input)
  * ```
  */
-export interface CreateInput<T = EntityData> {
+export interface CreateInput<_T = EntityData> {
   /**
    * Entity type name (required)
    * Must match a type defined in the schema if schema validation is enabled

@@ -42,7 +42,7 @@
  */
 
 import { Readable, Writable, Transform, PassThrough } from 'node:stream'
-import type { Duplex, TransformOptions } from 'node:stream'
+import type { TransformOptions } from 'node:stream'
 
 // =============================================================================
 // Types
@@ -309,7 +309,7 @@ function createNodeWritableAdapter(
           stream.destroy(reason ? new Error(String(reason)) : undefined)
         },
       }, {
-        highWaterMark: opts.highWaterMark,
+        ...(opts.highWaterMark !== undefined ? { highWaterMark: opts.highWaterMark } : {}),
       })
     },
 
@@ -462,7 +462,7 @@ function createWebWritableAdapter(
         highWaterMark: opts.highWaterMark,
         objectMode: opts.objectMode,
 
-        async write(chunk, encoding, callback) {
+        async write(chunk, _encoding, callback) {
           try {
             const data = Buffer.isBuffer(chunk)
               ? new Uint8Array(chunk)
@@ -709,7 +709,7 @@ export function createTransform<TInput = Uint8Array, TOutput = Uint8Array>(
 ): Transform {
   return new Transform({
     ...options,
-    async transform(chunk, encoding, callback) {
+    async transform(chunk, _encoding, callback) {
       try {
         const result = await transformFn(chunk)
         callback(null, result)
