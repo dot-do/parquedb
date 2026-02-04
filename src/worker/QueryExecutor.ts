@@ -590,7 +590,7 @@ export class QueryExecutor {
         // These enable row-group skipping based on min/max column statistics
         const pushdownFilter = this.extractPushdownFilter(filter)
 
-        type DataRow = { $id: string; data: T | string; [key: string]: unknown }
+        type DataRow = { $id: string; $data: T | string; [key: string]: unknown }
         let rows: DataRow[]
         let results: T[]
 
@@ -602,7 +602,7 @@ export class QueryExecutor {
             rows = await parquetQuery({
               file: asyncBuffer,
               filter: pushdownFilter,
-              columns: ['$id', 'data'],
+              columns: ['$id', '$data'],
               compressors,
               rowEnd: options.limit ? (options.skip ?? 0) + options.limit : undefined,
             }) as DataRow[]
@@ -618,11 +618,11 @@ export class QueryExecutor {
 
           // Unpack data column - parse JSON if string, use directly if object
           results = rows.map(row => {
-            if (typeof row.data === 'string') {
-              const parsed = tryParseJson<T>(row.data)
+            if (typeof row.$data === 'string') {
+              const parsed = tryParseJson<T>(row.$data)
               return parsed ?? rowAsEntity<T>(row)
             }
-            return (row.data ?? row) as T
+            return (row.$data ?? row) as T
           })
         } else if (options.limit && this.storageAdapter) {
           // No filter but has limit - use rowEnd for early termination
@@ -630,7 +630,7 @@ export class QueryExecutor {
           const targetRows = (options.skip ?? 0) + options.limit
           rows = await parquetQuery({
             file: asyncBuffer,
-            columns: ['$id', 'data'],
+            columns: ['$id', '$data'],
             compressors,
             rowEnd: targetRows,
           }) as DataRow[]
@@ -638,11 +638,11 @@ export class QueryExecutor {
 
           // Unpack data column - parse JSON if string, use directly if object
           results = rows.map(row => {
-            if (typeof row.data === 'string') {
-              const parsed = tryParseJson<T>(row.data)
+            if (typeof row.$data === 'string') {
+              const parsed = tryParseJson<T>(row.$data)
               return parsed ?? rowAsEntity<T>(row)
             }
-            return (row.data ?? row) as T
+            return (row.$data ?? row) as T
           })
         } else {
           // No filter, no limit - read all data
@@ -651,11 +651,11 @@ export class QueryExecutor {
 
           // Unpack data column - parse JSON if string, use directly if object
           results = rows.map(row => {
-            if (typeof row.data === 'string') {
-              const parsed = tryParseJson<T>(row.data)
+            if (typeof row.$data === 'string') {
+              const parsed = tryParseJson<T>(row.$data)
               return parsed ?? rowAsEntity<T>(row)
             }
-            return (row.data ?? row) as T
+            return (row.$data ?? row) as T
           })
         }
 
@@ -822,7 +822,7 @@ export class QueryExecutor {
       // Build candidate set for O(1) lookup
       const candidateSet = new Set(candidateDocIds)
 
-      type DataRow = { $id: string; data: T | string }
+      type DataRow = { $id: string; $data: T | string }
       let rows: DataRow[]
 
       // ROW GROUP SKIPPING: Only read the row groups that contain matching documents
@@ -871,7 +871,7 @@ export class QueryExecutor {
           const asyncBuffer = await this.createAsyncBuffer(dataPath)
           const rangeRows = await parquetQuery({
             file: asyncBuffer,
-            columns: ['$id', 'data'],
+            columns: ['$id', '$data'],
             rowStart: range.rowStart,
             rowEnd: range.rowEnd,
             compressors,
@@ -897,17 +897,17 @@ export class QueryExecutor {
           // Check both $id and extracted ID from data
           if (candidateSet.has(row.$id)) return true
           // Also check data.$id for nested structure
-          const data = typeof row.data === 'string' ? tryParseJson(row.data) : row.data
+          const data = typeof row.$data === 'string' ? tryParseJson(row.$data) : row.$data
           const dataId = (data && isRecord(data)) ? (data as Record<string, unknown>).$id as string : undefined
           if (dataId && candidateSet.has(dataId)) return true
           return false
         })
         .map(row => {
-          if (typeof row.data === 'string') {
-            const parsed = tryParseJson<T>(row.data)
+          if (typeof row.$data === 'string') {
+            const parsed = tryParseJson<T>(row.$data)
             return parsed ?? rowAsEntity<T>(row)
           }
-          return (row.data ?? row) as T
+          return (row.$data ?? row) as T
         })
 
       // Apply any remaining filter conditions (excluding the indexed field)
@@ -1122,8 +1122,8 @@ export class QueryExecutor {
 
       // Parse JSON data column if needed
       const allRels: RelRow[] = rawRels.map(row => {
-        if (typeof row.data === 'string') {
-          const parsed = tryParseJson<RelRow['data']>(row.data)
+        if (typeof row.$data === 'string') {
+          const parsed = tryParseJson<RelRow['data']>(row.$data)
           return {
             from_id: row.from_id,
             match_mode: row.match_mode,
@@ -2065,18 +2065,18 @@ export class QueryExecutor {
         try {
           if (path.endsWith('.parquet') && this.parquetReader) {
             // Read Parquet file
-            type DataRow = { $id: string; data: T | string }
+            type DataRow = { $id: string; $data: T | string }
             const rows = await this.parquetReader.read<DataRow>(path)
 
             // Unpack data column
             for (const row of rows) {
-              if (typeof row.data === 'string') {
-                const parsed = tryParseJson<T>(row.data)
+              if (typeof row.$data === 'string') {
+                const parsed = tryParseJson<T>(row.$data)
                 if (parsed) {
                   allRows.push(parsed)
                 }
-              } else if (row.data) {
-                allRows.push(row.data)
+              } else if (row.$data) {
+                allRows.push(row.$data)
               }
             }
           } else if (path.endsWith('.json')) {
@@ -2087,7 +2087,7 @@ export class QueryExecutor {
               const rows = tryParseJson<Array<{ $id: string; data: string }>>(text)
               if (rows) {
                 for (const row of rows) {
-                  const parsed = tryParseJson<T>(row.data)
+                  const parsed = tryParseJson<T>(row.$data)
                   if (parsed) {
                     allRows.push(parsed)
                   }
