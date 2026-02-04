@@ -839,12 +839,85 @@ export default {
   ): Promise<Response> {
     const startTime = performance.now()
     const url = new URL(request.url)
-    const path = url.pathname
+    let path = url.pathname
     const baseUrl = `${url.protocol}//${url.host}`
 
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       return buildCorsPreflightResponse()
+    }
+
+    // =========================================================================
+    // Subdomain Routing - Map dataset subdomains to /datasets/:dataset paths
+    // onet.parquedb.com/occupations -> /datasets/onet-graph/occupations
+    // imdb.parquedb.com/titles -> /datasets/imdb/titles
+    // =========================================================================
+    const subdomainRoutes: Record<string, string> = {
+      'onet.parquedb.com': 'onet-graph',
+      'imdb.parquedb.com': 'imdb',
+      'unspsc.parquedb.com': 'unspsc',
+    }
+
+    const hostname = url.hostname
+    const datasetPrefix = subdomainRoutes[hostname]
+
+    if (datasetPrefix) {
+      // Rewrite path to include dataset prefix
+      if (path === '/' || path === '') {
+        path = `/datasets/${datasetPrefix}`
+      } else {
+        path = `/datasets/${datasetPrefix}${path}`
+      }
+    }
+
+    // Helper to rewrite links in response for dataset subdomains
+    // Strips /datasets/{datasetPrefix} from links to make them subdomain-relative
+    const rewriteLinksForSubdomain = async (response: Response): Promise<Response> => {
+      if (!datasetPrefix) return response
+
+      const contentType = response.headers.get('Content-Type') || ''
+      if (!contentType.includes('application/json')) return response
+
+      try {
+        const data = await response.json()
+        const rewriteUrl = (url: string): string => {
+          // Replace /datasets/{datasetPrefix}/ with /
+          // Replace /datasets/{datasetPrefix} (at end) with /
+          return url
+            .replace(`/datasets/${datasetPrefix}/`, '/')
+            .replace(new RegExp(`/datasets/${datasetPrefix}$`), '/')
+        }
+
+        const rewriteObject = (obj: unknown): unknown => {
+          if (typeof obj === 'string') {
+            // Only rewrite if it looks like a URL on our domain
+            if (obj.includes(baseUrl) && obj.includes(`/datasets/${datasetPrefix}`)) {
+              return rewriteUrl(obj)
+            }
+            return obj
+          }
+          if (Array.isArray(obj)) {
+            return obj.map(rewriteObject)
+          }
+          if (obj && typeof obj === 'object') {
+            const result: Record<string, unknown> = {}
+            for (const [key, value] of Object.entries(obj)) {
+              result[key] = rewriteObject(value)
+            }
+            return result
+          }
+          return obj
+        }
+
+        const rewrittenData = rewriteObject(data)
+
+        return new Response(JSON.stringify(rewrittenData), {
+          status: response.status,
+          headers: response.headers,
+        })
+      } catch {
+        return response
+      }
     }
 
     // =========================================================================
@@ -1483,7 +1556,7 @@ export default {
       // =======================================================================
       if (path === '/datasets') {
         const response = await handleDatasetsList(context)
-        return withRateLimitHeaders(response)
+        return withRateLimitHeaders(await rewriteLinksForSubdomain(response))
       }
 
       // =======================================================================
@@ -1494,7 +1567,7 @@ export default {
       if (datasetMatch) {
         const [datasetId] = datasetMatch
         const response = await handleDatasetDetail(context, datasetId)
-        return withRateLimitHeaders(response)
+        return withRateLimitHeaders(await rewriteLinksForSubdomain(response))
       }
 
       // =======================================================================
@@ -1505,7 +1578,7 @@ export default {
       if (collectionMatch) {
         const [datasetId, collectionId] = collectionMatch
         const response = await handleCollectionList(context, datasetId, collectionId)
-        return withRateLimitHeaders(response)
+        return withRateLimitHeaders(await rewriteLinksForSubdomain(response))
       }
 
       // =======================================================================
@@ -1517,7 +1590,7 @@ export default {
       if (relMatch) {
         const [datasetId, collectionId, entityId, predicate] = relMatch
         const response = await handleRelationshipTraversal(context, datasetId, collectionId, decodeURIComponent(entityId), predicate)
-        return withRateLimitHeaders(response)
+        return withRateLimitHeaders(await rewriteLinksForSubdomain(response))
       }
 
       // =======================================================================
@@ -1528,7 +1601,7 @@ export default {
       if (entityMatch) {
         const [datasetId, collectionId, entityId] = entityMatch
         const response = await handleEntityDetail(context, datasetId, collectionId, decodeURIComponent(entityId))
-        return withRateLimitHeaders(response)
+        return withRateLimitHeaders(await rewriteLinksForSubdomain(response))
       }
 
       // =======================================================================
