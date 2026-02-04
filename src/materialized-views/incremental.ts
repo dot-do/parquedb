@@ -158,8 +158,10 @@ export interface AggregateState {
 export class IncrementalRefresher {
   private eventSource: EventSource
   private storage: MVStorage
-  private manifest: ManifestManager
-  private segmentStorage: SegmentStorage
+  // Reserved for future use (event manifest access)
+  private _manifest: ManifestManager
+  // Reserved for future use (event segment storage)
+  private _segmentStorage: SegmentStorage
 
   constructor(options: {
     eventSource: EventSource
@@ -169,8 +171,8 @@ export class IncrementalRefresher {
   }) {
     this.eventSource = options.eventSource
     this.storage = options.storage
-    this.manifest = options.manifest
-    this.segmentStorage = options.segmentStorage
+    this._manifest = options.manifest
+    this._segmentStorage = options.segmentStorage
   }
 
   // ===========================================================================
@@ -844,7 +846,7 @@ export class IncrementalRefresher {
         if (include === 1 || include === true) {
           const fieldValue = this.getFieldValue(value, key)
           if (fieldValue !== undefined) {
-            result[key] = fieldValue
+            result[key] = fieldValue as VariantValue
           }
         }
       }

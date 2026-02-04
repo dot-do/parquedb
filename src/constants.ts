@@ -919,6 +919,21 @@ export const WRITE_HEAVY_BLOOM_CACHE_TTL_SECONDS = 120
  */
 export const GITHUB_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000
 
+/**
+ * Default data cache TTL in milliseconds (1 minute)
+ */
+export const DATA_CACHE_TTL_MS = 60 * 1000
+
+/**
+ * Default data cache max entries
+ */
+export const DATA_CACHE_MAX_ENTRIES = 1000
+
+/**
+ * Default starting field ID for shredded variant columns
+ */
+export const DEFAULT_SHREDDED_STARTING_FIELD_ID = 0
+
 // =============================================================================
 // Batch Processing Constants
 // =============================================================================

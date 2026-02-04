@@ -99,20 +99,14 @@ export function executeDelete(
   const [ns, ...idParts] = entityId.split('/')
   const id = idParts.join('/')
 
-  // Determine after state based on soft vs hard delete
-  let afterState: Record<string, unknown> | null = null
-  if (!options?.hard) {
-    // Soft delete: apply soft delete and include the updated entity as after state
-    const softDeletedEntity = applySoftDelete({ ...existingEntity }, context)
-    afterState = softDeletedEntity as Record<string, unknown>
-  }
-
   // Generate DELETE event
+  // For DELETE events, after is always null regardless of soft/hard delete
+  // The soft delete behavior (keeping entity with deletedAt) is a storage detail
   const event: MutationEvent = {
     op: 'DELETE',
     target: entityTarget(ns || '', id),
     before: beforeEntity as Record<string, unknown>,
-    after: afterState,
+    after: null,
     actor: context.actor,
     timestamp: context.timestamp,
   }

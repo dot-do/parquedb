@@ -574,7 +574,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
     this.checkBackpressure()
 
     // Check if we should flush
-    if (this.buffer.length >= this.config.batchSize) {
+    if (this.buffer.length >= (this.config.batchSize ?? DEFAULT_CONFIG.batchSize)) {
       await this.triggerFlush()
     }
   }
@@ -787,7 +787,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
           ...failedBatch,
           error: err instanceof Error ? err : new Error(String(err)),
           failedAt: Date.now(),
-          attempts: failedBatch.attempts + this.config.retry.maxAttempts,
+          attempts: failedBatch.attempts + (this.config.retry?.maxAttempts ?? DEFAULT_CONFIG.retry.maxAttempts),
         }
         this.deadLetterQueue.push(updatedBatch)
 
@@ -888,7 +888,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
    */
   private async triggerFlush(): Promise<void> {
     // Don't trigger if we're at max pending writes
-    if (this.pendingWrites >= this.config.maxPendingWrites) {
+    if (this.pendingWrites >= (this.config.maxPendingWrites ?? DEFAULT_CONFIG.maxPendingWrites)) {
       return
     }
 
@@ -974,7 +974,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
 
       // Save checkpoint periodically
       this.batchesSinceCheckpoint++
-      if (this.persistence && this.batchesSinceCheckpoint >= this.config.persistence.checkpointInterval) {
+      if (this.persistence && this.batchesSinceCheckpoint >= (this.config.persistence?.checkpointInterval ?? DEFAULT_CONFIG.persistence.checkpointInterval)) {
         await this.saveCheckpoint()
         this.batchesSinceCheckpoint = 0
       }
@@ -1009,7 +1009,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
         filePath,
         error,
         failedAt: Date.now(),
-        attempts: this.config.retry.maxAttempts,
+        attempts: this.config.retry?.maxAttempts ?? DEFAULT_CONFIG.retry.maxAttempts,
       }
 
       // Log detailed info for replay capability
@@ -1032,7 +1032,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
         records,
         batchNumber,
         filePath,
-        attempts: this.config.retry.maxAttempts,
+        attempts: this.config.retry?.maxAttempts ?? DEFAULT_CONFIG.retry.maxAttempts,
       })
     } finally {
       this.pendingWrites--
@@ -1070,7 +1070,7 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
         }
 
         // Apply backpressure if DLQ is getting full
-        if (this.deadLetterQueue.length >= this.config.maxDeadLetterQueueSize) {
+        if (this.deadLetterQueue.length >= (this.config.maxDeadLetterQueueSize ?? DEFAULT_CONFIG.maxDeadLetterQueueSize)) {
           logger.warn(
             `[StreamProcessor:${this.config.name}] Dead-letter queue is full (${this.deadLetterQueue.length} batches). ` +
               `Consider processing failed batches with retryDeadLetterQueue() or clearDeadLetterQueue().`
@@ -1095,8 +1095,9 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
         break
 
       default: {
-        // Exhaustiveness check
-        const _exhaustive: never = this.config.writeFailureBehavior
+        // Exhaustiveness check - writeFailureBehavior is always defined via DEFAULT_CONFIG
+        const behavior = this.config.writeFailureBehavior ?? DEFAULT_CONFIG.writeFailureBehavior
+        const _exhaustive: never = behavior as never
         throw new Error(`Unknown writeFailureBehavior: ${_exhaustive}`)
       }
     }
@@ -1110,7 +1111,8 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
     records: Record<string, unknown>[],
     batchNumber: number
   ): Promise<WriteResult> {
-    const { maxAttempts, initialDelayMs, maxDelayMs, backoffMultiplier } = this.config.retry
+    const retryConfig = this.config.retry ?? DEFAULT_CONFIG.retry
+    const { maxAttempts, initialDelayMs, maxDelayMs, backoffMultiplier } = retryConfig
     let lastError: Error | null = null
     let delay = initialDelayMs
 
@@ -1150,8 +1152,10 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
    * Check if backpressure should be applied
    */
   private checkBackpressure(): void {
+    const maxBufferSize = this.config.maxBufferSize ?? DEFAULT_CONFIG.maxBufferSize
+    const maxPendingWrites = this.config.maxPendingWrites ?? DEFAULT_CONFIG.maxPendingWrites
     const shouldApplyBackpressure =
-      this.buffer.length >= this.config.maxBufferSize || this.pendingWrites >= this.config.maxPendingWrites
+      this.buffer.length >= maxBufferSize || this.pendingWrites >= maxPendingWrites
 
     if (shouldApplyBackpressure && !this.backpressurePromise) {
       this.stats.backpressureEvents++
@@ -1174,8 +1178,10 @@ export class StreamProcessor<T extends Record<string, unknown> = Record<string, 
    * Release backpressure if conditions are met
    */
   private releaseBackpressure(): void {
+    const maxBufferSize = this.config.maxBufferSize ?? DEFAULT_CONFIG.maxBufferSize
+    const maxPendingWrites = this.config.maxPendingWrites ?? DEFAULT_CONFIG.maxPendingWrites
     const shouldRelease =
-      this.buffer.length < this.config.maxBufferSize * 0.8 && this.pendingWrites < this.config.maxPendingWrites
+      this.buffer.length < maxBufferSize * 0.8 && this.pendingWrites < maxPendingWrites
 
     if (shouldRelease && this.backpressureResolve) {
       this.backpressureResolve()
