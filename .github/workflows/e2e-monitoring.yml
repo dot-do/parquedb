@@ -1,19 +1,18 @@
 name: E2E Production Monitoring
 
 on:
-  # Health checks every 15 minutes
+  # Daily at 6 AM UTC (only runs if there were changes)
   schedule:
-    - cron: '*/15 * * * *'  # Every 15 minutes (health checks)
-    - cron: '5 * * * *'     # Hourly at :05 (full benchmarks, offset to avoid collision)
-  # Allow manual trigger
+    - cron: '0 6 * * *'
+  # Manual trigger
   workflow_dispatch:
     inputs:
       url:
-        description: 'Worker URL to monitor'
+        description: 'Worker URL to benchmark'
         required: false
         default: 'https://parquedb.workers.do'
-      run_full_benchmark:
-        description: 'Run full benchmark suite (not just health check)'
+      skip_change_check:
+        description: 'Run even if no recent changes'
         type: boolean
         required: false
         default: false
@@ -22,108 +21,45 @@ env:
   WORKER_URL: ${{ github.event.inputs.url || 'https://parquedb.workers.do' }}
 
 jobs:
-  health-check:
-    name: Health Check
+  # Check if there were recent changes (skip benchmark if no changes in last 24h)
+  check-changes:
+    name: Check for Recent Changes
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     outputs:
-      health_status: ${{ steps.health.outputs.status }}
-
+      has_changes: ${{ steps.check.outputs.has_changes }}
     steps:
-      - name: Check production health
-        id: health
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for commits in last 24 hours
+        id: check
         run: |
-          echo "Checking health at ${{ env.WORKER_URL }}/health?deep=true"
-
-          # Make health check request
-          HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" \
-            "${{ env.WORKER_URL }}/health?deep=true" \
-            --max-time 30)
-
-          echo "HTTP Status: $HTTP_CODE"
-          cat response.json
-
-          # Parse status from response
-          STATUS=$(cat response.json | jq -r '.api.status // "unknown"')
-          echo "Health Status: $STATUS"
-          echo "status=$STATUS" >> $GITHUB_OUTPUT
-          echo "http_code=$HTTP_CODE" >> $GITHUB_OUTPUT
-
-          # Check for failures
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::Health check returned HTTP $HTTP_CODE"
-            exit 1
+          # Skip check if manually triggered with skip_change_check
+          if [ "${{ github.event.inputs.skip_change_check }}" == "true" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Skipping change check (manual override)"
+            exit 0
           fi
 
-          if [ "$STATUS" == "unhealthy" ]; then
-            echo "::error::Worker health is unhealthy"
-            exit 1
+          # Check for commits in the last 24 hours
+          COMMITS=$(git log --oneline --since="24 hours ago" | wc -l)
+          echo "Commits in last 24 hours: $COMMITS"
+
+          if [ "$COMMITS" -gt 0 ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes in last 24 hours, skipping benchmark"
           fi
 
-          if [ "$STATUS" == "degraded" ]; then
-            echo "::warning::Worker health is degraded"
-          fi
-
-          echo "Health check passed: $STATUS"
-
-      - name: Alert on failure (Slack)
-        if: failure()
-        continue-on-error: true
-        run: |
-          if [ -n "${{ secrets.E2E_SLACK_WEBHOOK_URL }}" ]; then
-            curl -X POST -H 'Content-type: application/json' \
-              --data '{
-                "text": ":broken_heart: Production Health Check Failed",
-                "blocks": [
-                  {
-                    "type": "section",
-                    "text": {
-                      "type": "mrkdwn",
-                      "text": ":broken_heart: *Production Health Check Failed*\n\n*Worker URL:* ${{ env.WORKER_URL }}\n*Time:* '"$(date -u +"%Y-%m-%d %H:%M:%S UTC")"'\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
-                    }
-                  }
-                ]
-              }' \
-              ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
-          fi
-
-      - name: Alert on failure (PagerDuty)
-        if: failure()
-        continue-on-error: true
-        run: |
-          if [ -n "${{ secrets.E2E_PAGERDUTY_ROUTING_KEY }}" ]; then
-            curl -X POST https://events.pagerduty.com/v2/enqueue \
-              -H 'Content-Type: application/json' \
-              -d '{
-                "routing_key": "${{ secrets.E2E_PAGERDUTY_ROUTING_KEY }}",
-                "event_action": "trigger",
-                "dedup_key": "parquedb-e2e:production:health_check_failed",
-                "payload": {
-                  "summary": "[ParqueDB] Production health check failed",
-                  "severity": "critical",
-                  "source": "${{ env.WORKER_URL }}",
-                  "component": "parquedb-e2e",
-                  "group": "e2e-monitoring",
-                  "class": "health_check_failed",
-                  "custom_details": {
-                    "worker_url": "${{ env.WORKER_URL }}",
-                    "run_id": "${{ github.run_id }}",
-                    "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                  }
-                }
-              }'
-          fi
-
-  # Full benchmark runs hourly (on the hour)
-  full-benchmark:
-    name: Full Benchmark (Hourly)
+  benchmark:
+    name: E2E Benchmark
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Only run on hourly schedule (5 * * * *) OR when manually triggered with run_full_benchmark=true
-    if: >-
-      github.event.inputs.run_full_benchmark == 'true' ||
-      github.event.schedule == '5 * * * *'
-    needs: health-check
+    needs: check-changes
+    if: needs.check-changes.outputs.has_changes == 'true'
 
     steps:
       - name: Checkout
@@ -267,57 +203,3 @@ jobs:
               ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
           fi
 
-  # Recovery alert when health check recovers after failure
-  recovery-alert:
-    name: Recovery Alert
-    runs-on: ubuntu-latest
-    needs: health-check
-    if: needs.health-check.outputs.health_status == 'healthy'
-    # This job only runs if the previous run failed
-
-    steps:
-      - name: Check if recovering from failure
-        id: check-recovery
-        run: |
-          # Use GitHub API to check if the last run of this workflow failed
-          # This is a simplified check - in production you'd use a more robust mechanism
-          echo "Health check passed. Checking for recovery scenario..."
-
-          # For now, we just output that health is OK
-          # A more sophisticated implementation would track state in R2 or a database
-          echo "recovery_needed=false" >> $GITHUB_OUTPUT
-
-      - name: Send recovery alert (Slack)
-        if: steps.check-recovery.outputs.recovery_needed == 'true'
-        continue-on-error: true
-        run: |
-          if [ -n "${{ secrets.E2E_SLACK_WEBHOOK_URL }}" ]; then
-            curl -X POST -H 'Content-type: application/json' \
-              --data '{
-                "text": ":white_check_mark: Production Health Recovered",
-                "blocks": [
-                  {
-                    "type": "section",
-                    "text": {
-                      "type": "mrkdwn",
-                      "text": ":white_check_mark: *Production Health Recovered*\n\n*Worker URL:* ${{ env.WORKER_URL }}\n*Time:* '"$(date -u +"%Y-%m-%d %H:%M:%S UTC")"'"
-                    }
-                  }
-                ]
-              }' \
-              ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
-          fi
-
-      - name: Resolve PagerDuty incident
-        if: steps.check-recovery.outputs.recovery_needed == 'true'
-        continue-on-error: true
-        run: |
-          if [ -n "${{ secrets.E2E_PAGERDUTY_ROUTING_KEY }}" ]; then
-            curl -X POST https://events.pagerduty.com/v2/enqueue \
-              -H 'Content-Type: application/json' \
-              -d '{
-                "routing_key": "${{ secrets.E2E_PAGERDUTY_ROUTING_KEY }}",
-                "event_action": "resolve",
-                "dedup_key": "parquedb-e2e:production:health_check_failed"
-              }'
-          fi
