@@ -375,16 +375,4 @@ export interface FindResult<T> {
   } | undefined
 }
 
-/** Result of an update operation */
-export interface UpdateResult {
-  /** Number of documents that matched the filter */
-  matchedCount: number
-  /** Number of documents that were actually modified */
-  modifiedCount: number
-}
-
-/** Result of a delete operation */
-export interface DeleteResult {
-  /** Number of documents that were deleted */
-  deletedCount: number
-}
+// UpdateResult and DeleteResult are defined in entity.ts

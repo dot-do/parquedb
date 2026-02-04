@@ -183,4 +183,4 @@ function buildMergedState(
 // Exports
 // =============================================================================
 
-export type { MergeState, ConflictInfo, ConflictResolutionStrategy }
+export type { MergeState, ConflictResolutionStrategy }

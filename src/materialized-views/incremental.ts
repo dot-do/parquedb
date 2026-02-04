@@ -159,9 +159,9 @@ export class IncrementalRefresher {
   private eventSource: EventSource
   private storage: MVStorage
   // Reserved for future use (event manifest access)
-  private _manifest: ManifestManager
+  private manifest: ManifestManager
   // Reserved for future use (event segment storage)
-  private _segmentStorage: SegmentStorage
+  private segmentStorage: SegmentStorage
 
   constructor(options: {
     eventSource: EventSource
@@ -171,8 +171,18 @@ export class IncrementalRefresher {
   }) {
     this.eventSource = options.eventSource
     this.storage = options.storage
-    this._manifest = options.manifest
-    this._segmentStorage = options.segmentStorage
+    this.manifest = options.manifest
+    this.segmentStorage = options.segmentStorage
+  }
+
+  // Reserved: Access to manifest manager for future segment-level optimizations
+  getManifest(): ManifestManager {
+    return this.manifest
+  }
+
+  // Reserved: Access to segment storage for future segment-level reads
+  getSegmentStorage(): SegmentStorage {
+    return this.segmentStorage
   }
 
   // ===========================================================================

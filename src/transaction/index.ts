@@ -781,7 +781,7 @@ export type TransactionErrorCode =
 export class TransactionError extends Error {
   readonly code: TransactionErrorCode
   readonly transactionId?: string | undefined
-  readonly cause?: Error | undefined
+  override readonly cause?: Error | undefined
 
   constructor(
     message: string,

@@ -5,7 +5,7 @@
  */
 
 export { GeoIndex } from './geo-index'
-export type { GeoEntry, GeoSearchResult, GeoSearchOptions } from './geo-index'
+export type { GeoEntry } from './geo-index'
 
 export {
   encodeGeohash,

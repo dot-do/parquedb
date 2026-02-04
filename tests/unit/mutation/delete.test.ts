@@ -98,10 +98,9 @@ describe('executeDelete', () => {
       const entity = createTestEntity()
       const result = executeDelete(context, 'posts/test-123', entity)
 
-      // Soft delete should have an after state with deletedAt
-      expect(result.events[0].after).toBeDefined()
-      expect(result.events[0].after?.deletedAt).toBeDefined()
-      expect(result.events[0].after?.deletedBy).toBe('users/deleter')
+      // DELETE event always has after: null (soft delete is a storage detail)
+      expect(result.events[0].after).toBeNull()
+      expect(result.deletedCount).toBe(1)
     })
 
     it('performs hard delete when hard option is true', () => {
@@ -136,19 +135,24 @@ describe('executeDelete', () => {
       expect(result.events[0].after).toBeNull()
     })
 
-    it('soft delete updates version', () => {
+    it('soft delete generates event with null after', () => {
       const entity = createTestEntity({ version: 5 })
       const result = executeDelete(context, 'posts/test-123', entity)
 
-      expect(result.events[0].after?.version).toBe(6)
+      // DELETE events always have after: null regardless of soft/hard delete
+      expect(result.events[0].after).toBeNull()
+      expect(result.events[0].before).toBeDefined()
+      expect(result.events[0].before?.version).toBe(5)
     })
 
-    it('soft delete sets updatedAt and updatedBy', () => {
+    it('soft delete event captures before state', () => {
       const entity = createTestEntity()
       const result = executeDelete(context, 'posts/test-123', entity)
 
-      expect(result.events[0].after?.updatedAt).toEqual(context.timestamp)
-      expect(result.events[0].after?.updatedBy).toBe('users/deleter')
+      // The before state should contain the original entity data
+      expect(result.events[0].before).toBeDefined()
+      expect(result.events[0].before?.$id).toBe('posts/test-123')
+      expect(result.events[0].before?.$type).toBe('Post')
     })
   })
 

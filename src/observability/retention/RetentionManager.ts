@@ -290,7 +290,7 @@ export class RetentionManager {
       })
 
       // Process each granularity
-      const granularities: (TimeGranularity | 'default')[] = ['hourly', 'daily', 'weekly', 'monthly', 'default']
+      const granularities: (TimeGranularity | 'default')[] = ['hour', 'day', 'week', 'month', 'default']
 
       for (const granularity of granularities) {
         const policy = granularity === 'default'
@@ -516,7 +516,7 @@ export class RetentionManager {
     const now = new Date()
     const byGranularity: Record<string, { count: number; oldestTimestamp: Date | null; eligibleForDeletion: number }> = {}
 
-    const granularities: (TimeGranularity | 'default')[] = ['hourly', 'daily', 'weekly', 'monthly', 'default']
+    const granularities: (TimeGranularity | 'default')[] = ['hour', 'day', 'week', 'month', 'default']
     let totalRecords = 0
     let totalEligibleForDeletion = 0
 

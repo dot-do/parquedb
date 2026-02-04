@@ -1468,18 +1468,6 @@ export {
    * @returns A SearchClient instance
    */
   createSearchClient,
-  /** Pre-configured search client for IMDB movie dataset */
-  imdb,
-  /** Pre-configured search client for O*NET occupation dataset */
-  onet,
-  type Dataset,
-  type SearchMode,
-  type SearchParams,
-  type VectorParams,
-  type HybridParams,
-  type SearchResponse,
-  type SuggestResponse,
-  type SearchClient,
   type IMDBTitle,
   type ONETOccupation,
 } from './search'

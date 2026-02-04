@@ -607,7 +607,7 @@ export async function withLock<T>(
  * Error thrown when a lock cannot be acquired
  */
 export class LockAcquisitionError extends Error {
-  readonly name = 'LockAcquisitionError'
+  override readonly name = 'LockAcquisitionError'
 
   constructor(
     public readonly resource: LockResource,
@@ -621,7 +621,7 @@ export class LockAcquisitionError extends Error {
  * Error thrown when an operation is attempted on an expired lock
  */
 export class LockExpiredError extends Error {
-  readonly name = 'LockExpiredError'
+  override readonly name = 'LockExpiredError'
 
   constructor(public readonly resource: LockResource) {
     super(`Lock on '${resource}' has expired`)
