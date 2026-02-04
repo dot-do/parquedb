@@ -75,6 +75,8 @@ export interface QueryStats {
   indexUsed?: string | undefined
   /** Index type used */
   indexType?: 'fts' | 'vector' | 'geo' | undefined
+  /** Whether early termination was used (limit without sort) */
+  usedEarlyTermination?: boolean | undefined
 }
 
 /**
@@ -386,7 +388,84 @@ export class QueryExecutor {
       // Determine columns to read
       const columns = this.selectColumns(mvFilter, options)
 
-      // Read row groups
+      // Create predicate for post-filter
+      const predicate = routingResult.needsPostFilter && routingResult.postFilter
+        ? toPredicate(routingResult.postFilter)
+        : () => true
+
+      // Check if we can use early termination
+      const canUseEarlyTermination = options.limit !== undefined &&
+                                      options.limit > 0 &&
+                                      !options.sort
+
+      if (canUseEarlyTermination) {
+        // Calculate target count: limit + skip + 1 (for hasMore detection)
+        const targetCount = (options.limit ?? 0) + (options.skip ?? 0) + 1
+
+        const earlyResult = await this.readRowGroupsWithEarlyTermination<T>(
+          mvPath,
+          selectedRowGroups,
+          columns,
+          {
+            predicate: predicate as (row: T) => boolean,
+            targetCount,
+            includeDeleted: options.includeDeleted,
+          }
+        )
+
+        // Apply skip and limit to the matched rows
+        let result = earlyResult.matchedRows
+        const totalCount = result.length
+
+        // Apply skip
+        if (options.skip && options.skip > 0) {
+          result = result.slice(options.skip)
+        }
+
+        // Apply limit and check for hasMore
+        let hasMore = false
+        if (options.limit && options.limit > 0) {
+          if (result.length > options.limit) {
+            hasMore = true
+            result = result.slice(0, options.limit)
+          }
+        }
+
+        // Generate cursor for pagination
+        let nextCursor: string | undefined
+        if (hasMore && result.length > 0) {
+          const lastRow = result[result.length - 1] as Record<string, unknown>
+          nextCursor = this.generateCursor(lastRow, options.sort)
+        }
+
+        // Apply projection
+        if (options.project) {
+          result = this.applyProjection(result, options.project)
+        }
+
+        const executionStats: QueryStats = {
+          totalRowGroups: stats.length,
+          scannedRowGroups: earlyResult.rowGroupsRead,
+          skippedRowGroups: stats.length - earlyResult.rowGroupsRead,
+          rowsScanned: earlyResult.rowsScanned,
+          rowsMatched: earlyResult.matchedRows.length,
+          executionTimeMs: Date.now() - startTime,
+          columnsRead: columns,
+          usedBloomFilter: false,
+          indexUsed: `mv:${routingResult.mvName}`,
+          usedEarlyTermination: earlyResult.terminatedEarly,
+        }
+
+        return {
+          rows: result,
+          totalCount,
+          nextCursor,
+          hasMore,
+          stats: executionStats,
+        }
+      }
+
+      // Read row groups (original path for sorted queries)
       const rowBatches = await this.readRowGroupsParallel<T>(
         mvPath,
         selectedRowGroups,
@@ -397,11 +476,7 @@ export class QueryExecutor {
       const allRows = rowBatches.flat()
 
       // Apply post-filter if needed
-      let filtered = allRows
-      if (routingResult.needsPostFilter && routingResult.postFilter) {
-        const predicate = toPredicate(routingResult.postFilter)
-        filtered = allRows.filter(row => predicate(row))
-      }
+      const filtered = allRows.filter(row => predicate(row))
 
       // Apply sort, limit, skip
       const result = this.postProcess(filtered, options)
@@ -900,24 +975,100 @@ export class QueryExecutor {
       stats
     )
 
-    // 6. Read selected row groups in parallel
+    // 6. Check if we can use early termination optimization
+    // Early termination is possible when:
+    // - We have a limit
+    // - There's no sort (sorting requires all matching rows)
+    const canUseEarlyTermination = options.limit !== undefined &&
+                                    options.limit > 0 &&
+                                    !options.sort
+
+    const predicate = toPredicate(filter)
+
+    if (canUseEarlyTermination) {
+      // Calculate target count: limit + skip (to handle skip correctly)
+      // Add 1 extra to detect if there are more results (for hasMore flag)
+      const targetCount = (options.limit ?? 0) + (options.skip ?? 0) + 1
+
+      const earlyResult = await this.readRowGroupsWithEarlyTermination<T>(
+        dataPath,
+        bloomFilteredGroups,
+        columns,
+        {
+          predicate: predicate as (row: T) => boolean,
+          targetCount,
+          includeDeleted: options.includeDeleted,
+        }
+      )
+
+      // Apply skip and limit to the matched rows
+      let result = earlyResult.matchedRows
+      const totalCount = result.length
+
+      // Apply skip
+      if (options.skip && options.skip > 0) {
+        result = result.slice(options.skip)
+      }
+
+      // Apply limit and check for hasMore
+      let hasMore = false
+      if (options.limit && options.limit > 0) {
+        if (result.length > options.limit) {
+          hasMore = true
+          result = result.slice(0, options.limit)
+        }
+      }
+
+      // Generate cursor for pagination
+      let nextCursor: string | undefined
+      if (hasMore && result.length > 0) {
+        const lastRow = result[result.length - 1] as Record<string, unknown>
+        nextCursor = this.generateCursor(lastRow, options.sort)
+      }
+
+      // Apply projection
+      if (options.project) {
+        result = this.applyProjection(result, options.project)
+      }
+
+      const executionStats: QueryStats = {
+        totalRowGroups: stats.length,
+        scannedRowGroups: earlyResult.rowGroupsRead,
+        skippedRowGroups: stats.length - earlyResult.rowGroupsRead,
+        rowsScanned: earlyResult.rowsScanned,
+        rowsMatched: earlyResult.matchedRows.length,
+        executionTimeMs: Date.now() - startTime,
+        columnsRead: columns,
+        usedBloomFilter: bloomFilteredGroups.length < selectedRowGroups.length,
+        usedEarlyTermination: earlyResult.terminatedEarly,
+      }
+
+      return {
+        rows: result,
+        totalCount,
+        nextCursor,
+        hasMore,
+        stats: executionStats,
+      }
+    }
+
+    // 7. Read selected row groups in parallel (original path for sorted queries)
     const rowBatches = await this.readRowGroupsParallel<T>(
       dataPath,
       bloomFilteredGroups,
       columns
     )
 
-    // 7. Flatten row batches
+    // 8. Flatten row batches
     const allRows = rowBatches.flat()
 
-    // 8. Apply filter (post-predicate pushdown)
-    const predicate = toPredicate(filter)
+    // 9. Apply filter (post-predicate pushdown)
     const filtered = allRows.filter(row => predicate(row))
 
-    // 9. Apply sort, limit, skip
+    // 10. Apply sort, limit, skip
     const result = this.postProcess(filtered, options)
 
-    // 10. Build statistics
+    // 11. Build statistics
     const executionStats: QueryStats = {
       totalRowGroups: stats.length,
       scannedRowGroups: bloomFilteredGroups.length,
@@ -1329,6 +1480,90 @@ export class QueryExecutor {
     }
 
     return results
+  }
+
+  /**
+   * Read row groups with early termination when enough matching rows are found.
+   * This optimization is critical for limit queries without sorting.
+   */
+  private async readRowGroupsWithEarlyTermination<T>(
+    path: string,
+    rowGroups: number[],
+    columns: string[],
+    options: {
+      predicate: (row: T) => boolean
+      targetCount: number
+      includeDeleted?: boolean | undefined
+    }
+  ): Promise<{
+    matchedRows: T[]
+    rowsScanned: number
+    rowGroupsRead: number
+    terminatedEarly: boolean
+  }> {
+    const { predicate, targetCount, includeDeleted } = options
+    const CONCURRENCY = DEFAULT_CONCURRENCY
+
+    const matchedRows: T[] = []
+    let rowsScanned = 0
+    let rowGroupsRead = 0
+
+    // Process row groups in batches
+    const batches: number[][] = []
+    for (let i = 0; i < rowGroups.length; i += CONCURRENCY) {
+      batches.push(rowGroups.slice(i, i + CONCURRENCY))
+    }
+
+    for (const batch of batches) {
+      // Check if we already have enough rows
+      if (matchedRows.length >= targetCount) {
+        break
+      }
+
+      const batchResults = await Promise.all(
+        batch.map(rg =>
+          this.reader.readRowGroups<T>(path, [rg], columns.length > 0 ? columns : undefined)
+        )
+      )
+
+      // Process each row group's results
+      for (const rows of batchResults) {
+        rowGroupsRead++
+        rowsScanned += rows.length
+
+        for (const row of rows) {
+          // Apply soft-delete filter unless includeDeleted
+          if (!includeDeleted) {
+            const r = row as Record<string, unknown>
+            if (!isNullish(r.deletedAt)) {
+              continue
+            }
+          }
+
+          // Apply the filter predicate
+          if (predicate(row)) {
+            matchedRows.push(row)
+
+            // Early termination check
+            if (matchedRows.length >= targetCount) {
+              return {
+                matchedRows,
+                rowsScanned,
+                rowGroupsRead,
+                terminatedEarly: true,
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      matchedRows,
+      rowsScanned,
+      rowGroupsRead,
+      terminatedEarly: false,
+    }
   }
 
   /**

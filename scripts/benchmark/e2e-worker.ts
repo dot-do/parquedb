@@ -63,14 +63,14 @@ const IMDB_QUERIES: QuerySpec[] = [
   {
     name: 'entity_lookup_middle',
     description: 'Get middle title entity',
-    path: '/datasets/imdb/titles/tt0500000',
+    path: '/datasets/imdb/titles/tt0050000',
     expectedRows: 1,
     category: 'entity',
   },
   {
     name: 'entity_lookup_recent',
     description: 'Get recent title entity',
-    path: '/datasets/imdb/titles/tt0999999',
+    path: '/datasets/imdb/titles/tt0099999',
     expectedRows: 1,
     category: 'entity',
   },

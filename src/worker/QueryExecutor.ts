@@ -756,6 +756,7 @@ export class QueryExecutor {
               filter: pushdownFilter,
               columns: ['$id', 'data'],
               compressors,
+              rowLimit: options.limit,
             }) as DataRow[]
             stats.rowsScanned = rows.length
             // Log pushdown filter for debugging
