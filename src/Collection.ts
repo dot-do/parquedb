@@ -54,6 +54,7 @@ import type {
   Projection,
   SortSpec,
   SortDirection,
+  Schema,
 } from './types'
 import { normalizeSortDirection } from './types'
 import { castEntity, entityAsRecord } from './types/cast'
@@ -74,6 +75,7 @@ import {
   DEFAULT_GLOBAL_STORAGE_CLEANUP_INTERVAL_MS,
 } from './constants'
 import { isNotFoundError, NotFoundError } from './storage/errors'
+import { parseRelation, isRelationString } from './types/schema'
 
 // Re-export AggregationStage for backwards compatibility
 export type { AggregationStage } from './aggregation'
@@ -256,6 +258,114 @@ const globalStorage = new LRUMap<string, LRUMap<string, Entity<unknown>>>(
 const globalRelationships = new LRUMap<string, Array<{ from: EntityId; predicate: string; to: EntityId }>>(
   storageConfig.maxNamespaces
 )
+
+// Schema-driven relationship mapping registry
+// Maps: sourceNs -> predicate -> reverseName
+const globalRelationshipSchema = new Map<string, Map<string, string>>()
+
+/** Schema-driven relationship mapping entry */
+export interface RelationshipMapping {
+  sourceNs: string
+  predicate: string
+  reverseName: string
+}
+
+/**
+ * Register relationship mappings from a schema definition.
+ * Replaces hardcoded reverse mapping lookups with schema-driven configuration.
+ */
+export function registerRelationshipMappings(mappings: RelationshipMapping[]): void {
+  for (const mapping of mappings) {
+    if (!globalRelationshipSchema.has(mapping.sourceNs)) {
+      globalRelationshipSchema.set(mapping.sourceNs, new Map())
+    }
+    globalRelationshipSchema.get(mapping.sourceNs)!.set(mapping.predicate, mapping.reverseName)
+  }
+}
+
+/**
+ * Register a schema to enable schema-driven reverse relationship mapping.
+ * This parses forward relationships from the schema and builds the reverse lookup map.
+ *
+ * @param schema - The schema to register
+ *
+ * @example
+ * registerSchemaForRelationships({
+ *   Post: {
+ *     $ns: 'posts',
+ *     author: '-> User.posts',  // Forward relationship
+ *     categories: '-> Category.posts[]',
+ *   },
+ *   Comment: {
+ *     $ns: 'comments',
+ *     post: '-> Post.comments',
+ *     author: '-> User.comments',
+ *   },
+ * })
+ * // This registers:
+ * // 'posts:author' -> 'posts' (inbound from posts/author shows as "posts" on User)
+ * // 'posts:categories' -> 'posts' (inbound from posts/categories shows as "posts" on Category)
+ * // 'comments:post' -> 'comments' (inbound from comments/post shows as "comments" on Post)
+ * // 'comments:author' -> 'comments' (inbound from comments/author shows as "comments" on User)
+ */
+export function registerSchemaForRelationships(schema: Schema): void {
+  const mappings: RelationshipMapping[] = []
+
+  for (const [typeName, typeDef] of Object.entries(schema)) {
+    // Determine namespace: use $ns if specified, otherwise lowercase type name + 's'
+    const ns = typeof typeDef.$ns === 'string' ? typeDef.$ns : typeName.toLowerCase() + 's'
+
+    for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
+      if (fieldName.startsWith('$')) continue
+      if (typeof fieldDef !== 'string') continue
+      if (!isRelationString(fieldDef)) continue
+
+      const rel = parseRelation(fieldDef)
+      if (!rel) continue
+
+      // Only forward relationships define the reverse mapping
+      if (rel.direction === 'forward' && rel.reverse) {
+        // When we see 'posts:author' (from posts namespace, predicate author),
+        // the reverse name (how it appears on the target) is rel.reverse
+        mappings.push({
+          sourceNs: ns,
+          predicate: fieldName,
+          reverseName: rel.reverse,
+        })
+      }
+    }
+  }
+
+  registerRelationshipMappings(mappings)
+}
+
+/** Clear all registered relationship mappings. */
+export function clearRelationshipMappings(): void {
+  globalRelationshipSchema.clear()
+}
+
+/** Get reverse name from schema registry, falling back to source namespace. */
+function getReverseName(sourceNs: string, predicate: string): string {
+  const nsMap = globalRelationshipSchema.get(sourceNs)
+  if (nsMap) {
+    const reverseName = nsMap.get(predicate)
+    if (reverseName !== undefined) return reverseName
+  }
+  return sourceNs
+}
+
+/** Get reverse configs for a given reverse name. */
+function getReverseConfig(reverseName: string): Array<{ sourceNs: string; predicate: string }> {
+  const configs: Array<{ sourceNs: string; predicate: string }> = []
+  for (const [sourceNs, predicateMap] of globalRelationshipSchema) {
+    for (const [predicate, rName] of predicateMap) {
+      if (rName === reverseName) {
+        configs.push({ sourceNs, predicate })
+      }
+    }
+  }
+  return configs
+}
 
 // Event log with TTL and size limits (uses getters for dynamic config)
 const globalEventLog = new BoundedEventLog(
@@ -696,7 +806,7 @@ export class Collection<T extends EntityData = EntityData> {
     const total = await this.count(filter)
 
     // Fetch one extra to check if there are more results
-    const entities = await this.find(filter, { ...options, limit: limit + 1 })
+    const entities = await this.find(filter, { ...options, limit: limit + 1 } as FindOptions<T>)
 
     const hasMore = entities.length > limit
     const items = hasMore ? entities.slice(0, limit) : entities
@@ -755,7 +865,7 @@ export class Collection<T extends EntityData = EntityData> {
    * @returns Single entity or null if not found
    */
   async findOne(filter?: Filter, options?: FindOptions<T>): Promise<Entity<T> | null> {
-    const results = await this.find(filter, { ...options, limit: 1 })
+    const results = await this.find(filter, { ...options, limit: 1 } as FindOptions<T>)
     return results[0] ?? null
   }
 
@@ -775,7 +885,7 @@ export class Collection<T extends EntityData = EntityData> {
    * @returns Entity with traversal methods
    * @throws Error if entity not found
    */
-  async get(id: string, options?: GetOptions): Promise<Entity<T>> {
+  async get(id: string, options?: GetOptions<T>): Promise<Entity<T>> {
     const entityId = this.normalizeId(id)
     const localId = this.extractLocalId(entityId)
     const entity = this.storage.get(localId)
@@ -875,17 +985,9 @@ export class Collection<T extends EntityData = EntityData> {
 
       for (const rel of inboundRels) {
         const parsed = parseEntityId(rel.from)
-        // Determine reverse name based on source namespace and predicate
-        // posts/author -> User = posts
-        // comments/author -> User = comments
-        // posts/categories -> Category = posts
-        // comments/post -> Post = comments
-        const reverseMap: Record<string, Record<string, string>> = {
-          'posts': { 'author': 'posts', 'categories': 'posts' },
-          'comments': { 'author': 'comments', 'post': 'comments' },
-        }
-        const nsReverseMap = reverseMap[parsed.ns] || {}
-        const reverseName = nsReverseMap[rel.predicate] || parsed.ns
+        // Determine reverse name from schema-driven relationship registry
+        // Falls back to source namespace name when no mapping is registered
+        const reverseName = getReverseName(parsed.ns, rel.predicate)
 
         if (!reverseGroups.has(reverseName)) {
           reverseGroups.set(reverseName, [])
@@ -991,25 +1093,19 @@ export class Collection<T extends EntityData = EntityData> {
     traversableEntity.referencedBy = async function<R>(reverse: string, opts?: { filter?: Filter | undefined; sort?: SortSpec | undefined; limit?: number | undefined; cursor?: string | undefined; includeDeleted?: boolean | undefined; asOf?: Date | undefined }): Promise<{ items: Entity<R>[]; total?: number | undefined; nextCursor?: string | undefined; hasMore: boolean }> {
       if (!reverse) throw new Error('Reverse name is required')
 
-      // Map reverse names to source namespace and predicate
-      const reverseConfig: Record<string, { sourceNs: string; predicate: string }> = {
-        'posts': { sourceNs: 'posts', predicate: 'author' },
-        'comments': { sourceNs: 'comments', predicate: 'author' },
-      }
-      const config = reverseConfig[reverse]
-      if (!config) {
-        const knownReverses = ['posts', 'comments']
-        if (!knownReverses.includes(reverse)) throw new Error(`Reverse "${reverse}" not found`)
-      }
+      // Look up reverse configuration from schema-driven registry
+      const configs = getReverseConfig(reverse)
 
       // Filter relationships by target (this entity), source namespace, and predicate
       const rels = allRels.filter(r => {
         if (r.to !== entityId) return false
-        if (config) {
+        if (configs.length > 0) {
           const parsed = parseEntityId(r.from)
-          return parsed.ns === config.sourceNs && r.predicate === config.predicate
+          return configs.some(c => parsed.ns === c.sourceNs && r.predicate === c.predicate)
         }
-        return true
+        // Fallback: match any inbound relationship whose source namespace matches
+        const parsed = parseEntityId(r.from)
+        return parsed.ns === reverse
       })
 
       // Batch entity fetches by namespace to avoid N+1 queries
@@ -1533,11 +1629,12 @@ export class Collection<T extends EntityData = EntityData> {
 /**
  * Clear all global storage (for testing purposes)
  * This clears all entities and relationships from all namespaces.
- * Also stops the automatic cleanup timer if running.
+ * Also stops the automatic cleanup timer if running and clears schema registry.
  */
 export function clearGlobalStorage(): void {
   stopGlobalStorageCleanup()
   globalStorage.clear()
   globalRelationships.clear()
+  clearRelationshipMappings()
   clearEventLog()
 }

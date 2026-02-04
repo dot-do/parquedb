@@ -31,6 +31,9 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
+    // noPropertyAccessFromIndexSignature disabled: 1207 errors across 30+ files
+    // MongoDB-style filter/aggregation operators ($gt, $eq, $set, etc.) use dot notation idiomatically
+    // Cost-benefit unfavorable - would require massive refactoring with minimal safety benefit
     "noPropertyAccessFromIndexSignature": false,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,

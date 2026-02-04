@@ -229,7 +229,23 @@ export class IcebergBackend implements EntityBackend {
   }
 
   async count(ns: string, filter?: Filter): Promise<number> {
-    // Issue parquedb-kzoe: Optimize using manifest statistics for unfiltered counts
+    // Optimization: for unfiltered counts, use snapshot summary statistics
+    // instead of reading and scanning all data files
+    if (!filter || Object.keys(filter).length === 0) {
+      const metadata = await this.getTableMetadata(ns)
+      if (!metadata) return 0
+
+      const snapshot = getCurrentSnapshot(metadata)
+      if (!snapshot) return 0
+
+      const summary = snapshot.summary as Record<string, string> | undefined
+      const totalRecords = summary?.['total-records']
+      if (totalRecords !== undefined) {
+        return parseInt(totalRecords)
+      }
+    }
+
+    // Filtered counts still require reading entities
     const entities = await this.find(ns, filter)
     return entities.length
   }
@@ -520,11 +536,51 @@ export class IcebergBackend implements EntityBackend {
 
     const builder = new SchemaEvolutionBuilder(currentSchema)
 
-    // Add new fields
+    // Build a set of desired field names for detecting removals
+    const desiredFieldNames = new Set(schema.fields.map(f => f.name))
+
+    // Track fields that are being renamed (so we don't also drop their old names)
+    const renamedFromNames = new Set<string>()
     for (const field of schema.fields) {
+      if (field.renamedFrom) {
+        renamedFromNames.add(field.renamedFrom)
+      }
+    }
+
+    // Step 1: Process renames first (before adds/drops to maintain field ID continuity)
+    for (const field of schema.fields) {
+      if (field.renamedFrom) {
+        const existingField = currentSchema.fields.find(f => f.name === field.renamedFrom)
+        if (existingField) {
+          builder.renameColumn(field.renamedFrom, field.name)
+        }
+      }
+    }
+
+    // Step 2: Process type changes for existing fields
+    for (const field of schema.fields) {
+      const lookupName = field.renamedFrom ?? field.name
+      const existingField = currentSchema.fields.find(f => f.name === lookupName)
+      if (existingField) {
+        const newIcebergType = this.entityFieldTypeToIceberg(field.type)
+        const existingIcebergType = typeof existingField.type === 'string'
+          ? existingField.type
+          : JSON.stringify(existingField.type)
+        if (newIcebergType !== existingIcebergType) {
+          builder.updateColumnType(
+            field.name,
+            newIcebergType as 'string' | 'int' | 'long' | 'float' | 'double' | 'boolean'
+              | 'date' | 'time' | 'timestamp' | 'timestamptz' | 'uuid' | 'binary'
+          )
+        }
+      }
+    }
+
+    // Step 3: Add new fields (that don't exist and aren't renames)
+    for (const field of schema.fields) {
+      if (field.renamedFrom) continue
       const existingField = currentSchema.fields.find(f => f.name === field.name)
       if (!existingField) {
-        // Cast to IcebergType - the string values we produce are valid Iceberg primitive types
         const icebergType = this.entityFieldTypeToIceberg(field.type) as
           | 'string' | 'int' | 'long' | 'float' | 'double' | 'boolean'
           | 'date' | 'time' | 'timestamp' | 'timestamptz' | 'uuid' | 'binary'
@@ -535,7 +591,20 @@ export class IcebergBackend implements EntityBackend {
       }
     }
 
-    // Issue parquedb-7tin: Implement field removals, renames, and type changes
+    // Step 4: Remove fields that exist in current schema but not in new schema
+    const coreFieldNames = new Set([
+      '$id', '$type', 'name', 'createdAt', 'createdBy',
+      'updatedAt', 'updatedBy', 'deletedAt', 'deletedBy', 'version', '$data',
+    ])
+    for (const existingField of currentSchema.fields) {
+      if (
+        !desiredFieldNames.has(existingField.name) &&
+        !renamedFromNames.has(existingField.name) &&
+        !coreFieldNames.has(existingField.name)
+      ) {
+        builder.dropColumn(existingField.name)
+      }
+    }
 
     const evolvedSchema = builder.build()
 
@@ -605,7 +674,7 @@ export class IcebergBackend implements EntityBackend {
       }
     }
 
-    // Issue parquedb-j0n8: Full compaction implementation for filesystem catalogs
+    // Compaction for filesystem catalogs: merge small files into larger ones
     const startTime = Date.now()
     const metadata = await this.getTableMetadata(ns)
     if (!metadata) {
@@ -738,9 +807,20 @@ export class IcebergBackend implements EntityBackend {
     const olderThanMs = Date.now() - retentionMs
     const result = manager.expireSnapshots(olderThanMs)
 
-    const expiredSnapshotIds = result.expiredSnapshotIds ?? []
+    let expiredSnapshotIds = result.expiredSnapshotIds ?? []
     if (expiredSnapshotIds.length === 0) {
       return { filesDeleted: 0, bytesReclaimed: 0, snapshotsExpired: 0 }
+    }
+
+    // Respect minSnapshots option: keep at least N snapshots
+    const minSnapshots = options?.minSnapshots ?? 1
+    const totalSnapshots = metadata.snapshots.length
+    const maxExpirable = totalSnapshots - minSnapshots
+    if (maxExpirable <= 0) {
+      return { filesDeleted: 0, bytesReclaimed: 0, snapshotsExpired: 0 }
+    }
+    if (expiredSnapshotIds.length > maxExpirable) {
+      expiredSnapshotIds = expiredSnapshotIds.slice(0, maxExpirable)
     }
 
     // Collect all files referenced by current (non-expired) snapshots
@@ -821,13 +901,21 @@ export class IcebergBackend implements EntityBackend {
       }
     }
 
-    // Issue parquedb-0wut: Full file deletion and metadata update implementation
+    // Deduplicate orphaned files (a file may be referenced by multiple expired snapshots)
+    const seenPaths = new Set<string>()
+    const uniqueOrphanedFiles = orphanedFiles.filter(f => {
+      if (seenPaths.has(f.path)) return false
+      seenPaths.add(f.path)
+      return true
+    })
+
+    // Delete orphaned files and update metadata
     let filesDeleted = 0
     let bytesReclaimed = 0
 
-    if (!options?.dryRun && orphanedFiles.length > 0) {
-      // Delete orphaned files
-      for (const file of orphanedFiles) {
+    if (!options?.dryRun && uniqueOrphanedFiles.length > 0) {
+      // Delete orphaned files from storage
+      for (const file of uniqueOrphanedFiles) {
         try {
           await this.storage.delete(file.path)
           filesDeleted++
@@ -861,9 +949,9 @@ export class IcebergBackend implements EntityBackend {
     }
 
     return {
-      filesDeleted: options?.dryRun ? orphanedFiles.length : filesDeleted,
+      filesDeleted: options?.dryRun ? uniqueOrphanedFiles.length : filesDeleted,
       bytesReclaimed: options?.dryRun
-        ? orphanedFiles.reduce((sum, f) => sum + f.size, 0)
+        ? uniqueOrphanedFiles.reduce((sum, f) => sum + f.size, 0)
         : bytesReclaimed,
       snapshotsExpired: expiredSnapshotIds.length,
     }

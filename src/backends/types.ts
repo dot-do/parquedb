@@ -73,7 +73,7 @@ export interface EntityBackend {
   get<T extends EntityData = EntityData>(
     ns: string,
     id: string,
-    options?: GetOptions | undefined
+    options?: GetOptions<T> | undefined
   ): Promise<Entity<T> | null>
 
   /**
@@ -82,7 +82,7 @@ export interface EntityBackend {
   find<T extends EntityData = EntityData>(
     ns: string,
     filter?: Filter | undefined,
-    options?: FindOptions | undefined
+    options?: FindOptions<T> | undefined
   ): Promise<Entity<T>[]>
 
   /**
@@ -273,6 +273,9 @@ export interface SchemaField {
 
   /** Field ID (for Iceberg) */
   id?: number | undefined
+
+  /** Previous field name (for rename tracking during schema evolution) */
+  renamedFrom?: string | undefined
 }
 
 /** Supported field types */
