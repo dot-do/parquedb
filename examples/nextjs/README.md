@@ -15,28 +15,84 @@ pnpm seed
 pnpm dev
 ```
 
+## Project Structure
+
+```
+parquedb.config.ts    # Schema + config - auto-detected by parquedb
+app/
+  posts/page.tsx      # Server Component - just `import { db } from 'parquedb'`
+  posts/[slug]/page.tsx
+  posts/new/page.tsx  # Server Action for mutations
+  users/[email]/page.tsx
+  api/posts/route.ts  # REST API route
+scripts/
+  seed.ts             # Database seeding
+```
+
+## The Magic: parquedb.config.ts
+
+```ts
+import { defineConfig, defineSchema } from 'parquedb/config'
+
+export const schema = defineSchema({
+  User: {
+    $id: 'email',
+    $name: 'name',
+    email: 'string!#',
+    name: 'string!',
+    posts: '<- Post.author[]'
+  },
+  Post: {
+    $id: 'slug',
+    $name: 'title',
+    slug: 'string!#',
+    title: 'string!',
+    author: '-> User',
+
+    // Studio layout
+    $layout: { Content: [['title', 'slug'], 'content'] },
+    $studio: { label: 'Blog Posts' }
+  }
+})
+
+export default defineConfig({ schema })
+```
+
+Then just import `db` anywhere:
+
+```tsx
+import { db } from 'parquedb'
+
+const posts = await db.Post.find({ status: 'published' })
+```
+
+No `lib/db.ts` needed - ParqueDB auto-detects the config file!
+
 ## Features Demonstrated
 
 ### Server Components
 
 ```tsx
 // app/posts/page.tsx
-const posts = await db.Post.find({ status: 'published' })
+import { db } from 'parquedb'
 
-// Direct iteration - no .items needed
-{posts.map(post => (
-  <li>{post.title} by {post.author?.name}</li>
-))}
+export default async function PostsPage() {
+  const posts = await db.Post.find({ status: 'published' })
 
-// Pagination metadata via proxy
-<span>Total: {posts.$total}</span>
+  return (
+    <ul>
+      {posts.map(post => (
+        <li>{post.title} by {post.author?.name}</li>
+      ))}
+    </ul>
+  )
+}
 ```
 
 ### Auto-Hydrated Relationships
 
 ```tsx
-// app/posts/[slug]/page.tsx
-const post = await db.Post.get(slug)
+const post = await db.Post.get('hello-world')
 
 // Forward relationship auto-hydrated
 <p>By {post.author?.name}</p>
@@ -48,26 +104,23 @@ const post = await db.Post.get(slug)
 ### Server Actions
 
 ```tsx
-// app/posts/new/page.tsx
 async function createPost(formData: FormData) {
   'use server'
-  const post = await db.Post.create({
+  await db.Post.create({
     slug: formData.get('slug'),
     title: formData.get('title'),
     author: formData.get('author')
   })
-  redirect(`/posts/${post.slug}`)
+  redirect(`/posts/${slug}`)
 }
 ```
 
-### API Routes
+### SQL Queries
 
-```ts
-// app/api/posts/route.ts
-export async function GET(request: NextRequest) {
-  const posts = await db.Post.find({ status: 'published' })
-  return NextResponse.json({ posts, total: posts.$total })
-}
+```tsx
+import { sql } from 'parquedb'
+
+const posts = await sql`SELECT * FROM posts WHERE status = ${'published'}`
 ```
 
 ## Pages
@@ -80,4 +133,4 @@ export async function GET(request: NextRequest) {
 
 ## Database Location
 
-Data is stored in `.data/` directory as Parquet files.
+Data stored in `.parquedb/` (auto-created).

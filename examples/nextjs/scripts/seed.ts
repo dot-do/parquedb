@@ -3,7 +3,7 @@
  *
  * Run: pnpm seed
  */
-import { db } from '../lib/db'
+import { db } from 'parquedb'
 
 // Create users
 await db.User.create({
@@ -46,4 +46,3 @@ await db.Post.create({
 })
 
 console.log('Seeded database!')
-db.dispose()

@@ -3,42 +3,19 @@
  *
  * Deploy: wrangler deploy
  */
-import { DB, R2Backend } from 'parquedb'
+import { db } from './db'
 
-// Schema - shared across requests
-const schema = {
-  User: {
-    $id: 'email',
-    $name: 'name',
-    email: 'string!#',
-    name: 'string!',
-    role: 'string',
-    posts: '<- Post.author[]'
-  },
-  Post: {
-    $id: 'slug',
-    $name: 'title',
-    slug: 'string!#',
-    title: 'string!',
-    content: 'text',
-    status: 'string',
-    author: '-> User'
-  }
-} as const
-
-interface Env {
-  BUCKET: R2Bucket
-  PARQUEDB: DurableObjectNamespace
-}
+// Re-export ParqueDBDO for Cloudflare to bind
+export { ParqueDBDO } from 'parquedb/worker'
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
-    const db = DB(schema, { storage: new R2Backend(env.BUCKET) })
 
     // GET /posts - List published posts
     if (url.pathname === '/posts' && request.method === 'GET') {
       const posts = await db.Post.find({ status: 'published' })
+
       return Response.json({
         total: posts.$total,
         posts: posts.map(p => ({

@@ -1,9 +1,10 @@
 /**
- * ParqueDB database configuration
+ * Database schema definition
  *
- * Single instance shared across all server components and actions
+ * This is the single source of truth for types.
+ * Import `db` anywhere you need database access.
  */
-import { DB, FsBackend } from 'parquedb'
+import { DB } from 'parquedb'
 
 export const db = DB({
   User: {
@@ -21,9 +22,6 @@ export const db = DB({
     title: 'string!',
     content: 'text',
     status: 'string',
-    publishedAt: 'datetime',
     author: '-> User'
   }
-}, {
-  storage: new FsBackend('.data')
 })

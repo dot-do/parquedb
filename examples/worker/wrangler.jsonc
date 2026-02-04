@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/wrangler.json",
+  "name": "parquedb-example",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-01-01",
+
+  // R2 bucket for data storage
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "parquedb-data"
+    }
+  ],
+
+  // Durable Object for write consistency
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PARQUEDB",
+        "class_name": "ParqueDBDO"
+      }
+    ]
+  },
+
+  // Required for DO
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["ParqueDBDO"]
+    }
+  ]
+}

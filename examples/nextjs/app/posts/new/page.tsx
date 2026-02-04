@@ -2,7 +2,7 @@
  * New post form - Server Actions for mutations
  */
 import { redirect } from 'next/navigation'
-import { db } from '@/lib/db'
+import { db } from 'parquedb'
 
 async function createPost(formData: FormData) {
   'use server'
@@ -16,20 +16,6 @@ async function createPost(formData: FormData) {
   })
 
   redirect(`/posts/${post.slug}`)
-}
-
-async function publishPost(formData: FormData) {
-  'use server'
-
-  const slug = formData.get('slug') as string
-  await db.Post.update(slug, {
-    $set: {
-      status: 'published',
-      publishedAt: new Date()
-    }
-  })
-
-  redirect(`/posts/${slug}`)
 }
 
 export default async function NewPostPage() {
