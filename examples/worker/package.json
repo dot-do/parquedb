@@ -1,0 +1,17 @@
+{
+  "name": "parquedb-worker-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "parquedb": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241022.0",
+    "typescript": "^5.3.0",
+    "wrangler": "^3.91.0"
+  }
+}

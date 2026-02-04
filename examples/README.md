@@ -1,6 +1,26 @@
 # ParqueDB Examples
 
-This directory contains examples demonstrating how to use ParqueDB with real-world datasets. Each example showcases different aspects of working with large-scale data: streaming, partitioning, graph relationships, and memory-efficient processing.
+## Quick Start by Environment
+
+| Example | Description | Run |
+|---------|-------------|-----|
+| [CLI Script](./01-getting-started/) | Top-level await, FsBackend | `npx tsx examples/01-getting-started/index.ts` |
+| [Cloudflare Worker](./worker/) | R2 storage, REST API | `cd examples/worker && pnpm dev` |
+| [Next.js App](./nextjs/) | Server Components, Server Actions | `cd examples/nextjs && pnpm dev` |
+
+## Tutorials
+
+| Example | Description |
+|---------|-------------|
+| [01-getting-started](./01-getting-started/) | Schema, CRUD, relationships, `$id` and `$name` directives |
+| [02-storage-modes](./02-storage-modes/) | Typed vs Flexible mode, `$options`, `$data` |
+| [03-sql](./03-sql/) | SQL queries on typed collections |
+| [04-branching](./04-branching/) | Git-style version control |
+| [05-sync-to-r2](./05-sync-to-r2/) | Push/pull sync to cloud |
+
+## Dataset Examples
+
+Large-scale examples for streaming, partitioning, and graph processing.
 
 ## Quick Start
 
