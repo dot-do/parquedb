@@ -33,14 +33,15 @@ import type {
 
 import { CollectionImpl } from './collection'
 import { normalizeNamespace } from './validation'
+import { asCollection } from '../types/cast'
 
 /**
  * Interface for the database methods required by CollectionManager.
  * This mirrors ParqueDBMethods in collection.ts to avoid circular dependencies.
  */
 export interface CollectionManagerContext {
-  find<T extends EntityData>(namespace: string, filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
-  get<T extends EntityData>(namespace: string, id: string, options?: GetOptions): Promise<Entity<T> | null>
+  find<T extends EntityData>(namespace: string, filter?: Filter, options?: FindOptions<T>): Promise<PaginatedResult<Entity<T>>>
+  get<T extends EntityData>(namespace: string, id: string, options?: GetOptions<T>): Promise<Entity<T> | null>
   create<T extends EntityData>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
   update<T extends EntityData>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
   delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
@@ -89,7 +90,7 @@ export class CollectionManager {
       this.collections.set(normalizedNs, collection)
     }
 
-    return collection as unknown as Collection<T>
+    return asCollection<T>(collection)
   }
 
   /**
@@ -134,5 +135,5 @@ export function createCollection<T extends EntityData = EntityData>(
   namespace: string
 ): Collection<T> {
   const normalizedNs = normalizeNamespace(namespace)
-  return new CollectionImpl(db as never, normalizedNs) as unknown as Collection<T>
+  return asCollection<T>(new CollectionImpl(db as never, normalizedNs))
 }

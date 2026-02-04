@@ -1831,7 +1831,7 @@ export interface AggregationOptions {
   /** Allow disk use for large aggregations */
   allowDiskUse?: boolean | undefined
   /** Hint for index */
-  hint?: string | { [field: string]: 1 | -1 } | undefined
+  hint?: string | SortSpec | undefined
   /** Include soft-deleted entities */
   includeDeleted?: boolean | undefined
   /** Time-travel */

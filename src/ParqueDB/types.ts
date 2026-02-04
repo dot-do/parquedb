@@ -399,7 +399,7 @@ export interface Collection<T extends EntityData = EntityData> {
    * @param options - Query options
    * @returns Paginated result set
    */
-  find(filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
+  find(filter?: Filter, options?: FindOptions<T>): Promise<PaginatedResult<Entity<T>>>
 
   /**
    * Find a single entity matching a filter
@@ -407,7 +407,7 @@ export interface Collection<T extends EntityData = EntityData> {
    * @param options - Query options
    * @returns Single entity or null if not found
    */
-  findOne(filter?: Filter, options?: FindOptions): Promise<Entity<T> | null>
+  findOne(filter?: Filter, options?: FindOptions<T>): Promise<Entity<T> | null>
 
   /**
    * Get a single entity by ID
@@ -415,7 +415,7 @@ export interface Collection<T extends EntityData = EntityData> {
    * @param options - Get options
    * @returns Entity or null if not found
    */
-  get(id: string, options?: GetOptions): Promise<Entity<T> | null>
+  get(id: string, options?: GetOptions<T>): Promise<Entity<T> | null>
 
   /**
    * Create a new entity

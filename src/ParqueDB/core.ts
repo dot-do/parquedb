@@ -554,7 +554,7 @@ export class ParqueDBImpl {
   async find<T extends EntityData = EntityData>(
     namespace: string,
     filter?: Filter,
-    options?: FindOptions
+    options?: FindOptions<T>
   ): Promise<PaginatedResult<Entity<T>>> {
     return findEntities<T>(this.getEntityContext(), namespace, filter, options)
   }
@@ -562,7 +562,7 @@ export class ParqueDBImpl {
   async get<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
-    options?: GetOptions
+    options?: GetOptions<T>
   ): Promise<Entity<T> | null> {
     const entity = await getEntity<T>(this.getEntityContext(), namespace, id, options)
     if (!entity) return null

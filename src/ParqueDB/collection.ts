@@ -36,8 +36,8 @@ import type {
  * This avoids circular dependencies with ParqueDBImpl while providing type safety.
  */
 interface ParqueDBMethods {
-  find<T extends EntityData>(namespace: string, filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>>
-  get<T extends EntityData>(namespace: string, id: string, options?: GetOptions): Promise<Entity<T> | null>
+  find<T extends EntityData>(namespace: string, filter?: Filter, options?: FindOptions<T>): Promise<PaginatedResult<Entity<T>>>
+  get<T extends EntityData>(namespace: string, id: string, options?: GetOptions<T>): Promise<Entity<T> | null>
   create<T extends EntityData>(namespace: string, data: CreateInput<T>, options?: CreateOptions): Promise<Entity<T>>
   update<T extends EntityData>(namespace: string, id: string, update: UpdateInput<T>, options?: UpdateOptions): Promise<Entity<T> | null>
   delete(namespace: string, id: string, options?: DeleteOptions): Promise<DeleteResult>
@@ -117,7 +117,7 @@ export class CollectionImpl<T extends EntityData = EntityData> implements Collec
    * const titles = await collection.find({}, { project: { title: 1, author: 1 } })
    * ```
    */
-  async find(filter?: Filter, options?: FindOptions): Promise<PaginatedResult<Entity<T>>> {
+  async find(filter?: Filter, options?: FindOptions<T>): Promise<PaginatedResult<Entity<T>>> {
     return this.db.find<T>(this.namespace, filter, options)
   }
 
@@ -149,7 +149,7 @@ export class CollectionImpl<T extends EntityData = EntityData> implements Collec
    * const deleted = await collection.get('01HX...', { includeDeleted: true })
    * ```
    */
-  async get(id: string, options?: GetOptions): Promise<Entity<T> | null> {
+  async get(id: string, options?: GetOptions<T>): Promise<Entity<T> | null> {
     return this.db.get<T>(this.namespace, id, options)
   }
 
@@ -371,8 +371,8 @@ export class CollectionImpl<T extends EntityData = EntityData> implements Collec
    * )
    * ```
    */
-  async findOne(filter?: Filter, options?: FindOptions): Promise<Entity<T> | null> {
-    const result = await this.db.find<T>(this.namespace, filter, { ...options, limit: 1 })
+  async findOne(filter?: Filter, options?: FindOptions<T>): Promise<Entity<T> | null> {
+    const result = await this.db.find<T>(this.namespace, filter, { ...options, limit: 1 } as FindOptions<T>)
     return result.items[0] ?? null
   }
 

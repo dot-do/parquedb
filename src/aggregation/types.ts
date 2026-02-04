@@ -15,6 +15,7 @@
  */
 
 import type { Filter } from '../types/filter'
+import type { SortDirection } from '../types/options'
 import type { IndexManager } from '../indexes/manager'
 
 // =============================================================================
@@ -617,7 +618,7 @@ export interface AggregationOptions {
   allowDiskUse?: boolean | undefined
 
   /** Hint for index */
-  hint?: string | Record<string, 1 | -1> | undefined
+  hint?: string | Record<string, SortDirection> | undefined
 
   /** Include soft-deleted entities */
   includeDeleted?: boolean | undefined

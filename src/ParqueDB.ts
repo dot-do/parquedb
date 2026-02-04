@@ -140,13 +140,13 @@ export interface IParqueDB {
   find<T extends EntityData = EntityData>(
     namespace: string,
     filter?: Filter | undefined,
-    options?: FindOptions | undefined
+    options?: FindOptions<T> | undefined
   ): Promise<PaginatedResult<Entity<T>>>
 
   get<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
-    options?: GetOptions | undefined
+    options?: GetOptions<T> | undefined
   ): Promise<Entity<T> | null>
 
   create<T extends EntityData = EntityData>(

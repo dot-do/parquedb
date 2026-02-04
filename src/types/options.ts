@@ -146,7 +146,7 @@ export interface FindOptionsBase {
   explain?: boolean | undefined
 
   /** Hint for index to use */
-  hint?: string | { [field: string]: 1 | -1 } | undefined
+  hint?: string | SortSpec | undefined
 
   /** Maximum time in milliseconds */
   maxTimeMs?: number | undefined
@@ -241,9 +241,11 @@ export type FindOptions<T = unknown> =
 // =============================================================================
 
 /**
- * Options for get (single entity) operations
+ * Base get options interface (untyped, for backward compatibility)
+ *
+ * @internal
  */
-export interface GetOptions {
+export interface GetOptionsBase {
   /** Include soft-deleted entity */
   includeDeleted?: boolean | undefined
 
@@ -259,6 +261,53 @@ export interface GetOptions {
   /** Field projection */
   project?: Projection | undefined
 }
+
+/**
+ * Options for get (single entity) operations with typed projection.
+ *
+ * When a type parameter T is provided, the project option is constrained to
+ * only allow valid field names from T (plus standard entity fields).
+ *
+ * @typeParam T - The entity data shape. When provided, enables typed projection.
+ *               Defaults to unknown for backward compatibility.
+ *
+ * @example
+ * ```typescript
+ * // Typed get with autocomplete for projection
+ * interface Post { title: string; content: string; views: number }
+ *
+ * const options: GetOptions<Post> = {
+ *   project: { title: 1, content: 1 },  // Only valid fields allowed
+ * }
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Untyped (backward compatible)
+ * const options: GetOptions = {
+ *   project: { anyField: 1 },
+ * }
+ * ```
+ */
+export type GetOptions<T = unknown> =
+  unknown extends T
+    ? GetOptionsBase
+    : {
+        /** Include soft-deleted entity */
+        includeDeleted?: boolean | undefined
+
+        /** Time-travel: get entity as of specific time */
+        asOf?: Date | undefined
+
+        /** Hydrate related entities (fetch full entity, not just link) */
+        hydrate?: string[] | undefined
+
+        /** Maximum inbound references to inline */
+        maxInbound?: number | undefined
+
+        /** Field projection - constrained to valid fields of T */
+        project?: TypedProjection<T> | undefined
+      }
 
 // =============================================================================
 // Related Options
@@ -441,7 +490,7 @@ export interface AggregateOptions {
   allowDiskUse?: boolean | undefined
 
   /** Hint for index */
-  hint?: string | { [field: string]: 1 | -1 } | undefined
+  hint?: string | SortSpec | undefined
 
   /** Include soft-deleted entities */
   includeDeleted?: boolean | undefined
