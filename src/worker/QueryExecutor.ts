@@ -624,8 +624,28 @@ export class QueryExecutor {
             }
             return (row.data ?? row) as T
           })
+        } else if (options.limit && this.storageAdapter) {
+          // No filter but has limit - use rowEnd for early termination
+          const asyncBuffer = await this.createAsyncBuffer(path)
+          const targetRows = (options.skip ?? 0) + options.limit
+          rows = await parquetQuery({
+            file: asyncBuffer,
+            columns: ['$id', 'data'],
+            compressors,
+            rowEnd: targetRows,
+          }) as DataRow[]
+          stats.rowsScanned = rows.length
+
+          // Unpack data column - parse JSON if string, use directly if object
+          results = rows.map(row => {
+            if (typeof row.data === 'string') {
+              const parsed = tryParseJson<T>(row.data)
+              return parsed ?? rowAsEntity<T>(row)
+            }
+            return (row.data ?? row) as T
+          })
         } else {
-          // No pushable filter and no early termination - read all data
+          // No filter, no limit - read all data
           rows = await this.parquetReader.read<DataRow>(path)
           stats.rowsScanned = rows.length
 
