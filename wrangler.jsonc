@@ -11,10 +11,32 @@
   "compatibility_flags": ["nodejs_compat"],
 
   // Route on workers.do enterprise zone (5GB cache support)
+  // Custom domains: api.parquedb.com, benchmarks.parquedb.com, etc.
+  // To add custom domains, run: wrangler domains add api.parquedb.com
   "routes": [
     {
       "pattern": "parquedb.workers.do/*",
       "zone_name": "workers.do"
+    },
+    {
+      "pattern": "api.parquedb.com/*",
+      "zone_name": "parquedb.com"
+    },
+    {
+      "pattern": "benchmarks.parquedb.com/*",
+      "zone_name": "parquedb.com"
+    },
+    {
+      "pattern": "onet.parquedb.com/*",
+      "zone_name": "parquedb.com"
+    },
+    {
+      "pattern": "imdb.parquedb.com/*",
+      "zone_name": "parquedb.com"
+    },
+    {
+      "pattern": "unspsc.parquedb.com/*",
+      "zone_name": "parquedb.com"
     }
   ],
 

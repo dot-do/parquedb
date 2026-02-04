@@ -20,6 +20,7 @@ import { handleDatasetBenchmarkRequest } from './benchmark-datasets'
 import { handleIndexedBenchmarkRequest } from './benchmark-indexed'
 import { handleBackendsBenchmarkRequest } from './benchmark-backends'
 import { handleDatasetBackendsBenchmarkRequest } from './benchmark-datasets-backends'
+import { handleE2EBenchmarkRequest } from './benchmark-e2e'
 import type { Filter } from '../types/filter'
 import type {
   FindOptions,
@@ -949,6 +950,18 @@ export default {
           throw new MissingBucketError('BUCKET', 'Required for dataset backend benchmarks.')
         }
         const response = await handleDatasetBackendsBenchmarkRequest(request, env.BUCKET)
+        return withRateLimitHeaders(response)
+      }
+
+      // =======================================================================
+      // E2E Benchmark Suite - End-to-end performance testing
+      // Rate limited via 'benchmark' endpoint type (10 req/min)
+      // =======================================================================
+      if (path === '/benchmark/e2e' || path.startsWith('/benchmark/e2e/')) {
+        if (!env.BUCKET) {
+          throw new MissingBucketError('BUCKET', 'Required for E2E benchmark operations.')
+        }
+        const response = await handleE2EBenchmarkRequest(request, env.BUCKET)
         return withRateLimitHeaders(response)
       }
 
