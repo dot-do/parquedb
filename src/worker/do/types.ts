@@ -279,7 +279,7 @@ export interface BackpressureState {
  * Error thrown when backpressure timeout is exceeded.
  */
 export class BackpressureTimeoutError extends Error {
-  name = 'BackpressureTimeoutError'
+  override name = 'BackpressureTimeoutError'
 
   constructor(
     public readonly timeoutMs: number,
