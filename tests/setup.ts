@@ -7,6 +7,10 @@
 
 import { beforeAll, afterEach, describe, expect } from 'vitest'
 import { parquedbMatchers } from './matchers'
+import { config } from 'dotenv'
+
+// Load environment variables from .env file
+config()
 
 // Register custom matchers
 expect.extend(parquedbMatchers)
