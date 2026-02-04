@@ -3,7 +3,7 @@
  */
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { db } from 'parquedb'
+import { db } from '../../../src/db.generated'
 
 interface Props {
   params: Promise<{ email: string }>
@@ -17,7 +17,6 @@ export default async function UserPage({ params }: Props) {
     notFound()
   }
 
-  // user.posts is auto-hydrated as a reverse relationship
   const posts = user.posts ?? []
 
   return (

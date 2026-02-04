@@ -3,7 +3,7 @@
  */
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { db } from 'parquedb'
+import { db } from '../../../src/db.generated'
 
 interface Props {
   params: Promise<{ slug: string }>
@@ -17,7 +17,6 @@ export default async function PostPage({ params }: Props) {
     notFound()
   }
 
-  // post.author is auto-hydrated - no extra query needed!
   const author = post.author
 
   return (

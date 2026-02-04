@@ -6,11 +6,14 @@ A blog using ParqueDB with Next.js App Router.
 
 ```bash
 pnpm install
+pnpm generate   # Generate typed exports
 pnpm seed
 pnpm dev
 ```
 
-## The Magic: parquedb.config.ts
+## Type-Safe Setup
+
+### 1. Define schema in `parquedb.config.ts`
 
 ```ts
 import { defineConfig } from 'parquedb/config'
@@ -35,11 +38,19 @@ export default defineConfig({
 })
 ```
 
-Then just import `db` anywhere:
+### 2. Generate typed exports
+
+```bash
+npx parquedb generate
+# Creates src/db.generated.ts with full TypeScript types
+```
+
+### 3. Import and use
 
 ```tsx
-import { db } from 'parquedb'
+import { db } from './db.generated'
 
+// Fully typed!
 const posts = await db.Post.find({ status: 'published' })
 const post = await db.Post.get('hello-world')
 console.log(post.author?.name)  // Auto-hydrated!

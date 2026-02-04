@@ -2,7 +2,7 @@
  * New post form - Server Actions for mutations
  */
 import { redirect } from 'next/navigation'
-import { db } from 'parquedb'
+import { db } from '../../../src/db.generated'
 
 async function createPost(formData: FormData) {
   'use server'

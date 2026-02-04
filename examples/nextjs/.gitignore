@@ -1,0 +1,13 @@
+# Generated types - regenerate with: pnpm generate
+src/db.generated.ts
+
+# Next.js
+.next/
+out/
+
+# Dependencies
+node_modules/
+
+# Database
+.parquedb/
+.db/

@@ -1,8 +1,8 @@
 /**
- * REST API route - Alternative to Server Actions
+ * REST API route
  */
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from 'parquedb'
+import { db } from '../../../src/db.generated'
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)

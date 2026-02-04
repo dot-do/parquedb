@@ -1,10 +1,8 @@
 /**
  * Posts listing page - Server Component
- *
- * Uses auto-configured `db` from parquedb - no lib/db.ts needed!
  */
 import Link from 'next/link'
-import { db } from 'parquedb'
+import { db } from '../../src/db.generated'
 
 export default async function PostsPage() {
   const posts = await db.Post.find({ status: 'published' })
