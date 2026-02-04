@@ -18,7 +18,22 @@ on:
       iterations:
         description: 'Number of iterations per query'
         required: false
-        default: '3'
+        default: '5'
+      fail_on_regression:
+        description: 'Fail if regression detected'
+        type: boolean
+        required: false
+        default: true
+      update_baseline:
+        description: 'Update baseline after successful run'
+        type: boolean
+        required: false
+        default: false
+
+env:
+  WORKER_URL: ${{ github.event.inputs.url || 'https://parquedb.workers.do' }}
+  R2_BUCKET: parquedb-benchmarks
+  ENVIRONMENT: production
 
 jobs:
   benchmark:
@@ -38,55 +53,179 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run E2E benchmark
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Download baseline from R2
+        id: baseline
+        continue-on-error: true
         run: |
-          node scripts/e2e-benchmark.mjs \
-            --url="${{ github.event.inputs.url || 'https://parquedb.workers.do' }}" \
-            --datasets="${{ github.event.inputs.datasets || 'imdb,onet-full,unspsc-full' }}" \
-            --iterations="${{ github.event.inputs.iterations || '3' }}" \
-            --output=json > benchmark-results.json
+          wrangler r2 object get ${{ env.R2_BUCKET }}/benchmarks/baselines/${{ env.ENVIRONMENT }}/latest.json \
+            --file=baseline.json 2>/dev/null || echo "No baseline found"
+          if [ -f baseline.json ]; then
+            echo "baseline_exists=true" >> $GITHUB_OUTPUT
+            echo "Baseline downloaded successfully"
+          else
+            echo "baseline_exists=false" >> $GITHUB_OUTPUT
+            echo "No baseline found, will skip regression check"
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Run E2E benchmark
+        id: benchmark
+        run: |
+          BASELINE_FLAG=""
+          REGRESSION_FLAG=""
+
+          if [ "${{ steps.baseline.outputs.baseline_exists }}" == "true" ]; then
+            BASELINE_FLAG="--baseline-url=./baseline.json"
+          fi
+
+          if [ "${{ github.event.inputs.fail_on_regression || 'true' }}" == "true" ] && [ "${{ steps.baseline.outputs.baseline_exists }}" == "true" ]; then
+            REGRESSION_FLAG="--fail-on-regression"
+          fi
+
+          npx tsx tests/e2e/benchmarks/runner.ts \
+            --url="${{ env.WORKER_URL }}" \
+            --iterations="${{ github.event.inputs.iterations || '5' }}" \
+            --output=json \
+            --save-baseline=./results.json \
+            --environment=${{ env.ENVIRONMENT }} \
+            $BASELINE_FLAG \
+            $REGRESSION_FLAG \
+            > benchmark-output.json
+
+          # Extract results for summary
+          echo "benchmark_completed=true" >> $GITHUB_OUTPUT
         env:
           CI: true
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
 
-      - name: Upload benchmark results
+      - name: Upload results to R2
+        if: always() && steps.benchmark.outputs.benchmark_completed == 'true'
+        run: |
+          # Upload timestamped result
+          DATE_PATH=$(date -u +"%Y/%m/%d")
+          RUN_ID="run-$(date -u +"%s")-${{ github.run_id }}"
+          RESULT_PATH="benchmarks/results/${{ env.ENVIRONMENT }}/${DATE_PATH}/${RUN_ID}.json"
+
+          wrangler r2 object put ${{ env.R2_BUCKET }}/${RESULT_PATH} \
+            --file=results.json \
+            --content-type="application/json"
+
+          echo "Results uploaded to: ${RESULT_PATH}"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Update baseline
+        if: success() && github.event.inputs.update_baseline == 'true'
+        run: |
+          wrangler r2 object put ${{ env.R2_BUCKET }}/benchmarks/baselines/${{ env.ENVIRONMENT }}/latest.json \
+            --file=results.json \
+            --content-type="application/json"
+          echo "Baseline updated successfully"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Upload benchmark results artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: benchmark-results
-          path: benchmark-results.json
+          path: |
+            results.json
+            benchmark-output.json
           retention-days: 30
 
       - name: Display benchmark summary
+        if: always()
         run: |
           echo "## E2E Benchmark Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          node -e "
-            const fs = require('fs');
-            const results = JSON.parse(fs.readFileSync('benchmark-results.json', 'utf8'));
 
-            console.log('### Configuration');
-            console.log('- **Worker URL**: ' + results.config.url);
-            console.log('- **Datasets**: ' + results.config.datasets.join(', '));
-            console.log('- **Iterations**: ' + results.config.iterations);
-            console.log('');
+          if [ -f results.json ]; then
+            node -e "
+              const fs = require('fs');
+              const results = JSON.parse(fs.readFileSync('results.json', 'utf8'));
+              const r = results.results || results;
 
-            if (results.benchmark?.lastResult?.data?.summary) {
-              const s = results.benchmark.lastResult.data.summary;
-              console.log('### R2 I/O (V3 vs V1)');
-              console.log('| Metric | Value |');
-              console.log('|--------|-------|');
-              console.log('| Avg Speedup | ' + s.avgSpeedup + 'x |');
-              console.log('| Best Speedup | ' + (s.bestSpeedup?.speedup || 'N/A') + 'x |');
+              console.log('### Configuration');
+              console.log('- **Worker URL**: ' + (r.config?.url || r.metadata?.workerUrl || 'N/A'));
+              console.log('- **Environment**: ${{ env.ENVIRONMENT }}');
+              console.log('- **Run ID**: ' + (results.runId || 'N/A'));
+              console.log('- **Commit**: ' + (results.commitSha || 'N/A'));
               console.log('');
-            }
 
-            if (results.benchmarkIndexed?.lastResult?.data?.summary) {
-              const s = results.benchmarkIndexed.lastResult.data.summary;
-              console.log('### Secondary Indexes');
-              console.log('| Metric | Value |');
-              console.log('|--------|-------|');
-              console.log('| Avg Speedup | ' + s.avgSpeedup + 'x |');
-              console.log('| Median Speedup | ' + s.medianSpeedup + 'x |');
-              console.log('| Index Beneficial Rate | ' + s.indexBeneficialRate + '% |');
-              console.log('');
-            }
-          " >> $GITHUB_STEP_SUMMARY
+              if (r.summary) {
+                console.log('### Summary');
+                console.log('| Metric | Value |');
+                console.log('|--------|-------|');
+                console.log('| Total Tests | ' + r.summary.totalTests + ' |');
+                console.log('| Passed | ' + r.summary.passedTests + ' |');
+                console.log('| Failed | ' + r.summary.failedTests + ' |');
+                console.log('| Avg Latency | ' + r.summary.avgLatencyMs?.toFixed(1) + 'ms |');
+                console.log('| P95 Latency | ' + r.summary.p95LatencyMs?.toFixed(1) + 'ms |');
+                console.log('');
+              }
+
+              if (r.regression) {
+                const reg = r.regression;
+                const status = reg.hasRegression ? ':x: REGRESSION DETECTED' : ':white_check_mark: No regression';
+                console.log('### Regression Analysis');
+                console.log('- **Status**: ' + status);
+                console.log('- **Severity**: ' + reg.severity);
+                console.log('');
+
+                if (reg.hasRegression && reg.metrics) {
+                  console.log('**Regressed Metrics:**');
+                  console.log('| Metric | Change | Threshold |');
+                  console.log('|--------|--------|-----------|');
+                  for (const m of reg.metrics) {
+                    if (m.isRegression) {
+                      const sign = m.changePercent >= 0 ? '+' : '';
+                      console.log('| ' + m.name + ' | ' + sign + m.changePercent.toFixed(1) + '% | ' + m.threshold + '% |');
+                    }
+                  }
+                  console.log('');
+                }
+              }
+
+              if (r.coldStart) {
+                console.log('### Cold Start');
+                console.log('| Metric | Value |');
+                console.log('|--------|-------|');
+                console.log('| Cold | ' + r.coldStart.coldLatencyMs?.toFixed(1) + 'ms |');
+                console.log('| Warm | ' + r.coldStart.warmLatencyMs?.toFixed(1) + 'ms |');
+                console.log('| Overhead | ' + r.coldStart.overheadMs?.toFixed(1) + 'ms (' + r.coldStart.overheadPercent?.toFixed(0) + '%) |');
+                console.log('');
+              }
+            " >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No results file found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Alert on regression (Slack)
+        if: failure() && steps.baseline.outputs.baseline_exists == 'true'
+        continue-on-error: true
+        run: |
+          if [ -n "${{ secrets.E2E_SLACK_WEBHOOK_URL }}" ]; then
+            curl -X POST -H 'Content-type: application/json' \
+              --data '{
+                "text": ":rotating_light: E2E Benchmark Regression Detected",
+                "blocks": [
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": ":rotating_light: *E2E Benchmark Regression Detected*\n\n*Environment:* ${{ env.ENVIRONMENT }}\n*Worker URL:* ${{ env.WORKER_URL }}\n*Commit:* ${{ github.sha }}\n*Branch:* ${{ github.ref_name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                    }
+                  }
+                ]
+              }' \
+              ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
+          fi

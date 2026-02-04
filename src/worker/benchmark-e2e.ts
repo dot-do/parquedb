@@ -772,7 +772,7 @@ export async function handleE2EBenchmarkRequest(
       })
     }
 
-    // List available endpoints
+    // List available endpoints as JSON
     return Response.json({
       benchmark: 'E2E Benchmark Suite',
       description: 'End-to-end performance benchmarks for deployed ParqueDB workers',
@@ -780,28 +780,51 @@ export async function handleE2EBenchmarkRequest(
         health: {
           path: '/benchmark/e2e/health',
           description: 'Health check with R2 and Cache status',
+          url: `${url.origin}/benchmark/e2e/health`,
         },
         coldStart: {
           path: '/benchmark/e2e/cold-start',
           description: 'Measure cold start latency',
+          url: `${url.origin}/benchmark/e2e/cold-start`,
         },
         crud: {
           path: '/benchmark/e2e/crud/:operation',
           operations: ['create', 'read', 'update', 'delete', 'batch-create', 'batch-read'],
           params: ['iterations', 'batchSize', 'warmup'],
-          example: '/benchmark/e2e/crud/create?iterations=10&warmup=2',
+          examples: [
+            { url: `${url.origin}/benchmark/e2e/crud/create?iterations=10`, description: 'Create operation' },
+            { url: `${url.origin}/benchmark/e2e/crud/read?iterations=10`, description: 'Read operation' },
+            { url: `${url.origin}/benchmark/e2e/crud/batch-create?batchSize=100`, description: 'Batch create' },
+          ],
         },
         query: {
           path: '/benchmark/e2e/query/:type',
           types: ['simple-filter', 'range-filter', 'compound-filter', 'full-text-search', 'pagination', 'aggregation'],
           params: ['dataset', 'iterations', 'limit'],
-          example: '/benchmark/e2e/query/simple-filter?dataset=imdb&iterations=5',
+          examples: [
+            { url: `${url.origin}/benchmark/e2e/query/simple-filter?dataset=imdb`, description: 'Simple equality filter' },
+            { url: `${url.origin}/benchmark/e2e/query/range-filter?dataset=imdb`, description: 'Numeric range filter' },
+            { url: `${url.origin}/benchmark/e2e/query/compound-filter?dataset=imdb`, description: 'Compound filter' },
+          ],
         },
         backend: {
           path: '/benchmark/e2e/backend/:type',
           types: ['iceberg', 'delta', 'native-parquet'],
           params: ['operation', 'iterations', 'dataSize'],
-          example: '/benchmark/e2e/backend/iceberg?operation=write,read&iterations=3',
+          examples: [
+            { url: `${url.origin}/benchmark/e2e/backend/native-parquet?dataSize=1000`, description: 'Native Parquet' },
+            { url: `${url.origin}/benchmark/e2e/backend/iceberg?operation=write,read`, description: 'Iceberg format' },
+          ],
+        },
+        api: {
+          path: '/api/:namespace',
+          description: 'API endpoints for CRUD operations',
+          examples: [
+            { url: `${url.origin}/api/posts`, description: 'List posts' },
+            { url: `${url.origin}/api/posts?filter=${encodeURIComponent('{"status":"published"}')}`, description: 'Filter by status' },
+            { url: `${url.origin}/api/posts?filter=${encodeURIComponent('{"views":{"$gt":100}}')}`, description: 'Range query' },
+            { url: `${url.origin}/api/posts?filter=${encodeURIComponent('{"$or":[{"status":"published"},{"status":"featured"}]}')}`, description: '$or query' },
+          ],
         },
       },
     }, {

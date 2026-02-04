@@ -1277,9 +1277,10 @@ export default {
 
       // =======================================================================
       // Health Check (exempt from rate limiting for monitoring)
+      // Supports ?deep=true for R2 connectivity verification
       // =======================================================================
       if (path === '/health') {
-        return handleHealth(context)
+        return handleHealth({ ...context, bucket: env.BUCKET })
       }
 
       // =======================================================================

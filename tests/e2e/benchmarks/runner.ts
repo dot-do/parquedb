@@ -9,19 +9,24 @@
  *   npx tsx tests/e2e/benchmarks/runner.ts [options]
  *
  * Options:
- *   --url=<url>          Worker URL to benchmark (default: https://api.parquedb.com)
- *   --iterations=<n>     Number of iterations per test (default: 10)
- *   --warmup=<n>         Warmup iterations (default: 2)
- *   --output=<format>    Output format: table, json, markdown (default: table)
- *   --verbose            Enable verbose logging
- *   --datasets=<list>    Comma-separated datasets to test (default: imdb,onet-full)
- *   --skip-cold-start    Skip cold start tests
- *   --skip-cache         Skip cache tests
- *   --concurrency=<n>    Max concurrent requests to test (default: 25)
+ *   --url=<url>              Worker URL to benchmark (default: https://api.parquedb.com)
+ *   --iterations=<n>         Number of iterations per test (default: 10)
+ *   --warmup=<n>             Warmup iterations (default: 2)
+ *   --output=<format>        Output format: table, json, markdown (default: table)
+ *   --verbose                Enable verbose logging
+ *   --datasets=<list>        Comma-separated datasets to test (default: imdb,onet-full)
+ *   --skip-cold-start        Skip cold start tests
+ *   --skip-cache             Skip cache tests
+ *   --concurrency=<n>        Max concurrent requests to test (default: 25)
+ *   --baseline-url=<path>    Path to baseline JSON file for regression comparison
+ *   --fail-on-regression     Exit with error code 1 if regression detected
+ *   --save-baseline=<path>   Save results as new baseline to specified path
+ *   --environment=<name>     Environment name for result metadata (default: production)
  *
  * Examples:
  *   npx tsx tests/e2e/benchmarks/runner.ts --url=https://staging.parquedb.com
  *   npx tsx tests/e2e/benchmarks/runner.ts --iterations=20 --output=markdown
+ *   npx tsx tests/e2e/benchmarks/runner.ts --baseline-url=./baseline.json --fail-on-regression
  *   WORKER_URL=https://my-worker.workers.dev npx tsx tests/e2e/benchmarks/runner.ts
  */
 
@@ -52,16 +57,33 @@ import type {
   ConcurrencyResult,
   DatasetBenchmarkResult,
   E2EBenchmarkSuiteResult,
+  StoredBenchmarkResult,
+  RegressionAnalysis,
 } from './types'
-import { DEFAULT_E2E_CONFIG } from './types'
+import { DEFAULT_E2E_CONFIG, DEFAULT_REGRESSION_THRESHOLDS } from './types'
+
+// =============================================================================
+// Extended Config with Regression Options
+// =============================================================================
+
+interface E2ERunnerConfig extends E2EBenchmarkConfig {
+  /** Path to baseline JSON file for regression comparison */
+  baselineUrl?: string | undefined
+  /** Exit with error if regression detected */
+  failOnRegression?: boolean | undefined
+  /** Path to save results as new baseline */
+  saveBaseline?: string | undefined
+  /** Environment name (production, staging, etc) */
+  environment?: string | undefined
+}
 
 // =============================================================================
 // CLI Argument Parsing
 // =============================================================================
 
-function parseArgs(): E2EBenchmarkConfig {
+function parseArgs(): E2ERunnerConfig {
   const args = process.argv.slice(2)
-  const config: E2EBenchmarkConfig = { ...DEFAULT_E2E_CONFIG }
+  const config: E2ERunnerConfig = { ...DEFAULT_E2E_CONFIG }
 
   for (const arg of args) {
     if (arg.startsWith('--url=')) {
@@ -84,15 +106,66 @@ function parseArgs(): E2EBenchmarkConfig {
       config.concurrency = parseInt(arg.slice(14), 10)
     } else if (arg.startsWith('--timeout=')) {
       config.timeout = parseInt(arg.slice(10), 10)
+    } else if (arg.startsWith('--baseline-url=')) {
+      config.baselineUrl = arg.slice(15)
+    } else if (arg === '--fail-on-regression') {
+      config.failOnRegression = true
+    } else if (arg.startsWith('--save-baseline=')) {
+      config.saveBaseline = arg.slice(16)
+    } else if (arg.startsWith('--environment=')) {
+      config.environment = arg.slice(14)
     }
   }
 
-  // Check environment variable
+  // Check environment variables
   if (process.env.WORKER_URL && !args.some(a => a.startsWith('--url='))) {
     config.url = process.env.WORKER_URL
   }
+  if (process.env.E2E_BASELINE_URL && !config.baselineUrl) {
+    config.baselineUrl = process.env.E2E_BASELINE_URL
+  }
+  if (process.env.E2E_ENVIRONMENT && !config.environment) {
+    config.environment = process.env.E2E_ENVIRONMENT
+  }
 
   return config
+}
+
+// =============================================================================
+// Baseline Loading
+// =============================================================================
+
+async function loadBaseline(baselineUrl: string): Promise<StoredBenchmarkResult | null> {
+  try {
+    // Check if it's a local file path
+    if (baselineUrl.startsWith('./') || baselineUrl.startsWith('/') || baselineUrl.startsWith('file://')) {
+      const fs = await import('fs/promises')
+      const path = baselineUrl.replace('file://', '')
+      const content = await fs.readFile(path, 'utf-8')
+      return JSON.parse(content) as StoredBenchmarkResult
+    }
+
+    // Otherwise, fetch from URL
+    const response = await fetch(baselineUrl)
+    if (!response.ok) {
+      console.warn(`  Warning: Could not load baseline from ${baselineUrl}: ${response.status}`)
+      return null
+    }
+    return (await response.json()) as StoredBenchmarkResult
+  } catch (error) {
+    console.warn(`  Warning: Error loading baseline: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    return null
+  }
+}
+
+async function saveBaseline(result: StoredBenchmarkResult, path: string): Promise<void> {
+  const fs = await import('fs/promises')
+  const dir = path.substring(0, path.lastIndexOf('/'))
+  if (dir) {
+    await fs.mkdir(dir, { recursive: true })
+  }
+  await fs.writeFile(path, JSON.stringify(result, null, 2))
+  console.log(`  Baseline saved to: ${path}`)
 }
 
 // =============================================================================
@@ -139,12 +212,12 @@ function generatePost(index: number): TestPost {
 // =============================================================================
 
 class E2EBenchmarkRunner {
-  private config: E2EBenchmarkConfig
+  private config: E2ERunnerConfig
   private results: BenchmarkTestResult[] = []
   private createdIds: string[] = []
   private startTime: number = 0
 
-  constructor(config: E2EBenchmarkConfig) {
+  constructor(config: E2ERunnerConfig) {
     this.config = config
   }
 
@@ -744,9 +817,69 @@ async function main(): Promise<void> {
   try {
     const results = await runner.run()
 
-    // Exit with error code if any tests failed
+    // Load baseline for regression detection if specified
+    let regressionAnalysis: RegressionAnalysis | undefined
+    if (config.baselineUrl) {
+      console.log('\n--- Regression Detection ---')
+      console.log(`  Loading baseline from: ${config.baselineUrl}`)
+
+      const baseline = await loadBaseline(config.baselineUrl)
+      if (baseline) {
+        console.log(`  Baseline loaded: ${baseline.runId} (${baseline.timestamp})`)
+
+        // Run regression detection
+        regressionAnalysis = detectRegressions(results, baseline.results, DEFAULT_REGRESSION_THRESHOLDS)
+        results.regression = regressionAnalysis
+
+        // Print regression analysis
+        console.log(`  Status: ${regressionAnalysis.hasRegression ? 'REGRESSION DETECTED' : 'No regression'}`)
+        console.log(`  Severity: ${regressionAnalysis.severity}`)
+
+        if (regressionAnalysis.hasRegression) {
+          console.log('\n  Regressed metrics:')
+          for (const metric of regressionAnalysis.metrics) {
+            if (metric.isRegression) {
+              const sign = metric.changePercent >= 0 ? '+' : ''
+              console.log(`    - ${metric.name}: ${sign}${metric.changePercent.toFixed(1)}% (threshold: ${metric.threshold}%)`)
+            }
+          }
+        }
+      } else {
+        console.log('  No baseline available, skipping regression detection')
+      }
+    }
+
+    // Save as new baseline if specified
+    if (config.saveBaseline) {
+      console.log('\n--- Saving Baseline ---')
+      const storedResult: StoredBenchmarkResult = {
+        runId: generateRunId(),
+        environment: config.environment ?? 'production',
+        results,
+        timestamp: new Date().toISOString(),
+        commitSha: process.env.GITHUB_SHA,
+        branch: process.env.GITHUB_REF_NAME,
+      }
+      await saveBaseline(storedResult, config.saveBaseline)
+    }
+
+    // Determine exit code
+    let exitCode = 0
+
+    // Exit with error if tests failed
     if (results.summary.failedTests > 0) {
-      process.exit(1)
+      console.error(`\nERROR: ${results.summary.failedTests} test(s) failed`)
+      exitCode = 1
+    }
+
+    // Exit with error if regression detected and --fail-on-regression is set
+    if (config.failOnRegression && regressionAnalysis?.hasRegression) {
+      console.error(`\nERROR: Performance regression detected (severity: ${regressionAnalysis.severity})`)
+      exitCode = 1
+    }
+
+    if (exitCode !== 0) {
+      process.exit(exitCode)
     }
   } catch (error) {
     console.error('Benchmark failed:', error)

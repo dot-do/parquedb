@@ -8,6 +8,7 @@
 export * from './types'
 export * from './root'
 export * from './health'
+export * from './health-checks'
 export * from './metrics'
 export * from './debug'
 export * from './datasets'
