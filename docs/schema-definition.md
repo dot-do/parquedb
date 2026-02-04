@@ -8,11 +8,12 @@ ParqueDB provides a powerful schema definition system through the `DB()` factory
 ## Table of Contents
 
 1. [The DB() Factory](#the-db-factory)
-2. [Field Type Syntax](#field-type-syntax)
-3. [Relationships](#relationships)
-4. [Collection Options ($options)](#collection-options-options)
-5. [Layout Configuration](#layout-configuration)
-6. [Complete Examples](#complete-examples)
+2. [ID and Name Directives](#id-and-name-directives)
+3. [Field Type Syntax](#field-type-syntax)
+4. [Relationships](#relationships)
+5. [Collection Options ($options)](#collection-options-options)
+6. [Layout Configuration](#layout-configuration)
+7. [Complete Examples](#complete-examples)
 
 ---
 
@@ -103,6 +104,109 @@ const db = DB({
 }, {
   storage: new FsBackend('./data'),
   defaultNamespace: 'app'
+})
+```
+
+---
+
+## ID and Name Directives
+
+ParqueDB provides two powerful directives for using meaningful field values as entity identifiers and display names.
+
+### $id Directive
+
+The `$id` directive specifies which field's value should be used as the entity ID instead of an auto-generated ULID:
+
+```typescript
+const db = DB({
+  User: {
+    $id: 'email',           // Use email as the entity ID
+    email: 'string!#',      // alice@example.com → user/alice@example.com
+    name: 'string!',
+  },
+  Post: {
+    $id: 'slug',            // Use slug as the entity ID
+    slug: 'string!#',       // hello-world → post/hello-world
+    title: 'string!',
+    content: 'text',
+  }
+})
+```
+
+**Benefits:**
+- **Human-readable IDs**: `user/alice@example.com` instead of `user/01hwm3x8g6kj4...`
+- **Intuitive lookups**: `db.User.get('alice@example.com')` instead of requiring a ULID
+- **URL-friendly**: Slugs work naturally in URLs
+
+**Validation rules:**
+- The referenced field must exist in the schema
+- The field value cannot be empty
+- The field value cannot contain `/` (slashes separate namespace from local ID)
+
+```typescript
+// Get by short ID (using field value)
+const user = await db.User.get('alice@example.com')
+const post = await db.Post.get('hello-world')
+
+// Also works with full ID
+const user = await db.User.get('user/alice@example.com')
+```
+
+### $name Directive
+
+The `$name` directive specifies which field's value should be used as the entity's display name:
+
+```typescript
+const db = DB({
+  Post: {
+    $id: 'slug',
+    $name: 'title',         // Use title as display name
+    slug: 'string!#',
+    title: 'string!',       // "Hello World" becomes the entity's name
+  },
+  User: {
+    $id: 'email',
+    $name: 'displayName',   // Use displayName as display name
+    email: 'string!#',
+    displayName: 'string!',
+  }
+})
+```
+
+**Fallback behavior:**
+- If `$name` field value is empty, null, or undefined, falls back to the entity's local ID
+- If no `$name` directive, ParqueDB looks for `name`, `title`, or `label` fields
+
+```typescript
+const post = await db.Post.create({
+  slug: 'hello-world',
+  title: 'Hello World',
+})
+
+console.log(post.name)  // 'Hello World' (from $name directive)
+console.log(post.$id)   // 'post/hello-world' (from $id directive)
+```
+
+### Using Both Directives Together
+
+You can use `$id` and `$name` together, and they can even reference the same field:
+
+```typescript
+const db = DB({
+  // Different fields for ID and name
+  User: {
+    $id: 'email',
+    $name: 'fullName',
+    email: 'string!#',
+    fullName: 'string!',
+  },
+
+  // Same field for both ID and name
+  Tag: {
+    $id: 'name',
+    $name: 'name',
+    name: 'string!#',
+  }
 })
 ```
 

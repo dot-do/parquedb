@@ -44,23 +44,32 @@ Query multiple entities matching a filter.
 
 **Signature:**
 ```typescript
-async find(filter?: Filter, options?: FindOptions<T>): Promise<Entity<T>[]>
+async find(filter?: Filter, options?: FindOptions<T>): Promise<ResultArray<Entity<T>>>
 ```
 
 **Parameters:**
 - `filter` (optional): MongoDB-style filter criteria
 - `options` (optional): Query options for sorting, pagination, projection
 
-**Returns:** Array of matching entities
+**Returns:** `ResultArray<T>` - a standard array with additional metadata properties via Proxy:
+- `$total`: Total count of matching entities (optional, may require `{ countTotal: true }`)
+- `$next`: Cursor for next page (if more results exist)
+- `$prev`: Cursor for previous page (if navigating backwards)
+
+The result is a standard JavaScript array, so you can iterate directly without `.items`.
 
 **Examples:**
 
 ```typescript
-// Find all posts
+// Find all posts - iterate directly
 const allPosts = await db.Posts.find()
+for (const post of allPosts) {
+  console.log(post.title)
+}
 
 // Find with filter
 const published = await db.Posts.find({ status: 'published' })
+console.log(`Found ${published.$total} published posts`)
 
 // Find with options
 const recent = await db.Posts.find(
@@ -78,18 +87,19 @@ const titles = await db.Posts.find(
   { project: { title: 1, author: 1 } }
 )
 
-// Cursor-based pagination
+// Cursor-based pagination using $next
 const page1 = await db.Posts.find(
   { status: 'published' },
   { limit: 20 }
 )
-const page2 = await db.Posts.find(
-  { status: 'published' },
-  {
-    limit: 20,
-    cursor: page1[page1.length - 1].$id
-  }
-)
+console.log(`Page 1: ${page1.length} items, total: ${page1.$total}`)
+
+if (page1.$next) {
+  const page2 = await db.Posts.find(
+    { status: 'published' },
+    { limit: 20, cursor: page1.$next }
+  )
+}
 
 // Complex filter with operators
 const filtered = await db.Posts.find({
@@ -157,20 +167,62 @@ const author = await db.Posts.findOne(
 
 ### get(id, options?)
 
-Get an entity by ID. Throws error if not found.
+Get an entity by ID with auto-hydrated relationships.
 
 **Signature:**
 ```typescript
-async get(id: string, options?: GetOptions): Promise<Entity<T>>
+async get(id: string, options?: GetOptions): Promise<Entity<T> | null>
 ```
 
 **Parameters:**
-- `id`: Entity ID (with or without namespace prefix). If no namespace prefix is provided (no `/`), the collection's namespace is automatically prepended.
+- `id`: Entity ID (with or without namespace prefix). If no namespace prefix is provided (no `/`), the collection's namespace is automatically prepended. When using `$id` directive, you can use the short ID (e.g., `'hello-world'` instead of `'post/hello-world'`).
 - `options` (optional): Get options
 
-**Returns:** Entity with `related()` and `referencedBy()` methods for relationship traversal
+**Returns:** Entity with relationships auto-hydrated, or `null` if not found
 
-**Throws:** Error if entity not found or if entity is soft-deleted (unless `includeDeleted: true` is set)
+**Auto-Hydrated Relationships:**
+
+Entities returned from `get()` have their relationships automatically populated:
+
+- **Forward relationships** (`-> Target`): Fully hydrated with the related entity
+- **Reverse relationships** (`<- Target.field[]`): Arrays with `$total`, `$next` metadata
+
+```typescript
+// Schema with $id directive
+const db = DB({
+  User: {
+    $id: 'email',
+    $name: 'name',
+    email: 'string!#',
+    name: 'string!',
+    posts: '<- Post.author[]'
+  },
+  Post: {
+    $id: 'slug',
+    $name: 'title',
+    slug: 'string!#',
+    title: 'string!',
+    author: '-> User'
+  }
+})
+
+// Get by short ID (when $id directive is set)
+const post = await db.Post.get('hello-world')
+
+// Forward relationships are fully hydrated
+console.log(post.author.name)     // 'Alice' - not just an ID!
+console.log(post.author.email)    // 'alice@example.com'
+
+// Reverse relationships are arrays with pagination metadata
+const user = await db.User.get('alice@example.com')
+console.log(user.posts.$total)    // Total count of posts
+for (const p of user.posts) {
+  console.log(p.title)            // First 10 posts (default limit)
+}
+if (user.posts.$next) {
+  // More posts available via cursor
+}
+```
 
 **Examples:**
 
@@ -178,8 +230,8 @@ async get(id: string, options?: GetOptions): Promise<Entity<T>>
 // Get by full ID
 const post = await db.Posts.get('posts/abc123')
 
-// Get by short ID (namespace inferred)
-const post = await db.Posts.get('abc123')
+// Get by short ID (namespace inferred, or using $id field value)
+const post = await db.Posts.get('hello-world')
 
 // With projection
 const post = await db.Posts.get('abc123', {
@@ -208,30 +260,29 @@ const post = await db.Posts.get('abc123', {
 - `project`: Field projection
 - `maxInbound`: Maximum inbound relationships to include (default: 10)
 
-**Relationship Traversal:**
+**Manual Relationship Traversal:**
 
-The returned entity includes methods for traversing relationships:
+For more control, you can also traverse relationships manually:
 
 ```typescript
 const post = await db.Posts.get('abc123')
 
-// Traverse outbound relationships (predicate)
+// Traverse outbound relationships with options
 const categories = await post.related('categories', {
   limit: 10,
   sort: { name: 1 }
 })
 
-// Traverse inbound relationships (reverse)
+// Traverse inbound relationships with filtering
 const comments = await post.referencedBy('comments', {
   filter: { status: 'approved' },
   limit: 20,
   sort: { createdAt: -1 }
 })
 
-console.log(categories.items)    // Array of Category entities
-console.log(categories.total)    // Total count (optional)
-console.log(categories.hasMore)  // Boolean
-console.log(categories.nextCursor) // Cursor for next page (optional)
+// Results are also ResultArrays
+console.log(categories.$total)    // Total count
+console.log(categories.$next)     // Cursor for next page
 ```
 
 ---

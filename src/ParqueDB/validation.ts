@@ -240,3 +240,326 @@ export function normalizeEntityId(namespace: string, id: string): EntityId {
 
   return `${normalizedNs}/${id}` as EntityId
 }
+
+// =============================================================================
+// $id Directive Resolution
+// =============================================================================
+
+import type { Schema, TypeDefinition, FieldDef } from '../types/schema'
+import { generateId } from '../utils'
+
+/**
+ * Check if a field is required based on its schema definition.
+ * Exported from validation module for use in $id directive validation.
+ */
+export function isFieldRequired(fieldDef: FieldDef | unknown): boolean {
+  if (typeof fieldDef === 'string') {
+    return fieldDef.includes('!')
+  }
+
+  if (typeof fieldDef === 'object' && fieldDef !== null) {
+    const def = fieldDef as { type?: string | undefined; required?: boolean | undefined }
+    if (def.required) return true
+    if (def.type && def.type.includes('!')) return true
+  }
+
+  return false
+}
+
+/**
+ * Result of resolving an entity ID
+ */
+export interface ResolvedEntityId {
+  /** The full entity ID in "namespace/id" format */
+  fullId: EntityId
+  /** The local ID part (without namespace) */
+  localId: string
+}
+
+/**
+ * Options for resolving an entity ID
+ */
+export interface ResolveEntityIdOptions {
+  /** The namespace/collection name */
+  namespace: string
+  /** The type name derived from namespace (e.g., 'User' from 'users') */
+  typeName: string
+  /** The schema containing type definitions */
+  schema: Schema
+  /** The create data that may contain $id or the field specified by $id directive */
+  data: Record<string, unknown>
+}
+
+// =============================================================================
+// Directive Validation Helpers
+// =============================================================================
+
+/**
+ * Options for directive field validation
+ */
+interface DirectiveValidationOptions {
+  /** The directive name (e.g., '$id', '$name') */
+  directiveName: string
+  /** The type name being validated */
+  typeName: string
+  /** The type definition containing the directive */
+  typeDef: TypeDefinition
+  /** The field name specified by the directive */
+  fieldName: string
+  /** Whether to warn if the field is optional (default: false) */
+  warnIfOptional?: boolean
+}
+
+/**
+ * Validates that a directive references a valid field in the schema.
+ *
+ * Shared validation logic for $id, $name, and other directives that
+ * reference schema fields.
+ *
+ * Checks:
+ * 1. The specified field exists in the type definition
+ * 2. The specified field is not itself a directive (doesn't start with $)
+ * 3. Optionally warns if the field is optional
+ *
+ * @param options - Validation options
+ * @throws {ValidationError} if validation fails
+ */
+function validateDirectiveField(options: DirectiveValidationOptions): void {
+  const { directiveName, typeName, typeDef, fieldName, warnIfOptional } = options
+
+  // Check if the field is a directive (starts with $) - that's not allowed
+  if (fieldName.startsWith('$')) {
+    throw new ValidationError(
+      'schema',
+      typeName,
+      `${directiveName} directive cannot reference another directive '${fieldName}'`,
+      { fieldName }
+    )
+  }
+
+  // Check if the field exists in the type definition
+  const fieldDef = typeDef[fieldName]
+  if (fieldDef === undefined) {
+    throw new ValidationError(
+      'schema',
+      typeName,
+      `${directiveName} directive references nonexistent field '${fieldName}'`,
+      { fieldName }
+    )
+  }
+
+  // Warn if the field is not required (but don't throw)
+  if (warnIfOptional && !isFieldRequired(fieldDef)) {
+    console.warn(
+      `[ParqueDB] Warning: ${directiveName} directive on '${typeName}' references optional field '${fieldName}'. ` +
+      `Consider making it required.`
+    )
+  }
+}
+
+// =============================================================================
+// Directive Validators
+// =============================================================================
+
+/**
+ * Validates that a $id directive in a schema is valid.
+ *
+ * Checks:
+ * 1. The specified field exists in the type definition
+ * 2. The specified field is not a directive
+ * 3. Warns if the specified field is optional
+ *
+ * @param typeName - The name of the type being validated
+ * @param typeDef - The type definition
+ * @throws {ValidationError} if $id references a nonexistent field or directive
+ *
+ * @example
+ * ```typescript
+ * validateIdDirective('User', {
+ *   $id: 'email',
+ *   email: 'string!#',
+ *   name: 'string',
+ * })
+ * // OK - email field exists and is required
+ *
+ * validateIdDirective('User', {
+ *   $id: 'nonexistent',
+ *   email: 'string!#',
+ * })
+ * // Throws: $id directive references nonexistent field 'nonexistent'
+ * ```
+ */
+export function validateIdDirective(typeName: string, typeDef: TypeDefinition): void {
+  const idFieldName = typeDef.$id
+  if (!idFieldName || typeof idFieldName !== 'string') {
+    return // No $id directive, nothing to validate
+  }
+
+  validateDirectiveField({
+    directiveName: '$id',
+    typeName,
+    typeDef,
+    fieldName: idFieldName,
+    warnIfOptional: true,
+  })
+}
+
+/**
+ * Validates that a $name directive in a schema is valid.
+ *
+ * Checks:
+ * 1. The specified field exists in the type definition
+ * 2. The specified field is not a directive
+ *
+ * @param typeName - The name of the type being validated
+ * @param typeDef - The type definition
+ * @throws {ValidationError} if $name references a nonexistent field or directive
+ *
+ * @example
+ * ```typescript
+ * validateNameDirective('User', {
+ *   $name: 'fullName',
+ *   email: 'string!#',
+ *   fullName: 'string!',
+ * })
+ * // OK - fullName field exists
+ *
+ * validateNameDirective('User', {
+ *   $name: 'nonexistent',
+ *   email: 'string!#',
+ * })
+ * // Throws: $name directive references nonexistent field 'nonexistent'
+ * ```
+ */
+export function validateNameDirective(typeName: string, typeDef: TypeDefinition): void {
+  const nameFieldName = typeDef.$name
+  if (!nameFieldName || typeof nameFieldName !== 'string') {
+    return // No $name directive, nothing to validate
+  }
+
+  validateDirectiveField({
+    directiveName: '$name',
+    typeName,
+    typeDef,
+    fieldName: nameFieldName,
+    // Note: Unlike $id, we don't warn for optional $name fields
+    // because it's less critical - entity still works without a name
+    warnIfOptional: false,
+  })
+}
+
+/**
+ * Resolves an entity ID from create data, using:
+ * 1. Explicit $id in the data (highest priority)
+ * 2. $id directive from schema (uses field value as ID)
+ * 3. Generated ULID (fallback)
+ *
+ * @param options - Resolution options
+ * @returns The resolved entity ID (full ID and local part)
+ * @throws {ValidationError} if ID resolution fails validation
+ *
+ * @example
+ * ```typescript
+ * // With explicit $id
+ * resolveEntityId({
+ *   namespace: 'users',
+ *   typeName: 'User',
+ *   schema: {},
+ *   data: { $id: 'custom-id', name: 'Alice' }
+ * })
+ * // Returns { fullId: 'users/custom-id', localId: 'custom-id' }
+ *
+ * // With $id directive in schema
+ * resolveEntityId({
+ *   namespace: 'users',
+ *   typeName: 'User',
+ *   schema: { User: { $id: 'email', email: 'string!#' } },
+ *   data: { email: 'alice@example.com', name: 'Alice' }
+ * })
+ * // Returns { fullId: 'users/alice@example.com', localId: 'alice@example.com' }
+ *
+ * // Generated ULID fallback
+ * resolveEntityId({
+ *   namespace: 'posts',
+ *   typeName: 'Post',
+ *   schema: {},
+ *   data: { title: 'Hello World' }
+ * })
+ * // Returns { fullId: 'posts/01HX...', localId: '01HX...' }
+ * ```
+ */
+export function resolveEntityId(options: ResolveEntityIdOptions): ResolvedEntityId {
+  const { namespace, typeName, schema, data } = options
+
+  // Priority 1: Explicit $id in data
+  if (data.$id !== undefined) {
+    const providedId = String(data.$id)
+
+    // Validate: empty string is not allowed
+    if (providedId === '') {
+      throw new ValidationError(
+        'entityId',
+        typeName,
+        'Entity ID cannot be an empty string',
+        { fieldName: '$id' }
+      )
+    }
+
+    // If the ID contains '/', treat as full ID
+    if (providedId.includes('/')) {
+      return {
+        fullId: providedId as EntityId,
+        localId: providedId.split('/').slice(1).join('/'),
+      }
+    }
+
+    return {
+      fullId: `${namespace}/${providedId}` as EntityId,
+      localId: providedId,
+    }
+  }
+
+  // Priority 2: $id directive in schema
+  const typeDef = schema[typeName] as TypeDefinition | undefined
+  const idFieldName = typeDef?.$id
+
+  if (idFieldName && typeof idFieldName === 'string') {
+    const fieldValue = data[idFieldName]
+
+    if (fieldValue !== undefined) {
+      const localId = String(fieldValue)
+
+      // Validate: empty string is not allowed
+      if (localId === '') {
+        throw new ValidationError(
+          'entityId',
+          typeName,
+          `$id field '${idFieldName}' cannot be an empty string`,
+          { fieldName: idFieldName }
+        )
+      }
+
+      // Validate: local ID cannot contain slashes (slashes separate namespace from local ID)
+      if (localId.includes('/')) {
+        throw new ValidationError(
+          'entityId',
+          typeName,
+          `$id field '${idFieldName}' cannot contain '/' character. Local IDs must not contain slashes.`,
+          { fieldName: idFieldName }
+        )
+      }
+
+      return {
+        fullId: `${namespace}/${localId}` as EntityId,
+        localId,
+      }
+    }
+  }
+
+  // Priority 3: Generate a ULID
+  const localId = generateId()
+  return {
+    fullId: `${namespace}/${localId}` as EntityId,
+    localId,
+  }
+}

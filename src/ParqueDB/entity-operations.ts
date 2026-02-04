@@ -49,6 +49,7 @@ import {
 } from './types'
 
 import { validateNamespace, validateFilter, validateUpdateOperators, toFullId, resolveEntityId } from './validation'
+import { parseRelation } from '../types/schema'
 
 // =============================================================================
 // Types - Focused Context Interfaces
@@ -288,6 +289,196 @@ export function applySchemaDefaults<T extends EntityData = EntityData>(
 
     if (defaultValue !== undefined) {
       result[fieldName] = defaultValue
+    }
+  }
+
+  return result as CreateInput<T>
+}
+
+// =============================================================================
+// Auto-Resolve Relationships
+// =============================================================================
+
+/**
+ * Get the namespace for a type from its schema definition.
+ *
+ * NOTE: This intentionally does NOT use the $ns directive because the Proxy-based
+ * collection access (db.User, db.Post) uses the lowercased type name, not $ns.
+ * If $ns support is needed, entities should be created via db.collection(ns).
+ *
+ * @param _schema - The schema (currently unused, kept for future $ns support)
+ * @param typeName - The type name (e.g., 'User', 'Organization')
+ * @returns The namespace (lowercased type name)
+ */
+function getNamespaceForType(_schema: Schema, typeName: string): string {
+  // Match the proxy behavior: lowercase the type name
+  return typeName.toLowerCase()
+}
+
+/**
+ * Result of resolving a relationship ID
+ */
+export interface ResolvedRelationshipId {
+  /** The full entity ID (e.g., 'user/alice@example.com') */
+  fullId: string
+  /** Display name from the target entity (e.g., 'Alice') */
+  displayName: string
+}
+
+/**
+ * Error thrown when relationship resolution fails
+ */
+export class RelationshipResolutionError extends Error {
+  constructor(
+    public readonly targetId: string,
+    public readonly reason: 'not_found' | 'soft_deleted' | 'invalid_format',
+    message: string
+  ) {
+    super(message)
+    this.name = 'RelationshipResolutionError'
+  }
+}
+
+/**
+ * Resolve a single relationship ID to its full form.
+ *
+ * This function takes a short ID (e.g., 'alice@example.com') or full ID
+ * (e.g., 'user/alice@example.com') and resolves it to:
+ * 1. The full entity ID
+ * 2. The display name from the target entity
+ *
+ * @param idValue - The ID to resolve (short or full form)
+ * @param targetNs - The target namespace (used when idValue is short)
+ * @param entities - The entity store to look up targets
+ * @returns The resolved relationship info
+ * @throws {RelationshipResolutionError} if target entity doesn't exist or is soft-deleted
+ *
+ * @example
+ * ```typescript
+ * // Resolve short ID
+ * const result = resolveRelationshipId('alice@example.com', 'user', entities)
+ * // Returns: { fullId: 'user/alice@example.com', displayName: 'Alice' }
+ *
+ * // Resolve full ID (namespace in idValue takes precedence)
+ * const result = resolveRelationshipId('organization/acme', 'user', entities)
+ * // Returns: { fullId: 'organization/acme', displayName: 'ACME Corp' }
+ * ```
+ */
+export function resolveRelationshipId(
+  idValue: string,
+  targetNs: string,
+  entities: Map<string, Entity>
+): ResolvedRelationshipId {
+  // Determine full ID
+  const fullTargetId = idValue.includes('/') ? idValue : `${targetNs}/${idValue}`
+
+  // Validate target exists
+  const targetEntity = entities.get(fullTargetId)
+  if (!targetEntity) {
+    throw new RelationshipResolutionError(
+      fullTargetId,
+      'not_found',
+      `Related entity '${fullTargetId}' does not exist`
+    )
+  }
+
+  // Check if soft-deleted
+  if (targetEntity.deletedAt) {
+    throw new RelationshipResolutionError(
+      fullTargetId,
+      'soft_deleted',
+      `Related entity '${fullTargetId}' does not exist`
+    )
+  }
+
+  // Use target entity's name as display name, or fall back to ID
+  const displayName = String(targetEntity.name || fullTargetId)
+
+  return { fullId: fullTargetId, displayName }
+}
+
+/**
+ * Resolve multiple relationship IDs in batch.
+ *
+ * Optimized for bulk operations - validates all targets exist before
+ * returning results. Fails fast on first error.
+ *
+ * @param idValues - Array of IDs to resolve
+ * @param targetNs - The target namespace
+ * @param entities - The entity store
+ * @returns Array of resolved relationship info
+ * @throws {RelationshipResolutionError} if any target doesn't exist
+ */
+export function resolveRelationshipIdsBatch(
+  idValues: string[],
+  targetNs: string,
+  entities: Map<string, Entity>
+): ResolvedRelationshipId[] {
+  return idValues.map(idValue => resolveRelationshipId(idValue, targetNs, entities))
+}
+
+/**
+ * Auto-resolve relationship IDs in create data.
+ *
+ * When a schema defines a forward relationship like `author: '-> User'`, and the
+ * create data contains a short ID (e.g., 'alice@example.com'), this function
+ * resolves it to a full entity ID (e.g., 'user/alice@example.com') and converts
+ * it to the relationship object format (e.g., { 'Alice': 'user/alice@example.com' }).
+ *
+ * Resolution rules:
+ * 1. If the value already contains '/', it's already a full ID - convert to object
+ * 2. If the target type has a $id directive, use targetNs/shortId
+ * 3. Otherwise, treat as full ID (must contain '/')
+ *
+ * @param ctx - The mutation context with entities and schema
+ * @param typeName - The type being created (e.g., 'Post')
+ * @param data - The create data with potential short IDs
+ * @returns Data with resolved relationship IDs in object format
+ * @throws {RelationshipResolutionError} if a related entity does not exist or is soft-deleted
+ */
+export function autoResolveRelationships<T extends EntityData = EntityData>(
+  ctx: EntityMutationContext,
+  typeName: string,
+  data: CreateInput<T>
+): CreateInput<T> {
+  const typeDef = ctx.schema[typeName]
+  if (!typeDef) return data
+
+  const result: Record<string, unknown> = { ...data }
+
+  for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
+    // Skip non-string definitions and meta fields
+    if (fieldName.startsWith('$')) continue
+    if (typeof fieldDef !== 'string') continue
+    if (!isRelationString(fieldDef)) continue
+
+    // Only handle forward relationships (->)
+    const parsed = parseRelation(fieldDef)
+    if (!parsed || parsed.direction !== 'forward') continue
+
+    const targetTypeName = parsed.toType
+    if (!targetTypeName) continue
+
+    const fieldValue = result[fieldName]
+    if (fieldValue === undefined || fieldValue === null) continue
+
+    // Get the target type's namespace
+    const targetNs = getNamespaceForType(ctx.schema, targetTypeName)
+
+    // Handle array relationships - use batch resolution for efficiency
+    if (Array.isArray(fieldValue)) {
+      const stringIds = fieldValue.filter((id): id is string => typeof id === 'string')
+      const resolved = resolveRelationshipIdsBatch(stringIds, targetNs, ctx.entities)
+
+      const relObject: Record<string, string> = {}
+      for (const { fullId, displayName } of resolved) {
+        relObject[displayName] = fullId
+      }
+      result[fieldName] = relObject
+    } else if (typeof fieldValue === 'string') {
+      // Single relationship value - convert to object format
+      const { fullId, displayName } = resolveRelationshipId(fieldValue, targetNs, ctx.entities)
+      result[fieldName] = { [displayName]: fullId }
     }
   }
 
@@ -578,30 +769,51 @@ export async function createEntity<T extends EntityData = EntityData>(
     throw new ValidationError(
       'create',
       derivedType,
-      `Entity with ID '${fullId}' already exists`,
-      { entityId: fullId }
+      `Entity with ID '${fullId}' already exists`
     )
   }
 
   const actor = options?.actor || ('system/anonymous' as EntityId)
 
-  // Auto-derive name from common fields or use id
+  // Auto-derive name: check $name directive first, then common fields, then id
   const dataAsRecord = data as Record<string, unknown>
-  const derivedName = data.name || dataAsRecord.title || dataAsRecord.label || entityIdPart
+  const typeDef = ctx.schema[derivedType]
+  const nameFieldName = typeDef?.$name
+  let derivedName: unknown
+
+  if (data.name !== undefined) {
+    // Explicit name provided - use it
+    derivedName = data.name
+  } else if (nameFieldName && typeof nameFieldName === 'string') {
+    // Use $name directive field value, but only if it's a non-empty truthy value
+    const nameValue = dataAsRecord[nameFieldName]
+    if (nameValue != null && nameValue !== '') {
+      derivedName = nameValue
+    } else {
+      // Fall back to entity ID when $name field is empty, null, or undefined
+      derivedName = entityIdPart
+    }
+  } else {
+    // Fall back to common name fields or entityIdPart
+    derivedName = dataAsRecord.title || dataAsRecord.label || entityIdPart
+  }
 
   // Apply defaults from schema
   const dataWithDefaults = applySchemaDefaults(data, ctx.schema)
+
+  // Auto-resolve short relationship IDs to full IDs before validation
+  const dataWithResolvedRels = autoResolveRelationships(ctx, derivedType, dataWithDefaults)
 
   // Determine if validation should run
   const shouldValidate = !options?.skipValidation && options?.validateOnWrite !== false
 
   // Validate against schema if registered (using derived type)
   if (shouldValidate && validateAgainstSchema) {
-    validateAgainstSchema(namespace, { ...dataWithDefaults, $type: derivedType }, options?.validateOnWrite)
+    validateAgainstSchema(namespace, { ...dataWithResolvedRels, $type: derivedType }, options?.validateOnWrite)
   }
 
   const entity = {
-    ...dataWithDefaults,
+    ...dataWithResolvedRels,
     $id: fullId,
     $type: derivedType,
     name: derivedName,

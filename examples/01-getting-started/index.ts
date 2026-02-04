@@ -9,7 +9,7 @@ async function main() {
   const db = DB({
     User: {
       $id: 'email',
-      $name: 'name',        // Use name field for display
+      $name: 'name',
       email: 'string!#',
       name: 'string!',
       role: 'string',
@@ -17,7 +17,7 @@ async function main() {
     },
     Post: {
       $id: 'slug',
-      $name: 'title',       // Use title as display name
+      $name: 'title',
       slug: 'string!#',
       title: 'string!',
       content: 'text',
@@ -67,17 +67,26 @@ async function main() {
     author: 'bob@example.com'
   })
 
-  // Query
+  // Query - returns T[] directly with $total metadata
   const published = await db.Post.find({ status: 'published' })
-  console.log(`Found ${published.total} published posts`)
+  console.log(`Found ${published.$total} published posts`)
 
-  // Get by readable ID
+  // Direct iteration (no .items needed)
+  for (const post of published) {
+    console.log(`  - ${post.title}`)
+  }
+
+  // Get entity - relationships are auto-hydrated
   const post = await db.Post.get('hello-world')
   console.log('Post:', post?.title)
+  console.log('Author:', post?.author?.name)  // Auto-hydrated!
 
-  // Get related
-  const alicePosts = await db.User.getRelated('alice@example.com', 'posts')
-  console.log(`Alice has ${alicePosts.total} posts`)
+  // Reverse relationships are also auto-hydrated
+  const user = await db.User.get('alice@example.com')
+  console.log(`${user?.name} has ${user?.posts?.$total} posts:`)
+  for (const p of user?.posts || []) {
+    console.log(`  - ${p.title}`)
+  }
 
   db.dispose()
   console.log('Done!')

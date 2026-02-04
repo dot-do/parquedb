@@ -64,21 +64,60 @@ npm install parquedb
 ## Quick Start
 
 ```typescript
-import { DB } from 'parquedb'
+import { DB, FsBackend } from 'parquedb'
 
-// Define your schema
+// Define your schema with $id and $name directives
 const db = DB({
-  User: { email: 'string!#', name: 'string', role: 'string' },
-  Post: { title: 'string!', content: 'text', author: '-> User' }
+  User: {
+    $id: 'email',           // Use email as entity ID
+    $name: 'name',          // Use name as display name
+    email: 'string!#',
+    name: 'string!',
+    role: 'string',
+    posts: '<- Post.author[]'
+  },
+  Post: {
+    $id: 'slug',
+    $name: 'title',
+    slug: 'string!#',
+    title: 'string!',
+    content: 'text',
+    status: 'string',
+    author: '-> User'
+  }
+}, { storage: new FsBackend('.db') })
+
+// Create users - email becomes the $id
+const alice = await db.User.create({
+  email: 'alice@example.com',
+  name: 'Alice',
+  role: 'admin'
+})
+console.log(alice.$id)  // 'user/alice@example.com'
+
+// Create posts - author auto-resolves via schema
+await db.Post.create({
+  slug: 'hello-world',
+  title: 'Hello World',
+  content: 'My first post',
+  status: 'published',
+  author: 'alice@example.com'  // Resolves to user/alice@example.com
 })
 
-// CRUD operations
-const user = await db.User.create({ email: 'alice@example.com', name: 'Alice' })
-const posts = await db.Post.find({ author: user.$id })
-await db.Post.update(posts[0].$id, { $set: { title: 'Updated' } })
+// Query - returns T[] directly with $total metadata
+const published = await db.Post.find({ status: 'published' })
+console.log(`Found ${published.$total} published posts`)
+for (const post of published) {
+  console.log(`  - ${post.title}`)
+}
 
-// SQL queries
-const results = await db.sql`SELECT * FROM posts WHERE author = ${user.$id}`
+// Get entity - relationships are auto-hydrated
+const post = await db.Post.get('hello-world')
+console.log('Author:', post?.author?.name)  // 'Alice' - auto-hydrated!
+
+// Reverse relationships are also auto-hydrated
+const user = await db.User.get('alice@example.com')
+console.log(`${user?.name} has ${user?.posts?.$total} posts`)
 ```
 
 ## Storage Backends

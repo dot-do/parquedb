@@ -10,50 +10,66 @@ Get up and running with ParqueDB in minutes.
 Here is a complete working example you can run immediately:
 
 ```typescript
-import { DB } from 'parquedb'
+import { DB, FsBackend } from 'parquedb'
 
-// 1. Define your schema
+// 1. Define your schema with $id and $name directives
 const db = DB({
   User: {
-    email: 'string!#',  // required, indexed
+    $id: 'email',           // Use email as entity ID
+    $name: 'name',          // Use name as display name
+    email: 'string!#',
     name: 'string!',
-    role: 'string = "user"'
+    role: 'string = "user"',
+    posts: '<- Post.author[]'  // Reverse relationship
   },
   Post: {
+    $id: 'slug',            // Use slug as entity ID
+    $name: 'title',         // Use title as display name
+    slug: 'string!#',
     title: 'string!',
     content: 'text',
     published: 'boolean = false',
-    author: '-> User.posts'  // relationship to User
+    author: '-> User'       // Forward relationship to User
   }
-})
+}, { storage: new FsBackend('.db') })
 
 // 2. Create some data
 const alice = await db.User.create({
   email: 'alice@example.com',
   name: 'Alice'
 })
+console.log(alice.$id)  // 'user/alice@example.com'
 
 const post = await db.Post.create({
+  slug: 'getting-started',
   title: 'Getting Started with ParqueDB',
   content: 'ParqueDB is a document database built on Parquet...',
-  author: alice.$id
+  author: 'alice@example.com'  // Auto-resolves to user/alice@example.com
 })
+console.log(post.$id)  // 'post/getting-started'
 
-// 3. Query your data
-const users = await db.User.find({ role: 'user' })
-const alicePosts = await db.Post.find({ author: alice.$id })
+// 3. Query your data - returns T[] directly with $total
+const published = await db.Post.find({ published: true })
+console.log(`Found ${published.$total} published posts`)
+for (const p of published) {
+  console.log(`  - ${p.title}`)
+}
 
-// 4. Update data
-await db.Post.update(post.$id, {
+// 4. Get entity - relationships are auto-hydrated
+const fetchedPost = await db.Post.get('getting-started')
+console.log('Author:', fetchedPost?.author?.name)  // 'Alice' - auto-hydrated!
+
+// 5. Reverse relationships are also auto-hydrated
+const user = await db.User.get('alice@example.com')
+console.log(`${user?.name} has ${user?.posts?.$total} posts`)
+
+// 6. Update data
+await db.Post.update('getting-started', {
   $set: { published: true }
 })
 
-// 5. Use SQL if you prefer
+// 7. Use SQL if you prefer
 const results = await db.sql`SELECT * FROM posts WHERE published = ${true}`
-
-console.log('Created user:', alice.$id)
-console.log('Created post:', post.$id)
-console.log('Found posts:', alicePosts.length)
 ```
 
 ## Installation
@@ -130,6 +146,8 @@ Field types use a concise string notation:
 
 | Notation | Meaning |
 |----------|---------|
+| `$id: 'field'` | Use field value as entity ID |
+| `$name: 'field'` | Use field value as display name |
 | `string` | Optional string field |
 | `string!` | Required field |
 | `string#` | Indexed field |
@@ -139,6 +157,30 @@ Field types use a concise string notation:
 | `string[]` | Array of strings |
 | `-> Target` | Forward relationship |
 | `<- Target.field[]` | Reverse relationship |
+
+### $id and $name Directives
+
+The `$id` directive lets you use a meaningful field value as the entity ID:
+
+```typescript
+User: {
+  $id: 'email',       // alice@example.com → user/alice@example.com
+  email: 'string!#',
+}
+
+Post: {
+  $id: 'slug',        // hello-world → post/hello-world
+  $name: 'title',     // "Hello World" becomes the display name
+  slug: 'string!#',
+  title: 'string!',
+}
+```
+
+This enables intuitive lookups:
+```typescript
+const user = await db.User.get('alice@example.com')  // Uses email as ID
+const post = await db.Post.get('hello-world')         // Uses slug as ID
+```
 
 Example schema with bidirectional relationships:
 
@@ -208,12 +250,22 @@ console.log(user.createdAt) // Date object
 
 ### Find
 
+`find()` returns a `ResultArray<T>` - a standard array you can iterate directly, with additional metadata accessible via proxy properties:
+
 ```typescript
-// Find all entities in a collection
+// Find all entities - iterate directly (no .items needed)
 const allUsers = await db.Users.find()
+for (const user of allUsers) {
+  console.log(user.name)
+}
+
+// Access pagination metadata via proxy
+console.log(allUsers.$total)   // Total count
+console.log(allUsers.$next)    // Cursor for next page
 
 // Filter with exact match
 const active = await db.Users.find({ status: 'active' })
+console.log(`Found ${active.$total} active users`)
 
 // Filter with operators (MongoDB-style)
 const adults = await db.Users.find({ age: { $gte: 18 } })
@@ -234,6 +286,14 @@ const page = await db.Users.find(
   }
 )
 
+// Cursor-based pagination using $next
+if (page.$next) {
+  const nextPage = await db.Users.find(
+    { status: 'active' },
+    { limit: 10, cursor: page.$next }
+  )
+}
+
 // Projection (select specific fields)
 const names = await db.Users.find(
   {},
@@ -243,6 +303,8 @@ const names = await db.Users.find(
 
 ### Get
 
+`get()` returns entities with relationships automatically hydrated:
+
 ```typescript
 // By full ID
 const user = await db.Users.get('users/abc123')
@@ -250,8 +312,23 @@ const user = await db.Users.get('users/abc123')
 // By short ID (namespace inferred from collection)
 const sameUser = await db.Users.get('abc123')
 
+// With $id directive, use the field value directly
+const user = await db.Users.get('alice@example.com')  // When $id: 'email'
+const post = await db.Posts.get('hello-world')         // When $id: 'slug'
+
 // Returns null if not found
 const missing = await db.Users.get('nonexistent')  // null
+
+// Relationships are auto-hydrated
+const post = await db.Posts.get('hello-world')
+console.log(post.author.name)      // 'Alice' - fully hydrated, not just an ID!
+
+// Reverse relationships are arrays with metadata
+const user = await db.Users.get('alice@example.com')
+console.log(user.posts.$total)     // Total count of posts
+for (const p of user.posts) {
+  console.log(p.title)             // First 10 posts (default limit)
+}
 ```
 
 ### Update

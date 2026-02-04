@@ -355,6 +355,34 @@ export function getReverseRelatedIds(
 // =============================================================================
 
 /**
+ * Context for hydration operations.
+ * Provides caching and circular reference detection to optimize hydration.
+ */
+export interface HydrationContext {
+  /**
+   * Cache of already-hydrated entities by their fullId.
+   * Prevents fetching the same entity multiple times during a single hydration pass.
+   */
+  cache: Map<string, Entity>
+
+  /**
+   * Set of entity IDs currently being hydrated.
+   * Used to detect and prevent circular reference infinite loops (A -> B -> A).
+   */
+  visited: Set<string>
+}
+
+/**
+ * Create a new hydration context for a hydration pass.
+ */
+export function createHydrationContext(): HydrationContext {
+  return {
+    cache: new Map(),
+    visited: new Set(),
+  }
+}
+
+/**
  * Hydrate reverse relationship fields for an entity.
  *
  * This method populates relationship fields with actual entity references,
@@ -458,6 +486,315 @@ export function hydrateEntity<T>(
 }
 
 /**
+ * Array with metadata for reverse relationships
+ * Allows accessing array methods like `length` and `[0]` while also
+ * having $total and $next properties for pagination metadata.
+ */
+export interface HydratedArray<T> extends Array<T> {
+  $total: number
+  $next?: string | undefined
+}
+
+/**
+ * Type utility for hydrated forward relationships.
+ * Converts a forward relationship field from EntityId to the full Entity type.
+ *
+ * @typeParam T - The target entity type
+ */
+export type HydratedForwardRel<T> = T | null
+
+/**
+ * Type utility for hydrated reverse relationships.
+ * Converts a reverse relationship field to an array of entities with pagination metadata.
+ *
+ * @typeParam T - The related entity type
+ */
+export type HydratedReverseRel<T> = HydratedArray<T>
+
+/**
+ * Type for an entity with all relationships hydrated.
+ *
+ * This is a utility type that transforms relationship fields from their storage format
+ * (EntityId strings) to their hydrated format (full Entity objects or arrays).
+ *
+ * Forward relationships (->): Transformed to Entity<T> | null
+ * Reverse relationships (<-[]): Transformed to HydratedArray<Entity<T>>
+ *
+ * @typeParam T - The base entity data type
+ * @typeParam ForwardFields - Keys of fields that are forward relationships
+ * @typeParam ReverseFields - Keys of fields that are reverse relationships
+ *
+ * @example
+ * ```typescript
+ * interface PostData {
+ *   title: string
+ *   author: EntityId      // Forward relationship
+ * }
+ *
+ * interface UserData {
+ *   name: string
+ *   posts: unknown        // Reverse relationship
+ * }
+ *
+ * // The hydrated Post type
+ * type HydratedPost = HydratedEntity<PostData, 'author', never>
+ * // { title: string; author: Entity<UserData> | null }
+ *
+ * // The hydrated User type
+ * type HydratedUser = HydratedEntity<UserData, never, 'posts'>
+ * // { name: string; posts: HydratedArray<Entity<PostData>> }
+ * ```
+ */
+export type HydratedEntity<
+  T,
+  ForwardFields extends keyof T = never,
+  ReverseFields extends keyof T = never
+> = Omit<T, ForwardFields | ReverseFields> & {
+  [K in ForwardFields]: HydratedForwardRel<Entity>
+} & {
+  [K in ReverseFields]: HydratedReverseRel<Entity>
+}
+
+/**
+ * Create a hydrated array with $total and $next metadata.
+ */
+function createHydratedArray<T>(
+  items: T[],
+  total: number,
+  next?: string
+): HydratedArray<T> {
+  const arr = [...items] as HydratedArray<T>
+  arr.$total = total
+  if (next !== undefined) {
+    arr.$next = next
+  }
+  return arr
+}
+
+/**
+ * Auto-hydrate all relationship fields on an entity based on schema definitions.
+ *
+ * This is called automatically by get() when depth > 0 (default: 1).
+ * It detects all relationship fields from the schema and:
+ * - Forward relationships (->): fetches and populates the full related entity
+ * - Reverse relationships (<-[]): fetches related entities as an array with $total/$next
+ *
+ * Features:
+ * - **Caching**: Reuses already-fetched entities to avoid redundant lookups
+ * - **Circular Reference Detection**: Prevents infinite loops when A -> B -> A
+ * - **Batch-Friendly**: Collects all target IDs before fetching for potential batching
+ *
+ * @param ctx - The relationship operations context
+ * @param entity - The entity to auto-hydrate
+ * @param fullId - The full entity ID (e.g., "users/123")
+ * @param maxInbound - Maximum number of inbound references to include per field
+ * @param includeDeleted - Whether to include soft-deleted entities
+ * @param hydrationCtx - Optional hydration context for caching and circular detection
+ * @returns The entity with all relationship fields auto-hydrated
+ */
+export function autoHydrateEntity<T>(
+  ctx: RelationshipOperationsContext,
+  entity: Entity<T>,
+  fullId: string,
+  maxInbound: number,
+  includeDeleted = false,
+  hydrationCtx?: HydrationContext
+): Entity<T> {
+  // Create or reuse hydration context
+  const hCtx = hydrationCtx ?? createHydrationContext()
+
+  // Check for circular reference - if we're already hydrating this entity, return it as-is
+  if (hCtx.visited.has(fullId)) {
+    return entity
+  }
+
+  // Mark this entity as being visited to prevent circular hydration
+  hCtx.visited.add(fullId)
+
+  // Check if we have a cached hydrated version
+  const cached = hCtx.cache.get(fullId)
+  if (cached) {
+    return cached as Entity<T>
+  }
+
+  const hydratedEntity = { ...entity } as Entity<T>
+  const typeDef = ctx.schema[entity.$type]
+
+  if (!typeDef) {
+    // No schema definition, cache and return entity as-is
+    hCtx.cache.set(fullId, hydratedEntity)
+    return hydratedEntity
+  }
+
+  const mutableHydrated = asMutableEntity(hydratedEntity)
+
+  // Collect all target IDs for forward relationships first (batch-friendly)
+  const forwardRelTargets: Array<{
+    fieldName: string
+    targetId: string
+  }> = []
+
+  // First pass: identify all forward relationship targets
+  for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
+    if (fieldName.startsWith('$')) continue
+    if (typeof fieldDef !== 'string') continue
+    if (!fieldDef.startsWith('->')) continue
+
+    const currentValue = asMutableEntity(entity)[fieldName]
+
+    if (currentValue === undefined || currentValue === null) {
+      mutableHydrated[fieldName] = null
+      continue
+    }
+
+    // Handle RelLink object { displayName: entityId }
+    if (typeof currentValue === 'object' && !Array.isArray(currentValue)) {
+      const relLink = currentValue as Record<string, EntityId>
+      const targetIds = Object.values(relLink)
+      if (targetIds.length > 0) {
+        const targetId = targetIds[0]
+        if (typeof targetId === 'string' && targetId.includes('/')) {
+          forwardRelTargets.push({ fieldName, targetId })
+        }
+      }
+      continue
+    }
+
+    // Handle direct EntityId string
+    if (typeof currentValue === 'string' && currentValue.includes('/')) {
+      forwardRelTargets.push({ fieldName, targetId: currentValue })
+    }
+  }
+
+  // Second pass: fetch and hydrate forward relationships (using cache)
+  for (const { fieldName, targetId } of forwardRelTargets) {
+    // Check cache first
+    let targetEntity = hCtx.cache.get(targetId)
+
+    if (!targetEntity) {
+      // Fetch from entity store
+      targetEntity = ctx.entities.get(targetId) ?? undefined
+      if (targetEntity) {
+        // Cache the fetched entity
+        hCtx.cache.set(targetId, targetEntity)
+      }
+    }
+
+    if (targetEntity && (!targetEntity.deletedAt || includeDeleted)) {
+      mutableHydrated[fieldName] = targetEntity
+    } else {
+      mutableHydrated[fieldName] = null
+    }
+  }
+
+  // Third pass: handle reverse relationships
+  for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
+    if (fieldName.startsWith('$')) continue
+    if (typeof fieldDef !== 'string') continue
+    if (!fieldDef.startsWith('<-')) continue
+
+    const parsed = parseReverseRelation(ctx.schema, fieldDef)
+    if (!parsed) continue
+
+    // Use reverse index to find related entities
+    const sourceIds = getReverseRelatedIds(ctx, fullId, parsed.relatedNs, parsed.relatedField, {
+      includeDeleted,
+    })
+
+    // Batch fetch related entities (using cache)
+    const allRelatedEntities: Entity[] = []
+    for (const sourceId of sourceIds) {
+      // Check cache first
+      let relatedEntity = hCtx.cache.get(sourceId)
+
+      if (!relatedEntity) {
+        // Fetch from entity store
+        relatedEntity = ctx.entities.get(sourceId) ?? undefined
+        if (relatedEntity) {
+          // Cache the fetched entity
+          hCtx.cache.set(sourceId, relatedEntity)
+        }
+      }
+
+      if (relatedEntity) {
+        allRelatedEntities.push(relatedEntity)
+      }
+    }
+
+    const totalCount = allRelatedEntities.length
+    const limitedEntities = allRelatedEntities.slice(0, maxInbound)
+    const nextCursor = totalCount > maxInbound ? String(maxInbound) : undefined
+
+    // Create a hydrated array with $total and $next metadata
+    mutableHydrated[fieldName] = createHydratedArray(
+      limitedEntities,
+      totalCount,
+      nextCursor
+    )
+  }
+
+  // Cache the hydrated entity
+  hCtx.cache.set(fullId, hydratedEntity)
+
+  return hydratedEntity
+}
+
+/**
+ * Return raw entity with relationship fields as EntityId strings (for depth: 0).
+ *
+ * This ensures forward relationships return their stored EntityId values,
+ * and reverse relationships are not populated at all.
+ *
+ * @param ctx - The relationship operations context
+ * @param entity - The entity to process
+ * @returns The entity with raw relationship IDs
+ */
+export function getRawRelationshipEntity<T>(
+  ctx: RelationshipOperationsContext,
+  entity: Entity<T>
+): Entity<T> {
+  const rawEntity = { ...entity } as Entity<T>
+  const typeDef = ctx.schema[entity.$type]
+
+  if (!typeDef) {
+    return rawEntity
+  }
+
+  const mutableRaw = asMutableEntity(rawEntity)
+
+  for (const [fieldName, fieldDef] of Object.entries(typeDef)) {
+    // Skip meta fields
+    if (fieldName.startsWith('$')) continue
+    if (typeof fieldDef !== 'string') continue
+
+    // Forward relationship: -> Target
+    if (fieldDef.startsWith('->')) {
+      const currentValue = asMutableEntity(entity)[fieldName]
+
+      if (currentValue === undefined || currentValue === null) {
+        // Keep undefined/null as-is for depth: 0
+        continue
+      }
+
+      // Handle RelLink object { displayName: entityId } - extract the EntityId
+      if (typeof currentValue === 'object' && !Array.isArray(currentValue)) {
+        const relLink = currentValue as Record<string, EntityId>
+        const targetIds = Object.values(relLink)
+        if (targetIds.length > 0 && typeof targetIds[0] === 'string') {
+          mutableRaw[fieldName] = targetIds[0]
+        }
+      }
+      // If already a string, keep as-is
+    }
+
+    // Reverse relationships are not populated at depth: 0
+    // They stay as undefined (or whatever the raw value is)
+  }
+
+  return rawEntity
+}
+
+/**
  * Apply maxInbound limiting to reverse relationship fields.
  *
  * @param ctx - The relationship operations context
@@ -509,15 +846,172 @@ export function applyMaxInboundToEntity<T>(
 // =============================================================================
 
 /**
+ * Empty result constant to avoid repeated object creation.
+ * Used when no related entities are found.
+ */
+const EMPTY_RESULT: GetRelatedResult<never> = Object.freeze({
+  items: [],
+  total: 0,
+  hasMore: false,
+})
+
+/**
+ * Fetch related entities via a forward relationship (->) from an entity.
+ *
+ * Forward relationships store target entity IDs as values in a relationship field.
+ * This function iterates through those IDs and fetches the corresponding entities.
+ *
+ * @param ctx - The relationship operations context
+ * @param entity - The source entity containing the relationship field
+ * @param relationField - The name of the relationship field
+ * @param includeDeleted - Whether to include soft-deleted entities
+ * @returns Array of related entities
+ */
+function fetchForwardRelatedEntities<T extends EntityData>(
+  ctx: RelationshipOperationsContext,
+  entity: Entity,
+  relationField: string,
+  includeDeleted: boolean
+): Entity<T>[] {
+  const relField = asMutableEntity(entity)[relationField]
+  if (!relField || typeof relField !== 'object') {
+    return []
+  }
+
+  const results: Entity<T>[] = []
+
+  // Batch collect all target IDs first to minimize lookups
+  const targetIds = Object.values(relField) as string[]
+
+  for (const targetId of targetIds) {
+    const targetEntity = ctx.entities.get(targetId)
+    if (targetEntity) {
+      // Skip soft-deleted entities unless explicitly requested
+      if (targetEntity.deletedAt && !includeDeleted) continue
+      results.push(targetEntity as Entity<T>)
+    }
+  }
+
+  return results
+}
+
+/**
+ * Fetch related entities via a reverse relationship (<-) from an entity.
+ *
+ * Reverse relationships find entities that reference the source entity via
+ * a specified field. Uses the reverse relationship index for O(1) lookups.
+ *
+ * @param ctx - The relationship operations context
+ * @param fullId - The full ID of the source entity (namespace/id format)
+ * @param fieldDef - The relationship definition string (e.g., "<- Post.author[]")
+ * @param includeDeleted - Whether to include soft-deleted entities
+ * @returns Array of related entities
+ */
+function fetchReverseRelatedEntities<T extends EntityData>(
+  ctx: RelationshipOperationsContext,
+  fullId: string,
+  fieldDef: string,
+  includeDeleted: boolean
+): Entity<T>[] {
+  const parsed = parseReverseRelation(ctx.schema, fieldDef)
+  if (!parsed) {
+    return []
+  }
+
+  // Use batched ID lookup from reverse index
+  const sourceIds = getReverseRelatedIds(ctx, fullId, parsed.relatedNs, parsed.relatedField, {
+    includeDeleted,
+  })
+
+  const results: Entity<T>[] = []
+  for (const sourceId of sourceIds) {
+    const relatedEntity = ctx.entities.get(sourceId)
+    if (relatedEntity) {
+      results.push(relatedEntity as Entity<T>)
+    }
+  }
+
+  return results
+}
+
+/**
+ * Apply projection to a list of entities.
+ *
+ * Projection selects a subset of fields to include in the result,
+ * reducing data transfer and memory usage for large entities.
+ *
+ * @param entities - The entities to project
+ * @param projection - Map of field names to include (1 = include)
+ * @returns Projected entities with only selected fields
+ */
+function applyProjection<T extends EntityData>(
+  entities: Entity<T>[],
+  projection: Record<string, unknown>
+): Entity<T>[] {
+  return entities.map(entity => {
+    // Always include $id in projected results
+    const projected: Record<string, unknown> = { $id: entity.$id }
+    const mutableE = asMutableEntity(entity)
+
+    for (const [field, include] of Object.entries(projection)) {
+      if (include === 1) {
+        projected[field] = mutableE[field]
+      }
+    }
+
+    return projected as Entity<T>
+  })
+}
+
+/**
  * Get related entities with pagination support.
- * Supports both forward (->) and reverse (<-) relationships.
+ *
+ * Traverses relationships defined in the schema to return related entities.
+ * Supports both forward relationships (`->`) that point from this entity to others,
+ * and reverse relationships (`<-`) that point from other entities to this one.
+ *
+ * ## Forward Relationships (->)
+ * Forward relationships store target entity IDs directly on the source entity.
+ * Example: `author: '-> User'` means this entity links to a User entity.
+ *
+ * ## Reverse Relationships (<-)
+ * Reverse relationships are computed by looking up which entities reference
+ * this one via a specific field. Uses an O(1) reverse index for efficiency.
+ * Example: `posts: '<- Post.author[]'` finds all Posts that reference this entity
+ * via their `author` field.
+ *
+ * ## Performance
+ * - Forward lookups are O(n) where n is the number of targets
+ * - Reverse lookups are O(1) using the reverse relationship index
+ * - Filtering is applied after fetching all related entities
+ * - Sorting and pagination are applied after filtering
  *
  * @param ctx - The relationship operations context
  * @param namespace - The namespace of the source entity
- * @param id - The ID of the source entity
- * @param relationField - The relationship field name
- * @param options - Pagination and filtering options
- * @returns Paginated related entities
+ * @param id - The ID of the source entity (can be short ID or full EntityId)
+ * @param relationField - The relationship field name as defined in the schema
+ * @param options - Pagination, filtering, and sorting options
+ * @returns Paginated result containing related entities
+ *
+ * @throws {RelationshipError} When the source entity does not exist
+ * @throws {RelationshipError} When the relationship is not defined in schema
+ * @throws {RelationshipError} When the field is not a relationship type
+ *
+ * @example
+ * ```typescript
+ * // Get posts by an author (reverse relationship)
+ * const posts = await getRelatedEntities(ctx, 'users', 'alice@example.com', 'posts')
+ *
+ * // Get author of a post (forward relationship)
+ * const author = await getRelatedEntities(ctx, 'posts', 'my-post', 'author')
+ *
+ * // With pagination and filtering
+ * const publishedPosts = await getRelatedEntities(ctx, 'users', userId, 'posts', {
+ *   filter: { status: 'published' },
+ *   sort: { createdAt: -1 },
+ *   limit: 10,
+ * })
+ * ```
  */
 export async function getRelatedEntities<T extends EntityData = EntityData>(
   ctx: RelationshipOperationsContext,
@@ -526,91 +1020,84 @@ export async function getRelatedEntities<T extends EntityData = EntityData>(
   relationField: string,
   options?: GetRelatedOptions
 ): Promise<GetRelatedResult<T>> {
+  // Validate and normalize inputs
   validateNamespace(namespace)
-
   const fullId = toFullId(namespace, id)
+
+  // Fetch source entity
   const entity = ctx.entities.get(fullId)
   if (!entity) {
-    return { items: [], total: 0, hasMore: false }
+    throw new RelationshipError(
+      'GetRelated',
+      namespace,
+      'Entity not found',
+      { entityId: fullId, relationshipName: relationField }
+    )
   }
 
+  // Validate relationship field exists in schema
   const typeDef = ctx.schema[entity.$type]
-  if (!typeDef || !typeDef[relationField]) {
-    return { items: [], total: 0, hasMore: false }
+  if (!typeDef || !(relationField in typeDef)) {
+    throw new RelationshipError(
+      'GetRelated',
+      entity.$type,
+      `Relationship '${relationField}' is not defined in schema`,
+      { entityId: fullId, relationshipName: relationField }
+    )
   }
 
+  // Validate field is a relationship type (string starting with -> or <-)
   const fieldDef = typeDef[relationField]
   if (typeof fieldDef !== 'string') {
-    return { items: [], total: 0, hasMore: false }
+    throw new RelationshipError(
+      'GetRelated',
+      entity.$type,
+      `Field '${relationField}' is not a relationship`,
+      { entityId: fullId, relationshipName: relationField }
+    )
   }
 
-  let allRelatedEntities: Entity<T>[] = []
+  // Fetch related entities based on relationship direction
+  const includeDeleted = options?.includeDeleted ?? false
+  let relatedEntities: Entity<T>[]
 
-  // Check if this is a forward relationship (->)
   if (fieldDef.startsWith('->')) {
-    const relField = asMutableEntity(entity)[relationField]
-    if (relField && typeof relField === 'object') {
-      for (const [, targetId] of Object.entries(relField)) {
-        const targetEntity = ctx.entities.get(targetId as string)
-        if (targetEntity) {
-          if (targetEntity.deletedAt && !options?.includeDeleted) continue
-          allRelatedEntities.push(targetEntity as Entity<T>)
-        }
-      }
-    }
+    // Forward relationship: this entity -> target entities
+    relatedEntities = fetchForwardRelatedEntities<T>(ctx, entity, relationField, includeDeleted)
   } else if (fieldDef.startsWith('<-')) {
-    const parsed = parseReverseRelation(ctx.schema, fieldDef)
-    if (!parsed) {
-      return { items: [], total: 0, hasMore: false }
-    }
-
-    const sourceIds = getReverseRelatedIds(ctx, fullId, parsed.relatedNs, parsed.relatedField, {
-      includeDeleted: options?.includeDeleted,
-    })
-
-    for (const sourceId of sourceIds) {
-      const relatedEntity = ctx.entities.get(sourceId)
-      if (relatedEntity) {
-        allRelatedEntities.push(relatedEntity as Entity<T>)
-      }
-    }
+    // Reverse relationship: other entities -> this entity
+    relatedEntities = fetchReverseRelatedEntities<T>(ctx, fullId, fieldDef, includeDeleted)
   } else {
-    return { items: [], total: 0, hasMore: false }
+    // Not a recognized relationship syntax
+    return EMPTY_RESULT as GetRelatedResult<T>
   }
 
-  // Apply filter if provided
-  let filteredEntities = allRelatedEntities
+  // Apply optional filter to narrow results
   if (options?.filter) {
-    filteredEntities = allRelatedEntities.filter(e => canonicalMatchesFilter(e as Entity, options.filter!))
+    relatedEntities = relatedEntities.filter(e =>
+      canonicalMatchesFilter(e as Entity, options.filter!)
+    )
   }
 
-  // Apply sorting
+  // Apply optional sorting
   if (options?.sort) {
-    sortEntities(filteredEntities, options.sort)
+    sortEntities(relatedEntities, options.sort)
   }
 
-  const total = filteredEntities.length
+  // Calculate pagination values
+  const total = relatedEntities.length
   const limit = options?.limit ?? total
   const cursor = options?.cursor ? parseInt(options.cursor, 10) : 0
 
-  const paginatedEntities = filteredEntities.slice(cursor, cursor + limit)
+  // Apply pagination slice
+  const paginatedEntities = relatedEntities.slice(cursor, cursor + limit)
   const hasMore = cursor + limit < total
   const nextCursor = hasMore ? String(cursor + limit) : undefined
 
-  // Apply projection if provided
-  let resultItems = paginatedEntities
-  if (options?.project) {
-    resultItems = paginatedEntities.map(e => {
-      const projected: Record<string, unknown> = { $id: e.$id }
-      const mutableE = asMutableEntity(e)
-      for (const field of Object.keys(options.project!)) {
-        if (options.project![field] === 1) {
-          projected[field] = mutableE[field]
-        }
-      }
-      return projected as Entity<T>
-    })
-  }
+  // Apply optional projection to reduce result size
+  const resultItems = options?.project
+    ? applyProjection(paginatedEntities, options.project)
+    : paginatedEntities
 
   return {
     items: resultItems,
