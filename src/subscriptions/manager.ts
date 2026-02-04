@@ -179,7 +179,7 @@ export class SubscriptionManager {
     }
 
     // Check subscription limit
-    if (connection.subscriptions.size >= this.config.maxSubscriptionsPerConnection) {
+    if (connection.subscriptions.size >= (this.config.maxSubscriptionsPerConnection ?? 100)) {
       this.sendToConnection(connection, {
         type: 'error',
         error: 'Maximum subscriptions reached',
@@ -430,7 +430,7 @@ export class SubscriptionManager {
 
       for (const connection of this.connections.values()) {
         // Check for timeout
-        if (now - connection.lastActivity > this.config.connectionTimeoutMs) {
+        if (now - connection.lastActivity > (this.config.connectionTimeoutMs ?? 30000)) {
           if (this.config.debug) {
             logger.debug(`[SubscriptionManager] Connection timeout: ${connection.id}`)
           }

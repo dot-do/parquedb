@@ -361,8 +361,9 @@ export class FsBackend implements StorageBackend {
       // Clean up temp file if it exists
       try {
         await fs.unlink(tempPath)
-      } catch {
+      } catch (cleanupError) {
         // Intentionally ignored: temp file cleanup is best-effort; file may already be removed
+        logger.debug(`Failed to clean up temp file ${tempPath} during writeAtomic`, cleanupError)
       }
       throw error
     }
@@ -461,8 +462,9 @@ export class FsBackend implements StorageBackend {
               }
             }
           }
-        } catch {
+        } catch (parentDirError) {
           // Intentionally ignored: parent directory doesn't exist, so nothing to delete
+          logger.debug(`Parent directory ${prefixDir} does not exist during deletePrefix`, parentDirError)
           return 0
         }
       } else {
@@ -546,12 +548,14 @@ export class FsBackend implements StorageBackend {
               try {
                 await fs.unlink(lockPath)
                 continue // Retry immediately after removing stale lock
-              } catch {
+              } catch (unlinkError) {
                 // Another process may have removed it or acquired it
+                logger.debug(`Failed to remove stale lock ${lockPath}`, unlinkError)
               }
             }
-          } catch {
+          } catch (statError) {
             // Lock file may have been removed, retry
+            logger.debug(`Failed to stat lock file ${lockPath}`, statError)
             continue
           }
 
@@ -621,14 +625,16 @@ export class FsBackend implements StorageBackend {
       // Clean up lock file
       try {
         await fs.unlink(lockPath)
-      } catch {
+      } catch (lockCleanupError) {
         // Intentionally ignored: lock file cleanup is best-effort
+        logger.debug(`Failed to clean up lock file ${lockPath}`, lockCleanupError)
       }
       // Clean up temp file if it still exists (write failed)
       try {
         await fs.unlink(tempPath)
-      } catch {
+      } catch (tempCleanupError) {
         // Intentionally ignored: temp file may have been renamed or doesn't exist
+        logger.debug(`Failed to clean up temp file ${tempPath} during writeConditional`, tempCleanupError)
       }
     }
   }

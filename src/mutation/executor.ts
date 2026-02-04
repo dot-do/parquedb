@@ -13,6 +13,7 @@
 import type {
   Entity,
   EntityId,
+  EntityData,
   CreateInput,
   UpdateInput,
   Filter,
@@ -221,7 +222,7 @@ export class MutationExecutor {
    * @param options - Update options
    * @returns Updated entity or null
    */
-  async update<T = Record<string, unknown>>(
+  async update<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     update: UpdateInput<T>,
@@ -246,7 +247,7 @@ export class MutationExecutor {
       'update',
       namespace,
       fullId,
-      update as UpdateInput<unknown>
+      update as UpdateInput<EntityData>
     )
 
     // Dispatch observability hook: mutation start

@@ -8,6 +8,7 @@
 import type {
   Entity,
   EntityId,
+  EntityData,
   UpdateInput,
   Schema,
 } from '../types'
@@ -60,7 +61,7 @@ export interface UpdateOperationOptions {
  * @param options - Update operation options
  * @returns Update result with entity and events
  */
-export function executeUpdate<T = Record<string, unknown>>(
+export function executeUpdate<T extends EntityData = EntityData>(
   context: MutationContext,
   entityId: string,
   update: UpdateInput<T>,

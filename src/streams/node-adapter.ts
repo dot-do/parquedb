@@ -229,9 +229,7 @@ function createNodeReadableAdapter(
         cancel(reason) {
           stream.destroy(reason ? new Error(String(reason)) : undefined)
         },
-      }, {
-        highWaterMark: opts.highWaterMark,
-      })
+      }, opts.highWaterMark !== undefined ? { highWaterMark: opts.highWaterMark } : undefined)
     },
 
     async *toAsyncIterator(): AsyncIterableIterator<Uint8Array> {
@@ -828,9 +826,7 @@ export function webReadableFromAsyncIterator(
     async cancel(reason) {
       await asyncIterator.return?.(reason)
     },
-  }, {
-    highWaterMark: opts.highWaterMark,
-  })
+  }, opts.highWaterMark !== undefined ? { highWaterMark: opts.highWaterMark } : undefined)
 }
 
 // =============================================================================

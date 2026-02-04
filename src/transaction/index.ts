@@ -548,7 +548,7 @@ export class TransactionManager<TContext = unknown> {
    * Get an active transaction by ID
    */
   get(id: string): Transaction<TContext> | undefined {
-    return this.transactions.get(id)?.transaction
+    return this.transactions.get(id)?.transaction as Transaction<TContext> | undefined
   }
 
   /**
@@ -565,7 +565,7 @@ export class TransactionManager<TContext = unknown> {
   getActiveTransactions(): Transaction<TContext>[] {
     return Array.from(this.transactions.values())
       .filter(state => state.transaction.isActive())
-      .map(state => state.transaction)
+      .map(state => state.transaction as Transaction<TContext>)
   }
 
   /**

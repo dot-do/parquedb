@@ -228,7 +228,7 @@ async function createMVCommand(args: ParsedArgs): Promise<number> {
     }
 
     if (options.gracePeriod) {
-      viewOptions.gracePeriod = options.gracePeriod
+      viewOptions.gracePeriod = parseInt(options.gracePeriod, 10)
     }
 
     // Build view definition

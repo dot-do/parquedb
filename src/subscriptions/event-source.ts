@@ -172,7 +172,7 @@ export class EventWriterSource implements SubscriptionEventSource {
       this.dispatchEvent(event)
     } else {
       // Buffer while not started
-      if (this.buffer.length < this.options.maxBufferSize) {
+      if (this.buffer.length < (this.options.maxBufferSize ?? 1000)) {
         this.buffer.push(event)
       }
     }

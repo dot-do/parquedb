@@ -67,7 +67,7 @@ export async function captureSchema(config: ParqueDBConfig): Promise<SchemaSnaps
   }
 
   const schemaHash = hashObject({ collections })
-  const configHash = hashObject(config)
+  const configHash = hashObject(config as unknown as Record<string, unknown>)
 
   return {
     hash: schemaHash,

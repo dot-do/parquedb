@@ -182,8 +182,6 @@ async function snapshotRelationships(
   storage: StorageBackend,
   direction: 'forward' | 'reverse'
 ): Promise<string> {
-  const _basePath = `rels/${direction}`
-
   // List all relationship files
   const files = await listRelationshipFiles(storage, direction)
 

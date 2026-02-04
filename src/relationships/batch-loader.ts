@@ -20,7 +20,7 @@
  * @packageDocumentation
  */
 
-import type { Entity } from '../types/entity'
+import type { Entity, EntityData } from '../types/entity'
 import type { GetRelatedOptions, GetRelatedResult } from '../ParqueDB/types'
 import { DEFAULT_BATCH_WINDOW_MS, DEFAULT_BATCH_MAX_SIZE } from '../constants'
 
@@ -89,7 +89,7 @@ export interface BatchLoaderDB {
   /**
    * Get related entities
    */
-  getRelated<T = Record<string, unknown>>(
+  getRelated<T extends EntityData = EntityData>(
     namespace: string,
     id: string,
     relationField: string,
@@ -252,7 +252,7 @@ export class RelationshipBatchLoader {
       this.scheduleFlush()
 
       // Force flush if max batch size reached
-      if (this.pendingCount >= this.options.maxBatchSize) {
+      if (this.pendingCount >= (this.options.maxBatchSize ?? DEFAULT_BATCH_MAX_SIZE)) {
         this.flush()
       }
     })
