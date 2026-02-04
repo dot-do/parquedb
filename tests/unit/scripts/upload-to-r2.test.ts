@@ -551,4 +551,247 @@ describe('R2 Upload Script', () => {
       expect(hash1).not.toBe(hash2)
     })
   })
+
+  // ===========================================================================
+  // 6. Parallel Uploads with Configurable Concurrency
+  // ===========================================================================
+
+  describe('Parallel Uploads', () => {
+    it('should upload files in parallel with default concurrency', async () => {
+      const localDir = path.join(tempDir, 'data')
+      const r2Prefix = 'data/'
+
+      // Track concurrent calls
+      let maxConcurrent = 0
+      let currentConcurrent = 0
+
+      const originalPut = mockBucket.put
+      mockBucket.put = vi.fn().mockImplementation(async (...args) => {
+        currentConcurrent++
+        maxConcurrent = Math.max(maxConcurrent, currentConcurrent)
+        await new Promise(resolve => setTimeout(resolve, 10))
+        currentConcurrent--
+        return originalPut(...args)
+      })
+
+      await uploadDirectoryToR2(mockBucket, localDir, r2Prefix)
+
+      // Default concurrency is 5, but we only have 4 files so max should be 4
+      expect(maxConcurrent).toBeLessThanOrEqual(5)
+      expect(maxConcurrent).toBeGreaterThan(0)
+    })
+
+    it('should respect concurrency limit of 1 (sequential)', async () => {
+      const localDir = path.join(tempDir, 'data')
+      const r2Prefix = 'data/'
+
+      let maxConcurrent = 0
+      let currentConcurrent = 0
+
+      const originalPut = mockBucket.put
+      mockBucket.put = vi.fn().mockImplementation(async (...args) => {
+        currentConcurrent++
+        maxConcurrent = Math.max(maxConcurrent, currentConcurrent)
+        await new Promise(resolve => setTimeout(resolve, 10))
+        currentConcurrent--
+        return originalPut(...args)
+      })
+
+      await uploadDirectoryToR2(mockBucket, localDir, r2Prefix, { concurrency: 1 })
+
+      expect(maxConcurrent).toBe(1)
+    })
+
+    it('should support concurrency option in syncToR2', async () => {
+      let maxConcurrent = 0
+      let currentConcurrent = 0
+
+      const originalHead = mockBucket.head
+      mockBucket.head = vi.fn().mockImplementation(async (...args) => {
+        currentConcurrent++
+        maxConcurrent = Math.max(maxConcurrent, currentConcurrent)
+        await new Promise(resolve => setTimeout(resolve, 5))
+        currentConcurrent--
+        return originalHead(...args)
+      })
+
+      await syncToR2(mockBucket, tempDir, 'data/', { concurrency: 2 })
+
+      // With concurrency 2, max should be at most 2
+      expect(maxConcurrent).toBeLessThanOrEqual(2)
+    })
+  })
+
+  // ===========================================================================
+  // 7. Progress Tracking
+  // ===========================================================================
+
+  describe('Progress Tracking', () => {
+    it('should call progress callback during directory upload', async () => {
+      const localDir = path.join(tempDir, 'data')
+      const progressUpdates: Array<{ filesProcessed: number; filesTotal: number }> = []
+
+      await uploadDirectoryToR2(mockBucket, localDir, 'data/', {
+        onProgress: progress => {
+          progressUpdates.push({
+            filesProcessed: progress.filesProcessed,
+            filesTotal: progress.filesTotal,
+          })
+        },
+      })
+
+      expect(progressUpdates.length).toBeGreaterThan(0)
+      // Final progress should show all files processed
+      const finalProgress = progressUpdates[progressUpdates.length - 1]
+      expect(finalProgress.filesProcessed).toBe(finalProgress.filesTotal)
+    })
+
+    it('should call progress callback during sync', async () => {
+      const progressUpdates: Array<{ operation: string; bytesTransferred: number }> = []
+
+      await syncToR2(mockBucket, tempDir, 'data/', {
+        onProgress: progress => {
+          progressUpdates.push({
+            operation: progress.operation,
+            bytesTransferred: progress.bytesTransferred,
+          })
+        },
+      })
+
+      expect(progressUpdates.length).toBeGreaterThan(0)
+      expect(progressUpdates.some(p => p.operation === 'uploading')).toBe(true)
+    })
+
+    it('should report upload speed metrics in result', async () => {
+      const localDir = path.join(tempDir, 'data')
+
+      const result = await uploadDirectoryToR2(mockBucket, localDir, 'data/')
+
+      expect(result.totalBytes).toBeDefined()
+      expect(result.totalBytes).toBeGreaterThan(0)
+      expect(result.durationMs).toBeDefined()
+      expect(result.durationMs).toBeGreaterThanOrEqual(0)
+      expect(result.bytesPerSecond).toBeDefined()
+    })
+
+    it('should report upload speed metrics in sync result', async () => {
+      const result = await syncToR2(mockBucket, tempDir, 'data/')
+
+      expect(result.totalBytes).toBeDefined()
+      expect(result.durationMs).toBeDefined()
+      expect(result.bytesPerSecond).toBeDefined()
+    })
+  })
+
+  // ===========================================================================
+  // 8. Resume Interrupted Uploads
+  // ===========================================================================
+
+  describe('Resume Interrupted Uploads', () => {
+    it('should create manifest file when manifestPath is provided', async () => {
+      const { mkdtemp } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const manifestDir = await mkdtemp(path.join(tmpdir(), 'manifest-test-'))
+      const manifestPath = path.join(manifestDir, 'upload-manifest.json')
+
+      try {
+        await syncToR2(mockBucket, tempDir, 'data/', { manifestPath })
+
+        // Check manifest file was created
+        const manifestExists = fs.existsSync(manifestPath)
+        expect(manifestExists).toBe(true)
+
+        // Check manifest content
+        const manifestContent = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
+        expect(manifestContent.version).toBe(1)
+        expect(manifestContent.completedFiles).toBeDefined()
+        expect(Object.keys(manifestContent.completedFiles).length).toBeGreaterThan(0)
+      } finally {
+        await import('node:fs/promises').then(m => m.rm(manifestDir, { recursive: true, force: true }))
+      }
+    })
+
+    it('should skip files already in manifest on resume', async () => {
+      const { mkdtemp, writeFile: fsWriteFile } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const manifestDir = await mkdtemp(path.join(tmpdir(), 'manifest-resume-'))
+      const manifestPath = path.join(manifestDir, 'upload-manifest.json')
+
+      try {
+        // First sync - uploads all files
+        const result1 = await syncToR2(mockBucket, tempDir, 'data/', { manifestPath })
+        const uploadedFirst = result1.uploaded
+
+        // Reset mock call count
+        vi.clearAllMocks()
+
+        // Second sync - should skip all files (no changes)
+        const result2 = await syncToR2(mockBucket, tempDir, 'data/', { manifestPath })
+
+        // All files should be skipped (from manifest)
+        expect(result2.skipped).toBe(result1.total)
+        expect(result2.uploaded).toBe(0)
+      } finally {
+        await import('node:fs/promises').then(m => m.rm(manifestDir, { recursive: true, force: true }))
+      }
+    })
+
+    it('should re-upload file if content changed since manifest', async () => {
+      const { mkdtemp, writeFile: fsWriteFile, readFile } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const manifestDir = await mkdtemp(path.join(tmpdir(), 'manifest-change-'))
+      const manifestPath = path.join(manifestDir, 'upload-manifest.json')
+      const testFile = path.join(tempDir, 'data', 'users', 'data.parquet')
+
+      try {
+        // First sync
+        await syncToR2(mockBucket, tempDir, 'data/', { manifestPath })
+
+        // Modify a file
+        const originalContent = await readFile(testFile)
+        await fsWriteFile(testFile, createMockParquetContent('modified-users'))
+
+        // Reset mock
+        vi.clearAllMocks()
+
+        // Second sync - should re-upload the changed file
+        const result2 = await syncToR2(mockBucket, tempDir, 'data/', { manifestPath })
+
+        expect(result2.uploaded).toBeGreaterThan(0)
+
+        // Restore original content
+        await fsWriteFile(testFile, originalContent)
+      } finally {
+        await import('node:fs/promises').then(m => m.rm(manifestDir, { recursive: true, force: true }))
+      }
+    })
+
+    it('should track failed files in manifest', async () => {
+      const { mkdtemp } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const manifestDir = await mkdtemp(path.join(tmpdir(), 'manifest-fail-'))
+      const manifestPath = path.join(manifestDir, 'upload-manifest.json')
+
+      // Create a bucket that fails for one file
+      const failBucket = createMockR2Bucket({ functional: true })
+      failBucket.put = vi.fn().mockImplementation(async (key: string) => {
+        if (key.includes('products')) {
+          throw new Error('Simulated failure')
+        }
+        return { key, size: 0, etag: '"test"' }
+      })
+
+      try {
+        await syncToR2(failBucket, tempDir, 'data/', { manifestPath })
+
+        // Check manifest has failed file
+        const manifestContent = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
+        expect(Object.keys(manifestContent.failedFiles).length).toBeGreaterThan(0)
+        const failedKeys = Object.keys(manifestContent.failedFiles)
+        expect(failedKeys.some(k => k.includes('products'))).toBe(true)
+      } finally {
+        await import('node:fs/promises').then(m => m.rm(manifestDir, { recursive: true, force: true }))
+      }
+    })
+  })
 })
