@@ -181,6 +181,8 @@ export interface QueryStats {
   usedBloomFilter: boolean
   /** Whether cache was hit */
   cacheHit: boolean
+  /** Whether early termination was used (limit queries without sort) */
+  usedEarlyTermination?: boolean | undefined
 }
 
 /**
@@ -909,8 +911,26 @@ export class QueryExecutor {
 
         type DataRow = { $id: string; data: T | string; [key: string]: unknown }
         let rows: DataRow[]
+        let results: T[]
 
-        if (pushdownFilter && this.storageAdapter) {
+        // EARLY TERMINATION: For limit queries WITHOUT sort, we can stop
+        // scanning once we've found enough matching rows
+        const canUseEarlyTermination = options.limit && options.limit > 0 && !options.sort
+        const targetCount = canUseEarlyTermination
+          ? (options.limit ?? 0) + (options.skip ?? 0)
+          : Infinity
+
+        if (canUseEarlyTermination && !pushdownFilter) {
+          // Use early termination - process row groups incrementally
+          // and stop once we have enough matching rows
+          const remainingFilter = this.removeIdFilter(filter)
+          results = await this.readRowGroupsWithEarlyTermination<T>(
+            path,
+            remainingFilter,
+            targetCount,
+            stats
+          )
+        } else if (pushdownFilter && this.storageAdapter) {
           // Use parquetQuery with predicate pushdown
           // hyparquet uses min/max statistics to skip row groups that can't match
           const asyncBuffer = await this.createAsyncBuffer(path)
@@ -920,7 +940,7 @@ export class QueryExecutor {
               filter: pushdownFilter,
               columns: ['$id', 'data'],
               compressors,
-              rowLimit: options.limit,
+              rowEnd: options.limit ? (options.skip ?? 0) + options.limit : undefined,
             }) as DataRow[]
             stats.rowsScanned = rows.length
             // Log pushdown filter for debugging
@@ -931,20 +951,29 @@ export class QueryExecutor {
             rows = await this.parquetReader.read<DataRow>(path)
             stats.rowsScanned = rows.length
           }
+
+          // Unpack data column - parse JSON if string, use directly if object
+          results = rows.map(row => {
+            if (typeof row.data === 'string') {
+              const parsed = tryParseJson<T>(row.data)
+              return parsed ?? rowAsEntity<T>(row)
+            }
+            return (row.data ?? row) as T
+          })
         } else {
-          // No pushable filter - read all data
+          // No pushable filter and no early termination - read all data
           rows = await this.parquetReader.read<DataRow>(path)
           stats.rowsScanned = rows.length
-        }
 
-        // Unpack data column - parse JSON if string, use directly if object
-        let results = rows.map(row => {
-          if (typeof row.data === 'string') {
-            const parsed = tryParseJson<T>(row.data)
-            return parsed ?? rowAsEntity<T>(row)
-          }
-          return (row.data ?? row) as T
-        })
+          // Unpack data column - parse JSON if string, use directly if object
+          results = rows.map(row => {
+            if (typeof row.data === 'string') {
+              const parsed = tryParseJson<T>(row.data)
+              return parsed ?? rowAsEntity<T>(row)
+            }
+            return (row.data ?? row) as T
+          })
+        }
 
         // Merge pending files (DO WAL Phase 2 - Bulk Bypass)
         // Pending files contain bulk writes that bypassed SQLite buffering
@@ -956,14 +985,18 @@ export class QueryExecutor {
         }
 
         // Cache the unpacked data for subsequent requests (only for full reads without pending)
-        if (!pushdownFilter && pendingRows.length === 0) {
+        // Skip caching when early termination was used (we don't have all data)
+        if (!pushdownFilter && pendingRows.length === 0 && !stats.usedEarlyTermination) {
           this.dataCache.set(path, asCacheableArray(results))
         }
 
         // Apply remaining MongoDB-style filters (for nested fields in data)
-        const remainingFilter = this.removeIdFilter(filter)
-        if (Object.keys(remainingFilter).length > 0) {
-          results = this.applyFilter(results, remainingFilter)
+        // Skip if early termination was used (filter already applied during read)
+        if (!stats.usedEarlyTermination) {
+          const remainingFilter = this.removeIdFilter(filter)
+          if (Object.keys(remainingFilter).length > 0) {
+            results = this.applyFilter(results, remainingFilter)
+          }
         }
 
         // Post-process: sort, skip, limit, project
@@ -1285,14 +1318,23 @@ export class QueryExecutor {
 
     // Read from Parquet - try multiple ID field patterns
     // Support: $id (ParqueDB), id (legacy), code (O*NET occupations), elementId (O*NET skills/abilities/knowledge)
-    const fullId = id.includes('/') ? id : `${ns.split('/').pop()}/${id}`
+    // IDs may be formatted as:
+    //   - "title:tt0000001" (singular type with colon - ParqueDB format)
+    //   - "titles/tt0000001" (plural type with slash)
+    //   - "tt0000001" (raw ID)
+    const collection = ns.split('/').pop() ?? ''
+    const singularType = collection.endsWith('s') ? collection.slice(0, -1) : collection
+    const colonId = `${singularType}:${id}`  // title:tt0000001
+    const slashId = `${collection}/${id}`    // titles/tt0000001
     const result = await this.find<T>(ns, {
       $or: [
-        { $id: { $eq: fullId } },
-        { $id: { $eq: id } },
-        { code: { $eq: id } },
-        { id: { $eq: id } },
-        { elementId: { $eq: id } },
+        { $id: { $eq: colonId } },   // title:tt0000001
+        { $id: { $eq: slashId } },   // titles/tt0000001
+        { $id: { $eq: id } },        // tt0000001
+        { code: { $eq: id } },       // O*NET: 15-1252.00
+        { id: { $eq: id } },         // legacy: id field
+        { elementId: { $eq: id } },  // O*NET: 2.C.2.b
+        { tconst: { $eq: id } },     // IMDB: tconst field
       ]
     }, { limit: 1 })
 
@@ -2142,6 +2184,110 @@ export class QueryExecutor {
     }
 
     return result
+  }
+
+  /**
+   * Read with early termination for limit queries
+   *
+   * Uses parquetQuery's rowLimit to stop reading once enough rows are found.
+   * For filtered queries, reads in chunks and applies filter incrementally.
+   *
+   * @param path - Path to parquet file
+   * @param filter - Filter to apply to rows
+   * @param targetCount - Number of rows needed (limit + skip)
+   * @param stats - Query stats to update
+   * @returns Array of matching rows
+   */
+  private async readRowGroupsWithEarlyTermination<T>(
+    path: string,
+    filter: Filter,
+    targetCount: number,
+    stats: QueryStats
+  ): Promise<T[]> {
+    if (!this.parquetReader || !this.storageAdapter) {
+      return []
+    }
+
+    type DataRow = { $id: string; data: T | string; [key: string]: unknown }
+    const hasFilter = Object.keys(filter).length > 0
+
+    // For queries WITHOUT filter, use rowEnd to limit rows (most efficient)
+    if (!hasFilter) {
+      const asyncBuffer = await this.createAsyncBuffer(path)
+      const rows = await parquetQuery({
+        file: asyncBuffer,
+        columns: ['$id', 'data'],
+        compressors,
+        rowEnd: targetCount,  // Stop reading after targetCount rows (rowEnd is exclusive)
+      }) as DataRow[]
+
+      stats.rowsScanned = rows.length
+      stats.usedEarlyTermination = rows.length >= targetCount
+
+      // Unpack data column
+      return rows.map(row => {
+        if (typeof row.data === 'string') {
+          const parsed = tryParseJson<T>(row.data)
+          return parsed ?? rowAsEntity<T>(row)
+        }
+        return (row.data ?? row) as T
+      })
+    }
+
+    // For queries WITH filter, read in chunks until we find enough matches
+    // Start with 2x target as initial guess, grow exponentially if needed
+    const matchingRows: T[] = []
+    let rowsScanned = 0
+    let chunkSize = Math.max(targetCount * 2, 100)  // Start with 2x or at least 100
+    let rowStart = 0
+    const MAX_CHUNK_SIZE = 10000  // Don't read more than 10K rows at once
+
+    while (matchingRows.length < targetCount) {
+      const asyncBuffer = await this.createAsyncBuffer(path)
+      const rows = await parquetQuery({
+        file: asyncBuffer,
+        columns: ['$id', 'data'],
+        compressors,
+        rowStart,
+        rowEnd: rowStart + chunkSize,
+      }) as DataRow[]
+
+      // If we got fewer rows than requested, we've reached the end
+      const reachedEnd = rows.length < chunkSize
+      rowsScanned += rows.length
+      rowStart += rows.length
+
+      // Filter and unpack rows
+      for (const row of rows) {
+        let item: T
+        if (typeof row.data === 'string') {
+          const parsed = tryParseJson<T>(row.data)
+          item = parsed ?? rowAsEntity<T>(row)
+        } else {
+          item = (row.data ?? row) as T
+        }
+
+        if (this.matchesFilter(item, filter)) {
+          matchingRows.push(item)
+          if (matchingRows.length >= targetCount) {
+            break
+          }
+        }
+      }
+
+      // Stop if we've reached the end of data or have enough matches
+      if (reachedEnd || matchingRows.length >= targetCount) {
+        break
+      }
+
+      // Grow chunk size for next iteration (up to MAX_CHUNK_SIZE)
+      chunkSize = Math.min(chunkSize * 2, MAX_CHUNK_SIZE)
+    }
+
+    stats.rowsScanned = rowsScanned
+    stats.usedEarlyTermination = matchingRows.length >= targetCount
+
+    return matchingRows
   }
 
   /**

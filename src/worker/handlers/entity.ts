@@ -44,9 +44,12 @@ export async function handleEntityDetail(
 
   // Construct possible $id formats (data may use : or / as separator)
   // e.g., "title:tt0000000" or "knowledge/2.C.2.b"
+  // Note: collectionId is plural (titles) but data often uses singular (title)
+  const singularType = collectionId.endsWith('s') ? collectionId.slice(0, -1) : collectionId
   const idFormats = [
-    `${collectionId}:${entityId}`,   // title:tt0000000
-    `${collectionId}/${entityId}`,   // title/tt0000000
+    `${singularType}:${entityId}`,   // title:tt0000000 (singular with colon)
+    `${collectionId}:${entityId}`,   // titles:tt0000000 (plural with colon)
+    `${collectionId}/${entityId}`,   // titles/tt0000000
     entityId,                         // Just the raw ID
   ]
 
@@ -54,19 +57,23 @@ export async function handleEntityDetail(
   markTiming(timing, 'parallel_start')
   let entityResult
   let allRels
+  // Namespace is dataset/collection (e.g., "imdb/titles")
+  const namespace = `${datasetId}/${collectionId}`
   try {
     // Try to find entity with any of the ID formats
-    const [result1, result2, result3, rels] = await Promise.all([
-      worker.find<EntityRecord>(datasetId, { $id: idFormats[0] }, { limit: 1 }),
-      worker.find<EntityRecord>(datasetId, { $id: idFormats[1] }, { limit: 1 }),
-      worker.find<EntityRecord>(datasetId, { $id: idFormats[2] }, { limit: 1 }),
+    const [result1, result2, result3, result4, rels] = await Promise.all([
+      worker.find<EntityRecord>(namespace, { $id: idFormats[0] }, { limit: 1 }),
+      worker.find<EntityRecord>(namespace, { $id: idFormats[1] }, { limit: 1 }),
+      worker.find<EntityRecord>(namespace, { $id: idFormats[2] }, { limit: 1 }),
+      worker.find<EntityRecord>(namespace, { $id: idFormats[3] }, { limit: 1 }),
       worker.getRelationships(datasetId, entityId),
     ])
 
     // Use the first result that found something
     entityResult = result1.items.length > 0 ? result1 :
                    result2.items.length > 0 ? result2 :
-                   result3
+                   result3.items.length > 0 ? result3 :
+                   result4
     allRels = rels
   } catch (error) {
     // Handle "File not found" errors with 404 instead of 500
