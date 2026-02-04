@@ -101,7 +101,7 @@ function createMockParqueDB(initialScores: MockScore[] = [], initialAggregates: 
             results = results.slice(0, options.limit)
           }
 
-          return results
+          return { items: results }
         }
 
         if (name === 'eval_score_aggregates') {
@@ -161,10 +161,10 @@ function createMockParqueDB(initialScores: MockScore[] = [], initialAggregates: 
             results = results.slice(0, options.limit)
           }
 
-          return results
+          return { items: results }
         }
 
-        return []
+        return { items: [] }
       }),
 
       create: vi.fn().mockImplementation(async (data: Record<string, unknown>) => {

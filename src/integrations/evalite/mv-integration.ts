@@ -37,6 +37,7 @@ import type {
 } from '../../materialized-views/streaming'
 import { createStreamingRefreshEngine } from '../../materialized-views/streaming'
 import type { Event, EventOp } from '../../types/entity'
+import { asMVEvent } from '../../types/cast'
 import type {
   EvalRun,
   EvalSuite,
@@ -671,7 +672,7 @@ export class EvaliteMVIntegration {
       process: async (events) => {
         for (const event of events) {
           if (event.after) {
-            const mvEvent = event.after as unknown as EvaliteMVEvent<EvalRun>
+            const mvEvent = asMVEvent<EvaliteMVEvent<EvalRun>>(event.after)
             if (mvEvent.entityType === 'run') {
               const existingIndex = this.rawData.runs.findIndex(r => r.id === mvEvent.data.id)
               if (existingIndex >= 0) {
@@ -698,7 +699,7 @@ export class EvaliteMVIntegration {
       process: async (events) => {
         for (const event of events) {
           if (event.after) {
-            const mvEvent = event.after as unknown as EvaliteMVEvent<EvalSuite>
+            const mvEvent = asMVEvent<EvaliteMVEvent<EvalSuite>>(event.after)
             if (mvEvent.entityType === 'suite') {
               const existingIndex = this.rawData.suites.findIndex(s => s.id === mvEvent.data.id)
               if (existingIndex >= 0) {
@@ -725,7 +726,7 @@ export class EvaliteMVIntegration {
       process: async (events) => {
         for (const event of events) {
           if (event.after) {
-            const mvEvent = event.after as unknown as EvaliteMVEvent<EvalResult>
+            const mvEvent = asMVEvent<EvaliteMVEvent<EvalResult>>(event.after)
             if (mvEvent.entityType === 'eval') {
               const existingIndex = this.rawData.evals.findIndex(e => e.id === mvEvent.data.id)
               if (existingIndex >= 0) {
@@ -752,7 +753,7 @@ export class EvaliteMVIntegration {
       process: async (events) => {
         for (const event of events) {
           if (event.after) {
-            const mvEvent = event.after as unknown as EvaliteMVEvent<EvalScore>
+            const mvEvent = asMVEvent<EvaliteMVEvent<EvalScore>>(event.after)
             if (mvEvent.entityType === 'score') {
               this.rawData.scores.push(mvEvent.data)
               this.eventsProcessed++
@@ -774,7 +775,7 @@ export class EvaliteMVIntegration {
       process: async (events) => {
         for (const event of events) {
           if (event.after) {
-            const mvEvent = event.after as unknown as EvaliteMVEvent<EvalTrace>
+            const mvEvent = asMVEvent<EvaliteMVEvent<EvalTrace>>(event.after)
             if (mvEvent.entityType === 'trace') {
               this.rawData.traces.push(mvEvent.data)
               this.eventsProcessed++
@@ -798,7 +799,7 @@ export class EvaliteMVIntegration {
       process: async (events) => {
         const mvEvents = events
           .filter(e => e.after)
-          .map(e => e.after as unknown as EvaliteMVEvent)
+          .map(e => asMVEvent<EvaliteMVEvent>(e.after))
           .filter(e => view.entityTypes.includes(e.entityType))
 
         if (mvEvents.length === 0) return

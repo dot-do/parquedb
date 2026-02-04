@@ -6,6 +6,7 @@
  */
 
 import type { ParqueDBConfig } from '../config/loader'
+import { asParam } from '../types/cast'
 import type { CollectionSchemaWithLayout } from '../db'
 import type { StorageBackend } from '../types/storage'
 import { sha256, hashObject } from './hash'
@@ -67,7 +68,7 @@ export async function captureSchema(config: ParqueDBConfig): Promise<SchemaSnaps
   }
 
   const schemaHash = hashObject({ collections })
-  const configHash = hashObject(config as unknown as Record<string, unknown>)
+  const configHash = hashObject(asParam<Record<string, unknown>>(config))
 
   return {
     hash: schemaHash,

@@ -44,7 +44,7 @@
 import type { ParqueDB } from '../ParqueDB'
 import type { ViewDefinition, ViewOptions } from '../materialized-views/types'
 import { viewName } from '../materialized-views/types'
-import { asCreatedRecord, asTypedResults } from '../types/cast'
+import { asCreatedRecord, asTypedResults, safeAsRecord } from '../types/cast'
 import { logger } from '../utils/logger'
 
 // =============================================================================
@@ -1004,7 +1004,7 @@ export async function getAIMetrics(
     // If grouping, add group value to key
     let fullKey = bucketKey
     if (groupByField) {
-      const groupValue = String((request as unknown as Record<string, unknown>)[groupByField] ?? 'unknown')
+      const groupValue = String((safeAsRecord(request) ?? {})[groupByField] ?? 'unknown')
       fullKey = `${bucketKey}${BUCKET_DELIMITER}${groupValue}`
     }
 

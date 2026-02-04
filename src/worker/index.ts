@@ -66,7 +66,7 @@ import {
   addRateLimitHeadersToResponse,
   type RateLimitResult,
 } from './rate-limit-utils'
-import { type RateLimitDO } from './RateLimitDO'
+import { asUpdateResult, asExtendedDOStub, asRateLimitDO, asParam } from '../types/cast'
 
 // Import handlers
 import {
@@ -250,7 +250,7 @@ async function checkRateLimitForRequest(
 
   try {
     const rateLimitId = env.RATE_LIMITER.idFromName(clientId)
-    const limiter = env.RATE_LIMITER.get(rateLimitId) as unknown as RateLimitDO
+    const limiter = asRateLimitDO(env.RATE_LIMITER.get(rateLimitId))
     return await limiter.checkLimit(endpointType)
   } catch (error) {
     // If rate limiting fails, log but allow the request through
@@ -471,7 +471,7 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     // Delegate to DO via RPC
     const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
     // Cast to DOCreateInput - the data should contain $type and name
-    const result = await stub.create(ns, data as unknown as Parameters<typeof stub.create>[1], options)
+    const result = await stub.create(ns, asParam<Parameters<typeof stub.create>[1]>(data), options)
 
     // Invalidate cache after write
     await this.invalidateCacheForNamespace(ns)
@@ -501,12 +501,12 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     // Delegate to DO via RPC
     const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
     // Cast Update to DOUpdateInput - they have similar structure
-    const result = await stub.update(ns, id, update as unknown as Parameters<typeof stub.update>[2], options)
+    const result = await stub.update(ns, id, asParam<Parameters<typeof stub.update>[2]>(update), options)
 
     // Invalidate cache after write
     await this.invalidateCacheForNamespace(ns)
 
-    return result as unknown as UpdateResult
+    return asUpdateResult(result)
   }
 
   /**
@@ -528,9 +528,9 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Delegate to DO via RPC
     // Note: updateMany is an extended method not in base ParqueDBDOStub interface
-    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns) as unknown as {
+    const stub = asExtendedDOStub<{
       updateMany(ns: string, filter: Filter, update: Update, options: UpdateOptions): Promise<UpdateResult>
-    }
+    }>(getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns))
     const result = await stub.updateMany(ns, filter, update, options)
 
     // Invalidate cache after write
@@ -581,9 +581,9 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Delegate to DO via RPC
     // Note: deleteMany with filter is an extended method; base stub only takes string[] ids
-    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns) as unknown as {
+    const stub = asExtendedDOStub<{
       deleteMany(ns: string, filter: Filter, options: DeleteOptions): Promise<DeleteResult>
-    }
+    }>(getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns))
     const result = await stub.deleteMany(ns, filter, options)
 
     // Invalidate cache after write
@@ -674,9 +674,9 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     // Relationship traversal via R2 would require reading relationship index files
     // directly from storage. For now, delegate to DO via RPC for consistency.
     // Note: related is an extended method not in base ParqueDBDOStub interface
-    const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns) as unknown as {
+    const stub = asExtendedDOStub<{
       related(ns: string, id: string, options: RelatedOptions): Promise<PaginatedResult<T>>
-    }
+    }>(getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns))
     return stub.related(ns, id, options)
   }
 

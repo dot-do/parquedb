@@ -167,11 +167,21 @@ describe('createSSEResponse', () => {
     expect(response.headers.get('Connection')).toBe('keep-alive')
   })
 
-  // Skip this test - TransformStream has backpressure issues in Node.js test environment
-  // that cause indefinite waits. The SSEWriter tests above verify the core functionality,
-  // and createSSEResponse works correctly in real Cloudflare Workers environments.
-  it.skip('writer can send messages', async () => {
-    const { writer } = createSSEResponse()
+  it('writer can send messages', async () => {
+    const { response, writer } = createSSEResponse()
+
+    // Consume the readable side to prevent TransformStream backpressure
+    // from blocking writes in the Node.js test environment
+    const reader = response.body!.getReader()
+    const readPromise = (async () => {
+      const chunks: Uint8Array[] = []
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        chunks.push(value)
+      }
+      return chunks
+    })()
 
     await writer.send({ type: 'connected', connectionId: 'conn1' })
     await writer.send({ type: 'pong', ts: 12345 })
@@ -180,6 +190,14 @@ describe('createSSEResponse', () => {
 
     await writer.close()
     expect(writer.isOpen()).toBe(false)
+
+    // Verify the chunks were written
+    const chunks = await readPromise
+    expect(chunks.length).toBe(2)
+
+    const decoder = new TextDecoder()
+    expect(decoder.decode(chunks[0])).toContain('"type":"connected"')
+    expect(decoder.decode(chunks[1])).toContain('"type":"pong"')
   })
 })
 

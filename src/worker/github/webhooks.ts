@@ -40,6 +40,7 @@ import {
   type ParqueDBClient,
   type OctokitClient as CommandOctokitClient,
 } from './commands'
+import { asParam } from '../../types/cast'
 
 // =============================================================================
 // Types
@@ -274,8 +275,8 @@ async function handleIssueComment(
   }
 
   // Create command-specific adapters
-  const commandOctokit = octokit as unknown as CommandOctokitClient
-  const commandParqueDB = parqueDB as unknown as ParqueDBClient
+  const commandOctokit = asParam<CommandOctokitClient>(octokit)
+  const commandParqueDB = asParam<ParqueDBClient>(parqueDB)
 
   // Check permissions for write commands
   if (['resolve', 'preview'].includes(parsed.command)) {

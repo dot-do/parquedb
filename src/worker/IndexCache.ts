@@ -22,6 +22,7 @@ import { FTSIndex } from '../indexes/fts/search'
 import { logger } from '../utils/logger'
 import { safeJsonParse, isRecord } from '../utils/json-validation'
 import { DEFAULT_INDEX_CACHE_MAX_BYTES, DEFAULT_FTS_SEARCH_LIMIT } from '../constants'
+import { asFTSStorageBackend } from '../types/cast'
 
 // =============================================================================
 // Types
@@ -238,7 +239,7 @@ export class IndexCache {
 
     // Cast required: MemoryStorageAdapter implements StorageBackend interface methods
     // but doesn't formally declare 'implements StorageBackend' to avoid circular imports
-    const index = new FTSIndex(memoryStorage as unknown as import('../types/storage').StorageBackend, entry.name, definition)
+    const index = new FTSIndex(asFTSStorageBackend(memoryStorage), entry.name, definition)
     await index.load()
 
     // Cache the loaded index

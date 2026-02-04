@@ -24,11 +24,12 @@
  */
 
 import type { Filter, FindOptions } from '../types'
-import type { MVDefinition, MVMetadata, MVState, ViewName } from '../materialized-views/types'
+import type { MVDefinition, MVMetadata, MVState } from '../materialized-views/types'
 import type { StalenessMetrics, StalenessDetector, MVLineage } from '../materialized-views/staleness'
 import type { QueryCost, TableStatistics } from './optimizer'
 import { COST_CONSTANTS } from './optimizer'
 import { extractFilterFields } from './predicate'
+import { asViewName } from '../types/cast'
 
 // =============================================================================
 // Types
@@ -461,7 +462,7 @@ export class MVQueryOptimizer {
       const lineage = await this.registry.getMVLineage(name)
       if (lineage) {
         stalenessMetrics = await this.stalenessDetector.getMetrics(
-          name as unknown as ViewName,
+          asViewName(name),
           lineage,
           [definition.$from]
         )

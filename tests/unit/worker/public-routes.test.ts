@@ -12,10 +12,41 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// Mock jwt-utils to avoid real JWKS verification in tests
+vi.mock('@/worker/jwt-utils', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/worker/jwt-utils')>()
+  return {
+    ...original,
+    extractBearerToken: original.extractBearerToken,
+    verifyOwnership: vi.fn(async (token: string | null, owner: string) => {
+      if (!token) return false
+      // Decode the mock JWT payload (second segment, base64url-encoded)
+      try {
+        const parts = token.split('.')
+        if (parts.length !== 3) return false
+        const payloadPart = parts[1]!
+        // Restore base64 padding
+        const base64 = payloadPart.replace(/-/g, '+').replace(/_/g, '/')
+        const padding = '='.repeat((4 - base64.length % 4) % 4)
+        const payload = JSON.parse(atob(base64 + padding))
+        const normalizedOwner = owner.toLowerCase()
+        if (typeof payload.sub === 'string' && payload.sub.toLowerCase() === normalizedOwner) return true
+        if (typeof payload.username === 'string' && payload.username.toLowerCase() === normalizedOwner) return true
+        if (typeof payload.preferred_username === 'string' && payload.preferred_username.toLowerCase() === normalizedOwner) return true
+        return false
+      } catch {
+        return false
+      }
+    }),
+  }
+})
+
 import { handlePublicRoutes } from '@/worker/public-routes'
 import type { Env } from '@/types/worker'
 import type { DatabaseInfo } from '@/worker/DatabaseIndexDO'
 import type { RateLimitResult } from '@/worker/rate-limit-utils'
+import { setLogger, consoleLogger, noopLogger } from '@/utils/logger'
 
 // =============================================================================
 // Mock Helpers
@@ -320,7 +351,8 @@ describe('Public Routes - Rate Limiting', () => {
       RATE_LIMITER: createMockDONamespace(mockRateLimiter),
     })
 
-    // Suppress console.error for this test
+    // Enable console logger so logger.error calls console.error
+    setLogger(consoleLogger)
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const request = new Request('https://api.parquedb.com/api/public')
@@ -332,6 +364,7 @@ describe('Public Routes - Rate Limiting', () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('[RateLimit]'), expect.any(Error))
 
     errorSpy.mockRestore()
+    setLogger(noopLogger)
   })
 
   it('should use correct endpoint type for rate limiting', async () => {

@@ -54,6 +54,7 @@ import type {
   ScoreComparison,
 } from './types'
 import { EVAL_SCORES_MAX_AGE_MS, MAX_BATCH_SIZE } from '../../constants'
+import { asTypedResults, asParam } from '../../types/cast'
 
 // =============================================================================
 // Constants
@@ -303,7 +304,7 @@ export class EvalScoresMV {
           )
 
           if (existingAggregates.items.length > 0) {
-            const existing = existingAggregates.items[0] as unknown as EvalScoreAggregate
+            const existing = asParam<EvalScoreAggregate>(existingAggregates.items[0])
             aggregate = {
               $id: existing.$id,
               $type: 'EvalScoreAggregate',
@@ -504,7 +505,7 @@ export class EvalScoresMV {
       sort: { [sortField]: sortOrder },
     })
 
-    return results as unknown as EvalScoreAggregate[]
+    return asTypedResults<EvalScoreAggregate>(results)
   }
 
   /**

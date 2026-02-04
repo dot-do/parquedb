@@ -79,6 +79,7 @@ import type {
 import { ParqueDBDO, type DOCreateOptions, type DOUpdateOptions, type DODeleteOptions, type DOLinkOptions } from '../../worker/do'
 import type { Env } from '../../types/worker'
 import { logger } from '../../utils/logger'
+import { asInternalAccess } from '../../types/cast'
 
 // =============================================================================
 // RPC Method Types
@@ -700,7 +701,7 @@ export class ParqueDBDurableRPC extends DurableObject<Env> {
 
   override async alarm(): Promise<void> {
     // Delegate to ParqueDBDO's alarm handler for event flushing
-    await (this.parquedb as unknown as { alarm(): Promise<void> }).alarm()
+    await asInternalAccess<{ alarm(): Promise<void> }>(this.parquedb).alarm()
   }
 }
 

@@ -23,6 +23,7 @@ import type {
 import type { Filter } from '../types/filter'
 import type { AggregationStage } from '../aggregation/types'
 import { generateULID, createSafeRegex } from '../utils'
+import { asPipelineStages } from '../types/cast'
 
 // =============================================================================
 // Types
@@ -203,7 +204,7 @@ export class IncrementalRefresher {
 
     // Check if aggregations are incrementally refreshable
     if (view.query.pipeline) {
-      const unsupportedStages = this.findUnsupportedIncrementalStages(view.query.pipeline as unknown as AggregationStage[])
+      const unsupportedStages = this.findUnsupportedIncrementalStages(asPipelineStages(view.query.pipeline))
       if (unsupportedStages.length > 0) {
         return {
           canIncremental: false,
@@ -384,7 +385,7 @@ export class IncrementalRefresher {
     // If pipeline is defined, execute aggregation
     let finalRows = rows
     if (view.query.pipeline) {
-      finalRows = await this.executePipeline(rows, view.query.pipeline as unknown as AggregationStage[])
+      finalRows = await this.executePipeline(rows, asPipelineStages(view.query.pipeline))
     }
 
     // Replace all data in storage

@@ -11,6 +11,7 @@
 
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { parquetWriteBuffer } from 'hyparquet-writer'
 import { parquetQuery, parquetMetadataAsync } from 'hyparquet'
 // Use Worker-compatible compressors (pure JS Snappy instead of WASM)
@@ -26,7 +27,7 @@ import {
 // Configuration
 // =============================================================================
 
-const BENCHMARK_DIR = '/tmp/parquedb-variant-benchmark'
+const BENCHMARK_DIR = join(tmpdir(), `parquedb-variant-benchmark-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`)
 const ROW_COUNTS = [10_000, 100_000, 500_000]
 const ROWS_PER_GROUP = 50_000
 

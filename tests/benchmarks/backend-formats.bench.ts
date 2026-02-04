@@ -450,7 +450,7 @@ describe('Backend Format Comparison', () => {
 
     beforeAll(async () => {
       // Create temp directories
-      testDir = join(tmpdir(), `parquedb-backend-bench-${Date.now()}`)
+      testDir = join(tmpdir(), `parquedb-backend-bench-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`)
       await fs.mkdir(testDir, { recursive: true })
 
       const icebergDir = join(testDir, 'iceberg')

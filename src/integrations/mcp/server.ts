@@ -43,6 +43,7 @@ import {
   validateBoolean,
   validateSearchQuery,
 } from './validation'
+import { asInternalAccess } from '../../types/cast'
 
 // Default version from package.json context
 const DEFAULT_VERSION = '0.1.0'
@@ -541,7 +542,7 @@ export function createParqueDBMCPServer(
       async () => {
         try {
           // Get collections from schema validator if available
-          const schemaValidator = (db as unknown as { getSchemaValidator?: (() => { getSchema?: (() => Record<string, unknown>) | undefined } | null) | undefined }).getSchemaValidator?.()
+          const schemaValidator = asInternalAccess<{ getSchemaValidator?: (() => { getSchema?: (() => Record<string, unknown>) | undefined } | null) | undefined }>(db).getSchemaValidator?.()
           const collections: CollectionInfo[] = []
 
           if (schemaValidator && typeof schemaValidator.getSchema === 'function') {
@@ -604,7 +605,7 @@ export function createParqueDBMCPServer(
           const collection = db.collection(collectionName)
 
           // Check if semantic search is available
-          if (typeof (collection as unknown as { semanticSearch?: unknown | undefined }).semanticSearch !== 'function') {
+          if (typeof asInternalAccess<{ semanticSearch?: unknown | undefined }>(collection).semanticSearch !== 'function') {
             return {
               content: [{
                 type: 'text',
@@ -618,7 +619,7 @@ export function createParqueDBMCPServer(
           }
 
           // Call semantic search if available
-          const semanticSearchFn = (collection as unknown as { semanticSearch: (query: string, options?: { limit?: number | undefined; filter?: unknown | undefined }) => Promise<unknown[]> }).semanticSearch
+          const semanticSearchFn = asInternalAccess<{ semanticSearch: (query: string, options?: { limit?: number | undefined; filter?: unknown | undefined }) => Promise<unknown[]> }>(collection).semanticSearch
           const results = await semanticSearchFn(query, {
             limit,
             filter,
@@ -669,7 +670,7 @@ export function createParqueDBMCPServer(
     },
     async () => {
       // Get schema from validator if available
-      const schemaValidator = (db as unknown as { getSchemaValidator?: (() => { getSchema?: (() => Record<string, unknown>) | undefined } | null) | undefined }).getSchemaValidator?.()
+      const schemaValidator = asInternalAccess<{ getSchemaValidator?: (() => { getSchema?: (() => Record<string, unknown>) | undefined } | null) | undefined }>(db).getSchemaValidator?.()
       let schema: Record<string, unknown> = {}
       if (schemaValidator && typeof schemaValidator.getSchema === 'function') {
         schema = schemaValidator.getSchema()
@@ -702,11 +703,22 @@ export function createParqueDBMCPServer(
 
       isDisposed = true
 
-      // Note: The McpServer itself manages its own cleanup via close().
-      // This dispose method is for any additional resources we might track
-      // in the future (e.g., event listeners, timers, subscriptions).
-      // Currently, the main cleanup is marking the handle as disposed
-      // to prevent further use and allow garbage collection.
+      // 1. Close the MCP server to terminate active connections and transports
+      try {
+        await server.close()
+      } catch {
+        // Ignore close errors - server may already be closed
+      }
+
+      // 2. Flush any pending database buffers (events, writes)
+      const dbWithFlush = asInternalAccess<{ flush?: (() => Promise<void>) | undefined }>(db)
+      if (typeof dbWithFlush.flush === 'function') {
+        try {
+          await dbWithFlush.flush()
+        } catch {
+          // Ignore flush errors during cleanup
+        }
+      }
     },
   }
 

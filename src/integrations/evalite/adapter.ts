@@ -21,6 +21,7 @@
 import { ParqueDB } from '../../ParqueDB'
 import type { EntityId, Entity, Filter } from '../../types'
 import { logger } from '../../utils/logger'
+import { asParam } from '../../types/cast'
 import type {
   EvaliteAdapterConfig,
   ResolvedEvaliteConfig,
@@ -84,7 +85,7 @@ class IdCounter {
       try {
         const result = await db.find(fullCollection, {}, { limit: 1, sort: { id: 'desc' } })
         if (result.items.length > 0) {
-          const maxId = (result.items[0] as unknown as { id: number }).id
+          const maxId = asParam<{ id: number }>(result.items[0]).id
           this.counters.set(collection, maxId)
         }
       } catch {
@@ -811,19 +812,19 @@ export class ParqueDBEvaliteAdapter {
 
   private entityToRun(entity: Entity): EvalRun {
     return {
-      id: (entity as unknown as { id: number }).id,
-      runType: (entity as unknown as { runType: RunType }).runType,
+      id: asParam<{ id: number }>(entity).id,
+      runType: asParam<{ runType: RunType }>(entity).runType,
       createdAt: entity.createdAt.toISOString(),
     }
   }
 
   private entityToSuite(entity: Entity): EvalSuite {
-    const data = entity as unknown as {
+    const data = asParam<{
       id: number
       runId: number
       status: SuiteStatus
       duration: number
-    }
+    }>(entity)
     return {
       id: data.id,
       runId: data.runId,
@@ -835,7 +836,7 @@ export class ParqueDBEvaliteAdapter {
   }
 
   private entityToEval(entity: Entity): EvalResult {
-    const data = entity as unknown as {
+    const data = asParam<{
       id: number
       suiteId: number
       duration: number
@@ -845,7 +846,7 @@ export class ParqueDBEvaliteAdapter {
       status: EvalStatus
       colOrder: number
       renderedColumns?: unknown | undefined
-    }
+    }>(entity)
     return {
       id: data.id,
       suiteId: data.suiteId,
@@ -861,13 +862,13 @@ export class ParqueDBEvaliteAdapter {
   }
 
   private entityToScore(entity: Entity): EvalScore {
-    const data = entity as unknown as {
+    const data = asParam<{
       id: number
       evalId: number
       score: number
       description?: string | undefined
       metadata?: unknown | undefined
-    }
+    }>(entity)
     return {
       id: data.id,
       evalId: data.evalId,
@@ -880,7 +881,7 @@ export class ParqueDBEvaliteAdapter {
   }
 
   private entityToTrace(entity: Entity): EvalTrace {
-    const data = entity as unknown as {
+    const data = asParam<{
       id: number
       evalId: number
       input: unknown
@@ -891,7 +892,7 @@ export class ParqueDBEvaliteAdapter {
       outputTokens?: number | undefined
       totalTokens?: number | undefined
       colOrder: number
-    }
+    }>(entity)
     return {
       id: data.id,
       evalId: data.evalId,

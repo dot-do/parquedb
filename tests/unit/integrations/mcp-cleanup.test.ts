@@ -47,7 +47,6 @@ describe('MCP Server Resource Cleanup', () => {
       expect(tools.tools.length).toBeGreaterThan(0)
 
       await client.close()
-      await handle.server.close()
       await handle.dispose()
     })
 
@@ -93,7 +92,6 @@ describe('MCP Server Resource Cleanup', () => {
 
       // Clean up first server
       await client1.close()
-      await handle1.server.close()
       await handle1.dispose()
 
       // Create second server
@@ -110,7 +108,6 @@ describe('MCP Server Resource Cleanup', () => {
 
       // Clean up second server
       await client2.close()
-      await handle2.server.close()
       await handle2.dispose()
     })
 
@@ -142,8 +139,6 @@ describe('MCP Server Resource Cleanup', () => {
       // Clean up both
       await client1.close()
       await client2.close()
-      await handle1.server.close()
-      await handle2.server.close()
       await handle1.dispose()
       await handle2.dispose()
     })
@@ -163,12 +158,29 @@ describe('MCP Server Resource Cleanup', () => {
       const tools = await client.listTools()
       expect(tools.tools.length).toBeGreaterThan(0)
 
-      // Close server and dispose without closing client first
-      await handle.server.close()
+      // Dispose should close the server and clean up without needing explicit server.close()
       await handle.dispose()
 
       // Client operations should fail after server close
       // (or be handled gracefully)
+    })
+
+    it('should close the server automatically via dispose without prior server.close()', async () => {
+      const handle = createParqueDBMCPServer(db)
+      const client = new Client({ name: 'test-client', version: '1.0.0' }, { capabilities: {} })
+
+      const [t1, t2] = InMemoryTransport.createLinkedPair()
+
+      await handle.server.connect(t2)
+      await client.connect(t1)
+
+      // Verify connection is active
+      const tools = await client.listTools()
+      expect(tools.tools.length).toBeGreaterThan(0)
+
+      // Only call dispose - it should close the server internally
+      await expect(handle.dispose()).resolves.not.toThrow()
+      expect(handle.isDisposed).toBe(true)
     })
   })
 
@@ -213,6 +225,78 @@ describe('MCP Server Resource Cleanup', () => {
     })
   })
 
+  describe('Database Buffer Flushing', () => {
+    it('should flush database buffers during dispose', async () => {
+      const handle = createParqueDBMCPServer(db)
+      const client = new Client({ name: 'test-client', version: '1.0.0' }, { capabilities: {} })
+
+      const [t1, t2] = InMemoryTransport.createLinkedPair()
+
+      await handle.server.connect(t2)
+      await client.connect(t1)
+
+      // Perform a write operation to generate pending events
+      await client.callTool({
+        name: 'parquedb_create',
+        arguments: {
+          collection: 'posts',
+          data: {
+            name: 'Flush Test Post',
+            title: 'Should Flush',
+            content: 'This tests buffer flushing on dispose',
+            status: 'draft',
+          },
+        },
+      })
+
+      // Dispose should flush pending events without errors
+      await expect(handle.dispose()).resolves.not.toThrow()
+      expect(handle.isDisposed).toBe(true)
+    })
+
+    it('should handle dispose gracefully when server was never connected', async () => {
+      // Create handle but never connect
+      const handle = createParqueDBMCPServer(db)
+
+      // Dispose should not throw even if never connected
+      await expect(handle.dispose()).resolves.not.toThrow()
+      expect(handle.isDisposed).toBe(true)
+    })
+
+    it('should flush buffers and then close the server during dispose', async () => {
+      const handle = createParqueDBMCPServer(db)
+      const client = new Client({ name: 'test-client', version: '1.0.0' }, { capabilities: {} })
+
+      const [t1, t2] = InMemoryTransport.createLinkedPair()
+
+      await handle.server.connect(t2)
+      await client.connect(t1)
+
+      // Create multiple documents to generate buffered events
+      for (let i = 0; i < 5; i++) {
+        await client.callTool({
+          name: 'parquedb_create',
+          arguments: {
+            collection: 'posts',
+            data: {
+              name: `Batch Post ${i}`,
+              title: `Batch Title ${i}`,
+              content: `Batch content ${i}`,
+              status: 'draft',
+            },
+          },
+        })
+      }
+
+      // Dispose should cleanly flush and close
+      await expect(handle.dispose()).resolves.not.toThrow()
+      expect(handle.isDisposed).toBe(true)
+
+      // Subsequent dispose calls should be no-ops
+      await expect(handle.dispose()).resolves.not.toThrow()
+    })
+  })
+
   describe('Event Listener Cleanup', () => {
     it('should not leak event listeners after dispose', async () => {
       const handle = createParqueDBMCPServer(db)
@@ -227,7 +311,6 @@ describe('MCP Server Resource Cleanup', () => {
       await client.listTools()
 
       await client.close()
-      await handle.server.close()
       await handle.dispose()
 
       // After dispose, creating a new server should work without
@@ -257,7 +340,6 @@ describe('MCP Server Resource Cleanup', () => {
       expect(toolNames).not.toContain('parquedb_create')
 
       await client.close()
-      await handle.server.close()
       await handle.dispose()
     })
 
@@ -283,7 +365,6 @@ describe('MCP Server Resource Cleanup', () => {
       expect(toolNames).not.toContain('parquedb_aggregate')
 
       await client.close()
-      await handle.server.close()
       await handle.dispose()
     })
   })

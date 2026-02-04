@@ -4,24 +4,97 @@
  * Comprehensive tests for the ParqueDB Express middleware adapter.
  * Tests middleware creation, request handling, error mapping, lifecycle hooks,
  * and shared singleton behavior.
+ *
+ * Heavy transitive dependencies (ParqueDB, DB, FsBackend) are mocked to avoid
+ * long module resolution times in the test environment.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+
+// ---------------------------------------------------------------------------
+// Mocks – vi.mock calls are hoisted, so factories must be self-contained
+// ---------------------------------------------------------------------------
+
+vi.mock('../../../src/ParqueDB', () => {
+  class ParqueDB {
+    _config: Record<string, unknown>
+    constructor(config: Record<string, unknown> = {}) {
+      this._config = config
+    }
+    collection(ns: string) {
+      return {
+        create: async (data: Record<string, unknown>) => ({
+          $id: `${ns}/mock-id`,
+          $type: 'Mock',
+          name: data.name ?? 'mock',
+          ...data,
+        }),
+        find: async () => [],
+        get: async () => null,
+      }
+    }
+  }
+  return { ParqueDB }
+})
+
+vi.mock('../../../src/storage', () => {
+  class MemoryBackend {
+    _data = new Map<string, ArrayBuffer>()
+    name = 'memory'
+  }
+  class FsBackend {
+    _basePath: string
+    name = 'fs'
+    constructor(basePath: string) {
+      this._basePath = basePath
+    }
+  }
+  return { MemoryBackend, FsBackend }
+})
+
+vi.mock('../../../src/db', () => {
+  // Import the already-mocked ParqueDB to reuse in DB factory
+  // At runtime the mock is already installed
+  return {
+    DB: (_schema: Record<string, unknown>, opts?: Record<string, unknown>) => {
+      // Inline a lightweight mock – returns same shape as ParqueDB mock
+      return {
+        _config: opts ?? {},
+        collection(ns: string) {
+          return {
+            create: async (data: Record<string, unknown>) => ({
+              $id: `${ns}/mock-id`,
+              $type: 'Mock',
+              name: data.name ?? 'mock',
+              ...data,
+            }),
+            find: async () => [],
+            get: async () => null,
+          }
+        },
+      }
+    },
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Imports – these now resolve against the mocked modules
+// ---------------------------------------------------------------------------
+
 import {
   createParqueDBMiddleware,
   createErrorMiddleware,
   getSharedDB,
   resetSharedDB,
+  ParqueDB,
   type ParqueDBMiddlewareOptions,
-  type ExpressMiddleware,
-  type ExpressErrorMiddleware,
 } from '../../../src/integrations/express'
 import { MemoryBackend } from '../../../src/storage'
-import { ParqueDB } from '../../../src/ParqueDB'
 
-/**
- * Mock Express Request object
- */
+// ---------------------------------------------------------------------------
+// Test Helpers
+// ---------------------------------------------------------------------------
+
 function createMockRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     method: 'GET',
@@ -34,9 +107,6 @@ function createMockRequest(overrides: Record<string, unknown> = {}): Record<stri
   }
 }
 
-/**
- * Mock Express Response object with chainable methods
- */
 function createMockResponse(): Record<string, unknown> & {
   statusCode: number
   _json: unknown
@@ -68,22 +138,26 @@ function createMockResponse(): Record<string, unknown> & {
   return res
 }
 
-/**
- * Mock next function
- */
 function createMockNext(): ((error?: Error) => void) & { mock: { calls: unknown[][] } } {
   return vi.fn() as ((error?: Error) => void) & { mock: { calls: unknown[][] } }
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 describe('Express Integration', () => {
   beforeEach(() => {
-    // Reset shared DB instance before each test
     resetSharedDB()
   })
 
   afterEach(() => {
     resetSharedDB()
   })
+
+  // =========================================================================
+  // createParqueDBMiddleware
+  // =========================================================================
 
   describe('createParqueDBMiddleware', () => {
     describe('middleware creation', () => {
@@ -108,7 +182,7 @@ describe('Express Integration', () => {
 
       it('should create middleware with custom storage backend', async () => {
         const storage = new MemoryBackend()
-        const middleware = createParqueDBMiddleware({ storage })
+        const middleware = createParqueDBMiddleware({ storage: storage as any })
         const req = createMockRequest()
         const res = createMockResponse()
         const next = createMockNext()
@@ -120,8 +194,6 @@ describe('Express Integration', () => {
       })
 
       it('should create middleware with basePath option', async () => {
-        // Note: basePath creates FsBackend, which may fail in test env
-        // We test that the option is accepted
         const middleware = createParqueDBMiddleware({ basePath: './test-data' })
 
         expect(typeof middleware).toBe('function')
@@ -352,6 +424,10 @@ describe('Express Integration', () => {
     })
   })
 
+  // =========================================================================
+  // createErrorMiddleware
+  // =========================================================================
+
   describe('createErrorMiddleware', () => {
     describe('error mapping', () => {
       it('should map NOT_FOUND error to 404', () => {
@@ -488,6 +564,10 @@ describe('Express Integration', () => {
     })
   })
 
+  // =========================================================================
+  // shared DB singleton
+  // =========================================================================
+
   describe('shared DB singleton', () => {
     it('should return null before middleware initialization', () => {
       const db = getSharedDB()
@@ -544,10 +624,14 @@ describe('Express Integration', () => {
     })
   })
 
+  // =========================================================================
+  // Integration scenarios
+  // =========================================================================
+
   describe('integration scenarios', () => {
     it('should work with full request/response cycle', async () => {
       const storage = new MemoryBackend()
-      const middleware = createParqueDBMiddleware({ storage })
+      const middleware = createParqueDBMiddleware({ storage: storage as any })
       const req = createMockRequest()
       const res = createMockResponse()
       const next = createMockNext()
@@ -555,10 +639,10 @@ describe('Express Integration', () => {
       await middleware(req, res, next)
 
       // Verify db is accessible and functional
-      const db = req.db as ParqueDB
+      const db = req.db as InstanceType<typeof ParqueDB>
       expect(db).toBeInstanceOf(ParqueDB)
 
-      // Test basic operations
+      // Test basic operations via collection proxy
       const result = await db.collection('test').create({
         $type: 'Test',
         name: 'test-item',
@@ -570,7 +654,7 @@ describe('Express Integration', () => {
     })
 
     it('should handle multiple middlewares with same options', async () => {
-      const options: ParqueDBMiddlewareOptions = { storage: new MemoryBackend() }
+      const options: ParqueDBMiddlewareOptions = { storage: new MemoryBackend() as any }
       const middleware1 = createParqueDBMiddleware(options)
       const middleware2 = createParqueDBMiddleware(options)
 
@@ -589,19 +673,53 @@ describe('Express Integration', () => {
     it('should create different instances for different options', async () => {
       resetSharedDB()
 
-      const middleware1 = createParqueDBMiddleware({ storage: new MemoryBackend() })
+      const middleware1 = createParqueDBMiddleware({ storage: new MemoryBackend() as any })
       const req1 = createMockRequest()
       await middleware1(req1, createMockResponse(), createMockNext())
       const db1 = req1.db
 
       resetSharedDB()
 
-      const middleware2 = createParqueDBMiddleware({ storage: new MemoryBackend() })
+      const middleware2 = createParqueDBMiddleware({ storage: new MemoryBackend() as any })
       const req2 = createMockRequest()
       await middleware2(req2, createMockResponse(), createMockNext())
       const db2 = req2.db
 
       expect(db1).not.toBe(db2)
+    })
+
+    it('should support defaultNamespace option', async () => {
+      const middleware = createParqueDBMiddleware({ defaultNamespace: 'myapp' })
+      const req = createMockRequest()
+      const res = createMockResponse()
+      const next = createMockNext()
+
+      await middleware(req, res, next)
+
+      expect(req.db).toBeDefined()
+    })
+
+    it('should handle concurrent requests correctly', async () => {
+      const middleware = createParqueDBMiddleware({})
+      const requests = Array.from({ length: 5 }, (_, i) =>
+        createMockRequest({ url: `/route-${i}` })
+      )
+      const res = createMockResponse()
+
+      const results = await Promise.all(
+        requests.map(async (req) => {
+          const next = createMockNext()
+          await middleware(req, res, next)
+          return { db: req.db, nextCalled: next.mock.calls.length > 0 }
+        })
+      )
+
+      // All requests get the same db instance
+      const firstDb = results[0].db
+      for (const r of results) {
+        expect(r.db).toBe(firstDb)
+        expect(r.nextCalled).toBe(true)
+      }
     })
   })
 })

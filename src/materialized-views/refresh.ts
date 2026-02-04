@@ -46,6 +46,7 @@ import type {
   ViewState,
 } from './types'
 import { isPipelineQuery } from './types'
+import { asPipelineStages } from '../types/cast'
 
 // =============================================================================
 // Constants
@@ -324,7 +325,7 @@ export async function fullRefresh(
       // Cast to AggregationStage[] since PipelineStage is compatible
       processedData = executeAggregation<Record<string, unknown>>(
         sourceData,
-        definition.query.pipeline as unknown as AggregationStage[]
+        asPipelineStages(definition.query.pipeline)
       )
     } else {
       // Apply filter/project/sort

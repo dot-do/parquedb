@@ -361,15 +361,12 @@ describe('Checkout Operations', () => {
   })
 
   describe('Checkout with uncommitted changes', () => {
-    // Issue: parquedb-kpnj - The current implementation does not track uncommitted changes.
-    // This test documents expected behavior for future implementation.
-    // TODO: Implement uncommitted changes tracking in BranchManager
-    it.skip('should warn/fail when there are uncommitted changes', async () => {
-      // When implemented:
-      // 1. Make changes to data files
-      // 2. Attempt checkout
-      // 3. Expect warning or failure without --force
-    })
+    // The current implementation does not track uncommitted changes (parquedb-kpnj).
+    // When BranchManager gains uncommitted changes tracking, this test should:
+    // 1. Make changes to data files
+    // 2. Attempt checkout
+    // 3. Expect warning or failure without --force
+    it.todo('should warn/fail when there are uncommitted changes')
 
     it('force checkout bypasses uncommitted changes check', async () => {
       await branchManager.create('develop')

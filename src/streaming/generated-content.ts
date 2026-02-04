@@ -158,6 +158,18 @@ export interface GeneratedContentRecord {
 
   /** Additional metadata */
   metadata: string | null
+
+  /** Version number (1 for first version) */
+  version: number
+
+  /** Parent content ID (null for first version) */
+  parentContentId: string | null
+
+  /** Root content ID (the original first version) */
+  rootContentId: string | null
+
+  /** Reason for creating this version */
+  versionReason: string | null
 }
 
 /**
@@ -229,6 +241,18 @@ export interface RecordContentInput {
 
   /** Additional metadata */
   metadata?: Record<string, unknown> | undefined
+
+  /** Version number (defaults to 1, or 2 if parentContentId is provided) */
+  version?: number | undefined
+
+  /** Parent content ID for versioning */
+  parentContentId?: string | undefined
+
+  /** Root content ID (the original first version) */
+  rootContentId?: string | undefined
+
+  /** Reason for creating this version */
+  versionReason?: string | undefined
 }
 
 /**
@@ -259,6 +283,10 @@ export const GENERATED_CONTENT_SCHEMA: ParquetSchema = {
   userId: { type: 'BYTE_ARRAY', optional: true },
   source: { type: 'BYTE_ARRAY', optional: true },
   metadata: { type: 'BYTE_ARRAY', optional: true },
+  version: { type: 'INT32', optional: false },
+  parentContentId: { type: 'BYTE_ARRAY', optional: true },
+  rootContentId: { type: 'BYTE_ARRAY', optional: true },
+  versionReason: { type: 'BYTE_ARRAY', optional: true },
 }
 
 // =============================================================================
@@ -528,6 +556,71 @@ export class GeneratedContentMV {
     return [...this.buffer]
   }
 
+  /**
+   * Create a new version of existing content
+   *
+   * @param parent - The parent content record
+   * @param input - Content input for the new version (without version fields)
+   * @returns The ID of the new version
+   */
+  async createVersion(
+    parent: GeneratedContentRecord,
+    input: RecordContentInput
+  ): Promise<string> {
+    const newId = input.id ?? this.generateId()
+    const newVersion = (parent.version ?? 1) + 1
+    const rootContentId = parent.rootContentId ?? parent.id
+
+    await this.ingestContent({
+      ...input,
+      id: newId,
+      version: newVersion,
+      parentContentId: parent.id,
+      rootContentId,
+    })
+
+    return newId
+  }
+
+  /**
+   * Get version history for a content record
+   *
+   * Returns all versions in the buffer that share the same rootContentId,
+   * sorted by version number (oldest first).
+   *
+   * @param contentId - Any content ID in the version chain
+   * @returns Array of content records sorted by version
+   */
+  getVersionHistory(contentId: string): GeneratedContentRecord[] {
+    // Find the record to get its rootContentId
+    const record = this.buffer.find(r => r.id === contentId)
+    if (!record) {
+      return []
+    }
+
+    const rootId = record.rootContentId ?? record.id
+
+    // Find all records with this rootContentId
+    const versions = this.buffer.filter(r => r.rootContentId === rootId)
+
+    // Sort by version number (ascending)
+    return versions.sort((a, b) => (a.version ?? 1) - (b.version ?? 1))
+  }
+
+  /**
+   * Get the latest version of a content record
+   *
+   * @param contentId - Any content ID in the version chain
+   * @returns The latest version record, or undefined if not found
+   */
+  getLatestVersion(contentId: string): GeneratedContentRecord | undefined {
+    const history = this.getVersionHistory(contentId)
+    if (history.length === 0) {
+      return undefined
+    }
+    return history[history.length - 1]
+  }
+
   // ===========================================================================
   // Internal Methods
   // ===========================================================================
@@ -606,7 +699,7 @@ export class GeneratedContentMV {
       ? input.content
       : JSON.stringify(input.content)
 
-    return {
+    const record: GeneratedContentRecord = {
       id: input.id ?? this.generateId(),
       requestId: input.requestId,
       timestamp: input.timestamp ?? Date.now(),
@@ -631,7 +724,18 @@ export class GeneratedContentMV {
       userId: input.userId ?? null,
       source: input.source ?? null,
       metadata: input.metadata ? JSON.stringify(input.metadata) : null,
+      version: input.version ?? (input.parentContentId ? 2 : 1),
+      parentContentId: input.parentContentId ?? null,
+      rootContentId: input.rootContentId ?? null,
+      versionReason: input.versionReason ?? null,
     }
+
+    // Ensure rootContentId is set to the record's own id for first versions
+    if (!record.parentContentId && !record.rootContentId) {
+      record.rootContentId = record.id
+    }
+
+    return record
   }
 
   /**
@@ -750,6 +854,10 @@ export class GeneratedContentMV {
       columns['userId']!.push(record.userId)
       columns['source']!.push(record.source)
       columns['metadata']!.push(record.metadata)
+      columns['version']!.push(record.version)
+      columns['parentContentId']!.push(record.parentContentId)
+      columns['rootContentId']!.push(record.rootContentId)
+      columns['versionReason']!.push(record.versionReason)
     }
 
     return columns
@@ -886,6 +994,10 @@ export function createGeneratedContentMVHandler(
               userId: data.userId ?? null,
               source: data.source ?? null,
               metadata: data.metadata ?? null,
+              version: data.version ?? 1,
+              parentContentId: data.parentContentId ?? null,
+              rootContentId: data.rootContentId ?? data.id ?? generateULID(),
+              versionReason: data.versionReason ?? null,
             })
           }
         }

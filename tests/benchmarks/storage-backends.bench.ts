@@ -302,7 +302,7 @@ describe('Storage Backend Benchmarks', () => {
 
     beforeAll(async () => {
       // Create temp directory for tests
-      testDir = join(tmpdir(), `parquedb-bench-${Date.now()}`)
+      testDir = join(tmpdir(), `parquedb-bench-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`)
       await fs.mkdir(testDir, { recursive: true })
       fsBackend = new FsBackend(testDir)
 
@@ -547,7 +547,7 @@ describe('Storage Backend Benchmarks', () => {
     beforeAll(async () => {
       memory = new MemoryBackend()
 
-      testDir = join(tmpdir(), `parquedb-compare-${Date.now()}`)
+      testDir = join(tmpdir(), `parquedb-compare-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`)
       await fs.mkdir(testDir, { recursive: true })
       fsBackend = new FsBackend(testDir)
 
@@ -655,7 +655,7 @@ describe('Storage Backend Benchmarks', () => {
 
     beforeAll(async () => {
       memory = new MemoryBackend()
-      testDir = join(tmpdir(), `parquedb-throughput-${Date.now()}`)
+      testDir = join(tmpdir(), `parquedb-throughput-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`)
       await fs.mkdir(testDir, { recursive: true })
       fsBackend = new FsBackend(testDir)
     })

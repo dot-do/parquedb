@@ -139,9 +139,14 @@ function createTestSchema(): Schema {
 
 describe('ParqueDB', () => {
   describe('Constructor', () => {
+    afterEach(async () => {
+      await cleanupTestResources()
+    })
+
     it('should create an instance with storage backend option', async () => {
       const storage = await createRealStorage()
       const db = new ParqueDB({ storage })
+      trackDb(db)
       expect(db).toBeInstanceOf(ParqueDB)
     })
 
@@ -149,12 +154,14 @@ describe('ParqueDB', () => {
       const storage = await createRealStorage()
       const schema = createTestSchema()
       const db = new ParqueDB({ storage, schema })
+      trackDb(db)
       expect(db).toBeInstanceOf(ParqueDB)
     })
 
     it('should accept defaultNamespace in constructor options', async () => {
       const storage = await createRealStorage()
       const db = new ParqueDB({ storage, defaultNamespace: 'default' })
+      trackDb(db)
       expect(db).toBeInstanceOf(ParqueDB)
     })
 
@@ -167,6 +174,7 @@ describe('ParqueDB', () => {
     it('should store the storage backend reference', async () => {
       const storage = await createRealStorage()
       const db = new ParqueDB({ storage })
+      trackDb(db)
       // Implementation should expose storage or use it internally
       expect(db).toBeDefined()
     })
@@ -1171,6 +1179,11 @@ describe('ParqueDB', () => {
     beforeEach(async () => {
       storage = await createRealStorage()
       db = new ParqueDB({ storage })
+      trackDb(db)
+    })
+
+    afterEach(async () => {
+      await cleanupTestResources()
     })
 
     it('should throw error for empty namespace', async () => {
@@ -1294,6 +1307,11 @@ describe('ParqueDB', () => {
     beforeEach(async () => {
       storage = await createRealStorage()
       db = new ParqueDB({ storage })
+      trackDb(db)
+    })
+
+    afterEach(async () => {
+      await cleanupTestResources()
     })
 
     it('should return a collection for explicit namespace', () => {
@@ -1358,6 +1376,11 @@ describe('ParqueDB', () => {
     beforeEach(async () => {
       storage = await createRealStorage()
       db = new ParqueDB({ storage })
+      trackDb(db)
+    })
+
+    afterEach(async () => {
+      await cleanupTestResources()
     })
 
     it('should support full CRUD workflow', async () => {
@@ -1447,14 +1470,35 @@ describe('ParqueDB', () => {
   // ===========================================================================
 
   describe('Dispose / Resource Cleanup', () => {
+    // These tests manage their own contexts to handle multiple storage backends
+    const localContexts: TestContext[] = []
+
+    async function createLocalStorage(): Promise<StorageBackend> {
+      const ctx = await createTestContext()
+      localContexts.push(ctx)
+      return ctx.storage
+    }
+
+    afterEach(async () => {
+      // Clean up all contexts created during the test
+      for (const ctx of localContexts) {
+        if (!ctx.isCleanedUp) {
+          await ctx.cleanup()
+        }
+      }
+      localContexts.length = 0
+      // Also clean up any module-level context
+      await cleanupTestResources()
+    })
+
     it('should have a dispose method', async () => {
-      const storage = await createRealStorage()
+      const storage = await createLocalStorage()
       const db = new ParqueDB({ storage })
       expect(typeof db.dispose).toBe('function')
     })
 
     it('should clear in-memory state after dispose', async () => {
-      const storage = await createRealStorage()
+      const storage = await createLocalStorage()
       const db = new ParqueDB({ storage })
 
       // Create some data
@@ -1479,7 +1523,7 @@ describe('ParqueDB', () => {
     })
 
     it('should allow multiple disposes without error', async () => {
-      const storage = await createRealStorage()
+      const storage = await createLocalStorage()
       const db = new ParqueDB({ storage })
 
       await db.create('posts', {
@@ -1495,8 +1539,8 @@ describe('ParqueDB', () => {
     })
 
     it('should isolate state between different storage backends', async () => {
-      const storage1 = await createRealStorage()
-      const storage2 = await createRealStorage()
+      const storage1 = await createLocalStorage()
+      const storage2 = await createLocalStorage()
 
       const db1 = new ParqueDB({ storage: storage1 })
       const db2 = new ParqueDB({ storage: storage2 })
@@ -1539,7 +1583,7 @@ describe('ParqueDB', () => {
     })
 
     it('should share state between ParqueDB instances with same storage backend', async () => {
-      const storage = await createRealStorage()
+      const storage = await createLocalStorage()
 
       const db1 = new ParqueDB({ storage })
       const db2 = new ParqueDB({ storage })

@@ -54,11 +54,15 @@ function createMockStorage(): DurableObjectStorage & {
       return data.get(key) as T
     },
 
-    async put<T>(keyOrEntries: string | Map<string, T>, value?: T): Promise<void> {
+    async put<T>(keyOrEntries: string | Map<string, T> | Record<string, T>, value?: T): Promise<void> {
       if (typeof keyOrEntries === 'string') {
         data.set(keyOrEntries, value)
-      } else {
+      } else if (keyOrEntries instanceof Map) {
         for (const [k, v] of keyOrEntries.entries()) {
+          data.set(k, v)
+        }
+      } else {
+        for (const [k, v] of Object.entries(keyOrEntries)) {
           data.set(k, v)
         }
       }

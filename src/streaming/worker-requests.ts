@@ -43,7 +43,7 @@
 import type { ParqueDB } from '../ParqueDB'
 import type { ViewDefinition, ViewOptions } from '../materialized-views/types'
 import { viewName } from '../materialized-views/types'
-import { asCreatedRecord, asTypedResults } from '../types/cast'
+import { asCreatedRecord, asTypedResults, safeAsRecord } from '../types/cast'
 import { logger } from '../utils/logger'
 
 // =============================================================================
@@ -770,7 +770,7 @@ export async function getRequestMetrics(
     // If grouping, add group value to key
     let fullKey = bucketKey
     if (options?.groupBy) {
-      const groupValue = String((request as unknown as Record<string, unknown>)[options.groupBy] ?? 'unknown')
+      const groupValue = String((safeAsRecord(request) ?? {})[options.groupBy] ?? 'unknown')
       fullKey = `${bucketKey}${BUCKET_DELIMITER}${groupValue}`
     }
 

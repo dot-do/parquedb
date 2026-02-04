@@ -780,3 +780,573 @@ describe('Nested Schema Support', () => {
     })
   })
 })
+
+// =============================================================================
+// Schema Evolution Tests
+// =============================================================================
+// These tests cover complex schema evolution scenarios including:
+// - Adding new required fields with defaults
+// - Removing fields (soft delete)
+// - Renaming fields
+// - Type changes (string to number)
+// - Nested schema changes
+
+describe('Schema Evolution', () => {
+  describe('Adding new required fields with defaults', () => {
+    it('validates new schema with required field and default', () => {
+      const schemaV2: Schema = {
+        User: {
+          name: 'string!',
+          email: 'email!',
+          status: 'string! = "active"', // New required field with default
+        },
+      }
+
+      const result = validateSchema(schemaV2, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('parses required field with default value', () => {
+      const parsed = parseFieldType('string! = "active"')
+      expect(parsed.type).toBe('string')
+      expect(parsed.required).toBe(true)
+      expect(parsed.default).toBe('"active"')
+    })
+
+    it('validates entity against schema with required field default', () => {
+      const schema: Schema = {
+        User: {
+          name: 'string!',
+          role: 'string! = "user"', // Required with default
+        },
+      }
+
+      const parsed = parseSchema(schema)
+
+      // Entity without role should fail (required field)
+      const invalidResult = parsed.validate('User', { name: 'Alice' })
+      expect(invalidResult.valid).toBe(false)
+      expect(invalidResult.errors[0]?.code).toBe('REQUIRED')
+
+      // Entity with role should pass
+      const validResult = parsed.validate('User', { name: 'Alice', role: 'admin' })
+      expect(validResult.valid).toBe(true)
+    })
+
+    it('validates adding multiple required fields with defaults', () => {
+      const schema: Schema = {
+        Post: {
+          title: 'string!',
+          status: 'string! = "draft"',
+          visibility: 'string! = "public"',
+          priority: 'int! = "0"',
+        },
+      }
+
+      const result = validateSchema(schema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+
+      const parsed = parseSchema(schema)
+      const statusField = parsed.getType('Post')?.fields.get('status')
+      expect(statusField?.default).toBe('draft')
+    })
+
+    it('validates adding required indexed field with default', () => {
+      const schema: Schema = {
+        User: {
+          email: 'email!',
+          status: { type: 'string!', index: true, default: 'pending' },
+        },
+      }
+
+      const result = validateSchema(schema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+
+      const parsed = parseSchema(schema)
+      const statusField = parsed.getType('User')?.fields.get('status')
+      expect(statusField?.default).toBe('pending')
+      expect(statusField?.index).toBe(true)
+    })
+  })
+
+  describe('Removing fields (soft delete semantics)', () => {
+    it('validates schema after field removal', () => {
+      // Original schema had 'age' field, evolved schema removes it
+      const evolvedSchema: Schema = {
+        User: {
+          name: 'string!',
+          email: 'email!',
+          // age field removed
+        },
+      }
+
+      const result = validateSchema(evolvedSchema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates schema removing optional field', () => {
+      const originalSchema: Schema = {
+        User: {
+          name: 'string!',
+          email: 'email!',
+          bio: 'text?', // Optional field
+        },
+      }
+
+      const evolvedSchema: Schema = {
+        User: {
+          name: 'string!',
+          email: 'email!',
+          // bio removed - this is safe for existing data
+        },
+      }
+
+      expect(validateSchema(originalSchema, { checkRelationships: false }).valid).toBe(true)
+      expect(validateSchema(evolvedSchema, { checkRelationships: false }).valid).toBe(true)
+    })
+
+    it('validates schema after removing indexed field', () => {
+      const evolvedSchema: Schema = {
+        User: {
+          name: 'string!',
+          // email field with index was removed
+        },
+      }
+
+      const result = validateSchema(evolvedSchema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates entities with extra fields not in schema', () => {
+      const schema: Schema = {
+        User: {
+          name: 'string!',
+        },
+      }
+
+      const parsed = parseSchema(schema)
+
+      // Entity with extra field (from old schema) should still validate
+      // ParqueDB uses flexible schema - extra fields are allowed
+      const result = parsed.validate('User', { name: 'Alice', legacyField: 'value' })
+      expect(result.valid).toBe(true)
+    })
+  })
+
+  describe('Renaming fields', () => {
+    it('validates schema with renamed field', () => {
+      // Original: { fullName: 'string!' }
+      // Evolved: { displayName: 'string!' }
+      const evolvedSchema: Schema = {
+        User: {
+          displayName: 'string!', // Renamed from fullName
+          email: 'email!',
+        },
+      }
+
+      const result = validateSchema(evolvedSchema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates entity against schema after field rename', () => {
+      const schema: Schema = {
+        User: {
+          displayName: 'string!', // Was 'fullName'
+          email: 'email!',
+        },
+      }
+
+      const parsed = parseSchema(schema)
+
+      // Entity with new field name should pass
+      const validResult = parsed.validate('User', {
+        displayName: 'Alice',
+        email: 'alice@example.com',
+      })
+      expect(validResult.valid).toBe(true)
+
+      // Entity with old field name should fail (missing required displayName)
+      const invalidResult = parsed.validate('User', {
+        fullName: 'Alice', // Old field name
+        email: 'alice@example.com',
+      })
+      expect(invalidResult.valid).toBe(false)
+    })
+
+    it('validates renaming relationship field', () => {
+      const evolvedSchema: Schema = {
+        User: {
+          name: 'string!',
+          authoredPosts: '<- Post.creator[]', // Renamed from 'posts'
+        },
+        Post: {
+          title: 'string!',
+          creator: '-> User.authoredPosts', // Renamed from 'author'
+        },
+      }
+
+      const result = validateSchema(evolvedSchema)
+      expect(result.valid).toBe(true)
+    })
+  })
+
+  describe('Type changes (string to number, etc.)', () => {
+    it('validates schema with changed field type', () => {
+      // Original: { age: 'string' }
+      // Evolved: { age: 'int' }
+      const evolvedSchema: Schema = {
+        User: {
+          name: 'string!',
+          age: 'int?', // Changed from string to int
+        },
+      }
+
+      const result = validateSchema(evolvedSchema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates entity with new type after schema change', () => {
+      const schema: Schema = {
+        User: {
+          name: 'string!',
+          score: 'number!', // Changed from string to number
+        },
+      }
+
+      const parsed = parseSchema(schema)
+
+      // Entity with numeric score should pass
+      const validResult = parsed.validate('User', {
+        name: 'Alice',
+        score: 100,
+      })
+      expect(validResult.valid).toBe(true)
+
+      // Entity with string score should fail
+      const invalidResult = parsed.validate('User', {
+        name: 'Alice',
+        score: '100', // String instead of number
+      })
+      expect(invalidResult.valid).toBe(false)
+      expect(invalidResult.errors[0]?.code).toBe('TYPE_MISMATCH')
+    })
+
+    it('validates boolean to string type change', () => {
+      const schema: Schema = {
+        Feature: {
+          name: 'string!',
+          enabled: 'string?', // Changed from boolean to string (e.g., "yes"/"no"/"partial")
+        },
+      }
+
+      const parsed = parseSchema(schema)
+
+      const result = parsed.validate('Feature', {
+        name: 'Dark Mode',
+        enabled: 'partial',
+      })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates array to non-array type change', () => {
+      // Changing from array to single value
+      const schema: Schema = {
+        User: {
+          name: 'string!',
+          primaryTag: 'string?', // Changed from 'tags: string[]'
+        },
+      }
+
+      const parsed = parseSchema(schema)
+
+      const result = parsed.validate('User', {
+        name: 'Alice',
+        primaryTag: 'developer',
+      })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates type widening (int to number)', () => {
+      const schema: Schema = {
+        Metric: {
+          name: 'string!',
+          value: 'number!', // Widened from 'int'
+        },
+      }
+
+      const parsed = parseSchema(schema)
+
+      // Both integers and floats should work
+      expect(parsed.validate('Metric', { name: 'Count', value: 42 }).valid).toBe(true)
+      expect(parsed.validate('Metric', { name: 'Rate', value: 3.14 }).valid).toBe(true)
+    })
+
+    it('validates enum type change (adding values)', () => {
+      const schema: Schema = {
+        Task: {
+          title: 'string!',
+          status: 'enum(todo,in_progress,review,done)!', // Added 'review' status
+        },
+      }
+
+      const parsed = parseSchema(schema)
+
+      const result = parsed.validate('Task', {
+        title: 'Fix bug',
+        status: 'review',
+      })
+      expect(result.valid).toBe(true)
+    })
+  })
+
+  describe('Nested schema changes', () => {
+    it('validates schema with nested object structure', () => {
+      const schema: Schema = {
+        User: {
+          name: 'string!',
+          address: {
+            type: 'json',
+            properties: {
+              street: 'string!',
+              city: 'string!',
+              zip: 'string!',
+              country: 'string! = "US"',
+            },
+          },
+        },
+      }
+
+      const result = validateSchema(schema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('parses nested field with property additions', () => {
+      const result = parseNestedField('settings', {
+        type: 'json',
+        properties: {
+          theme: 'string = "light"',
+          notifications: 'boolean = "true"',
+          language: 'string = "en"', // New nested property
+        },
+      })
+
+      expect(result.type).toBe('json')
+      expect(result.properties).toBeDefined()
+      expect(result.properties!.size).toBe(3)
+      expect(result.properties!.get('theme')?.default).toBe('light')
+      expect(result.properties!.get('language')?.default).toBe('en')
+    })
+
+    it('validates nested schema with type changes', () => {
+      const schema: Schema = {
+        Product: {
+          name: 'string!',
+          metadata: {
+            type: 'json',
+            properties: {
+              weight: 'number!', // Changed from 'string' to 'number'
+              dimensions: {
+                type: 'json',
+                properties: {
+                  width: 'number!',
+                  height: 'number!',
+                  depth: 'number?', // New optional nested field
+                },
+              },
+            },
+          },
+        },
+      }
+
+      const result = validateSchema(schema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates deeply nested schema evolution', () => {
+      const schema: Schema = {
+        Organization: {
+          name: 'string!',
+          config: {
+            type: 'json',
+            properties: {
+              billing: {
+                type: 'json',
+                properties: {
+                  plan: 'string!',
+                  seats: 'int!',
+                  features: {
+                    type: 'json',
+                    properties: {
+                      analytics: 'boolean = "false"',
+                      api: 'boolean = "true"',
+                      sso: 'boolean = "false"', // New deeply nested property
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }
+
+      const result = validateSchema(schema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates removing nested properties', () => {
+      // Original nested schema had more properties
+      const evolvedSchema: Schema = {
+        User: {
+          name: 'string!',
+          preferences: {
+            type: 'json',
+            properties: {
+              theme: 'string?',
+              // 'font' and 'size' properties removed
+            },
+          },
+        },
+      }
+
+      const result = validateSchema(evolvedSchema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates converting flat fields to nested structure', () => {
+      // Evolution: flat fields -> nested object
+      // Before: { street: 'string', city: 'string', zip: 'string' }
+      // After: { address: { street: 'string', city: 'string', zip: 'string' } }
+      const evolvedSchema: Schema = {
+        User: {
+          name: 'string!',
+          address: {
+            type: 'json',
+            properties: {
+              street: 'string?',
+              city: 'string?',
+              zip: 'string?',
+            },
+          },
+        },
+      }
+
+      const result = validateSchema(evolvedSchema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates nested array schema changes', () => {
+      const schema: Schema = {
+        Order: {
+          id: 'string!',
+          items: {
+            type: 'json',
+            properties: {
+              products: 'json[]', // Array of nested objects
+              total: 'number!',
+              discount: 'number = "0"', // New nested field with default
+            },
+          },
+        },
+      }
+
+      const result = validateSchema(schema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+  })
+
+  describe('Schema evolution edge cases', () => {
+    it('handles multiple simultaneous changes', () => {
+      // Schema with multiple changes at once:
+      // - Added required field with default
+      // - Removed field
+      // - Changed field type
+      // - Added nested structure
+      const evolvedSchema: Schema = {
+        User: {
+          name: 'string!',
+          email: 'email!',
+          // removed: age (was 'int?')
+          score: 'number!', // changed from 'string'
+          status: 'string! = "active"', // new required with default
+          settings: {
+            type: 'json',
+            properties: {
+              theme: 'string = "light"',
+              notifications: 'boolean = "true"',
+            },
+          },
+        },
+      }
+
+      const result = validateSchema(evolvedSchema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates schema with optional to required change plus default', () => {
+      // Changing optional field to required with default
+      const schema: Schema = {
+        User: {
+          name: 'string!',
+          verified: 'boolean! = "false"', // Was 'boolean?', now required with default
+        },
+      }
+
+      const result = validateSchema(schema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+
+      const parsed = parseSchema(schema)
+      const verifiedField = parsed.getType('User')?.fields.get('verified')
+      expect(verifiedField?.required).toBe(true)
+      // Default is stored as string '"false"' in the type definition and parsed to 'false' string
+      expect(verifiedField?.default).toBe('false')
+    })
+
+    it('validates relationship changes during evolution', () => {
+      // Evolution that changes relationship cardinality
+      const schema: Schema = {
+        User: {
+          name: 'string!',
+          mainProject: '-> Project.owner', // Changed from 'projects: -> Project.members[]'
+        },
+        Project: {
+          title: 'string!',
+          owner: '<- User.mainProject', // Changed from 'members: <- User.projects[]'
+        },
+      }
+
+      const result = validateSchema(schema)
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates index changes during schema evolution', () => {
+      // Adding/removing/changing indexes
+      const schema: Schema = {
+        User: {
+          name: 'string!',
+          email: { type: 'email!', index: 'unique' }, // New unique index
+          username: { type: 'string!', index: true }, // Changed from no index
+          // legacyCode index was removed
+        },
+      }
+
+      const result = validateSchema(schema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+    })
+
+    it('validates parametric type changes', () => {
+      const schema: Schema = {
+        Transaction: {
+          id: 'string!',
+          amount: 'decimal(18,4)!', // Changed from 'decimal(10,2)'
+          currency: 'varchar(10)!', // Changed from 'varchar(3)'
+        },
+      }
+
+      const result = validateSchema(schema, { checkRelationships: false })
+      expect(result.valid).toBe(true)
+
+      expect(isValidFieldType('decimal(18,4)')).toBe(true)
+      expect(isValidFieldType('varchar(10)')).toBe(true)
+    })
+  })
+})

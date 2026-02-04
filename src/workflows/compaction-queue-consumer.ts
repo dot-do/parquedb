@@ -43,6 +43,7 @@ import {
   createDefaultBackpressureManager,
   type BackpressureConfig,
 } from './backpressure'
+import { asWorkflowBinding } from '../types/cast'
 
 // =============================================================================
 // Types
@@ -1205,9 +1206,9 @@ export async function recoverStuckWindows(
               throw new Error('COMPACTION_WORKFLOW binding not available')
             }
             // Use type assertion since the Workflow type definition is incomplete
-            const workflowBinding = env.COMPACTION_WORKFLOW as unknown as {
+            const workflowBinding = asWorkflowBinding<{
               get(id: string): { status(): Promise<{ status: string }> }
-            }
+            }>(env.COMPACTION_WORKFLOW)
             const workflow = workflowBinding.get(stuckWindow.provisionalWorkflowId)
             const status = await workflow.status()
             workflowExists = true

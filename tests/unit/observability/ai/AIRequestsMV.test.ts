@@ -90,7 +90,7 @@ function createMockCollection() {
         results = results.slice(0, options.limit)
       }
 
-      return results
+      return { items: results }
     }),
     delete: vi.fn(async (id: string) => {
       const fullId = `ai_requests/${id}`
@@ -806,14 +806,14 @@ describe('Cleanup', () => {
       latencyMs: 100,
     })
 
-    // Mock count to throw an error
+    // Mock find to throw an error (cleanup uses find internally)
     const collection = db.collections.get('ai_requests')!
-    collection.count = vi.fn().mockRejectedValue(new Error('Count failed'))
+    collection.find = vi.fn().mockRejectedValue(new Error('Find failed'))
 
     const result = await mv.cleanup()
 
     expect(result.success).toBe(false)
-    expect(result.error).toBe('Count failed')
+    expect(result.error).toBe('Find failed')
   })
 
   it('should support progress callback', async () => {

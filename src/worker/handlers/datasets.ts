@@ -9,7 +9,7 @@ import { parseQueryFilter, parseQueryOptions } from '../routing'
 import { DATASETS } from '../datasets'
 import type { EntityRecord } from '../../types/entity'
 import type { HandlerContext } from './types'
-import { entityAsRecord, statsAsRecord } from '../../types/cast'
+import { entityAsRecord, statsAsRecord, asParam } from '../../types/cast'
 
 /**
  * Check if an error is a "File not found" error and return a 404 response if so.
@@ -158,7 +158,7 @@ export async function handleCollectionList(
 
   if (result.items) {
     for (const item of result.items) {
-      const entity = entityAsRecord(item as unknown as Record<string, unknown>)
+      const entity = entityAsRecord(asParam<Record<string, unknown>>(item))
       const entityId = entity.$id || entity.id
       if (entityId) {
         const localId = String(entityId).split('/').pop() || ''

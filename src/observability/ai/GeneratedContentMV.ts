@@ -59,6 +59,7 @@ import {
   DEFAULT_QUERY_LIMIT,
   DJB2_INITIAL,
 } from '../../constants'
+import { asTypedResults, asCreatedRecord } from '../../types/cast'
 
 // =============================================================================
 // Constants
@@ -610,7 +611,7 @@ export class GeneratedContentMV {
     }
 
     const created = await collection.create(data)
-    return created as unknown as GeneratedContentRecord
+    return asCreatedRecord<GeneratedContentRecord>(created)
   }
 
   /**
@@ -691,7 +692,7 @@ export class GeneratedContentMV {
     })
 
     const created = await Promise.all(records)
-    return created as unknown as GeneratedContentRecord[]
+    return asTypedResults<GeneratedContentRecord>(created)
   }
 
   /**
@@ -784,7 +785,7 @@ export class GeneratedContentMV {
       sort: { [sortField]: sortOrder },
     })
 
-    return results.items as unknown as GeneratedContentRecord[]
+    return asTypedResults<GeneratedContentRecord>(results)
   }
 
   /**
@@ -801,7 +802,7 @@ export class GeneratedContentMV {
       return null
     }
 
-    return results.items[0] as unknown as GeneratedContentRecord
+    return asTypedResults<GeneratedContentRecord>(results)[0] ?? null
   }
 
   /**
@@ -884,7 +885,10 @@ export class GeneratedContentMV {
     )
 
     // Combine and sort
-    const allVersions = [...rootResults.items, ...childResults.items] as unknown as GeneratedContentRecord[]
+    const allVersions = [
+      ...asTypedResults<GeneratedContentRecord>(rootResults),
+      ...asTypedResults<GeneratedContentRecord>(childResults),
+    ]
 
     // Dedupe by contentId and sort by version
     const seen = new Set<string>()
@@ -1074,7 +1078,7 @@ export class GeneratedContentMV {
   async findByHash(contentHash: string): Promise<GeneratedContentRecord[]> {
     const collection = this.db.collection(this.config.collection)
     const results = await collection.find({ contentHash }, { limit: 100 })
-    return results.items as unknown as GeneratedContentRecord[]
+    return asTypedResults<GeneratedContentRecord>(results)
   }
 
   /**

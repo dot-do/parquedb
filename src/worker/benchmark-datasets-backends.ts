@@ -25,6 +25,7 @@ import { parquetQuery } from 'hyparquet'
 import { compressors } from '../parquet/compressors'
 import { logger } from '../utils/logger'
 import { R2Backend } from '../storage/R2Backend'
+import { asR2BucketBinding } from '../types/cast'
 import {
   migrateBackend,
 } from '../backends'
@@ -318,7 +319,7 @@ async function autoMigrateDatasets(
   const errors: string[] = []
 
   // Create StorageBackend from R2Bucket
-  const storage = new R2Backend(bucket as unknown as import('../storage/types/r2').R2Bucket)
+  const storage = new R2Backend(asR2BucketBinding(bucket))
 
   for (const datasetId of datasets) {
     const dataset = datasetsConfig[datasetId]

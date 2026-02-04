@@ -165,12 +165,8 @@ export function asReadonlyStorageBackend<T>(adapter: T): ReadonlyStorageBackend 
  *
  * @remarks Safe because the memory adapter implements the required interface.
  */
-export function asFTSStorageBackend(adapter: {
-  read(path: string): Promise<Uint8Array>
-  write(path: string, data: Uint8Array): Promise<void>
-  exists(path: string): Promise<boolean>
-}): import('./storage').StorageBackend {
-  return adapter as unknown as import('./storage').StorageBackend
+export function asFTSStorageBackend(adapter: unknown): import('./storage').StorageBackend {
+  return adapter as import('./storage').StorageBackend
 }
 
 // =============================================================================
@@ -958,4 +954,212 @@ export function toR2BucketOrUndefined(value: unknown): R2Bucket | undefined {
     return value
   }
   return undefined
+}
+
+// =============================================================================
+// Collection and Query Casts
+// =============================================================================
+
+/**
+ * Cast a collection instance to a typed Collection<T>.
+ * Use when returning collection from cache or factory functions.
+ *
+ * @remarks Safe when the collection's underlying data matches type T.
+ */
+export function asCollection<T extends import('./entity').EntityData = import('./entity').EntityData>(
+  collection: unknown
+): import('../ParqueDB/types').Collection<T> {
+  return collection as import('../ParqueDB/types').Collection<T>
+}
+
+/**
+ * Cast aggregation pipeline stages to AggregationStage[].
+ * Use when executing pipelines from MV definitions.
+ *
+ * @remarks Safe because PipelineStage is structurally compatible with AggregationStage.
+ */
+export function asPipelineStages<T = unknown[]>(pipeline: T): import('../aggregation/types').AggregationStage[] {
+  return pipeline as unknown as import('../aggregation/types').AggregationStage[]
+}
+
+/**
+ * Cast create data to CreateInput<T>.
+ * Use when preparing entity data for creation.
+ *
+ * @remarks Safe when the data contains required $type and name fields.
+ */
+export function asCreateInput<T extends import('./entity').EntityData = import('./entity').EntityData>(
+  data: Record<string, unknown>
+): import('./entity').CreateInput<T> {
+  return data as import('./entity').CreateInput<T>
+}
+
+/**
+ * Cast result to UpdateResult.
+ * Use when DO RPC returns update results.
+ *
+ * @remarks Safe when the result has matchedCount, modifiedCount fields.
+ */
+export function asUpdateResult(result: unknown): import('./entity').UpdateResult {
+  return result as import('./entity').UpdateResult
+}
+
+// =============================================================================
+// Durable Object Extended Method Casts
+// =============================================================================
+
+/**
+ * Cast DO stub to extended interface with additional methods.
+ * Use when calling methods not in base ParqueDBDOStub interface.
+ *
+ * @remarks Safe when the DO implements the extended methods.
+ */
+export function asExtendedDOStub<T>(stub: unknown): T {
+  return stub as T
+}
+
+/**
+ * Cast DO stub to rate limiter DO interface.
+ * Use when accessing RATE_LIMITER binding methods.
+ *
+ * @remarks Safe because the DO implements RateLimitDO interface.
+ */
+export interface RateLimitDOInterface {
+  checkLimit(endpointType: string): Promise<{
+    allowed: boolean
+    remaining: number
+    resetAt: number
+    limit: number
+    current: number
+  } | null>
+}
+
+export function asRateLimitDO(stub: DurableObjectStub): RateLimitDOInterface {
+  return stub as unknown as RateLimitDOInterface
+}
+
+// =============================================================================
+// MV Event Casts
+// =============================================================================
+
+/**
+ * Cast event payload to MV event type.
+ * Use when processing CDC events in materialized view handlers.
+ *
+ * @remarks Safe when the event structure matches the expected MV event format.
+ */
+export function asMVEvent<T>(payload: unknown): T {
+  return payload as T
+}
+
+/**
+ * Cast event.after to typed MV event wrapper.
+ * Use in MV handlers when processing entity events.
+ *
+ * @remarks Safe when the event was created by the MV system.
+ */
+export interface MVEventWrapper<T> {
+  entityType: string
+  data: T
+}
+
+export function asMVEventWrapper<T>(payload: unknown): MVEventWrapper<T> {
+  return payload as MVEventWrapper<T>
+}
+
+// =============================================================================
+// Parameter Type Inference Casts
+// =============================================================================
+
+/**
+ * Cast a value to match a function parameter type.
+ * Use when calling functions that expect specific types from env bindings.
+ *
+ * @remarks Safe when the value's runtime structure matches the parameter type.
+ * Prefer this over `value as unknown as Parameters<typeof fn>[N]` patterns.
+ */
+export function asParam<T>(value: unknown): T {
+  return value as T
+}
+
+/**
+ * Cast environment bindings to typed namespace.
+ * Use when accessing DO namespace from untyped env.
+ *
+ * @remarks Safe when the binding is correctly configured in wrangler.toml.
+ */
+export function asTypedNamespace<T>(namespace: DurableObjectNamespace): T {
+  return namespace as unknown as T
+}
+
+// =============================================================================
+// ViewName and Branded Type Casts
+// =============================================================================
+
+/**
+ * Cast a string to a branded ViewName type.
+ * Use when passing string names to functions expecting ViewName.
+ *
+ * @remarks Safe when the string represents a valid view name.
+ */
+export function asViewName(name: string): import('../materialized-views/types').ViewName {
+  return name as unknown as import('../materialized-views/types').ViewName
+}
+
+// =============================================================================
+// Internal Object Access Casts
+// =============================================================================
+
+/**
+ * Cast an object to access internal/undeclared methods or properties.
+ * Use when calling methods that exist at runtime but aren't in the type definition.
+ *
+ * @remarks Safe when you've verified the method/property exists at runtime.
+ * Prefer this over inline `(obj as unknown as { method(): T }).method()` patterns.
+ */
+export function asInternalAccess<T>(obj: unknown): T {
+  return obj as T
+}
+
+// =============================================================================
+// Fastify Plugin Metadata Casts
+// =============================================================================
+
+/**
+ * Cast a Fastify plugin function to add plugin metadata properties.
+ * Fastify-plugin sets Symbol.for('skip-override') and '@@fastify-plugin'
+ * on plugin functions. This cast provides typed access to set those.
+ *
+ * @remarks Safe because Fastify plugins are plain functions that accept additional properties.
+ */
+export function asPluginWithMetadata(plugin: unknown): { [key: string | symbol]: unknown } {
+  return plugin as { [key: string | symbol]: unknown }
+}
+
+// =============================================================================
+// R2 Bucket Binding Casts
+// =============================================================================
+
+/**
+ * Cast an environment R2 bucket binding to the typed R2Bucket interface.
+ * Use when creating R2Backend from env bindings.
+ *
+ * @remarks Safe when the binding is configured correctly in wrangler.toml.
+ */
+export function asR2BucketBinding(bucket: unknown): import('../storage/types/r2').R2Bucket {
+  return bucket as import('../storage/types/r2').R2Bucket
+}
+
+// =============================================================================
+// Workflow Binding Casts
+// =============================================================================
+
+/**
+ * Cast a workflow environment binding to a typed workflow interface.
+ * Use when accessing Workflow bindings from env that have incomplete type definitions.
+ *
+ * @remarks Safe when the workflow binding is correctly configured.
+ */
+export function asWorkflowBinding<T>(binding: unknown): T {
+  return binding as T
 }

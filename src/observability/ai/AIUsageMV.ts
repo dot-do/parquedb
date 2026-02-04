@@ -52,6 +52,7 @@ import type {
 } from './types'
 import { DEFAULT_MODEL_PRICING } from './types'
 import { AI_USAGE_MAX_AGE_MS, MAX_BATCH_SIZE } from '../../constants'
+import { asTypedResults } from '../../types/cast'
 
 // =============================================================================
 // Constants
@@ -354,7 +355,8 @@ export class AIUsageMV {
           }
           const existingAggregates = await targetCollection.find(aggregateFilter, { limit: 1 })
           if (existingAggregates.items.length > 0) {
-            aggregate = normalizeAggregateFromDB(existingAggregates.items[0] as unknown as AIUsageAggregate)
+            const existingItems = asTypedResults<AIUsageAggregate>(existingAggregates)
+            aggregate = normalizeAggregateFromDB(existingItems[0] as AIUsageAggregate)
           } else {
             aggregate = createEmptyAggregate(aggregateId, modelId, providerId, dateKey, this.config.granularity, this.config.tenantId)
           }
@@ -532,7 +534,7 @@ export class AIUsageMV {
       sort: { [sortField]: sortOrder },
     })
 
-    return results as unknown as AIUsageAggregate[]
+    return asTypedResults<AIUsageAggregate>(results)
   }
 
   /**

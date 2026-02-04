@@ -21,7 +21,6 @@ import { type DatabaseIndexDO, type DatabaseInfo } from './DatabaseIndexDO'
 import { allowsAnonymousRead } from '../types/visibility'
 import { getDOStub } from '../utils/type-utils'
 import {
-  type RateLimitDO,
   type RateLimitResult,
   getClientId,
   buildRateLimitHeaders,
@@ -32,6 +31,7 @@ import { logger } from '../utils/logger'
 import { extractBearerToken, verifyOwnership } from './jwt-utils'
 import { parsePaginationParams } from './routing'
 import { SECONDS_PER_DAY } from '../constants'
+import { asRateLimitDO } from '../types/cast'
 
 /**
  * Get the database index stub for a user
@@ -166,7 +166,7 @@ async function checkRateLimit(
 
   const clientId = getClientId(request)
   const rateLimitId = env.RATE_LIMITER.idFromName(clientId)
-  const limiter = env.RATE_LIMITER.get(rateLimitId) as unknown as RateLimitDO
+  const limiter = asRateLimitDO(env.RATE_LIMITER.get(rateLimitId))
 
   try {
     return await limiter.checkLimit(endpointType)

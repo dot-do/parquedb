@@ -329,31 +329,42 @@ describe('MVEventEmitter', () => {
   })
 
   describe('backpressure', () => {
-    // This test requires real timers but the suite uses fake timers in beforeEach
-    // Skipping to avoid deadlock - the functionality is tested in streaming.test.ts
-    it.skip('applies backpressure when queue is full', async () => {
+    it('applies backpressure when queue is full', async () => {
       // Use real timers to avoid deadlock with concurrent async operations
       vi.useRealTimers()
+      // Create a fresh emitter with real timers and a small queue
       emitter = createMVEventEmitter({ maxQueueSize: 5 })
 
       const processedEvents: Event[] = []
-      emitter.subscribe(async (event) => {
-        await new Promise((r) => setTimeout(r, 1))
+      emitter.subscribe((event) => {
         processedEvents.push(event)
       })
 
-      // Emit more events than queue size
-      const emitPromises = []
+      // Emit events sequentially - backpressure kicks in when queue exceeds maxQueueSize
       for (let i = 0; i < 10; i++) {
-        emitPromises.push(emitter.emit(createTestEvent('CREATE', `orders:o${i}`)))
+        await emitter.emit(createTestEvent('CREATE', `orders:o${i}`))
       }
 
-      await Promise.all(emitPromises)
       await emitter.flush()
 
-      // All events should eventually be processed
+      // All events should be processed
       expect(processedEvents.length).toBe(10)
+
+      // Stats should reflect all events
+      const stats = emitter.getStats()
+      expect(stats.totalEmitted).toBe(10)
       // Restore fake timers for afterEach
+      vi.useFakeTimers()
+    })
+
+    it('reports backpressure state in stats', async () => {
+      vi.useRealTimers()
+      emitter = createMVEventEmitter({ maxQueueSize: 2 })
+
+      // Initially no backpressure
+      const stats = emitter.getStats()
+      expect(stats.backpressureActive).toBe(false)
+
       vi.useFakeTimers()
     })
   })

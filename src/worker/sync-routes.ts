@@ -25,6 +25,7 @@ import {
 import type { TokenPayload } from './sync-token'
 import { logger } from '../utils/logger'
 import { SECONDS_PER_DAY, SYNC_TOKEN_URL_EXPIRY_MS } from '../constants'
+import { asParam } from '../types/cast'
 
 // Re-export token functions for backwards compatibility and testing
 export { signUploadToken, signDownloadToken, verifyUploadToken, verifyDownloadToken }
@@ -459,7 +460,7 @@ async function handleRegister(
     // Get the user's database index
     // Cast needed because Env uses untyped DurableObjectNamespace while getUserDatabaseIndex expects typed
     const index = getUserDatabaseIndex(
-      { DATABASE_INDEX: env.DATABASE_INDEX as unknown as Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] },
+      { DATABASE_INDEX: asParam<Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX']>(env.DATABASE_INDEX) },
       user.id
     )
 
@@ -475,7 +476,7 @@ async function handleRegister(
         slug: body.slug,
         owner,
       },
-      user.id as unknown as Parameters<typeof index.register>[1]
+      asParam<Parameters<typeof index.register>[1]>(user.id)
     )
 
     return Response.json({
@@ -855,7 +856,7 @@ export async function handleUpload(
     // Get database info
     // Cast needed because Env uses untyped DurableObjectNamespace while getUserDatabaseIndex expects typed
     const index: ReturnType<typeof getUserDatabaseIndex> = getUserDatabaseIndex(
-      { DATABASE_INDEX: env.DATABASE_INDEX as unknown as Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] },
+      { DATABASE_INDEX: asParam<Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX']>(env.DATABASE_INDEX) },
       tokenData.userId
     )
     const database = await index.get(databaseId) as DatabaseInfo | null
@@ -958,7 +959,7 @@ export async function handleDownload(
     // Get database info
     // Cast needed because Env uses untyped DurableObjectNamespace while getUserDatabaseIndex expects typed
     const index: ReturnType<typeof getUserDatabaseIndex> = getUserDatabaseIndex(
-      { DATABASE_INDEX: env.DATABASE_INDEX as unknown as Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] },
+      { DATABASE_INDEX: asParam<Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX']>(env.DATABASE_INDEX) },
       tokenData.userId
     )
     const database = await index.get(databaseId) as DatabaseInfo | null
@@ -1025,7 +1026,7 @@ async function verifyDatabaseOwnership(
     }
     // Cast needed because Env uses untyped DurableObjectNamespace while getUserDatabaseIndex expects typed
     const index = getUserDatabaseIndex(
-      { DATABASE_INDEX: env.DATABASE_INDEX as unknown as Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX'] },
+      { DATABASE_INDEX: asParam<Parameters<typeof getUserDatabaseIndex>[0]['DATABASE_INDEX']>(env.DATABASE_INDEX) },
       user.id
     )
     const database = await index.get(databaseId)

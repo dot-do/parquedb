@@ -44,6 +44,7 @@ import {
   MIGRATION_DO_ALARM_INITIAL_DELAY_MS,
   MS_PER_SECOND,
 } from '../constants'
+import { asR2BucketBinding } from '../types/cast'
 
 // =============================================================================
 // Types
@@ -111,7 +112,7 @@ export class MigrationDO extends DurableObject<Env> {
    */
   private getR2Backend(): R2Backend {
     if (!this.r2Backend) {
-      this.r2Backend = new R2Backend(this.env.BUCKET as unknown as import('../storage/types/r2').R2Bucket)
+      this.r2Backend = new R2Backend(asR2BucketBinding(this.env.BUCKET))
     }
     return this.r2Backend
   }

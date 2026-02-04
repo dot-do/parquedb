@@ -31,7 +31,7 @@ import { entityTarget, relTarget } from '../types'
 import { SchemaValidator } from '../schema/validator'
 import { IndexManager } from '../indexes/manager'
 import type { IndexDefinition, IndexMetadata, IndexStats } from '../indexes/types'
-import { asRelEventPayload } from '../types/cast'
+import { asRelEventPayload, asCreateInput } from '../types/cast'
 import { DEFAULT_MAX_INBOUND } from '../constants'
 
 import type {
@@ -1123,10 +1123,10 @@ export class ParqueDBImpl {
 
       for (const doc of batchItems) {
         try {
-          const createData = {
+          const createData = asCreateInput<T>({
             ...doc,
             ...(entityType ? { $type: entityType } : {}),
-          } as unknown as CreateInput<T>
+          })
 
           const entity = await this.create<T>(namespace, createData, {
             actor,

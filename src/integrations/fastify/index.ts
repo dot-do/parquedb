@@ -41,6 +41,7 @@ import { FsBackend, MemoryBackend } from '../../storage'
 import type { StorageBackend, Schema } from '../../types'
 import { DB } from '../../db'
 import type { DBSchema, DBInstance } from '../../db'
+import { asPluginWithMetadata } from '../../types/cast'
 
 // =============================================================================
 // Types
@@ -271,8 +272,8 @@ export const parquedbPlugin: FastifyPluginAsync<ParqueDBPluginOptions> = async (
 }
 
 // Add plugin metadata for fastify-plugin compatibility
-;(parquedbPlugin as unknown as { [key: symbol]: unknown })[Symbol.for('skip-override')] = true
-;(parquedbPlugin as unknown as { [key: string]: unknown })['@@fastify-plugin'] = {
+;asPluginWithMetadata(parquedbPlugin)[Symbol.for('skip-override')] = true
+;asPluginWithMetadata(parquedbPlugin)['@@fastify-plugin'] = {
   name: 'parquedb',
   fastify: '>=4.0.0',
 }
@@ -381,8 +382,8 @@ export const parquedbErrorHandler: FastifyPluginAsync = async (fastify) => {
 }
 
 // Add plugin metadata
-;(parquedbErrorHandler as unknown as { [key: symbol]: unknown })[Symbol.for('skip-override')] = true
-;(parquedbErrorHandler as unknown as { [key: string]: unknown })['@@fastify-plugin'] = {
+;asPluginWithMetadata(parquedbErrorHandler)[Symbol.for('skip-override')] = true
+;asPluginWithMetadata(parquedbErrorHandler)['@@fastify-plugin'] = {
   name: 'parquedb-error-handler',
   fastify: '>=4.0.0',
 }

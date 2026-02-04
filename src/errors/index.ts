@@ -1526,6 +1526,10 @@ export class WriteLockTimeoutError extends BackendError {
     Object.setPrototypeOf(this, WriteLockTimeoutError.prototype)
   }
 
+  get ns(): string {
+    return this.context.namespace as string
+  }
+
   get timeoutMs(): number {
     return this.context.timeoutMs as number
   }
