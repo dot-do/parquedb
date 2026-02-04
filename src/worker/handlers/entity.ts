@@ -11,7 +11,7 @@ import {
   markTiming,
   measureTiming,
 } from '../responses'
-import { DATASETS as _DATASETS } from '../datasets'
+import { DATASETS } from '../datasets'
 import { handleFileNotFoundError } from './datasets'
 import type { EntityRecord } from '../../types/entity'
 import type { HandlerContext } from './types'
@@ -57,8 +57,10 @@ export async function handleEntityDetail(
   markTiming(timing, 'parallel_start')
   let entityResult
   let allRels
-  // Namespace is dataset/collection (e.g., "imdb/titles")
-  const namespace = `${datasetId}/${collectionId}`
+  // Namespace uses dataset prefix (e.g., "onet" -> "onet-graph") + collection
+  const dataset = DATASETS[datasetId]
+  const prefix = dataset?.prefix ?? datasetId
+  const namespace = `${prefix}/${collectionId}`
   try {
     // Try to find entity with any of the ID formats
     const [result1, result2, result3, result4, rels] = await Promise.all([
