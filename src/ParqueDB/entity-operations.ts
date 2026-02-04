@@ -775,27 +775,28 @@ export async function createEntity<T extends EntityData = EntityData>(
 
   const actor = options?.actor || ('system/anonymous' as EntityId)
 
-  // Auto-derive name: check $name directive first, then common fields, then id
+  // Auto-derive name using $name directive (defaults to 'name' field if not specified)
   const dataAsRecord = data as Record<string, unknown>
   const typeDef = ctx.schema[derivedType]
-  const nameFieldName = typeDef?.$name
+  // $name defaults to 'name' - only specify if using a different field
+  const nameFieldName = typeDef?.$name ?? 'name'
   let derivedName: unknown
 
-  if (data.name !== undefined) {
-    // Explicit name provided - use it
+  // If explicit 'name' provided AND $name points to a different field, explicit name wins
+  if (data.name !== undefined && nameFieldName !== 'name') {
     derivedName = data.name
-  } else if (nameFieldName && typeof nameFieldName === 'string') {
-    // Use $name directive field value, but only if it's a non-empty truthy value
+  } else if (typeof nameFieldName === 'string') {
+    // Use the configured $name field (or default 'name' field)
     const nameValue = dataAsRecord[nameFieldName]
     if (nameValue != null && nameValue !== '') {
       derivedName = nameValue
     } else {
-      // Fall back to entity ID when $name field is empty, null, or undefined
-      derivedName = entityIdPart
+      // Fall back to other common name fields, then entity ID
+      derivedName = dataAsRecord.title || dataAsRecord.label || entityIdPart
     }
   } else {
     // Fall back to common name fields or entityIdPart
-    derivedName = dataAsRecord.title || dataAsRecord.label || entityIdPart
+    derivedName = dataAsRecord.name || dataAsRecord.title || dataAsRecord.label || entityIdPart
   }
 
   // Apply defaults from schema

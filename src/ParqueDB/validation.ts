@@ -556,7 +556,37 @@ export function resolveEntityId(options: ResolveEntityIdOptions): ResolvedEntity
     }
   }
 
-  // Priority 3: Generate a ULID
+  // Priority 3: Default to 'id' field if present (implicit $id: 'id')
+  if (data.id !== undefined) {
+    const localId = String(data.id)
+
+    // Validate: empty string is not allowed
+    if (localId === '') {
+      throw new ValidationError(
+        'entityId',
+        typeName,
+        'id field cannot be an empty string',
+        { fieldName: 'id' }
+      )
+    }
+
+    // Validate: local ID cannot contain slashes
+    if (localId.includes('/')) {
+      throw new ValidationError(
+        'entityId',
+        typeName,
+        `id field cannot contain '/' character. Local IDs must not contain slashes.`,
+        { fieldName: 'id' }
+      )
+    }
+
+    return {
+      fullId: `${namespace}/${localId}` as EntityId,
+      localId,
+    }
+  }
+
+  // Priority 4: Generate a ULID
   const localId = generateId()
   return {
     fullId: `${namespace}/${localId}` as EntityId,
