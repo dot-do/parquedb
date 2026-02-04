@@ -602,7 +602,6 @@ export class QueryExecutor {
             rows = await parquetQuery({
               file: asyncBuffer,
               filter: pushdownFilter,
-              columns: ['$id', '$data'],
               compressors,
               rowEnd: options.limit ? (options.skip ?? 0) + options.limit : undefined,
             }) as DataRow[]
@@ -616,13 +615,15 @@ export class QueryExecutor {
             stats.rowsScanned = rows.length
           }
 
-          // Unpack data column - parse JSON if string, use directly if object
+          // Rows are returned with all columns
           results = rows.map(row => {
-            if (typeof row.$data === 'string') {
-              const parsed = tryParseJson<T>(row.$data)
-              return parsed ?? rowAsEntity<T>(row)
+            if (row.$data) {
+              if (typeof row.$data === 'string') {
+                return tryParseJson<T>(row.$data) ?? rowAsEntity<T>(row)
+              }
+              return row.$data as T
             }
-            return (row.$data ?? row) as T
+            return row as unknown as T
           })
         } else if (options.limit && this.storageAdapter) {
           // No filter but has limit - use rowEnd for early termination
@@ -874,7 +875,6 @@ export class QueryExecutor {
           const asyncBuffer = await this.createAsyncBuffer(dataPath)
           const rangeRows = await parquetQuery({
             file: asyncBuffer,
-            columns: ['$id', '$data'],
             rowStart: range.rowStart,
             rowEnd: range.rowEnd,
             compressors,
