@@ -92,7 +92,7 @@ export class NativeSourceVersionProvider implements SourceVersionProvider {
    * - totalEvents: Total event count across all segments
    * - updatedAt: When the manifest was last updated
    */
-  async getCurrentVersion(source: string): Promise<SourceVersion | null> {
+  async getCurrentVersion(_source: string): Promise<SourceVersion | null> {
     const manifest = await this.loadManifest()
     if (!manifest) {
       return null
@@ -100,6 +100,7 @@ export class NativeSourceVersionProvider implements SourceVersionProvider {
 
     // Filter events by source namespace if we have segment-level metadata
     // For now, we use the global manifest state since events aren't partitioned by source
+    // The _source parameter will be used once events are partitioned by source
     const lastSegment = manifest.segments.length > 0
       ? manifest.segments[manifest.segments.length - 1]
       : undefined
