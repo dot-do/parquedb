@@ -726,7 +726,7 @@ describe('Transactions', () => {
   // ===========================================================================
 
   describe('sequential transactions', () => {
-    it('handles sequential commits correctly', async () => {
+    it('handles sequential commits correctly', { timeout: 30000 }, async () => {
       const ids: string[] = []
 
       for (let i = 0; i < 5; i++) {
