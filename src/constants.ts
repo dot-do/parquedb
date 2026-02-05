@@ -1249,3 +1249,19 @@ export const EMBEDDING_RETRY_DELAY_MS = 5000
  * Delay between batch processing in milliseconds (100ms)
  */
 export const EMBEDDING_BATCH_PROCESSING_DELAY_MS = 100
+
+// =============================================================================
+// Row Group Cache Constants
+// =============================================================================
+
+/**
+ * Default maximum size for row group cache in bytes (100MB)
+ * Used for caching decoded row group data in QueryExecutor
+ */
+export const DEFAULT_ROW_GROUP_CACHE_MAX_BYTES = 100 * 1024 * 1024
+
+/**
+ * Default maximum number of row group cache entries (50)
+ * Used as secondary limit alongside byte size
+ */
+export const DEFAULT_ROW_GROUP_CACHE_MAX_ENTRIES = 50

@@ -132,6 +132,12 @@ function getOrCreateQueryExecutor(env: Env, ctx: ExecutionContext, cache: Cache)
 // Re-export for external use
 export { ReadPath, NotFoundError, ReadError } from './ReadPath'
 export { QueryExecutor } from './QueryExecutor'
+export {
+  RowGroupCache,
+  type RowGroupCacheOptions,
+  type RowGroupCacheStats,
+  type CachedRowGroup,
+} from './RowGroupCache'
 export type { CacheConfig } from './CacheStrategy'
 export {
   CacheStrategy,
