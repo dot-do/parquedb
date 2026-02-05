@@ -32,13 +32,13 @@ describe('Health Handler', () => {
   // ===========================================================================
 
   describe('GET /health - happy path', () => {
-    it('should return 200 with healthy status', () => {
+    it('should return 200 with healthy status', async () => {
       mockContext = createMockHandlerContext(
         'https://api.parquedb.com/health',
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
 
       expect(response.status).toBe(200)
     })
@@ -49,7 +49,7 @@ describe('Health Handler', () => {
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
       const body = (await response.json()) as Record<string, unknown>
 
       expect(body.api).toBeDefined()
@@ -66,32 +66,32 @@ describe('Health Handler', () => {
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
       const body = (await response.json()) as Record<string, unknown>
 
       const links = body.links as Record<string, string>
-      expect(links.home).toBe('https://api.example.com')
-      expect(links.datasets).toBe('https://api.example.com/datasets')
+      expect(links.home).toBe('https://api.parquedb.com')
+      expect(links.datasets).toBe('https://api.parquedb.com/datasets')
     })
 
-    it('should include CORS header', () => {
+    it('should include CORS header', async () => {
       mockContext = createMockHandlerContext(
         'https://api.parquedb.com/health',
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
 
       expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*')
     })
 
-    it('should return JSON content type', () => {
+    it('should return JSON content type', async () => {
       mockContext = createMockHandlerContext(
         'https://api.parquedb.com/health',
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
 
       expect(response.headers.get('Content-Type')).toContain('application/json')
     })
@@ -108,7 +108,7 @@ describe('Health Handler', () => {
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
       const body = (await response.json()) as Record<string, unknown>
 
       const api = body.api as Record<string, unknown>
@@ -123,7 +123,7 @@ describe('Health Handler', () => {
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
       const body = (await response.json()) as Record<string, unknown>
 
       const links = body.links as Record<string, unknown>
@@ -146,7 +146,7 @@ describe('Health Handler', () => {
       // Override baseUrl to simulate different domain
       mockContext.baseUrl = 'https://custom.domain.com'
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
       const body = (await response.json()) as Record<string, unknown>
 
       const links = body.links as Record<string, string>
@@ -160,7 +160,7 @@ describe('Health Handler', () => {
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
       const body = (await response.json()) as Record<string, unknown>
 
       const links = body.links as Record<string, string>
@@ -173,15 +173,15 @@ describe('Health Handler', () => {
   // ===========================================================================
 
   describe('edge cases', () => {
-    it('should be synchronous (no async needed)', () => {
+    it('should return a valid Response', async () => {
       mockContext = createMockHandlerContext(
         'https://api.parquedb.com/health',
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
 
-      // Should return Response directly, not Promise<Response>
+      // Should return Response after awaiting the promise
       expect(response).toBeInstanceOf(Response)
       expect(response.status).toBe(200)
     })
@@ -192,7 +192,7 @@ describe('Health Handler', () => {
         { worker: mockWorker }
       )
 
-      handleHealth(mockContext as any)
+      await handleHealth(mockContext as any)
 
       // Health check should not call any worker methods
       expect(mockWorker.find).not.toHaveBeenCalled()
@@ -200,7 +200,7 @@ describe('Health Handler', () => {
       expect(mockWorker.getRelationships).not.toHaveBeenCalled()
     })
 
-    it('should work with minimal context', () => {
+    it('should work with minimal context', async () => {
       // Create a minimal context with only required fields
       const minimalContext = {
         request: new Request('https://api.parquedb.com/health'),
@@ -209,7 +209,7 @@ describe('Health Handler', () => {
       }
 
       // Should not throw
-      const response = handleHealth(minimalContext as any)
+      const response = await handleHealth(minimalContext as any)
       expect(response.status).toBe(200)
     })
   })
@@ -219,25 +219,25 @@ describe('Health Handler', () => {
   // ===========================================================================
 
   describe('headers', () => {
-    it('should include standard response headers', () => {
+    it('should include standard response headers', async () => {
       mockContext = createMockHandlerContext(
         'https://api.parquedb.com/health',
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
 
       // CORS headers
       expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*')
     })
 
-    it('should include cache control headers for health checks', () => {
+    it('should include cache control headers for health checks', async () => {
       mockContext = createMockHandlerContext(
         'https://api.parquedb.com/health',
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
 
       // Health checks should have short cache or no cache
       const cacheControl = response.headers.get('Cache-Control')
@@ -259,7 +259,7 @@ describe('Health Handler', () => {
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
 
       // Should not throw when parsing JSON
       const body = await response.json()
@@ -273,7 +273,7 @@ describe('Health Handler', () => {
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
       const body = (await response.json()) as Record<string, unknown>
       const bodyStr = JSON.stringify(body)
 
@@ -290,7 +290,7 @@ describe('Health Handler', () => {
         { worker: mockWorker }
       )
 
-      const response = handleHealth(mockContext as any)
+      const response = await handleHealth(mockContext as any)
       const body = (await response.json()) as Record<string, unknown>
       const api = body.api as Record<string, unknown>
 

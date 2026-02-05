@@ -87,11 +87,12 @@ async function createAsyncBuffer(filePath: string) {
 }
 
 /**
- * Read events from a parquet file and parse them
+ * Parse rows from a parquet async buffer into parsed events
  */
-async function readEventsParquet(filePath: string): Promise<ParsedEvent[]> {
-  const asyncBuffer = await createAsyncBuffer(filePath)
-
+async function parseEventsFromBuffer(asyncBuffer: {
+  byteLength: number
+  slice: (start: number, end?: number) => Promise<ArrayBuffer>
+}): Promise<ParsedEvent[]> {
   let rows: unknown[][] = []
   await parquetRead({
     file: asyncBuffer,
@@ -130,6 +131,14 @@ async function readEventsParquet(filePath: string): Promise<ParsedEvent[]> {
 }
 
 /**
+ * Read events from a parquet file and parse them
+ */
+async function readEventsParquet(filePath: string): Promise<ParsedEvent[]> {
+  const asyncBuffer = await createAsyncBuffer(filePath)
+  return parseEventsFromBuffer(asyncBuffer)
+}
+
+/**
  * Get schema column names from a parquet file
  */
 async function getParquetSchemaColumns(filePath: string): Promise<string[]> {
@@ -138,6 +147,38 @@ async function getParquetSchemaColumns(filePath: string): Promise<string[]> {
   return (metadata.schema as Array<{ name?: string }>)
     .filter((s) => s.name && s.name !== 'root')
     .map((s) => s.name!)
+}
+
+/**
+ * Find batch event files in the events directory
+ */
+async function findBatchEventFiles(eventsDir: string): Promise<string[]> {
+  const { readdir } = await import('node:fs/promises')
+  try {
+    const files = await readdir(eventsDir)
+    return files
+      .filter((f) => f.endsWith('.parquet') && f.includes('batch-'))
+      .map((f) => join(eventsDir, f))
+      .sort()
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Read all events from batch files in the events directory (FsBackend)
+ */
+async function readAllEventsFromBatchFiles(eventsDir: string): Promise<ParsedEvent[]> {
+  const batchFiles = await findBatchEventFiles(eventsDir)
+  const allEvents: ParsedEvent[] = []
+
+  for (const file of batchFiles) {
+    const events = await readEventsParquet(file)
+    allEvents.push(...events)
+  }
+
+  // Sort by timestamp
+  return allEvents.sort((a, b) => a.ts - b.ts)
 }
 
 // =============================================================================
@@ -163,7 +204,7 @@ function createFsBackendFactory(): BackendFactory {
       tempDir = await mkdtemp(join(tmpdir(), 'parquedb-events-test-'))
       return new FsBackend(tempDir)
     },
-    getEventsPath: () => join(tempDir, 'events.parquet'),
+    getEventsPath: () => join(tempDir, 'events'), // Now points to events directory
     shouldSkip: false,
   }
 }
@@ -197,62 +238,54 @@ function runEventsParquetTests(factory: BackendFactory) {
     let db: ParqueDB
     let eventsPath: string
 
-    // For R2, we need a different approach to read the parquet file
+    // Read events from batch files in the events directory
     async function readEventsFromStorage(): Promise<ParsedEvent[]> {
       if (factory.name === 'R2Backend') {
-        // Read via storage backend
-        const data = await storage.read('events.parquet')
-        const asyncBuffer = {
-          byteLength: data.length,
-          slice: async (start: number, end?: number): Promise<ArrayBuffer> => {
-            const sliced = data.slice(start, end ?? data.length)
-            const buffer = new ArrayBuffer(sliced.byteLength)
-            new Uint8Array(buffer).set(sliced)
-            return buffer
-          },
-        }
+        // Read via storage backend - list batch files in events directory
+        const allEvents: ParsedEvent[] = []
+        try {
+          const listResult = await storage.list('events')
+          const batchFiles = listResult.files
+            .filter((f: string) => f.endsWith('.parquet') && f.includes('batch-'))
+            .sort()
 
-        let rows: unknown[][] = []
-        await parquetRead({
-          file: asyncBuffer,
-          compressors,
-          onComplete: (d: unknown[][]) => {
-            rows = d
-          },
-        })
-
-        const metadata = await parquetMetadataAsync(asyncBuffer)
-        const columnNames = (metadata.schema as Array<{ name?: string }>)
-          .filter((s) => s.name && s.name !== 'root')
-          .map((s) => s.name!)
-
-        return rows.map((row) => {
-          const obj: Record<string, unknown> = {}
-          columnNames.forEach((name, idx) => {
-            obj[name] = row[idx]
-          })
-
-          const eventRow = obj as EventRow
-
-          return {
-            id: eventRow.id,
-            ts: typeof eventRow.ts === 'bigint' ? Number(eventRow.ts) : eventRow.ts,
-            op: eventRow.op,
-            target: eventRow.target,
-            before: decodeVariantString(eventRow.before),
-            after: decodeVariantString(eventRow.after),
-            actor: eventRow.actor,
-            metadata: decodeVariantString(eventRow.metadata),
+          for (const file of batchFiles) {
+            const filePath = file.startsWith('events/') ? file : `events/${file}`
+            const data = await storage.read(filePath)
+            const asyncBuffer = {
+              byteLength: data.length,
+              slice: async (start: number, end?: number): Promise<ArrayBuffer> => {
+                const sliced = data.slice(start, end ?? data.length)
+                const buffer = new ArrayBuffer(sliced.byteLength)
+                new Uint8Array(buffer).set(sliced)
+                return buffer
+              },
+            }
+            const events = await parseEventsFromBuffer(asyncBuffer)
+            allEvents.push(...events)
           }
-        })
+        } catch {
+          // Events directory may not exist if no events were written
+        }
+        return allEvents.sort((a, b) => a.ts - b.ts)
       } else {
-        return readEventsParquet(eventsPath)
+        // FsBackend - read from local events directory
+        return readAllEventsFromBatchFiles(eventsPath)
       }
     }
 
     async function getSchemaColumns(): Promise<string[]> {
       if (factory.name === 'R2Backend') {
-        const data = await storage.read('events.parquet')
+        // Find first batch file in events directory
+        const listResult = await storage.list('events')
+        const batchFiles = listResult.files
+          .filter((f: string) => f.endsWith('.parquet') && f.includes('batch-'))
+          .sort()
+        if (batchFiles.length === 0) {
+          return []
+        }
+        const filePath = batchFiles[0]!.startsWith('events/') ? batchFiles[0]! : `events/${batchFiles[0]}`
+        const data = await storage.read(filePath)
         const asyncBuffer = {
           byteLength: data.length,
           slice: async (start: number, end?: number): Promise<ArrayBuffer> => {
@@ -267,7 +300,12 @@ function runEventsParquetTests(factory: BackendFactory) {
           .filter((s) => s.name && s.name !== 'root')
           .map((s) => s.name!)
       } else {
-        return getParquetSchemaColumns(eventsPath)
+        // FsBackend - find first batch file
+        const batchFiles = await findBatchEventFiles(eventsPath)
+        if (batchFiles.length === 0) {
+          return []
+        }
+        return getParquetSchemaColumns(batchFiles[0]!)
       }
     }
 
@@ -298,7 +336,7 @@ function runEventsParquetTests(factory: BackendFactory) {
     // =========================================================================
 
     describe('Schema Verification', () => {
-      it('should create events.parquet with correct schema columns', async () => {
+      it('should create batch event files with correct schema columns', async () => {
         // Create an entity to generate events
         await db.create('posts', {
           $type: 'Post',
@@ -308,12 +346,9 @@ function runEventsParquetTests(factory: BackendFactory) {
 
         await db.disposeAsync()
 
-        // Verify file exists
-        const exists = await storage.exists('events.parquet')
-        expect(exists).toBe(true)
-
-        // Get schema columns
+        // Get schema columns from first batch file (this verifies files exist)
         const columns = await getSchemaColumns()
+        expect(columns.length).toBeGreaterThan(0)
 
         // Verify all required columns are present
         expect(columns).toContain('id')

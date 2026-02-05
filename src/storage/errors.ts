@@ -384,6 +384,25 @@ export class OperationError extends StorageError {
   }
 }
 
+/**
+ * Error thrown when a Parquet write operation fails.
+ *
+ * This error is critical because Parquet write failures should NEVER be
+ * silently ignored as this causes data loss.
+ */
+export class ParquetWriteError extends StorageError {
+  override name = 'ParquetWriteError'
+
+  constructor(
+    message: string,
+    path?: string,
+    cause?: Error
+  ) {
+    super(message, StorageErrorCode.OPERATION_ERROR, path, cause)
+    Object.setPrototypeOf(this, ParquetWriteError.prototype)
+  }
+}
+
 // =============================================================================
 // Backward Compatibility Aliases
 // =============================================================================
@@ -507,6 +526,13 @@ export function isQuotaExceededError(error: unknown): error is QuotaExceededErro
 export function isDirectoryNotEmptyError(error: unknown): error is DirectoryNotEmptyError {
   return error instanceof DirectoryNotEmptyError ||
     (isParqueDBError(error) && error.code === ErrorCode.DIRECTORY_NOT_EMPTY)
+}
+
+/**
+ * Check if an error is a ParquetWriteError
+ */
+export function isParquetWriteError(error: unknown): error is ParquetWriteError {
+  return error instanceof ParquetWriteError
 }
 
 // =============================================================================
