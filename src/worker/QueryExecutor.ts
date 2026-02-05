@@ -50,11 +50,11 @@ import { asStorageBackend, asIndexStorageBucket, rowAsEntity } from '../types/ca
 // Module-level caches (persist across requests in same isolate)
 // =============================================================================
 
-/** In-memory file content cache for small files (<1MB)
+/** In-memory file content cache for small/medium files (<10MB)
  * Persists across requests within the same Worker isolate */
 const moduleFileCache = new Map<string, { data: ArrayBuffer; size: number }>()
-const MODULE_FILE_CACHE_MAX_SIZE = 1024 * 1024  // 1MB max per file
-const MODULE_FILE_CACHE_MAX_ENTRIES = 20  // Max files to cache
+const MODULE_FILE_CACHE_MAX_SIZE = 10 * 1024 * 1024  // 10MB max per file (covers rels.parquet at 7.7MB)
+const MODULE_FILE_CACHE_MAX_ENTRIES = 10  // Max files to cache (reduced due to larger size)
 
 /** Module-level metadata cache */
 const moduleMetadataCache = new Map<string, FileMetaData>()
