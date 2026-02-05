@@ -47,6 +47,19 @@ import { tryParseJson, isRecord } from '../utils/json-validation'
 import { asStorageBackend, asIndexStorageBucket, rowAsEntity } from '../types/cast'
 
 // =============================================================================
+// Module-level caches (persist across requests in same isolate)
+// =============================================================================
+
+/** In-memory file content cache for small files (<1MB)
+ * Persists across requests within the same Worker isolate */
+const moduleFileCache = new Map<string, { data: ArrayBuffer; size: number }>()
+const MODULE_FILE_CACHE_MAX_SIZE = 1024 * 1024  // 1MB max per file
+const MODULE_FILE_CACHE_MAX_ENTRIES = 20  // Max files to cache
+
+/** Module-level metadata cache */
+const moduleMetadataCache = new Map<string, FileMetaData>()
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -543,6 +556,9 @@ export class QueryExecutor {
     this.rawMetadataCache.clear()
     this.bloomCache.clear()
     this.rowGroupCache.clear()
+    // Also clear module-level caches
+    moduleFileCache.clear()
+    moduleMetadataCache.clear()
   }
 
   /**
@@ -566,9 +582,11 @@ export class QueryExecutor {
     // Invalidate metadata and bloom caches
     this.metadataCache.delete(ns)
     this.bloomCache.delete(ns)
-    // Also invalidate raw metadata cache for the parquet file path
+    // Also invalidate raw metadata cache and file cache for the parquet file path
     const path = ns.includes('/') ? `${ns}.parquet` : `${ns}/data.parquet`
     this.rawMetadataCache.delete(path)
+    moduleFileCache.delete(path)
+    moduleMetadataCache.delete(path)
     // Invalidate row group data cache for the namespace
     this.rowGroupCache.invalidate(ns)
   }
@@ -583,17 +601,24 @@ export class QueryExecutor {
    * @returns hyparquet FileMetaData
    */
   private async loadRawMetadata(path: string): Promise<FileMetaData> {
-    // Check cache first
-    const cached = this.rawMetadataCache.get(path)
-    if (cached) {
-      return cached
+    // Check module-level cache first (persists across requests)
+    const moduleCached = moduleMetadataCache.get(path)
+    if (moduleCached) {
+      return moduleCached
+    }
+
+    // Check instance cache (for backwards compatibility)
+    const instanceCached = this.rawMetadataCache.get(path)
+    if (instanceCached) {
+      return instanceCached
     }
 
     // Read metadata using parquetMetadataAsync (handles async buffer)
     const asyncBuffer = await this.createAsyncBuffer(path)
     const metadata = await parquetMetadataAsync(asyncBuffer)
 
-    // Cache for future queries
+    // Cache at both levels
+    moduleMetadataCache.set(path, metadata)
     this.rawMetadataCache.set(path, metadata)
 
     return metadata
@@ -1967,10 +1992,23 @@ export class QueryExecutor {
 
   /**
    * Create AsyncBuffer from storage adapter for parquetQuery
+   * Uses module-level cache for small files to eliminate network round trips
    */
   private async createAsyncBuffer(path: string): Promise<{ byteLength: number; slice: (start: number, end?: number) => Promise<ArrayBuffer> }> {
     if (!this.storageAdapter) {
       throw new Error('Storage adapter not available')
+    }
+
+    // Check module-level cache first (persists across requests)
+    const cached = moduleFileCache.get(path)
+    if (cached) {
+      return {
+        byteLength: cached.size,
+        async slice(start: number, end?: number): Promise<ArrayBuffer> {
+          const actualEnd = end ?? cached.size
+          return cached.data.slice(start, actualEnd)
+        }
+      }
     }
 
     // Get file size first
@@ -1979,6 +2017,29 @@ export class QueryExecutor {
       throw new Error(`File not found: ${path}`)
     }
 
+    // For small files, load entire file into module-level cache
+    if (stat.size <= MODULE_FILE_CACHE_MAX_SIZE) {
+      // Evict oldest entry if cache is full
+      if (moduleFileCache.size >= MODULE_FILE_CACHE_MAX_ENTRIES) {
+        const firstKey = moduleFileCache.keys().next().value
+        if (firstKey) moduleFileCache.delete(firstKey)
+      }
+
+      // Read entire file and cache it
+      const fullData = await this.storageAdapter.readRange(path, 0, stat.size)
+      const copy = new ArrayBuffer(fullData.byteLength)
+      new Uint8Array(copy).set(fullData)
+      moduleFileCache.set(path, { data: copy, size: stat.size })
+
+      return {
+        byteLength: stat.size,
+        async slice(start: number, end?: number): Promise<ArrayBuffer> {
+          return copy.slice(start, end ?? stat.size)
+        }
+      }
+    }
+
+    // For large files, use streaming reads
     const storage = this.storageAdapter
     return {
       byteLength: stat.size,
