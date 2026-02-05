@@ -393,10 +393,14 @@ async function main() {
   console.log('\nWriting output files...')
 
   // Combine ALL entities into single data.parquet
+  // Schema: $id | $data | flat columns (for aggregations & additional pushdown)
+  // - $id + $data for fast point lookups (column projection)
+  // - Flat columns for aggregations and predicate pushdown on any field
   const allNodes = [
     // Occupations
     ...occupationEntities.map(occ => ({
       $id: occ.$id,
+      $data: { $type: occ.$type, name: occ.name, code: occ.code, description: occ.description },
       $type: occ.$type,
       name: occ.name,
       code: occ.code,
@@ -406,6 +410,7 @@ async function main() {
     // Skills
     ...skillEntities.map(s => ({
       $id: s.$id,
+      $data: { $type: s.$type, name: s.name, elementId: s.elementId, description: s.description },
       $type: s.$type,
       name: s.name,
       code: null as string | null,
@@ -415,6 +420,7 @@ async function main() {
     // Abilities
     ...abilityEntities.map(a => ({
       $id: a.$id,
+      $data: { $type: a.$type, name: a.name, elementId: a.elementId, description: a.description },
       $type: a.$type,
       name: a.name,
       code: null as string | null,
@@ -424,6 +430,7 @@ async function main() {
     // Knowledge
     ...knowledgeEntities.map(k => ({
       $id: k.$id,
+      $data: { $type: k.$type, name: k.name, elementId: k.elementId, description: k.description },
       $type: k.$type,
       name: k.name,
       code: null as string | null,
