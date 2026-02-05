@@ -662,12 +662,9 @@ export class QueryExecutor {
         if (pushdownFilter && this.storageAdapter) {
           // Use parquetQuery with predicate pushdown
           // hyparquet uses min/max statistics to skip row groups that can't match
-          const t1 = performance.now()
           const asyncBuffer = await this.createAsyncBuffer(path)
-          const t2 = performance.now()
           // Load and cache metadata to avoid redundant reads in parquetQuery
           const metadata = await this.loadRawMetadata(path)
-          const t3 = performance.now()
           try {
             // Column projection: only read $id and $data columns
             // Tested locally: works correctly, reduces I/O for wide tables
@@ -679,9 +676,7 @@ export class QueryExecutor {
               compressors,
               rowEnd: options.limit ? (options.skip ?? 0) + options.limit : undefined,
             }) as DataRow[]
-            const t4 = performance.now()
             stats.rowsScanned = rows.length
-            console.log(`[PERF] find: asyncBuffer=${(t2-t1).toFixed(0)}ms metadata=${(t3-t2).toFixed(0)}ms query=${(t4-t3).toFixed(0)}ms rows=${rows.length}`)
             logger.debug(`Pushdown filter applied: ${JSON.stringify(pushdownFilter)}`)
           } catch (error: unknown) {
             // Fall back to full read if parquetQuery fails (e.g. column not found)
@@ -2159,6 +2154,13 @@ export class QueryExecutor {
    */
   async readPendingFiles<T>(ns: string): Promise<T[]> {
     if (!this.storageAdapter || !this._bucket) {
+      return []
+    }
+
+    // Skip pending file check for CDN-backed read-only datasets
+    // These datasets (onet, imdb, etc.) are pre-built and never have pending writes
+    // This saves ~150ms per query by avoiding the R2 list operation
+    if (this._cdnBucket) {
       return []
     }
 
