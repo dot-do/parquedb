@@ -313,7 +313,7 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
     this.totalReads++
     const cache = caches.default
     // Version param for cache busting when data changes
-    const cacheKey = new Request(`https://parquedb.cache/${path}?v=5`)
+    const cacheKey = new Request(`https://parquedb.cache/${path}?v=8`)
 
     // Check cache first
     const cachedResponse = await cache.match(cacheKey)
@@ -361,7 +361,7 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
 
     // Check edge Cache API
     const cache = caches.default
-    const cacheKey = new Request(`https://parquedb.cache/${path}?v=5`)
+    const cacheKey = new Request(`https://parquedb.cache/${path}?v=8`)
     const cachedResponse = await cache.match(cacheKey)
     if (cachedResponse) {
       this.edgeHits++
@@ -649,6 +649,9 @@ export class QueryExecutor {
           // Load and cache metadata to avoid redundant reads in parquetQuery
           const metadata = await this.loadRawMetadata(path)
           try {
+            // Note: Column projection doesn't work properly for $data (Variant/nested) columns
+            // hyparquet returns undefined for complex nested types when using columns param
+            // So we read all columns and rely on predicate pushdown for efficiency
             rows = await parquetQuery({
               file: asyncBuffer,
               metadata,  // Pass cached metadata to avoid redundant reads
@@ -657,7 +660,6 @@ export class QueryExecutor {
               rowEnd: options.limit ? (options.skip ?? 0) + options.limit : undefined,
             }) as DataRow[]
             stats.rowsScanned = rows.length
-            // Log pushdown filter for debugging
             logger.debug(`Pushdown filter applied: ${JSON.stringify(pushdownFilter)}`)
           } catch (error: unknown) {
             // Fall back to full read if parquetQuery fails (e.g. column not found)
@@ -667,12 +669,17 @@ export class QueryExecutor {
           }
 
           // Rows are returned with all columns
+          // When using column projection, merge $id with unpacked $data
           results = rows.map(row => {
             if (row.$data) {
-              if (typeof row.$data === 'string') {
-                return tryParseJson<T>(row.$data) ?? rowAsEntity<T>(row)
+              const data = typeof row.$data === 'string'
+                ? tryParseJson<Record<string, unknown>>(row.$data)
+                : row.$data as Record<string, unknown>
+              if (data) {
+                // Merge $id with unpacked data (data may not have $id)
+                return { $id: row.$id, ...data } as T
               }
-              return row.$data as T
+              return rowAsEntity<T>(row)
             }
             return row as unknown as T
           })
@@ -694,10 +701,14 @@ export class QueryExecutor {
           results = rows.map(row => {
             // If there's a $data column with the entity, unpack it
             if (row.$data) {
-              if (typeof row.$data === 'string') {
-                return tryParseJson<T>(row.$data) ?? rowAsEntity<T>(row)
+              const data = typeof row.$data === 'string'
+                ? tryParseJson<Record<string, unknown>>(row.$data)
+                : row.$data as Record<string, unknown>
+              if (data) {
+                // Merge $id with unpacked data
+                return { $id: row.$id, ...data } as T
               }
-              return row.$data as T
+              return rowAsEntity<T>(row)
             }
             // Otherwise the row IS the entity
             return row as unknown as T
@@ -709,11 +720,17 @@ export class QueryExecutor {
 
           // Unpack data column - parse JSON if string, use directly if object
           results = rows.map(row => {
-            if (typeof row.$data === 'string') {
-              const parsed = tryParseJson<T>(row.$data)
-              return parsed ?? rowAsEntity<T>(row)
+            if (row.$data) {
+              const data = typeof row.$data === 'string'
+                ? tryParseJson<Record<string, unknown>>(row.$data)
+                : row.$data as Record<string, unknown>
+              if (data) {
+                // Merge $id with unpacked data
+                return { $id: row.$id, ...data } as T
+              }
+              return rowAsEntity<T>(row)
             }
-            return (row.$data ?? row) as T
+            return row as unknown as T
           })
         }
 
@@ -1190,6 +1207,7 @@ export class QueryExecutor {
         file: asyncBuffer,
         metadata,
         filter: { $id: fromId },
+        columns: ['$id', '$data'],  // Only read needed columns
         compressors,
       }) as RelRow[]
 

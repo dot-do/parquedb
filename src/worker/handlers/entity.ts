@@ -33,10 +33,13 @@ export async function handleEntityDetail(
   // e.g., "occupations/11-1011.00" or "titles/tt0000001"
   const standardId = `${collectionId}/${entityId}`
 
-  // Namespace uses dataset prefix (e.g., "onet" -> "onet-graph") + collection
+  // Namespace uses dataset prefix (e.g., "onet" -> "onet-graph")
+  // For graph datasets, all entities are in a single data.parquet file
+  // and we filter by $id which includes the collection prefix
   const dataset = DATASETS[datasetId]
   const prefix = dataset?.prefix ?? datasetId
-  const namespace = `${prefix}/${collectionId}`
+  // Use prefix-only namespace to read from {prefix}/data.parquet (single file with all entities)
+  const namespace = prefix
 
   // PARALLEL: Fetch entity and relationships simultaneously
   // Track individual timings while still running in parallel
