@@ -275,25 +275,27 @@ async function main() {
     },
   }))
 
-  // 8. Build relationship edges with full data
+  // 8. Build relationship edges with proper $id + $data schema
+  // $id = entity identifier for predicate pushdown filtering
+  // $data = Variant column with all relationship payload
   console.log('\nBuilding relationship edges...')
 
-  const forwardRels: Array<{
-    from_ns: string
-    from_id: string
-    from_name: string
-    from_type: string
-    predicate: string
-    reverse: string
-    to_ns: string
-    to_id: string
-    to_name: string
-    to_type: string
-    importance: number | null
-    level: number | null
-    standardError: number | null
-    date: string | null
-  }> = []
+  interface RelEdge {
+    $id: string  // The entity we're looking up relationships FOR
+    $data: {     // All relationship data as Variant
+      predicate: string
+      reverse: string
+      to: string      // Full target ID (e.g., "skills/2.A.1.a")
+      to_name: string
+      to_type: string
+      importance: number | null
+      level: number | null
+      standardError: number | null
+      date: string | null
+    }
+  }
+
+  const forwardRels: RelEdge[] = []
 
   // Process skills relationships
   for (const row of skillsData) {
@@ -310,20 +312,18 @@ async function main() {
     )
 
     forwardRels.push({
-      from_ns: 'occupations',
-      from_id: occCode,
-      from_name: occ['Title'],
-      from_type: 'Occupation',
-      predicate: 'skills',
-      reverse: 'requiredBy',
-      to_ns: 'skills',
-      to_id: row['Element ID'],
-      to_name: row['Element Name'],
-      to_type: 'Skill',
-      importance: parseFloat(row['Data Value']),
-      level: levelRow ? parseFloat(levelRow['Data Value']) : null,
-      standardError: parseFloat(row['Standard Error']),
-      date: row['Date'],
+      $id: `occupations/${occCode}`,
+      $data: {
+        predicate: 'skills',
+        reverse: 'requiredBy',
+        to: `skills/${row['Element ID']}`,
+        to_name: row['Element Name'],
+        to_type: 'Skill',
+        importance: parseFloat(row['Data Value']),
+        level: levelRow ? parseFloat(levelRow['Data Value']) : null,
+        standardError: parseFloat(row['Standard Error']),
+        date: row['Date'],
+      },
     })
   }
 
@@ -342,20 +342,18 @@ async function main() {
     )
 
     forwardRels.push({
-      from_ns: 'occupations',
-      from_id: occCode,
-      from_name: occ['Title'],
-      from_type: 'Occupation',
-      predicate: 'abilities',
-      reverse: 'requiredBy',
-      to_ns: 'abilities',
-      to_id: row['Element ID'],
-      to_name: row['Element Name'],
-      to_type: 'Ability',
-      importance: parseFloat(row['Data Value']),
-      level: levelRow ? parseFloat(levelRow['Data Value']) : null,
-      standardError: parseFloat(row['Standard Error']),
-      date: row['Date'],
+      $id: `occupations/${occCode}`,
+      $data: {
+        predicate: 'abilities',
+        reverse: 'requiredBy',
+        to: `abilities/${row['Element ID']}`,
+        to_name: row['Element Name'],
+        to_type: 'Ability',
+        importance: parseFloat(row['Data Value']),
+        level: levelRow ? parseFloat(levelRow['Data Value']) : null,
+        standardError: parseFloat(row['Standard Error']),
+        date: row['Date'],
+      },
     })
   }
 
@@ -374,20 +372,18 @@ async function main() {
     )
 
     forwardRels.push({
-      from_ns: 'occupations',
-      from_id: occCode,
-      from_name: occ['Title'],
-      from_type: 'Occupation',
-      predicate: 'knowledge',
-      reverse: 'requiredBy',
-      to_ns: 'knowledge',
-      to_id: row['Element ID'],
-      to_name: row['Element Name'],
-      to_type: 'Knowledge',
-      importance: parseFloat(row['Data Value']),
-      level: levelRow ? parseFloat(levelRow['Data Value']) : null,
-      standardError: parseFloat(row['Standard Error']),
-      date: row['Date'],
+      $id: `occupations/${occCode}`,
+      $data: {
+        predicate: 'knowledge',
+        reverse: 'requiredBy',
+        to: `knowledge/${row['Element ID']}`,
+        to_name: row['Element Name'],
+        to_type: 'Knowledge',
+        importance: parseFloat(row['Data Value']),
+        level: levelRow ? parseFloat(levelRow['Data Value']) : null,
+        standardError: parseFloat(row['Standard Error']),
+        date: row['Date'],
+      },
     })
   }
 
@@ -444,7 +440,8 @@ async function main() {
   console.log(`  Wrote ${allNodes.length} nodes to data.parquet`)
 
   // Build ALL edges in BOTH directions into single rels.parquet
-  const allEdges: typeof forwardRels = []
+  // Each edge has $id (for filtering) and $data (Variant payload)
+  const allEdges: RelEdge[] = []
 
   // Add forward edges (occupation -> skill/ability/knowledge)
   for (const rel of forwardRels) {
@@ -452,35 +449,39 @@ async function main() {
   }
 
   // Add reverse edges (skill/ability/knowledge -> occupation)
+  // $id becomes the target, and we swap predicate/reverse
   for (const rel of forwardRels) {
+    // Parse the from/to from the $id and $data
+    const fromId = rel.$id  // e.g., "occupations/11-1011.00"
+    const toId = rel.$data.to  // e.g., "skills/2.A.1.a"
+    const [fromNs, fromCode] = fromId.split('/')
+
     allEdges.push({
-      from_ns: rel.to_ns,
-      from_id: rel.to_id,
-      from_name: rel.to_name,
-      from_type: rel.to_type,
-      predicate: rel.reverse,  // 'requiredBy'
-      reverse: rel.predicate,  // 'skills', 'abilities', 'knowledge'
-      to_ns: rel.from_ns,
-      to_id: rel.from_id,
-      to_name: rel.from_name,
-      to_type: rel.from_type,
-      importance: rel.importance,
-      level: rel.level,
-      standardError: rel.standardError,
-      date: rel.date,
+      $id: toId,  // Now looking up FROM the skill/ability/knowledge
+      $data: {
+        predicate: rel.$data.reverse,  // 'requiredBy'
+        reverse: rel.$data.predicate,  // 'skills', 'abilities', 'knowledge'
+        to: fromId,  // Target is the occupation
+        to_name: occupations.find(o => o['O*NET-SOC Code'] === fromCode)?.Title || fromCode,
+        to_type: 'Occupation',
+        importance: rel.$data.importance,
+        level: rel.$data.level,
+        standardError: rel.$data.standardError,
+        date: rel.$data.date,
+      },
     })
   }
 
-  // Sort by (from_ns, from_id, predicate) for fast lookups in either direction
-  allEdges.sort((a, b) => {
-    const nsCompare = a.from_ns.localeCompare(b.from_ns)
-    if (nsCompare !== 0) return nsCompare
-    const idCompare = a.from_id.localeCompare(b.from_id)
-    if (idCompare !== 0) return idCompare
-    return a.predicate.localeCompare(b.predicate)
-  })
+  // Sort by $id for fast predicate pushdown lookups
+  allEdges.sort((a, b) => a.$id.localeCompare(b.$id))
 
-  const relsBuffer = parquetWriteBuffer({ columnData: objectsToColumns(allEdges) })
+  // Write using Variant shredding for $data column
+  const relsBuffer = parquetWriteBuffer({
+    columnData: [
+      { name: '$id', data: allEdges.map(e => e.$id) },
+      { name: '$data', data: allEdges.map(e => e.$data) },  // Variant column
+    ],
+  })
   fs.writeFileSync(path.join(OUTPUT_DIR, 'rels.parquet'), Buffer.from(relsBuffer))
   console.log(`  Wrote ${allEdges.length} edges to rels.parquet (${forwardRels.length} forward + ${forwardRels.length} reverse)`)
 

@@ -8,6 +8,13 @@
  * - Result post-processing (sort, limit, project)
  */
 
+// Cloudflare Workers extends the global caches object with a default property
+declare global {
+  interface CacheStorage {
+    default: Cache
+  }
+}
+
 import type { Filter, FieldFilter, FieldOperator } from '../types/filter'
 import type {
   FindOptions,
@@ -272,7 +279,7 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
     private cdnBucket: R2Bucket,      // CDN bucket for reads (same as primary)
     private primaryBucket: R2Bucket,  // Primary bucket for fallback reads
     private cdnPrefix: string = '',   // Prefix in CDN bucket (empty = no prefix)
-    private r2DevUrl?: string         // r2.dev URL for edge caching (e.g. 'https://cdn.workers.do')
+    _r2DevUrl?: string                // r2.dev URL (unused, kept for API compatibility)
   ) {}
 
   async read(path: string): Promise<Uint8Array> {
@@ -306,7 +313,7 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
     this.totalReads++
     const cache = caches.default
     // Version param for cache busting when data changes
-    const cacheKey = new Request(`https://parquedb.cache/${path}?v=3`)
+    const cacheKey = new Request(`https://parquedb.cache/${path}?v=5`)
 
     // Check cache first
     const cachedResponse = await cache.match(cacheKey)
@@ -354,7 +361,7 @@ class CdnR2StorageAdapter implements ReadonlyStorageBackend {
 
     // Check edge Cache API
     const cache = caches.default
-    const cacheKey = new Request(`https://parquedb.cache/${path}?v=3`)
+    const cacheKey = new Request(`https://parquedb.cache/${path}?v=5`)
     const cachedResponse = await cache.match(cacheKey)
     if (cachedResponse) {
       this.edgeHits++
@@ -1110,12 +1117,16 @@ export class QueryExecutor {
   /**
    * Get relationships from rels.parquet
    *
-   * Reads edges from the unified rels.parquet file, filtered by from_id and predicate.
-   * Much faster than scanning all nodes to find reverse relationships.
+   * Reads edges from the unified rels.parquet file, filtered by $id.
+   * Uses the optimized $id + $data schema where:
+   * - $id is the entity we're looking up relationships FOR (enables predicate pushdown)
+   * - $data is a Variant column with all relationship payload
+   *
+   * Also supports legacy flat schema for backwards compatibility.
    *
    * @param dataset - Dataset prefix (e.g., 'onet-graph')
-   * @param fromId - Source entity ID (e.g., '2.C.2.b')
-   * @param predicate - Relationship predicate (e.g., 'requiredBy')
+   * @param fromId - Source entity ID (e.g., 'occupations/11-1011.00' or '11-1011.00')
+   * @param predicate - Relationship predicate (e.g., 'skills')
    * @returns Array of relationship edges
    */
   async getRelationships(
@@ -1150,32 +1161,42 @@ export class QueryExecutor {
       // Single rels.parquet file (no sharding - doesn't scale for large datasets)
       const path = `${dataset}/rels.parquet`
 
-      // Flat schema format (O*NET rels.parquet uses individual columns, not nested JSON)
-      // Columns: from_ns, from_id, from_name, from_type, predicate, reverse,
-      //          to_ns, to_id, to_name, to_type, importance, level, standardError, date
-      type FlatRelRow = {
-        from_ns: string
-        from_id: string
-        from_name: string
-        from_type: string
-        predicate: string
-        reverse: string
-        to_ns: string
-        to_id: string
-        to_name: string
-        to_type: string
-        importance?: number | null | undefined
-        level?: number | null | undefined
-        standardError?: number | null | undefined
-        date?: string | null | undefined
-        // Legacy nested format fields
-        match_mode?: string | null | undefined
-        similarity?: number | null | undefined
-        data?: { to: string; ns: string; name: string; pred: string; rev: string; importance?: number; level?: number } | string
-        $data?: { to: string; ns: string; name: string; pred: string; rev: string; importance?: number; level?: number } | string
+      // New optimized schema: $id + $data (Variant)
+      // $id = entity we're looking up (e.g., "occupations/11-1011.00")
+      // $data = { predicate, reverse, to, to_name, to_type, importance, level, ... }
+      type RelRow = {
+        $id: string
+        $data: {
+          predicate: string
+          reverse: string
+          to: string      // Full target ID (e.g., "skills/2.A.1.a")
+          to_name: string
+          to_type: string
+          importance?: number | null
+          level?: number | null
+          standardError?: number | null
+          date?: string | null
+        } | string
+        // Legacy flat schema fields (for backwards compatibility)
+        from_ns?: string
+        from_id?: string
+        from_name?: string
+        from_type?: string
+        predicate?: string
+        reverse?: string
+        to_ns?: string
+        to_id?: string
+        to_name?: string
+        to_type?: string
+        importance?: number | null
+        level?: number | null
+        standardError?: number | null
+        date?: string | null
+        match_mode?: string | null
+        similarity?: number | null
       }
 
-      // Use parquetQuery with predicate pushdown on from_id
+      // Use parquetQuery with predicate pushdown on $id
       // This enables row-group skipping based on min/max column statistics
       const t1 = performance.now()
       const asyncBuffer = await this.createAsyncBuffer(path)
@@ -1184,24 +1205,85 @@ export class QueryExecutor {
       const t2 = performance.now()
       const metadata = await this.loadRawMetadata(path)
       timing.metadata = performance.now() - t2
+
+      // Check if using new $id schema or legacy from_id schema
+      const schemaFields = metadata.schema?.filter((s) => s.name !== undefined).map((s) => s.name) ?? []
+      const hasNewSchema = schemaFields.includes('$id') && schemaFields.includes('$data')
+      const hasLegacySchema = schemaFields.includes('from_id')
+
+      // Debug logging for schema detection
+      logger.debug(`getRelationships: path=${path}, fromId=${fromId}, schemaFields=${JSON.stringify(schemaFields)}, hasNewSchema=${hasNewSchema}, hasLegacySchema=${hasLegacySchema}`)
+
       const t3 = performance.now()
-      const rawRels = await parquetQuery({
-        file: asyncBuffer,
-        metadata,
-        filter: { from_id: fromId },  // Predicate pushdown on from_id
-        compressors,
-      }) as FlatRelRow[]
+      let rawRels: RelRow[]
+
+      if (hasNewSchema) {
+        // New schema: filter on $id column
+        // $id format is "collection/id" (e.g., "occupations/11-1011.00")
+        // If fromId doesn't have collection prefix, we'll try with common prefixes
+        const fullId = fromId.includes('/') ? fromId : undefined
+
+        if (fullId) {
+          rawRels = await parquetQuery({
+            file: asyncBuffer,
+            metadata,
+            filter: { $id: fullId },  // Predicate pushdown on $id
+            compressors,
+          }) as RelRow[]
+        } else {
+          // Try common collection prefixes for O*NET
+          // This is a fallback for when caller doesn't provide full ID
+          const prefixes = ['occupations', 'skills', 'abilities', 'knowledge']
+          rawRels = []
+          for (const prefix of prefixes) {
+            const prefixedId = `${prefix}/${fromId}`
+            const prefixRels = await parquetQuery({
+              file: asyncBuffer,
+              metadata,
+              filter: { $id: prefixedId },
+              compressors,
+            }) as RelRow[]
+            if (prefixRels.length > 0) {
+              rawRels = prefixRels
+              break  // Found matches, stop searching
+            }
+          }
+        }
+      } else if (hasLegacySchema) {
+        // Legacy schema: filter on from_id column
+        rawRels = await parquetQuery({
+          file: asyncBuffer,
+          metadata,
+          filter: { from_id: fromId },  // Predicate pushdown on from_id
+          compressors,
+        }) as RelRow[]
+      } else {
+        // Unknown schema - try both
+        logger.warn(`Unknown rels.parquet schema, fields: ${schemaFields.join(', ')}`)
+        rawRels = []
+      }
+
       timing.parquetQuery = performance.now() - t3
       timing.total = performance.now() - t0
 
-      logger.debug(`Relationship query: from_id=${fromId}, rows=${rawRels.length}, timing=${JSON.stringify(timing)}ms`)
+      logger.debug(`Relationship query: fromId=${fromId}, schema=${hasNewSchema ? 'new' : 'legacy'}, rows=${rawRels.length}, timing=${JSON.stringify(timing)}ms`)
 
-      // Map to output format, handling both flat and nested schemas
+      // Map to output format, handling both schemas
       const t4 = performance.now()
       const results = rawRels
         .filter(rel => {
-          // Predicate filter (from_id already filtered by pushdown)
-          const relPredicate = rel.predicate ?? (rel.data && typeof rel.data === 'object' ? rel.data.pred : undefined)
+          // Get predicate from appropriate source
+          let relPredicate: string | undefined
+          if (rel.$data && typeof rel.$data === 'object') {
+            relPredicate = rel.$data.predicate
+          } else if (typeof rel.$data === 'string') {
+            const parsed = tryParseJson<{ predicate: string }>(rel.$data)
+            relPredicate = parsed?.predicate
+          } else {
+            relPredicate = rel.predicate
+          }
+
+          // Predicate filter
           if (predicate && relPredicate !== predicate) return false
 
           // Shredded field filters (for legacy format)
@@ -1218,33 +1300,42 @@ export class QueryExecutor {
           return true
         })
         .map(rel => {
-          // Handle flat schema (O*NET format)
+          // Handle new $id + $data schema
+          if (rel.$data !== undefined) {
+            const data = typeof rel.$data === 'string'
+              ? tryParseJson<NonNullable<RelRow['$data']>>(rel.$data)
+              : rel.$data
+
+            if (data && typeof data === 'object') {
+              // Parse "to" field: "skills/2.A.1.a" -> ns=skills, id=2.A.1.a
+              const toParts = data.to.split('/')
+              const toNs = toParts[0] ?? 'unknown'
+              const toId = toParts.slice(1).join('/') || data.to
+
+              return {
+                to_ns: toNs,
+                to_id: toId,
+                to_name: data.to_name,
+                to_type: data.to_type,
+                predicate: data.predicate,
+                importance: data.importance ?? null,
+                level: data.level ?? null,
+                matchMode: (rel.match_mode as 'exact' | 'fuzzy') ?? null,
+                similarity: rel.similarity ?? null,
+              }
+            }
+          }
+
+          // Handle legacy flat schema
           if (rel.to_ns !== undefined && rel.to_id !== undefined) {
             return {
               to_ns: rel.to_ns,
               to_id: rel.to_id,
-              to_name: rel.to_name,
-              to_type: rel.to_type,
-              predicate: rel.predicate,
+              to_name: rel.to_name ?? 'unknown',
+              to_type: rel.to_type ?? 'Unknown',
+              predicate: rel.predicate ?? 'unknown',
               importance: rel.importance ?? null,
               level: rel.level ?? null,
-              matchMode: (rel.match_mode as 'exact' | 'fuzzy') ?? null,
-              similarity: rel.similarity ?? null,
-            }
-          }
-
-          // Handle nested schema (legacy format with data column)
-          const dataCol = rel.$data ?? rel.data
-          const data = typeof dataCol === 'string' ? tryParseJson<FlatRelRow['data']>(dataCol) : dataCol
-          if (data && typeof data === 'object') {
-            return {
-              to_ns: data.ns,
-              to_id: data.to.split('/').pop() || data.to,
-              to_name: data.name,
-              to_type: data.ns.charAt(0).toUpperCase() + data.ns.slice(1, -1),
-              predicate: data.pred,
-              importance: data.importance ?? null,
-              level: data.level ?? null,
               matchMode: (rel.match_mode as 'exact' | 'fuzzy') ?? null,
               similarity: rel.similarity ?? null,
             }
