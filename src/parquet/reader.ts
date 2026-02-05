@@ -30,6 +30,8 @@ import type {
   EncodingType,
   CompressionCodec,
 } from './types'
+import type { BloomFilterReader } from '../query/executor'
+import { ParquetBloomFilter, parseBloomFilterHeader } from './bloom-filter'
 
 /**
  * Options for hyparquet's parquetReadObjects function
@@ -521,6 +523,87 @@ export class ParquetReader {
         return value !== null && value !== undefined
       default:
         return true
+    }
+  }
+
+  /**
+   * Get a bloom filter for a specific column in a row group.
+   *
+   * Reads the bloom filter data from the Parquet file and returns a
+   * BloomFilterReader that can check if values might exist.
+   *
+   * @param path - Path to the Parquet file
+   * @param rowGroup - Row group index
+   * @param column - Column name
+   * @returns BloomFilterReader if the column has a bloom filter, null otherwise
+   */
+  async getBloomFilter(
+    path: string,
+    rowGroup: number,
+    column: string
+  ): Promise<BloomFilterReader | null> {
+    try {
+      // Read metadata to get bloom filter offset for this column/row group
+      const metadata = await this.readMetadata(path)
+
+      // Find the row group
+      const rgMeta = metadata.rowGroups[rowGroup]
+      if (!rgMeta) {
+        return null
+      }
+
+      // Find the column chunk
+      const colMeta = rgMeta.columns.find(
+        (col) =>
+          col.pathInSchema.join('.') === column ||
+          col.pathInSchema[col.pathInSchema.length - 1] === column
+      )
+
+      if (!colMeta) {
+        return null
+      }
+
+      // Check if column has bloom filter
+      if (!colMeta.hasBloomFilter || colMeta.bloomFilterOffset === undefined) {
+        return null
+      }
+
+      // Read the bloom filter data
+      const offset = Number(colMeta.bloomFilterOffset)
+
+      // We need to read the bloom filter header first to get the data size
+      // The header is Thrift-encoded and variable length, so we read a reasonable chunk
+      // that should contain both the header and data
+      const initialReadSize = colMeta.bloomFilterLength ?? 4096
+
+      const rawData = await this.storage.readRange(
+        path,
+        offset,
+        offset + initialReadSize
+      )
+
+      // Parse the bloom filter header
+      const { header, dataOffset } = parseBloomFilterHeader(rawData)
+
+      // Check if we read enough data
+      if (dataOffset + header.numBytes > rawData.byteLength) {
+        // Need to read more data
+        const fullData = await this.storage.readRange(
+          path,
+          offset,
+          offset + dataOffset + header.numBytes
+        )
+        const filterData = fullData.slice(dataOffset, dataOffset + header.numBytes)
+        return new ParquetBloomFilter(filterData)
+      }
+
+      // Extract the bloom filter data
+      const filterData = rawData.slice(dataOffset, dataOffset + header.numBytes)
+
+      return new ParquetBloomFilter(filterData)
+    } catch {
+      // Error reading bloom filter - return null to indicate not available
+      return null
     }
   }
 

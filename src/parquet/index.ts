@@ -168,3 +168,20 @@ export type {
   SchemaTree,
   SchemaGeneratorOptions,
 } from './schema-generator'
+
+// =============================================================================
+// Bloom Filter
+// =============================================================================
+
+export {
+  ParquetBloomFilter,
+  xxHash64,
+  parseBloomFilterHeader,
+} from './bloom-filter'
+
+export type {
+  BloomFilterAlgorithm,
+  BloomFilterHash,
+  BloomFilterCompression,
+  BloomFilterHeader,
+} from './bloom-filter'

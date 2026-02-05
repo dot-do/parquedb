@@ -102,6 +102,9 @@ export type LayoutConfig =
 // Re-export CollectionOptions for backward compatibility
 export type { CollectionOptions } from './types/collection-options'
 
+// Re-export type inference types
+export type { DBSchemaInput, TypedDBInstance } from './types/infer'
+
 /**
  * Schema definition for a single collection
  * Supports field definitions plus optional layout/studio/options config
@@ -226,6 +229,33 @@ function convertToGraphDLInput(schema: DBSchema): Record<string, Record<string, 
       }
     }
     result[name] = fields
+  }
+
+  return result
+}
+
+/**
+ * Extract schema directives ($id, $name, $ns) from input schema
+ * These directives affect entity behavior and must be preserved through conversion
+ */
+function extractSchemaDirectives(schema: DBSchema): Record<string, Record<string, unknown>> {
+  const result: Record<string, Record<string, unknown>> = {}
+
+  for (const [name, collectionSchema] of Object.entries(schema)) {
+    if (isCollectionFlexible(collectionSchema)) {
+      continue
+    }
+
+    const directives: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(collectionSchema)) {
+      // Preserve important schema directives
+      if (key === '$id' || key === '$name' || key === '$ns') {
+        directives[key] = value
+      }
+    }
+    if (Object.keys(directives).length > 0) {
+      result[name] = directives
+    }
   }
 
   return result
@@ -382,6 +412,17 @@ export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {
 
     // Convert IceType schemas to ParqueDB Schema format
     const parqueDBSchema = fromIceType(iceTypeSchemas)
+
+    // Extract directives ($id, $name, $ns) from input schema
+    // These are filtered out during GraphDL conversion but must be preserved
+    const directives = extractSchemaDirectives(input)
+
+    // Merge directives back into the ParqueDB schema
+    for (const [typeName, typeDirectives] of Object.entries(directives)) {
+      if (parqueDBSchema[typeName]) {
+        Object.assign(parqueDBSchema[typeName], typeDirectives)
+      }
+    }
 
     // Register the converted schema
     db.registerSchema(parqueDBSchema)

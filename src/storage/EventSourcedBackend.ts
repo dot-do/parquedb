@@ -32,6 +32,7 @@ import {
   eventToRow,
   rowToEvent,
 } from '../backends/parquet-utils'
+import { logger } from '../utils/logger'
 
 // =============================================================================
 // Types
@@ -85,6 +86,12 @@ export interface EventSourcedConfig {
   maxCachedEntities?: number
   /** Cache TTL in milliseconds */
   cacheTtlMs?: number
+  /** Auto-compact when batch file count exceeds this (default: 10) */
+  autoCompactFileThreshold?: number
+  /** Auto-compact when total events exceed this (default: 1000) */
+  autoCompactEventThreshold?: number
+  /** Auto-compact after this many ms since last compaction (default: 60000 = 1 minute) */
+  autoCompactIntervalMs?: number
 }
 
 /**
@@ -137,6 +144,15 @@ interface EventBuffer {
   sizeBytes: number
 }
 
+/**
+ * Batch file metadata
+ */
+interface BatchFileInfo {
+  path: string
+  seq: number
+  eventCount: number
+}
+
 // =============================================================================
 // Default Configuration
 // =============================================================================
@@ -147,6 +163,9 @@ const DEFAULT_CONFIG: Required<EventSourcedConfig> = {
   autoSnapshotThreshold: 100,
   maxCachedEntities: 1000,
   cacheTtlMs: 5 * 60 * 1000, // 5 minutes
+  autoCompactFileThreshold: 10, // Compact when >10 batch files
+  autoCompactEventThreshold: 1000, // Compact when >1000 total events
+  autoCompactIntervalMs: 60 * 1000, // Compact at most once per minute
 }
 
 // =============================================================================
@@ -194,6 +213,24 @@ export class EventSourcedBackend implements EventSourcedOperations {
   /** Whether sequences have been initialized from storage */
   private initialized = false
 
+  /** Global batch sequence number for unique batch file names */
+  private batchSeq = 0
+
+  /** Cached batch file list */
+  private batchFiles: BatchFileInfo[] = []
+
+  /** Whether batch files have been scanned */
+  private batchFilesScanned = false
+
+  /** Timestamp of last compaction */
+  private lastCompactedAt = 0
+
+  /** Whether bulk operation is in progress (disables auto-compaction) */
+  private bulkOperationInProgress = false
+
+  /** Total events across all batch files (for threshold checking) */
+  private totalEventCount = 0
+
   constructor(storage: StorageBackend, config?: EventSourcedConfig) {
     this.storage = storage
     this.config = { ...DEFAULT_CONFIG, ...config }
@@ -208,7 +245,42 @@ export class EventSourcedBackend implements EventSourcedOperations {
    */
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return
+
+    // Ensure events directory exists
+    try {
+      await this.storage.mkdir('events')
+    } catch {
+      // Directory may already exist
+    }
+
+    // Scan for existing batch files
+    await this.scanBatchFiles()
+
+    // Derive sequences from existing events
+    await this.deriveSequencesFromEvents()
+
     this.initialized = true
+  }
+
+  /**
+   * Derive sequence numbers from existing events
+   */
+  private async deriveSequencesFromEvents(): Promise<void> {
+    const allEvents = await this.readAllStoredEvents()
+
+    // Count events per namespace
+    const eventCounts = new Map<string, number>()
+    for (const event of allEvents) {
+      const ns = this.parseNamespace(event.target)
+      if (ns) {
+        eventCounts.set(ns, (eventCounts.get(ns) || 0) + 1)
+      }
+    }
+
+    // Set sequence for each namespace (events + 1 for next)
+    for (const [ns, count] of eventCounts) {
+      this.sequences.set(ns, count + 1)
+    }
   }
 
   // ===========================================================================
@@ -239,10 +311,12 @@ export class EventSourcedBackend implements EventSourcedOperations {
     this.invalidateEntityCache(event.target)
 
     // Update entity state and relationships from events
+    // Parse entity target - expected format is "ns:id"
     const parts = event.target.split(':')
     if (parts.length === 2) {
-      const [ns, id] = parts
-      const fullId = `${ns}/${id}`
+      // Standard entity target: "ns:id"
+      const [entityNs, id] = parts
+      const fullId = `${entityNs}/${id}`
 
       if (event.op === 'CREATE' || event.op === 'UPDATE') {
         if (event.after && typeof event.after === 'object') {
@@ -255,6 +329,15 @@ export class EventSourcedBackend implements EventSourcedOperations {
         this.entities.delete(fullId)
         this.entitiesDirty = true
       }
+    } else if (parts.length > 2) {
+      // Relationship target (e.g., "entity:ns:id:pred:target_ns:target_id")
+      // These don't update entity state directly, which is expected
+    } else {
+      // Malformed target format - log warning
+      logger.warn(
+        `Event target "${event.target}" has unexpected format (expected "ns:id"). ` +
+        `Entity state will not be updated. Event: ${event.op} ${event.id}`
+      )
     }
 
     // Auto-flush if thresholds exceeded
@@ -398,7 +481,14 @@ export class EventSourcedBackend implements EventSourcedOperations {
   async reconstructEntity(ns: string, id: string): Promise<Entity | null> {
     const cacheKey = `${ns}/${id}`
 
-    // Check cache first
+    // Check in-memory entities first (populated by appendEvent)
+    // This ensures get() works immediately after create() even before events are flushed
+    const inMemoryEntity = this.entities.get(cacheKey)
+    if (inMemoryEntity) {
+      return inMemoryEntity
+    }
+
+    // Check cache second
     const cached = this.entityCache.get(cacheKey)
     if (cached && Date.now() - cached.timestamp < this.config.cacheTtlMs) {
       return cached.entity
@@ -503,17 +593,104 @@ export class EventSourcedBackend implements EventSourcedOperations {
   }
 
   /**
-   * Read all stored events (not filtered by namespace)
+   * Scan for batch files in the events directory
    */
-  private async readAllStoredEvents(): Promise<Event[]> {
+  private async scanBatchFiles(): Promise<void> {
+    if (this.batchFilesScanned) return
+
+    const eventsDir = 'events'
+
+    try {
+      // List all batch files - don't rely on exists() for directories
+      // because MemoryBackend returns false for directory paths
+      const result = await this.storage.list(eventsDir)
+      for (const file of result.files) {
+        // Files may include the directory prefix or just the filename
+        const fileName = file.includes('/') ? file.split('/').pop()! : file
+        if (fileName.endsWith('.parquet') && fileName.includes('batch-')) {
+          // Extract sequence from filename (batch-{timestamp}-{seq}.parquet)
+          const match = fileName.match(/batch-\d+-(\d+)\.parquet$/)
+          const seq = match?.[1] ? parseInt(match[1], 10) : 0
+
+          // Construct the full path properly
+          const fullPath = file.startsWith(eventsDir) ? file : `${eventsDir}/${file}`
+
+          this.batchFiles.push({
+            path: fullPath,
+            seq,
+            eventCount: 0, // Will be populated on read
+          })
+
+          // Track highest sequence seen
+          if (seq > this.batchSeq) {
+            this.batchSeq = seq
+          }
+        }
+      }
+
+      // Sort batch files by sequence
+      this.batchFiles.sort((a, b) => a.seq - b.seq)
+    } catch {
+      // Directory may not exist yet - that's OK
+    }
+
+    this.batchFilesScanned = true
+
+    // Also check for legacy events.parquet and migrate if exists
+    await this.migrateLegacyEventsFile()
+
+    // Count total events across all batch files (for threshold checking)
+    // This is done lazily - eventCount is populated when files are read
+    // For now, estimate based on file count until actual reads happen
+    this.totalEventCount = this.batchFiles.reduce((sum, f) => sum + f.eventCount, 0)
+  }
+
+  /**
+   * Migrate legacy events.parquet to batch file format
+   */
+  private async migrateLegacyEventsFile(): Promise<void> {
+    try {
+      const exists = await this.storage.exists('events.parquet')
+      if (!exists) return
+
+      // Read legacy file
+      const events = await this.readEventsFromFile('events.parquet')
+      if (events.length === 0) return
+
+      // Write to a batch file
+      const eventRows = events.map((event) => eventToRow(event))
+      const eventSchema = buildEventParquetSchema()
+      const writer = new ParquetWriter(this.storage, { compression: 'lz4' })
+
+      const batchSeq = ++this.batchSeq
+      const batchPath = `events/batch-${Date.now()}-${batchSeq}.parquet`
+
+      await writer.write(batchPath, eventRows, eventSchema)
+
+      this.batchFiles.push({
+        path: batchPath,
+        seq: batchSeq,
+        eventCount: events.length,
+      })
+
+      // Delete legacy file
+      await this.storage.delete('events.parquet').catch(() => {})
+    } catch {
+      // Ignore migration errors
+    }
+  }
+
+  /**
+   * Read events from a single Parquet file
+   */
+  private async readEventsFromFile(filePath: string): Promise<Event[]> {
     const events: Event[] = []
 
     try {
-      // Read from flat events.parquet file
-      const exists = await this.storage.exists('events.parquet')
+      const exists = await this.storage.exists(filePath)
       if (!exists) return events
 
-      const data = await this.storage.read('events.parquet')
+      const data = await this.storage.read(filePath)
 
       // Parse Parquet file using hyparquet
       const { parquetRead, parquetMetadataAsync } = await import('hyparquet')
@@ -536,7 +713,7 @@ export class EventSourcedBackend implements EventSourcedOperations {
         .filter((el) => el.name && el.name !== 'root')
         .map((el) => el.name!)
 
-      // Use onComplete callback to get data (parquetRead returns void)
+      // Use onComplete callback to get data
       let rows: unknown[][] = []
       await parquetRead({
         file: asyncBuffer,
@@ -558,13 +735,39 @@ export class EventSourcedBackend implements EventSourcedOperations {
         const eventData = rowToEvent(row)
         events.push(eventData as Event)
       }
-
-      // Sort by timestamp
-      events.sort((a, b) => a.ts - b.ts)
-    } catch (err) {
-      // Log read errors for debugging
-      console.error('[EventSourcedBackend] Error reading events.parquet:', err)
+    } catch {
+      // Ignore read errors
     }
+
+    return events
+  }
+
+  /**
+   * Read all stored events (not filtered by namespace)
+   *
+   * Scans all batch files and combines events.
+   */
+  private async readAllStoredEvents(): Promise<Event[]> {
+    await this.scanBatchFiles()
+
+    const events: Event[] = []
+    let totalCount = 0
+
+    // Read from all batch files
+    for (const batchFile of this.batchFiles) {
+      const batchEvents = await this.readEventsFromFile(batchFile.path)
+      events.push(...batchEvents)
+
+      // Update event count for this batch file
+      batchFile.eventCount = batchEvents.length
+      totalCount += batchEvents.length
+    }
+
+    // Update total event count
+    this.totalEventCount = totalCount
+
+    // Sort by timestamp
+    events.sort((a, b) => a.ts - b.ts)
 
     return events
   }
@@ -736,34 +939,49 @@ export class EventSourcedBackend implements EventSourcedOperations {
   /**
    * Flush events for a single namespace
    *
-   * Writes events to a single flat `events.parquet` file using Parquet format
-   * with Variant-encoded binary JSON for efficiency.
+   * Uses append-only batch files for O(1) writes instead of O(n) rewrites.
+   * Events are written to `events/batch-{seq}.parquet` files.
+   *
+   * Also writes data.parquet and rels.parquet for the current entity state.
    */
   private async flushNamespace(ns: string): Promise<void> {
     const buffer = this.eventBuffers.get(ns)
     if (!buffer || buffer.events.length === 0) return
 
-    // Read ALL existing events from storage (not just this namespace)
-    // This is critical because we write to a single events.parquet file
-    const existingEvents = await this.readAllStoredEvents()
-
-    // Combine with new events from this namespace's buffer
-    const allEvents = [...existingEvents, ...buffer.events]
-
     // Convert events to Parquet rows
-    const eventRows = allEvents.map((event) => eventToRow(event))
+    const eventRows = buffer.events.map((event) => eventToRow(event))
 
-    // Build Parquet schema and write
+    // Build Parquet schema and write to a NEW batch file (append-only pattern)
     const eventSchema = buildEventParquetSchema()
     const writer = new ParquetWriter(this.storage, { compression: 'lz4' })
 
-    // Write to flat events.parquet file (oplog for sync/time-travel)
-    await writer.write('events.parquet', eventRows, eventSchema)
+    // Generate unique batch file name using timestamp + sequence
+    const batchSeq = ++this.batchSeq
+    const batchPath = `events/batch-${Date.now()}-${batchSeq}.parquet`
+
+    // Write ONLY the new events to a new batch file (O(1) operation)
+    await writer.write(batchPath, eventRows, eventSchema)
+
+    // Track the new batch file
+    const newEventCount = buffer.events.length
+    this.batchFiles.push({
+      path: batchPath,
+      seq: batchSeq,
+      eventCount: newEventCount,
+    })
+    this.totalEventCount += newEventCount
 
     // Write data.parquet (primary entity storage for deployment/queries)
     if (this.entitiesDirty && this.entities.size > 0) {
       await this.writeDataParquet(writer)
       this.entitiesDirty = false
+    } else if (buffer.events.length > 0 && this.entities.size === 0) {
+      // Log when events exist but no entities were tracked
+      // This could indicate a target format issue
+      logger.debug(
+        `Skipping data.parquet write: ${buffer.events.length} events processed but no entities tracked. ` +
+        `Check that event targets use "ns:id" format.`
+      )
     }
 
     // Write rels.parquet (relationship index for queries)
@@ -782,75 +1000,24 @@ export class EventSourcedBackend implements EventSourcedOperations {
       lastSeq: buffer.lastSeq,
       sizeBytes: 0,
     })
+
+    // Check if auto-compaction should run
+    await this.maybeAutoCompact()
   }
 
   /**
-   * Read stored events for a namespace from flat events.parquet file
+   * Read stored events for a namespace from batch files
    */
   private async readStoredEvents(ns: string): Promise<Event[]> {
+    // Get all events and filter by namespace
+    const allEvents = await this.readAllStoredEvents()
+
     const events: Event[] = []
-
-    try {
-      // Read from flat events.parquet file
-      const exists = await this.storage.exists('events.parquet')
-      if (!exists) return events
-
-      const data = await this.storage.read('events.parquet')
-
-      // Parse Parquet file using hyparquet
-      const { parquetRead, parquetMetadataAsync } = await import('hyparquet')
-      const { compressors } = await import('../parquet/compression')
-
-      const asyncBuffer = {
-        byteLength: data.length,
-        slice: async (start: number, end?: number): Promise<ArrayBuffer> => {
-          const sliced = data.slice(start, end ?? data.length)
-          const buffer = new ArrayBuffer(sliced.byteLength)
-          new Uint8Array(buffer).set(sliced)
-          return buffer
-        },
+    for (const event of allEvents) {
+      const eventNs = this.parseNamespace(event.target)
+      if (eventNs === ns) {
+        events.push(event)
       }
-
-      // Get metadata to extract column names
-      const metadata = await parquetMetadataAsync(asyncBuffer)
-      const schema = (metadata.schema || []) as Array<{ name?: string }>
-      const columnNames: string[] = schema
-        .filter((el) => el.name && el.name !== 'root')
-        .map((el) => el.name!)
-
-      // Use onComplete callback to get data (parquetRead returns void)
-      let rows: unknown[][] = []
-      await parquetRead({
-        file: asyncBuffer,
-        compressors,
-        onComplete: (data: unknown[][]) => {
-          rows = data
-        },
-      })
-
-      // Convert rows back to Event objects, filtering by namespace
-      for (const rowArray of rows) {
-        const row: Record<string, unknown> = {}
-        for (let i = 0; i < columnNames.length; i++) {
-          const colName = columnNames[i]
-          if (colName) {
-            row[colName] = rowArray[i]
-          }
-        }
-        const eventData = rowToEvent(row)
-        // Cast to Event type (rowToEvent returns compatible structure)
-        const event = eventData as Event
-        // Filter by namespace if needed
-        const eventNs = this.parseNamespace(event.target)
-        if (eventNs === ns) {
-          events.push(event)
-        }
-      }
-
-      // Sort by timestamp
-      events.sort((a, b) => a.ts - b.ts)
-    } catch {
-      // Ignore read errors - file may not exist yet
     }
 
     return events
@@ -918,8 +1085,121 @@ export class EventSourcedBackend implements EventSourcedOperations {
   }
 
   // ===========================================================================
+  // Bulk Operation Control
+  // ===========================================================================
+
+  /**
+   * Begin a bulk operation (disables auto-compaction)
+   *
+   * Call this before bulk inserts/upserts to prevent compaction overhead.
+   * Remember to call endBulkOperation() when done.
+   */
+  beginBulkOperation(): void {
+    this.bulkOperationInProgress = true
+  }
+
+  /**
+   * End a bulk operation and optionally trigger compaction
+   *
+   * @param compact - Whether to compact after the bulk operation (default: true)
+   */
+  async endBulkOperation(compact = true): Promise<void> {
+    this.bulkOperationInProgress = false
+    if (compact) {
+      await this.compact()
+    }
+  }
+
+  /**
+   * Check if auto-compaction should run based on thresholds
+   */
+  private shouldAutoCompact(): boolean {
+    // Skip if bulk operation in progress
+    if (this.bulkOperationInProgress) return false
+
+    // Skip if we just compacted recently
+    const now = Date.now()
+    if (now - this.lastCompactedAt < this.config.autoCompactIntervalMs) return false
+
+    // Check file count threshold
+    if (this.batchFiles.length > this.config.autoCompactFileThreshold) return true
+
+    // Check event count threshold
+    if (this.totalEventCount > this.config.autoCompactEventThreshold) return true
+
+    return false
+  }
+
+  /**
+   * Run auto-compaction if thresholds are met
+   */
+  private async maybeAutoCompact(): Promise<void> {
+    if (this.shouldAutoCompact()) {
+      await this.compact()
+    }
+  }
+
+  // ===========================================================================
   // Resource Management
   // ===========================================================================
+
+  /**
+   * Compact all batch files into a single events file
+   *
+   * This merges all batch files into a single compacted file for
+   * more efficient reads. Should be called after bulk operations complete.
+   *
+   * @returns Number of events compacted
+   */
+  async compact(): Promise<number> {
+    await this.ensureInitialized()
+
+    // Skip if only one batch file (already compacted)
+    if (this.batchFiles.length <= 1) {
+      this.lastCompactedAt = Date.now()
+      return this.totalEventCount
+    }
+
+    // Read all events from batch files
+    const allEvents = await this.readAllStoredEvents()
+    if (allEvents.length === 0) {
+      this.lastCompactedAt = Date.now()
+      return 0
+    }
+
+    // Write compacted file
+    const eventRows = allEvents.map((event) => eventToRow(event))
+    const eventSchema = buildEventParquetSchema()
+    const writer = new ParquetWriter(this.storage, { compression: 'lz4' })
+
+    const compactedSeq = ++this.batchSeq
+    const compactedPath = `events/batch-${Date.now()}-${compactedSeq}.parquet`
+
+    await writer.write(compactedPath, eventRows, eventSchema)
+
+    // Delete old batch files
+    const oldBatchFiles = this.batchFiles
+    for (const batchFile of oldBatchFiles) {
+      try {
+        await this.storage.delete(batchFile.path)
+      } catch {
+        // Ignore delete errors
+      }
+    }
+
+    // Reset batch file tracking
+    this.batchFiles = [{
+      path: compactedPath,
+      seq: compactedSeq,
+      eventCount: allEvents.length,
+    }]
+
+    // Update tracking
+    this.totalEventCount = allEvents.length
+    this.lastCompactedAt = Date.now()
+
+    return allEvents.length
+  }
 
   /**
    * Clear all caches and buffers
@@ -932,6 +1212,12 @@ export class EventSourcedBackend implements EventSourcedOperations {
     this.relIndex.clear()
     this.entitiesDirty = false
     this.relsDirty = false
+    this.batchFiles = []
+    this.batchFilesScanned = false
+    this.batchSeq = 0
+    this.lastCompactedAt = 0
+    this.bulkOperationInProgress = false
+    this.totalEventCount = 0
   }
 
   /**
