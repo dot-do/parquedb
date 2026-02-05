@@ -115,6 +115,18 @@ export const DEFAULT_ENABLE_COLUMN_INDEX = true
  */
 export const DEFAULT_ENABLE_OFFSET_INDEX = true
 
+/**
+ * Default compression codec for Parquet files
+ *
+ * Set to 'none' (UNCOMPRESSED) because:
+ * - Cloudflare Workers: storage is cheap, CPU is expensive
+ * - Decompression overhead hurts latency on read-heavy workloads
+ * - For write-once/read-many patterns, CPU savings outweigh storage costs
+ *
+ * Use explicit compression option when storage size matters more than latency.
+ */
+export const DEFAULT_COMPRESSION: 'none' | 'snappy' | 'gzip' | 'zstd' | 'lz4' = 'none'
+
 // =============================================================================
 // FNV-1a Hash Constants
 // =============================================================================

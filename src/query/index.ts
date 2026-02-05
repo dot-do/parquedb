@@ -112,6 +112,17 @@ export {
   type VectorFilterNormalizationResult,
 } from './vector-query'
 
+// Columnar aggregations (optimized, no row materialization)
+export {
+  parquetAggregate,
+  ColumnarAggregator,
+  type AggregationType,
+  type AggregationOp,
+  type AggregationSpec,
+  type AggregationResult,
+  type AggregationStats,
+} from './columnar-aggregations'
+
 // Shredded Variant predicate pushdown
 export {
   // Context and helper functions

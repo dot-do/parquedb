@@ -33,6 +33,7 @@ import {
   DEFAULT_PARQUET_PAGE_SIZE,
   DEFAULT_ENABLE_COLUMN_INDEX,
   DEFAULT_ENABLE_OFFSET_INDEX,
+  DEFAULT_COMPRESSION,
 } from '../constants'
 
 // =============================================================================
@@ -98,7 +99,8 @@ export class ParquetWriter {
     options: ParquetWriterOptions = {}
   ) {
     this.storage = storage
-    this.compression = COMPRESSION_MAP[options.compression ?? 'lz4'] ?? 'LZ4'
+    // Use DEFAULT_COMPRESSION ('none' = UNCOMPRESSED) - storage is cheap, CPU is expensive on Cloudflare
+    this.compression = COMPRESSION_MAP[options.compression ?? DEFAULT_COMPRESSION] ?? 'UNCOMPRESSED'
     this.rowGroupSize = options.rowGroupSize ?? DEFAULT_ROW_GROUP_SIZE
     this.useDictionary = options.dictionary ?? true
     this._pageSize = options.pageSize ?? DEFAULT_PARQUET_PAGE_SIZE
@@ -131,8 +133,10 @@ export class ParquetWriter {
       return this.writeEmptyFile(path, schema)
     }
 
-    // Merge options
-    const compression = COMPRESSION_MAP[options.compression ?? 'lz4'] ?? this.compression
+    // Merge options - use per-write option if specified, otherwise fall back to instance default
+    const compression = options.compression !== undefined
+      ? COMPRESSION_MAP[options.compression] ?? this.compression
+      : this.compression
     const rowGroupSize = options.rowGroupSize ?? this.rowGroupSize
     const metadata = { ...this.defaultMetadata, ...options.metadata }
 
@@ -305,8 +309,10 @@ export class ParquetWriter {
       return this.writeEmptyFile(path, schema)
     }
 
-    // Merge options
-    const compression = COMPRESSION_MAP[writerOptions.compression ?? 'lz4'] ?? this.compression
+    // Merge options - use per-write option if specified, otherwise fall back to instance default
+    const compression = writerOptions.compression !== undefined
+      ? COMPRESSION_MAP[writerOptions.compression] ?? this.compression
+      : this.compression
     const rowGroupSize = writerOptions.rowGroupSize ?? this.rowGroupSize
     const metadata = { ...this.defaultMetadata, ...writerOptions.metadata }
 
@@ -368,8 +374,10 @@ export class ParquetWriter {
     // Build column data from entities
     const columns = this.typedEntitiesToColumns(entities, parquetSchema, includeDataVariant)
 
-    // Merge options
-    const compression = COMPRESSION_MAP[writerOptions.compression ?? 'lz4'] ?? this.compression
+    // Merge options - use per-write option if specified, otherwise fall back to instance default
+    const compression = writerOptions.compression !== undefined
+      ? COMPRESSION_MAP[writerOptions.compression] ?? this.compression
+      : this.compression
     const rowGroupSize = writerOptions.rowGroupSize ?? this.rowGroupSize
     const metadata = { ...this.defaultMetadata, ...writerOptions.metadata }
 
@@ -538,12 +546,12 @@ export class ParquetWriter {
         statistics: options.statistics,
         rowGroupSize: options.rowGroupSize,
         kvMetadata: kvMetadata.length > 0 ? kvMetadata : undefined,
+        // Always set codec explicitly - hyparquet-writer defaults to SNAPPY if not specified
+        codec: options.compression,
       }
 
-      // Set compression codec
+      // Provide compressors for LZ4/GZIP/ZSTD (hyparquet-writer only has Snappy built-in)
       if (options.compression !== 'UNCOMPRESSED') {
-        writeOptions.codec = options.compression
-        // Provide LZ4 compressor for writing (hyparquet-writer only has Snappy built-in)
         writeOptions.compressors = writeCompressors
       }
 

@@ -992,6 +992,12 @@ export {
   // Parquet
   DEFAULT_ROW_GROUP_SIZE,
   DEFAULT_PARQUET_PAGE_SIZE,
+  /**
+   * Default compression codec for Parquet files.
+   * Set to 'none' (UNCOMPRESSED) because on Cloudflare Workers,
+   * storage is cheap and CPU is expensive - decompression hurts latency.
+   */
+  DEFAULT_COMPRESSION,
   // Bloom Filters
   DEFAULT_BLOOM_SIZE,
   DEFAULT_NUM_HASH_FUNCTIONS,
