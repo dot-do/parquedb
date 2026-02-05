@@ -39,13 +39,26 @@ export async function handleEntityDetail(
   const namespace = `${prefix}/${collectionId}`
 
   // PARALLEL: Fetch entity and relationships simultaneously
+  // Track individual timings while still running in parallel
   markTiming(timing, 'parallel_start')
   let entityResult
   let allRels
+  let entityTime = 0
+  let relsTime = 0
   try {
     const [result, rels] = await Promise.all([
-      worker.find<EntityRecord>(namespace, { $id: standardId }, { limit: 1 }),
-      worker.getRelationships(prefix, standardId),  // Use full ID (e.g., 'occupations/11-1011.00') for $id lookup
+      (async () => {
+        const t0 = performance.now()
+        const r = await worker.find<EntityRecord>(namespace, { $id: standardId }, { limit: 1 })
+        entityTime = performance.now() - t0
+        return r
+      })(),
+      (async () => {
+        const t0 = performance.now()
+        const r = await worker.getRelationships(prefix, standardId)
+        relsTime = performance.now() - t0
+        return r
+      })(),
     ])
 
     entityResult = result
@@ -58,6 +71,9 @@ export async function handleEntityDetail(
     throw error
   }
   measureTiming(timing, 'parallel', 'parallel_start')
+  // Add individual timings
+  timing.durations.set('entity', entityTime)
+  timing.durations.set('rels', relsTime)
 
   if (entityResult.items.length === 0) {
     return buildErrorResponse(request, new Error(`Entity '${entityId}' not found in ${datasetId}/${collectionId}`), 404, startTime)
