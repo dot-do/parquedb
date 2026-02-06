@@ -316,6 +316,34 @@ function getNamespaceForType(_schema: Schema, typeName: string): string {
 }
 
 /**
+ * Find a type definition in the schema by case-insensitive lookup.
+ *
+ * When the Proxy-based collection access lowercases a compound type name
+ * (e.g., 'ZapierCategory' -> 'zapiercategory'), the derived type from
+ * deriveTypeFromNamespace becomes 'Zapiercategory' which doesn't match
+ * the original 'ZapierCategory'. This function finds the correct type
+ * by doing a case-insensitive search.
+ *
+ * @param schema - The schema to search
+ * @param typeName - The type name to look up (may have wrong casing)
+ * @returns The matching type name as it appears in the schema, or the original typeName if not found
+ */
+function findSchemaTypeName(schema: Schema, typeName: string): string {
+  // Exact match first (fast path)
+  if (schema[typeName]) return typeName
+
+  // Case-insensitive match
+  const lowerTypeName = typeName.toLowerCase()
+  for (const key of Object.keys(schema)) {
+    if (key.toLowerCase() === lowerTypeName) {
+      return key
+    }
+  }
+
+  return typeName
+}
+
+/**
  * Result of resolving a relationship ID
  */
 export interface ResolvedRelationshipId {
@@ -418,6 +446,89 @@ export function resolveRelationshipIdsBatch(
 }
 
 /**
+ * Resolve or auto-create a single relationship target.
+ *
+ * Handles both string IDs and object values:
+ * - String: resolves to existing entity or auto-creates stub when autoCreate is true
+ * - Object: extracts ID via target type's $id directive, resolves or auto-creates with full data
+ *
+ * @param ctx - The mutation context with entities and schema
+ * @param value - The value to resolve (string ID or object with data)
+ * @param targetNs - The target namespace
+ * @param targetTypeName - The target type name (for $id directive lookup)
+ * @param options - Options including autoCreate flag
+ * @returns Resolved relationship info, or null if the value cannot be resolved
+ * @throws {RelationshipResolutionError} if target doesn't exist and autoCreate is false
+ */
+async function resolveOrCreate(
+  ctx: EntityMutationContext,
+  value: unknown,
+  targetNs: string,
+  targetTypeName: string,
+  options?: { autoCreate?: boolean }
+): Promise<ResolvedRelationshipId | null> {
+  // Case 1: string ID
+  if (typeof value === 'string') {
+    const fullId = value.includes('/') ? value : `${targetNs}/${value}`
+    const existing = ctx.entities.get(fullId)
+
+    if (existing && !existing.deletedAt) {
+      return { fullId, displayName: String(existing.name || fullId) }
+    }
+
+    if (!options?.autoCreate) {
+      throw new RelationshipResolutionError(fullId, 'not_found',
+        `Related entity '${fullId}' does not exist`)
+    }
+
+    // Auto-create stub with the ID field and $type set so createEntity resolves the correct $id
+    const localId = fullId.includes('/') ? fullId.split('/').slice(1).join('/') : fullId
+    const targetDef = ctx.schema[targetTypeName]
+    const idField = (typeof targetDef?.$id === 'string' ? targetDef.$id : null)
+    const stubData: Record<string, unknown> = { $type: targetTypeName, name: localId }
+    if (idField) {
+      stubData[idField] = localId
+    } else {
+      stubData.$id = localId
+    }
+    const entity = await createEntity(ctx, targetNs, stubData as CreateInput, { skipValidation: true })
+
+    return { fullId: entity.$id, displayName: String(entity.name) }
+  }
+
+  // Case 2: object with data (only processed when autoCreate is enabled)
+  // Without autoCreate, objects are passed through unchanged (preserves legacy { displayName: fullId } format)
+  if (typeof value === 'object' && value !== null && options?.autoCreate) {
+    const obj = value as Record<string, unknown>
+
+    // Extract ID using target type's $id directive
+    const targetDef = ctx.schema[targetTypeName]
+    const idField = (typeof targetDef?.$id === 'string' ? targetDef.$id : null) ?? '$id'
+    const idValue = obj[idField] ?? obj.$id
+    if (!idValue || typeof idValue !== 'string') return null
+
+    const fullId = `${targetNs}/${idValue}`
+    const existing = ctx.entities.get(fullId)
+
+    if (existing && !existing.deletedAt) {
+      return { fullId, displayName: String(existing.name || fullId) }
+    }
+
+    if (!options?.autoCreate) {
+      throw new RelationshipResolutionError(fullId, 'not_found',
+        `Related entity '${fullId}' does not exist`)
+    }
+
+    // Auto-create with full provided data, setting $type so createEntity derives correct schema
+    const createData = { ...obj, $type: targetTypeName }
+    const entity = await createEntity(ctx, targetNs, createData as CreateInput, { skipValidation: true })
+    return { fullId: entity.$id, displayName: String(entity.name) }
+  }
+
+  return null
+}
+
+/**
  * Auto-resolve relationship IDs in create data.
  *
  * When a schema defines a forward relationship like `author: '-> User'`, and the
@@ -430,18 +541,26 @@ export function resolveRelationshipIdsBatch(
  * 2. If the target type has a $id directive, use targetNs/shortId
  * 3. Otherwise, treat as full ID (must contain '/')
  *
+ * When autoCreate is enabled, missing target entities are auto-created rather than
+ * throwing a RelationshipResolutionError.
+ *
  * @param ctx - The mutation context with entities and schema
  * @param typeName - The type being created (e.g., 'Post')
  * @param data - The create data with potential short IDs
+ * @param options - Options including autoCreate flag
  * @returns Data with resolved relationship IDs in object format
- * @throws {RelationshipResolutionError} if a related entity does not exist or is soft-deleted
+ * @throws {RelationshipResolutionError} if a related entity does not exist or is soft-deleted (when autoCreate is false)
  */
-export function autoResolveRelationships<T extends EntityData = EntityData>(
+export async function autoResolveRelationships<T extends EntityData = EntityData>(
   ctx: EntityMutationContext,
   typeName: string,
-  data: CreateInput<T>
-): CreateInput<T> {
-  const typeDef = ctx.schema[typeName]
+  data: CreateInput<T>,
+  options?: { autoCreate?: boolean }
+): Promise<CreateInput<T>> {
+  // Use case-insensitive lookup to handle compound type names
+  // (e.g., 'Zapierapp' derived from namespace 'zapierapp' should match 'ZapierApp' in schema)
+  const resolvedTypeName = findSchemaTypeName(ctx.schema, typeName)
+  const typeDef = ctx.schema[resolvedTypeName]
   if (!typeDef) return data
 
   const result: Record<string, unknown> = { ...data }
@@ -452,9 +571,17 @@ export function autoResolveRelationships<T extends EntityData = EntityData>(
     if (typeof fieldDef !== 'string') continue
     if (!isRelationString(fieldDef)) continue
 
-    // Only handle forward relationships (->)
+    // Parse the relationship direction
     const parsed = parseRelation(fieldDef)
-    if (!parsed || parsed.direction !== 'forward') continue
+    if (!parsed) continue
+
+    // Remove reverse relationship values from data (they are populated by the index system)
+    if (parsed.direction !== 'forward') {
+      if (result[fieldName] !== undefined) {
+        delete result[fieldName]
+      }
+      continue
+    }
 
     const targetTypeName = parsed.toType
     if (!targetTypeName) continue
@@ -465,21 +592,33 @@ export function autoResolveRelationships<T extends EntityData = EntityData>(
     // Get the target type's namespace
     const targetNs = getNamespaceForType(ctx.schema, targetTypeName)
 
-    // Handle array relationships - use batch resolution for efficiency
     if (Array.isArray(fieldValue)) {
-      const stringIds = fieldValue.filter((id): id is string => typeof id === 'string')
-      const resolved = resolveRelationshipIdsBatch(stringIds, targetNs, ctx.entities)
-
       const relObject: Record<string, string> = {}
-      for (const { fullId, displayName } of resolved) {
-        relObject[displayName] = fullId
+      for (const item of fieldValue) {
+        const resolved = await resolveOrCreate(ctx, item, targetNs, targetTypeName, options)
+        if (resolved) {
+          relObject[resolved.displayName] = resolved.fullId
+        }
       }
       result[fieldName] = relObject
     } else if (typeof fieldValue === 'string') {
-      // Single relationship value - convert to object format
-      const { fullId, displayName } = resolveRelationshipId(fieldValue, targetNs, ctx.entities)
-      result[fieldName] = { [displayName]: fullId }
+      // String value: resolve short ID or auto-create
+      const resolved = await resolveOrCreate(ctx, fieldValue, targetNs, targetTypeName, options)
+      if (resolved) {
+        result[fieldName] = { [resolved.displayName]: resolved.fullId }
+      } else {
+        delete result[fieldName]
+      }
+    } else if (typeof fieldValue === 'object' && fieldValue !== null && options?.autoCreate) {
+      // Object value: only process when autoCreate is enabled
+      const resolved = await resolveOrCreate(ctx, fieldValue, targetNs, targetTypeName, options)
+      if (resolved) {
+        result[fieldName] = { [resolved.displayName]: resolved.fullId }
+      } else {
+        delete result[fieldName]
+      }
     }
+    // else: leave value as-is (preserves legacy { displayName: fullId } object format)
   }
 
   return result as CreateInput<T>
@@ -753,7 +892,10 @@ export async function createEntity<T extends EntityData = EntityData>(
   const now = new Date()
 
   // Auto-derive $type from namespace (needed early to check $id directive)
-  const derivedType = data.$type || deriveTypeFromNamespace(namespace)
+  // Use case-insensitive schema lookup to handle compound type names
+  // (e.g., namespace 'zapierapp' -> derived 'Zapierapp' -> resolved 'ZapierApp' from schema)
+  const rawDerivedType = data.$type || deriveTypeFromNamespace(namespace)
+  const derivedType = findSchemaTypeName(ctx.schema, rawDerivedType)
 
   // Resolve entity ID using the utility function
   const { fullId, localId: entityIdPart } = resolveEntityId({
@@ -803,7 +945,7 @@ export async function createEntity<T extends EntityData = EntityData>(
   const dataWithDefaults = applySchemaDefaults(data, ctx.schema)
 
   // Auto-resolve short relationship IDs to full IDs before validation
-  const dataWithResolvedRels = autoResolveRelationships(ctx, derivedType, dataWithDefaults)
+  const dataWithResolvedRels = await autoResolveRelationships(ctx, derivedType, dataWithDefaults, { autoCreate: options?.autoCreate })
 
   // Determine if validation should run
   const shouldValidate = !options?.skipValidation && options?.validateOnWrite !== false

@@ -172,6 +172,8 @@ export interface IngestStreamOptions<T = Record<string, unknown>> {
   onProgress?: ((count: number) => void) | undefined
   /** Callback called after each batch is completed */
   onBatchComplete?: ((stats: IngestBatchStats) => void) | undefined
+  /** Auto-create missing relationship targets instead of throwing */
+  autoCreate?: boolean | undefined
 }
 
 /**
