@@ -35,6 +35,7 @@ import type {
 import type { IStorageRouter } from '../storage/router'
 import type { CollectionOptions } from '../types/collection-options'
 import type { EmbeddingProvider } from '../embeddings/provider'
+import type { EventSourcedConfig } from '../storage/EventSourcedBackend'
 
 // =============================================================================
 // Configuration Types
@@ -345,6 +346,35 @@ export interface ParqueDBConfig {
    * ```
    */
   embeddingProvider?: EmbeddingProvider | undefined
+
+  /**
+   * Configuration for the event-sourced storage backend
+   *
+   * Controls buffering, auto-snapshot, caching, and compaction behavior
+   * for the EventSourcedBackend that wraps the underlying StorageBackend.
+   *
+   * @example
+   * ```typescript
+   * const db = new ParqueDB({
+   *   storage,
+   *   eventSourcedConfig: {
+   *     maxBufferedEvents: 50,
+   *     autoSnapshotThreshold: 200,
+   *   },
+   * })
+   * ```
+   */
+  eventSourcedConfig?: EventSourcedConfig | undefined
+
+  /**
+   * Disable event sourcing entirely (for testing legacy behavior)
+   *
+   * When true, the EventSourcedBackend is not created and all writes
+   * go directly to the in-memory entity store without event persistence.
+   *
+   * @default false
+   */
+  disableEventSourcing?: boolean | undefined
 
   /**
    * Event callback for materialized view integration

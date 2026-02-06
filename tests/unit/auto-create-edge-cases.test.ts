@@ -24,7 +24,7 @@ describe('autoCreate edge case: empty string ID', () => {
     clearGlobalStorage()
   })
 
-  it('skips or handles empty string gracefully with autoCreate', async () => {
+  it('throws validation error for empty string with autoCreate', async () => {
     const storage = new MemoryBackend()
     const db = DB({
       User: {
@@ -43,30 +43,16 @@ describe('autoCreate edge case: empty string ID', () => {
 
     // Create a Post with author set to empty string and autoCreate: true.
     // The resolveOrCreate function receives '' as a string, constructs fullId 'user/',
-    // and then attempts to auto-create an entity with that ID.
-    // This should either:
-    // (a) throw a validation error because '' is not a valid ID, or
-    // (b) create an entity with an empty localId (which is undesirable).
-    //
-    // The current implementation will attempt to create 'user/' - we verify
-    // the behavior is deterministic (does not crash with an unhandled error).
-    try {
-      const post = await db.Post.create({
-        slug: 'empty-author-post',
-        title: 'Empty Author',
-        author: '',
-      }, { autoCreate: true })
-
-      // If it doesn't throw, verify the post was at least created
-      expect(post.$id).toBe('post/empty-author-post')
-    } catch (error: unknown) {
-      // If it throws, it should be a meaningful error (validation or resolution)
-      expect(error).toBeDefined()
-      expect((error as Error).message).toBeTruthy()
-    }
+    // and then attempts to auto-create an entity with that ID. The createEntity
+    // call rejects because '' is not a valid $id field value.
+    await expect(db.Post.create({
+      slug: 'empty-author-post',
+      title: 'Empty Author',
+      author: '',
+    }, { autoCreate: true })).rejects.toThrow(/cannot be an empty string/)
   })
 
-  it('empty string in array relationship is skipped or handled', async () => {
+  it('throws validation error for empty string in array relationship', async () => {
     const storage = new MemoryBackend()
     const db = DB({
       Tag: {
@@ -83,28 +69,15 @@ describe('autoCreate edge case: empty string ID', () => {
       },
     }, { storage })
 
-    // Include an empty string among valid tag references
-    try {
-      const article = await db.Article.create({
-        slug: 'mixed-empty-tags',
-        title: 'Mixed Tags',
-        tags: ['valid-tag', '', 'another-tag'],
-      }, { autoCreate: true })
-
-      // If it succeeds, the empty string should either be skipped or created
-      expect(article.$id).toBe('article/mixed-empty-tags')
-
-      // Check that at least the valid tags were created
-      const validTag = await db.Tag.get('valid-tag')
-      expect(validTag).not.toBeNull()
-
-      const anotherTag = await db.Tag.get('another-tag')
-      expect(anotherTag).not.toBeNull()
-    } catch (error: unknown) {
-      // If it throws, it should be a meaningful error
-      expect(error).toBeDefined()
-      expect((error as Error).message).toBeTruthy()
-    }
+    // Include an empty string among valid tag references.
+    // The resolveOrCreate function processes array items sequentially. When it
+    // encounters '' it attempts to auto-create a Tag with an empty slug, which
+    // fails validation because '' is not a valid $id field value.
+    await expect(db.Article.create({
+      slug: 'mixed-empty-tags',
+      title: 'Mixed Tags',
+      tags: ['valid-tag', '', 'another-tag'],
+    }, { autoCreate: true })).rejects.toThrow(/cannot be an empty string/)
   })
 })
 

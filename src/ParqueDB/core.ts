@@ -259,10 +259,9 @@ export class ParqueDBImpl {
 
     // Initialize EventSourcedBackend as default write path
     // Can be disabled with disableEventSourcing: true for testing legacy behavior
-    const disableEventSourcing = (config as { disableEventSourcing?: boolean }).disableEventSourcing
-    this._useEventSourcing = !disableEventSourcing
+    this._useEventSourcing = !config.disableEventSourcing
     if (this._useEventSourcing) {
-      const userConfig = (config as { eventSourcedConfig?: EventSourcedConfig }).eventSourcedConfig
+      const userConfig = config.eventSourcedConfig
       // Default to immediate flush (maxBufferedEvents: 1) for strong consistency
       // This ensures events are persisted before create/update/delete returns
       const eventSourcedConfig: EventSourcedConfig = {

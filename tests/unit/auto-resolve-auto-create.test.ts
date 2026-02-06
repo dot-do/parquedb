@@ -12,20 +12,6 @@
  * 2. autoCreate via collection.create() with { autoCreate: true }
  * 3. autoCreate creates entities across namespaces
  * 4. autoCreate with ingestStream
- *
- * This is the RED phase — these tests exercise functionality that DOES NOT EXIST YET.
- * The function autoResolveRelationships is currently synchronous and does not support
- * the autoCreate option. It must become async with signature:
- *
- *   export async function autoResolveRelationships<T>(
- *     ctx: EntityMutationContext,
- *     typeName: string,
- *     data: CreateInput<T>,
- *     options?: { autoCreate?: boolean }
- *   ): Promise<CreateInput<T>>
- *
- * And CreateOptions must gain an `autoCreate?: boolean` field that is threaded
- * through createEntity -> autoResolveRelationships.
  */
 
 import { describe, it, expect, afterEach, beforeEach } from 'vitest'
@@ -212,7 +198,7 @@ describe('autoCreate integration - creates across namespaces', () => {
         title: 'Hello World',
         author: 'alice@test.com',
       },
-      { autoCreate: true } as any, // autoCreate doesn't exist on CreateOptions yet
+      { autoCreate: true },
     )
 
     expect(post.$id).toBe('post/hello-world')
@@ -255,7 +241,7 @@ describe('autoCreate integration - creates across namespaces', () => {
           { slug: 'communication', title: 'Communication', description: 'Messaging tools' },
         ] as any,
       },
-      { autoCreate: true } as any,
+      { autoCreate: true },
     )
 
     expect(app.$id).toBe('zapierapp/slack')
@@ -296,7 +282,7 @@ describe('autoCreate integration - creates across namespaces', () => {
         title: "Bob's First Post",
         author: { email: 'bob@test.com', name: 'Bob' } as any,
       },
-      { autoCreate: true } as any,
+      { autoCreate: true },
     )
 
     expect(post.$id).toBe('post/bobs-post')
@@ -331,7 +317,7 @@ describe('autoCreate integration - creates across namespaces', () => {
         name: 'GitHub',
         categories: [{ slug: 'developer-tools', title: 'Developer Tools' }] as any,
       },
-      { autoCreate: true } as any,
+      { autoCreate: true },
     )
 
     // The auto-created entity should have $type derived from target type name
@@ -368,7 +354,7 @@ describe('autoCreate integration - creates across namespaces', () => {
         title: 'Mixed References',
         tags: ['existing-slug', { slug: 'new-one', name: 'New' }] as any,
       },
-      { autoCreate: true } as any,
+      { autoCreate: true },
     )
 
     expect(article.$id).toBe('article/mixed-article')
@@ -416,7 +402,7 @@ describe('autoCreate integration - creates across namespaces', () => {
         title: 'Post 1',
         author: 'alice@test.com',
       },
-      { autoCreate: true } as any,
+      { autoCreate: true },
     )
 
     // Verify original user data is preserved (not overwritten)

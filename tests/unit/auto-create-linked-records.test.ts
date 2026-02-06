@@ -7,9 +7,6 @@
  * When a schema defines a relationship like `author: '-> User'`, the create()
  * method should auto-create missing target entities as stubs when
  * { autoCreate: true } is passed.
- *
- * This is the RED phase - these tests should FAIL until the feature is implemented.
- * The `autoCreate` option does not exist yet on create().
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

@@ -37,6 +37,7 @@ import type { ParsedGraph } from '@icetype/core'
 import { ParqueDB } from './ParqueDB'
 import type { ParqueDBConfig } from './ParqueDB/types'
 import type { StorageBackend } from './types'
+import type { EventSourcedConfig } from './storage/EventSourcedBackend'
 import { fromIceType } from './types/integrations'
 import { MemoryBackend, StorageRouter } from './storage'
 import type { RouterSchema } from './storage/router'
@@ -177,6 +178,10 @@ export interface DBConfig {
   storage?: StorageBackend | undefined
   /** Default namespace for operations */
   defaultNamespace?: string | undefined
+  /** Configuration for the event-sourced storage backend */
+  eventSourcedConfig?: EventSourcedConfig | undefined
+  /** Maximum number of entities to cache in memory (default: 10000) */
+  maxCacheSize?: number | undefined
 }
 
 /**
@@ -358,19 +363,14 @@ export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {
 
   // If flexible mode, create simple config without router
   if (isFlexibleMode(input)) {
-    const extra = config as Record<string, unknown>
-    const parqueDBConfig: ParqueDBConfig & Record<string, unknown> = {
+    const parqueDBConfig: ParqueDBConfig = {
       storage,
       defaultNamespace: config.defaultNamespace,
-    }
-    if (extra.eventSourcedConfig) {
-      parqueDBConfig.eventSourcedConfig = extra.eventSourcedConfig
-    }
-    if (extra.maxCacheSize !== undefined) {
-      parqueDBConfig.maxCacheSize = extra.maxCacheSize
+      eventSourcedConfig: config.eventSourcedConfig,
+      maxCacheSize: config.maxCacheSize,
     }
 
-    const db = new ParqueDB(parqueDBConfig as ParqueDBConfig)
+    const db = new ParqueDB(parqueDBConfig)
     const dbWithSql = db as DBInstance
     dbWithSql.sql = createSQL(db)
     return dbWithSql
@@ -398,21 +398,16 @@ export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {
   // Extract collection options
   const collectionOptions = extractAllCollectionOptions(input)
 
-  const extra = config as Record<string, unknown>
-  const parqueDBConfig: ParqueDBConfig & Record<string, unknown> = {
+  const parqueDBConfig: ParqueDBConfig = {
     storage,
     defaultNamespace: config.defaultNamespace,
     storageRouter,
     collectionOptions,
-  }
-  if (extra.eventSourcedConfig) {
-    parqueDBConfig.eventSourcedConfig = extra.eventSourcedConfig
-  }
-  if (extra.maxCacheSize !== undefined) {
-    parqueDBConfig.maxCacheSize = extra.maxCacheSize
+    eventSourcedConfig: config.eventSourcedConfig,
+    maxCacheSize: config.maxCacheSize,
   }
 
-  const db = new ParqueDB(parqueDBConfig as ParqueDBConfig)
+  const db = new ParqueDB(parqueDBConfig)
 
   // Parse typed schemas using GraphDL
   const graphInput = convertToGraphDLInput(input)
