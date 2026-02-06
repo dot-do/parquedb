@@ -341,8 +341,9 @@ describe('ParquetReader $data Variant Optimization', () => {
     expect(result[0]?.$id).toBe('user/1')
     expect(result[0]?.$data).toBeDefined()
 
-    // Parse $data to verify content
-    const parsed = JSON.parse(result[0]?.$data ?? '{}')
+    // Verify $data content (auto-decoded from JSON converted type or parsed from string)
+    const raw = result[0]?.$data
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : (raw ?? {})
     expect(parsed.name).toBe('Alice')
     expect(parsed.age).toBe(30)
   })

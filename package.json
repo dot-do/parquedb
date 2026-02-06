@@ -93,6 +93,7 @@
     "dist"
   ],
   "scripts": {
+    "postinstall": "node scripts/patch-hyparquet.js",
     "build": "tsc && pnpm build:cli",
     "build:cli": "tsx scripts/build-cli.ts",
     "test": "vitest",

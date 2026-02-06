@@ -42,6 +42,7 @@ import type {
 import { IcebergBackend } from './iceberg'
 import { DeltaBackend } from './delta'
 import { logger } from '../utils/logger'
+import { parseDataField } from '../engine/parquet-data-utils'
 
 // =============================================================================
 // Types
@@ -230,13 +231,12 @@ async function readNativeEntities(
 
       // Convert rows to entities
       return rows.map((row: Record<string, unknown>) => {
-        // If row has $data field with JSON, parse it
-        if (typeof row.$data === 'string') {
-          try {
-            return JSON.parse(row.$data) as Entity
-          } catch {
-            return row as Entity
-          }
+        // Extract data fields from the $data column
+        // Supports VARIANT binary, JSON object, and legacy JSON string formats
+        if (row.$data !== undefined && row.$data !== null) {
+          const dataFields = parseDataField(row.$data)
+          const { $data: _, ...systemFields } = row
+          return { ...systemFields, ...dataFields } as Entity
         }
         return row as Entity
       })

@@ -25,6 +25,7 @@ import { mergeRelationships } from './merge-rels'
 import { mergeEvents } from './merge-events'
 import type { AnyEventLine } from './merge-events'
 import { toNumber } from './utils'
+import { parseDataField } from './parquet-data-utils'
 
 // =============================================================================
 // Helpers
@@ -57,18 +58,13 @@ async function readParquetFromR2(
  * Convert raw Parquet rows to DataLine[].
  *
  * Parquet stores system fields ($id, $op, $v, $ts) as dedicated columns
- * and remaining entity data in a $data JSON string column.
+ * and remaining entity data in a $data column. The $data column is either:
+ * - A JS object (new JSON converted type, auto-decoded by hyparquet)
+ * - A JSON string (legacy UTF8 format, parsed via fallback)
  */
 function rowsToDataLines(rows: Record<string, unknown>[]): DataLine[] {
   return rows.map((row) => {
-    let dataFields: Record<string, unknown> = {}
-    if (row.$data) {
-      try {
-        dataFields = JSON.parse(row.$data as string) as Record<string, unknown>
-      } catch {
-        console.warn(`[do-read-path] Skipping corrupted $data JSON for entity ${row.$id}: ${(row.$data as string).slice(0, 100)}`)
-      }
-    }
+    const dataFields = parseDataField(row.$data)
     return {
       ...dataFields,
       $id: row.$id as string,

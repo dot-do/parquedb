@@ -10,6 +10,7 @@ import { parquetQuery } from 'hyparquet'
 // Use Worker-compatible compressors (pure JS Snappy instead of WASM)
 import { compressors } from '../parquet/compressors'
 import { logger } from '../utils/logger'
+import { parseDataField } from '../engine/parquet-data-utils'
 
 // Use the Cloudflare R2Bucket type directly
 type R2Bucket = {
@@ -272,7 +273,7 @@ export async function runR2Benchmark(
         })
 
         const filtered = rows.filter((row) => {
-          const data = JSON.parse((row as { $data: string }).$data)
+          const data = parseDataField((row as { $data: unknown }).$data)
           return query.v1Filter(data)
         })
 

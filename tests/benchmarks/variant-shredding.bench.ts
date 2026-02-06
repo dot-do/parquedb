@@ -169,7 +169,7 @@ async function queryV1Json(path: string, targetType: string): Promise<QueryResul
 
   // Filter in memory
   const filtered = rows.filter((row: any) => {
-    const data = JSON.parse(row.$data)
+    const data = typeof row.$data === 'string' ? JSON.parse(row.$data) : row.$data
     return data.titleType === targetType
   })
 

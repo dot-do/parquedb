@@ -139,7 +139,7 @@ describe('ParquetStorageAdapter.readData() - corrupted $data JSON', () => {
     await adapter.readData(path)
 
     expect(warnSpy).toHaveBeenCalled()
-    expect(warnSpy.mock.calls[0]![0]).toContain('u1')
+    expect(warnSpy.mock.calls[0]![0]).toContain('not-json')
 
     warnSpy.mockRestore()
   })

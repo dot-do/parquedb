@@ -9,6 +9,7 @@
 
 import { env } from 'cloudflare:test'
 import { describe, it, expect } from 'vitest'
+import { parseDataField } from '../../src/engine/parquet-data-utils'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -190,8 +191,8 @@ describe('DOCompactor (real DO SQLite + R2)', () => {
         expect(rows[0].$op).toBe('u')
         expect(toNumber(rows[0].$v)).toBe(2)
 
-        // Verify $data contains the updated name
-        const data = JSON.parse(rows[0].$data as string)
+        // Verify $data contains the updated name (VARIANT, decoded via parseDataField)
+        const data = parseDataField(rows[0].$data)
         expect(data.name).toBe('Alice Smith')
       } finally {
         await cleanR2(r2Key)

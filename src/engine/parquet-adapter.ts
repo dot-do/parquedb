@@ -22,6 +22,7 @@ import type { DataLine, RelLine, EventLine } from './types'
 import type { AnyEventLine } from './merge-events'
 import { encodeDataToParquet, encodeRelsToParquet, encodeEventsToParquet } from './parquet-encoders'
 import { toNumber } from './utils'
+import { parseDataField } from './parquet-data-utils'
 
 // =============================================================================
 // Helpers
@@ -56,9 +57,11 @@ async function ensureDir(path: string): Promise<void> {
  * Storage adapter that reads/writes Parquet files using hyparquet/hyparquet-writer.
  *
  * Data entities are stored with system fields ($id, $op, $v, $ts) as typed
- * columns and all remaining fields packed into a $data JSON string column.
- * This provides efficient columnar access to system fields while preserving
- * arbitrary entity data.
+ * columns and all remaining fields packed into a $data column. The $data
+ * column uses Parquet's JSON converted type, which hyparquet auto-decodes
+ * to JS objects on read. For backward compatibility with older files that
+ * used plain UTF8 strings, the reader also handles string $data via
+ * JSON.parse fallback.
  *
  * Relationships and events are stored with direct column mappings matching
  * their respective schemas.
@@ -91,18 +94,11 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
       $op: string
       $v: number
       $ts: number
-      $data: string
+      $data: unknown
     }>
 
     return rows.map(row => {
-      let dataFields: Record<string, unknown> = {}
-      if (row.$data) {
-        try {
-          dataFields = JSON.parse(row.$data) as Record<string, unknown>
-        } catch {
-          console.warn(`[parquet-adapter] Skipping corrupted $data JSON for entity ${row.$id}: ${row.$data.slice(0, 100)}`)
-        }
-      }
+      const dataFields = parseDataField(row.$data)
       return {
         ...dataFields,
         $id: row.$id,

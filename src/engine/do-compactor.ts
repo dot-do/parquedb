@@ -31,7 +31,8 @@ import type { DataLine, RelLine, EventLine } from './types'
 import { mergeRelationships } from './merge-rels'
 import { mergeEvents } from './merge-events'
 import type { AnyEventLine } from './merge-events'
-import { toNumber, DATA_SYSTEM_FIELDS } from './utils'
+import { toNumber } from './utils'
+import { parseDataField } from './parquet-data-utils'
 
 // =============================================================================
 // Helpers
@@ -60,20 +61,15 @@ async function readParquetFromR2<T extends Record<string, unknown>>(bucket: R2Bu
 
 /**
  * Decode raw Parquet data rows into DataLine objects.
- * Handles the $data JSON column packing used by encodeDataToParquet.
+ * Handles the $data column which is either:
+ * - A JS object (new JSON converted type, auto-decoded by hyparquet)
+ * - A JSON string (legacy UTF8 format, parsed via fallback)
  */
 function decodeDataRows(
-  rows: Array<{ $id: string; $op: string; $v: unknown; $ts: unknown; $data?: string }>,
+  rows: Array<{ $id: string; $op: string; $v: unknown; $ts: unknown; $data?: unknown }>,
 ): DataLine[] {
   return rows.map((row) => {
-    let dataFields: Record<string, unknown> = {}
-    if (row.$data) {
-      try {
-        dataFields = JSON.parse(row.$data) as Record<string, unknown>
-      } catch {
-        console.warn(`[do-compactor] Skipping corrupted $data JSON for entity ${row.$id}: ${row.$data.slice(0, 100)}`)
-      }
-    }
+    const dataFields = parseDataField(row.$data)
     return {
       ...dataFields,
       $id: row.$id,
@@ -184,7 +180,7 @@ export class DOCompactor {
       $op: string
       $v: unknown
       $ts: unknown
-      $data?: string
+      $data?: unknown
     }>(this.bucket, r2Key)
     const existing = decodeDataRows(existingRaw)
 

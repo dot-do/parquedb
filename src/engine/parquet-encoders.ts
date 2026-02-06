@@ -8,6 +8,18 @@
  * Originally lived in compaction-worker.ts but extracted here to avoid
  * pulling in node:worker_threads when imported from Workers-side code
  * (e.g., DOCompactor).
+ *
+ * The $data column uses Parquet VARIANT type, which stores semi-structured
+ * data in an efficient binary format with automatic columnar compression.
+ * hyparquet auto-decodes VARIANT columns to JS objects on read, so no
+ * manual JSON.parse is needed.
+ *
+ * Benefits:
+ * - hyparquet auto-decodes $data to JS objects (no manual JSON.parse needed)
+ * - Analytics tools recognize the column as structured VARIANT data
+ * - Columnar compression applies to the binary VARIANT encoding
+ * - Predicate pushdown possible via shredded fields (future per-collection config)
+ * - Native support for mixed types, nested objects, arrays, nulls
  */
 
 import type { DataLine, RelLine } from './types'
@@ -22,12 +34,19 @@ import { DATA_SYSTEM_FIELDS } from './utils'
  * Encode an array of DataLine entities into a Parquet buffer.
  *
  * Sorts by $id for deterministic output, separates system fields from
- * data fields, and packs remaining fields into a $data JSON column.
+ * data fields, and packs remaining fields into a $data VARIANT column.
+ *
+ * The $data column uses Parquet's VARIANT type (a group with metadata
+ * and value binary sub-columns). hyparquet auto-decodes VARIANT columns
+ * to JS objects on read. No manual JSON.parse is needed.
+ *
+ * System fields ($id, $op, $v, $ts) are stored as dedicated typed columns.
+ * All other entity fields are stored in the $data VARIANT column.
  */
 export async function encodeDataToParquet(
   data: Array<{ $id: string; $op: string; $v: number; $ts: number; [key: string]: unknown }>,
 ): Promise<ArrayBuffer> {
-  const { parquetWriteBuffer } = await import('hyparquet-writer')
+  const { parquetWriteBuffer, createVariantColumn, autoSchemaElement } = await import('hyparquet-writer')
 
   const sorted = [...data].sort((a, b) => (a.$id < b.$id ? -1 : a.$id > b.$id ? 1 : 0))
 
@@ -35,7 +54,7 @@ export async function encodeDataToParquet(
   const ops: string[] = []
   const versions: number[] = []
   const timestamps: number[] = []
-  const dataJsons: string[] = []
+  const dataObjects: Record<string, unknown>[] = []
 
   for (const entity of sorted) {
     ids.push(entity.$id)
@@ -48,16 +67,36 @@ export async function encodeDataToParquet(
         dataFields[key] = value
       }
     }
-    dataJsons.push(JSON.stringify(dataFields))
+    dataObjects.push(dataFields)
   }
 
+  // Create VARIANT column for $data (schema + encoded binary data)
+  const variantCol = createVariantColumn('$data', dataObjects)
+
+  // Build the full schema: root + system columns + VARIANT $data group
+  const schema = [
+    // Root schema element
+    {
+      name: 'root',
+      num_children: 5, // $id, $op, $v, $ts, $data
+    },
+    // System field schemas (auto-detected from data)
+    autoSchemaElement('$id', ids),
+    autoSchemaElement('$op', ops),
+    autoSchemaElement('$v', versions),
+    { name: '$ts', type: 'DOUBLE' as const, repetition_type: 'REQUIRED' as const },
+    // VARIANT $data schema elements (group + metadata + value)
+    ...variantCol.schema,
+  ]
+
   return parquetWriteBuffer({
+    schema,
     columnData: [
       { name: '$id', data: ids },
       { name: '$op', data: ops },
       { name: '$v', data: versions },
-      { name: '$ts', data: timestamps, type: 'DOUBLE' as const },
-      { name: '$data', data: dataJsons },
+      { name: '$ts', data: timestamps },
+      { name: '$data', data: variantCol.data },
     ],
   })
 }

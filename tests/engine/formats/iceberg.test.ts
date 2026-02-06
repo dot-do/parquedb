@@ -14,6 +14,7 @@ import {
   type IcebergTableMetadata,
   type IcebergManifestEntry,
 } from '@/engine/formats/iceberg'
+import { parseDataField } from '@/engine/parquet-data-utils'
 
 // =============================================================================
 // Helpers
@@ -195,8 +196,8 @@ describe('IcebergFormat.createSnapshot', () => {
     expect(rows[0].$id).toBe('user-001')
     expect(rows[1].$id).toBe('user-002')
 
-    // $data column contains the extra fields
-    const parsed = JSON.parse(rows[0].$data as string)
+    // $data column contains the extra fields (VARIANT, decoded via parseDataField)
+    const parsed = parseDataField(rows[0].$data)
     expect(parsed.name).toBe('User 1')
     expect(parsed.email).toBe('user1@example.com')
   })

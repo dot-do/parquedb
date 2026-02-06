@@ -19,6 +19,7 @@ import {
   encodeEventsToParquet,
 } from '@/engine/compaction-worker'
 import type { DataLine, RelLine } from '@/engine/types'
+import { parseDataField } from '@/engine/parquet-data-utils'
 import { makeLine, makeRel, decodeParquet, toNumber } from './helpers'
 
 // =============================================================================
@@ -66,17 +67,17 @@ describe('encodeDataToParquet', () => {
     expect(rows[0].$v).toBe(1)
     expect(toNumber(rows[0].$ts)).toBe(1000)
 
-    // Data fields packed into $data JSON
-    const u1Data = JSON.parse(rows[0].$data as string)
+    // Data fields packed into $data (VARIANT column, decoded via parseDataField)
+    const u1Data = parseDataField(rows[0].$data)
     expect(u1Data.name).toBe('Alice')
     expect(u1Data.age).toBe(25)
 
-    const u2Data = JSON.parse(rows[1].$data as string)
+    const u2Data = parseDataField(rows[1].$data)
     expect(u2Data.name).toBe('Bob')
     expect(u2Data.age).toBe(30)
 
     // Delete has empty data
-    const u3Data = JSON.parse(rows[2].$data as string)
+    const u3Data = parseDataField(rows[2].$data)
     expect(Object.keys(u3Data)).toHaveLength(0)
   })
 
@@ -95,7 +96,7 @@ describe('encodeDataToParquet', () => {
     const rows = await decodeParquet(buffer)
 
     expect(rows).toHaveLength(1)
-    const parsed = JSON.parse(rows[0].$data as string)
+    const parsed = parseDataField(rows[0].$data)
     expect(parsed.name).toBe('Alice')
     expect(parsed.address).toEqual({ street: '123 Main St', city: 'Springfield' })
     expect(parsed.tags).toEqual(['admin', 'user'])
