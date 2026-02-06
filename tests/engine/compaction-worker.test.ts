@@ -19,42 +19,7 @@ import {
   encodeEventsToParquet,
 } from '@/engine/compaction-worker'
 import type { DataLine, RelLine } from '@/engine/types'
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-/** Decode a Parquet ArrayBuffer into rows using hyparquet */
-async function decodeParquet(buffer: ArrayBuffer): Promise<Array<Record<string, unknown>>> {
-  const { parquetReadObjects } = await import('hyparquet')
-  const asyncBuffer = {
-    byteLength: buffer.byteLength,
-    slice: async (start: number, end?: number) => buffer.slice(start, end ?? buffer.byteLength),
-  }
-  return parquetReadObjects({ file: asyncBuffer }) as Promise<Array<Record<string, unknown>>>
-}
-
-/** Convert BigInt values to Number for comparison */
-function toNumber(value: unknown): number {
-  if (typeof value === 'bigint') return Number(value)
-  if (typeof value === 'number') return value
-  return 0
-}
-
-/** Helper to create a DataLine with sensible defaults */
-function makeLine(overrides: Partial<DataLine> & { $id: string }): DataLine {
-  return {
-    $op: 'c',
-    $v: 1,
-    $ts: Date.now(),
-    ...overrides,
-  }
-}
-
-/** Helper to create a RelLine */
-function makeRel(f: string, p: string, r: string, t: string, ts = 1000): RelLine {
-  return { $op: 'l', $ts: ts, f, p, r, t }
-}
+import { makeLine, makeRel, decodeParquet, toNumber } from './helpers'
 
 // =============================================================================
 // Standalone Encoding Function Tests

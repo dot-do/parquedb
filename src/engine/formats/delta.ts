@@ -17,7 +17,7 @@
  * Each JSON file in _delta_log/ uses JSON Lines format (one action per line).
  */
 
-import { encodeDataToParquet } from '../compaction-worker'
+import { encodeDataToParquet } from '../parquet-encoders'
 
 // =============================================================================
 // Configuration
@@ -155,12 +155,14 @@ export class DeltaFormat {
     const dataPath = `data/part-00000-${uuid}.parquet`
 
     // Calculate stats from data
-    const stats = {
-      numRecords: data.length,
-      minValues: { $id: data.reduce((min, d) => (d.$id < min ? d.$id : min), data[0].$id) },
-      maxValues: { $id: data.reduce((max, d) => (d.$id > max ? d.$id : max), data[0].$id) },
-      nullCount: { $id: 0, $op: 0, $v: 0, $ts: 0, $data: 0 },
-    }
+    const stats = data.length > 0
+      ? {
+          numRecords: data.length,
+          minValues: { $id: data.reduce((min, d) => (d.$id < min ? d.$id : min), data[0].$id) },
+          maxValues: { $id: data.reduce((max, d) => (d.$id > max ? d.$id : max), data[0].$id) },
+          nullCount: { $id: 0, $op: 0, $v: 0, $ts: 0, $data: 0 },
+        }
+      : { numRecords: 0, minValues: {}, maxValues: {} }
 
     const now = Date.now()
 

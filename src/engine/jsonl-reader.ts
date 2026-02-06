@@ -25,7 +25,7 @@ function splitLines(content: string): string[] {
  * Safely parse a JSON line. Returns the parsed object on success,
  * or undefined on failure (with a console.warn).
  */
-function parseLine<T>(line: string, lineNumber: number, path: string): T | undefined {
+function parseLine<T extends Record<string, unknown>>(line: string, lineNumber: number, path: string): T | undefined {
   try {
     return JSON.parse(line) as T
   } catch {
@@ -51,7 +51,7 @@ async function readFileContent(path: string): Promise<string> {
 /**
  * Read all lines from a JSONL file and return as parsed objects.
  */
-export async function replay<T = Record<string, unknown>>(path: string): Promise<T[]> {
+export async function replay<T extends Record<string, unknown> = Record<string, unknown>>(path: string): Promise<T[]> {
   const content = await readFileContent(path)
   if (!content) return []
 
@@ -74,7 +74,7 @@ export async function replay<T = Record<string, unknown>>(path: string): Promise
  *
  * @returns The number of successfully parsed lines.
  */
-export async function replayInto<T = Record<string, unknown>>(
+export async function replayInto<T extends Record<string, unknown> = Record<string, unknown>>(
   path: string,
   callback: (line: T) => void,
 ): Promise<number> {
@@ -109,7 +109,7 @@ export async function replayInto<T = Record<string, unknown>>(
  * @param toTs - Inclusive upper bound of the timestamp range
  * @returns Filtered array of parsed objects
  */
-export async function replayRange<T = Record<string, unknown>>(
+export async function replayRange<T extends Record<string, unknown> = Record<string, unknown>>(
   path: string,
   fromTs: number,
   toTs: number,

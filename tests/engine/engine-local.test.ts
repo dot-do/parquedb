@@ -39,19 +39,6 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 // =============================================================================
-// Helper: read a JSON data file (stand-in for Parquet)
-// =============================================================================
-
-async function readJsonDataFile(path: string): Promise<DataLine[]> {
-  try {
-    const content = await readFile(path, 'utf-8')
-    return JSON.parse(content)
-  } catch {
-    return []
-  }
-}
-
-// =============================================================================
 // Startup Replay
 // =============================================================================
 
@@ -241,19 +228,25 @@ describe('ParqueEngine - compact', () => {
 // =============================================================================
 
 describe('ParqueEngine - compact with storage adapter', () => {
-  it('10. compact uses JSON-based adapter for local mode', async () => {
+  it('10. compact uses Parquet adapter for local mode', async () => {
     const engine = new ParqueEngine({ dataDir })
     await engine.create('users', { name: 'Alice' })
     await engine.create('users', { name: 'Bob' })
 
     await engine.compact('users')
 
-    // Should be a valid JSON file (the local adapter uses JSON)
+    // Should be a real Parquet file with PAR1 magic bytes
     const dataPath = join(dataDir, 'users.parquet')
-    const content = await readFile(dataPath, 'utf-8')
-    const parsed = JSON.parse(content) as DataLine[]
-    expect(parsed).toHaveLength(2)
-    expect(parsed.every(e => e.$id && e.name)).toBe(true)
+    const fileData = await readFile(dataPath)
+    expect(fileData[0]).toBe(0x50) // P
+    expect(fileData[1]).toBe(0x41) // A
+    expect(fileData[2]).toBe(0x52) // R
+    expect(fileData[3]).toBe(0x31) // 1
+
+    // Verify data can be read back via the engine
+    const results = await engine.find('users')
+    expect(results).toHaveLength(2)
+    expect(results.every(e => e.$id && e.name)).toBe(true)
 
     await engine.close()
   })
@@ -393,12 +386,14 @@ describe('ParqueEngine - recovery', () => {
     const jsonlPath = join(dataDir, 'users.jsonl')
     const compactingPath = jsonlPath + '.compacting'
 
-    // Write existing data file
+    // Write existing data file as real Parquet
+    const { ParquetStorageAdapter } = await import('@/engine/parquet-adapter')
+    const adapter = new ParquetStorageAdapter()
     const existingData: DataLine[] = [
       { $id: 'u1', $op: 'c', $v: 1, $ts: Date.now() - 1000, name: 'Alice' },
       { $id: 'u2', $op: 'c', $v: 1, $ts: Date.now() - 1000, name: 'Bob' },
     ]
-    await writeFile(dataPath, JSON.stringify(existingData), 'utf-8')
+    await adapter.writeData(dataPath, existingData)
 
     // Compacting file has an update and a new entity
     const compactingLines = [

@@ -9,6 +9,8 @@
  * - Serializes concurrent writes via a Promise chain (writeQueue) to prevent interleaving
  * - Tracks lineCount and byteCount for compaction threshold decisions
  * - After close(), all write operations throw to prevent use-after-close bugs
+ * - Write queue uses catch-and-recover pattern so a single failed write does not
+ *   permanently brick the queue (subsequent writes can still succeed)
  */
 
 import { appendFile } from 'node:fs/promises'
@@ -32,6 +34,9 @@ export class JsonlWriter {
    * Append a single JSON line to the file.
    * Serializes the object with JSON.stringify and appends a newline.
    * Concurrent calls are serialized via the internal write queue.
+   *
+   * If the underlying appendFile fails, this call rejects but the write queue
+   * resets to a resolved state so subsequent writes can still succeed.
    */
   async append(line: Record<string, unknown>): Promise<void> {
     this.assertNotClosed()
@@ -40,11 +45,17 @@ export class JsonlWriter {
     const bytes = Buffer.byteLength(data, 'utf-8')
 
     // Chain onto the write queue to serialize concurrent writes
-    this.writeQueue = this.writeQueue.then(async () => {
+    const current = this.writeQueue.then(async () => {
       await appendFile(this.path, data, 'utf-8')
     })
 
-    await this.writeQueue
+    // Always reset queue to resolved state for the next caller,
+    // even if this write fails. Without this, a single rejected
+    // promise would brick all subsequent .then() chains.
+    this.writeQueue = current.catch(() => {})
+
+    // Await the actual operation so THIS caller sees the error
+    await current
 
     this.lineCount += 1
     this.byteCount += bytes
@@ -54,6 +65,9 @@ export class JsonlWriter {
    * Append multiple JSON lines in a single write call.
    * All lines are concatenated into one string and written atomically
    * (single appendFile call), ensuring no partial batches on disk.
+   *
+   * If the underlying appendFile fails, this call rejects but the write queue
+   * resets to a resolved state so subsequent writes can still succeed.
    */
   async appendBatch(lines: Record<string, unknown>[]): Promise<void> {
     this.assertNotClosed()
@@ -62,11 +76,15 @@ export class JsonlWriter {
     const bytes = Buffer.byteLength(data, 'utf-8')
 
     // Chain onto the write queue to serialize concurrent writes
-    this.writeQueue = this.writeQueue.then(async () => {
+    const current = this.writeQueue.then(async () => {
       await appendFile(this.path, data, 'utf-8')
     })
 
-    await this.writeQueue
+    // Always reset queue to resolved state for the next caller
+    this.writeQueue = current.catch(() => {})
+
+    // Await the actual operation so THIS caller sees the error
+    await current
 
     this.lineCount += lines.length
     this.byteCount += bytes

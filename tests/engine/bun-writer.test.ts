@@ -241,4 +241,35 @@ describe('BunJsonlWriter', () => {
       expect(replayed[2]).toEqual(records[2])
     })
   })
+
+  // ===========================================================================
+  // Closed-state guards (Bug fix: BunJsonlWriter now guards against writes after close)
+  // ===========================================================================
+
+  describe('closed-state guards', () => {
+    it('throws on append after close', async () => {
+      const path = join(tempDir, 'test.jsonl')
+      const writer = new BunJsonlWriter(path)
+      await writer.init()
+      await writer.close()
+      await expect(writer.append({ a: 1 })).rejects.toThrow('BunJsonlWriter is closed')
+    })
+
+    it('throws on appendBatch after close', async () => {
+      const path = join(tempDir, 'test.jsonl')
+      const writer = new BunJsonlWriter(path)
+      await writer.init()
+      await writer.close()
+      await expect(writer.appendBatch([{ a: 1 }])).rejects.toThrow('BunJsonlWriter is closed')
+    })
+
+    it('close is idempotent', async () => {
+      const path = join(tempDir, 'test.jsonl')
+      const writer = new BunJsonlWriter(path)
+      await writer.init()
+      await writer.append({ a: 1 })
+      await writer.close()
+      await writer.close() // Should not throw
+    })
+  })
 })

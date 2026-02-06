@@ -22,6 +22,7 @@ import {
   type RelStorageAdapter,
 } from '@/engine/compactor-rels'
 import type { RelLine } from '@/engine/types'
+import { makeLink, makeUnlink } from './helpers'
 
 // =============================================================================
 // Storage adapter for testing (JSON files instead of Parquet)
@@ -81,16 +82,6 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false
   }
-}
-
-/** Helper to make a link RelLine */
-function makeLink(f: string, p: string, r: string, t: string, ts = 1000): RelLine {
-  return { $op: 'l', $ts: ts, f, p, r, t }
-}
-
-/** Helper to make an unlink RelLine */
-function makeUnlink(f: string, p: string, r: string, t: string, ts = 2000): RelLine {
-  return { $op: 'u', $ts: ts, f, p, r, t }
 }
 
 // =============================================================================

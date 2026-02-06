@@ -26,6 +26,7 @@ export class BunJsonlWriter {
   private writer: { write(data: string | Uint8Array): number; flush(): Promise<void>; end(): void } | null = null
   private highWaterMark: number
   private lineCount = 0
+  private closed = false
 
   constructor(path: string, options?: BunJsonlWriterOptions) {
     this.path = path
@@ -44,6 +45,7 @@ export class BunJsonlWriter {
 
   /** Append a single line to the JSONL file */
   async append(line: Record<string, unknown>): Promise<void> {
+    this.assertNotClosed()
     const serialized = JSON.stringify(line) + '\n'
 
     if (this.writer) {
@@ -58,6 +60,7 @@ export class BunJsonlWriter {
 
   /** Append multiple lines as a batch */
   async appendBatch(lines: Record<string, unknown>[]): Promise<void> {
+    this.assertNotClosed()
     if (lines.length === 0) return
 
     const data = lines.map(line => JSON.stringify(line) + '\n').join('')
@@ -82,11 +85,15 @@ export class BunJsonlWriter {
 
   /** Close the writer and release resources */
   async close(): Promise<void> {
+    if (this.closed) {
+      return
+    }
     if (this.writer) {
       await this.writer.flush()
       this.writer.end()
       this.writer = null
     }
+    this.closed = true
   }
 
   /** Get the number of lines written */
@@ -97,5 +104,14 @@ export class BunJsonlWriter {
   /** Whether this writer uses Bun FileSink */
   get usesBunFileSink(): boolean {
     return this.writer !== null
+  }
+
+  /**
+   * Throws if the writer has been closed.
+   */
+  private assertNotClosed(): void {
+    if (this.closed) {
+      throw new Error(`BunJsonlWriter is closed: ${this.path}`)
+    }
   }
 }

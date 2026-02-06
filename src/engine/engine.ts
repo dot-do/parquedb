@@ -15,16 +15,19 @@
  */
 
 import { join } from 'node:path'
-import { readdir, readFile, writeFile, unlink } from 'node:fs/promises'
-import { TableBuffer, matchesFilter } from './buffer'
+import { readdir, unlink } from 'node:fs/promises'
+import { TableBuffer } from './buffer'
 import type { ScanFilter } from './buffer'
+import { getNestedValue } from './filter'
 import { JsonlWriter } from './jsonl-writer'
 import { replay, replayInto } from './jsonl-reader'
 import { compactDataTable, shouldCompact as shouldCompactData } from './compactor'
 import type { StorageAdapter, CompactOptions } from './compactor'
 import { needsRecovery, getCompactingPath } from './rotation'
 import { mergeResults } from './merge'
+import { ParquetStorageAdapter } from './parquet-adapter'
 import type { DataLine, EventLine } from './types'
+import { DATA_SYSTEM_FIELDS } from './utils'
 
 // =============================================================================
 // Configuration
@@ -67,15 +70,13 @@ export interface FindOptions {
 // System field prefix — used to separate system fields from entity data
 // =============================================================================
 
-const SYSTEM_FIELDS = new Set(['$id', '$op', '$v', '$ts'])
-
 /**
  * Extract only the user-data fields from a DataLine (exclude $id, $op, $v, $ts).
  */
 function extractData(entity: DataLine): Record<string, unknown> {
   const data: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(entity)) {
-    if (!SYSTEM_FIELDS.has(key)) {
+    if (!DATA_SYSTEM_FIELDS.has(key)) {
       data[key] = value
     }
   }
@@ -83,63 +84,8 @@ function extractData(entity: DataLine): Record<string, unknown> {
 }
 
 // =============================================================================
-// Logical filter helpers
-// =============================================================================
-
-/**
- * Check whether a filter object contains $or or $and logical operators.
- */
-function hasLogicalOperators(filter: Record<string, unknown>): boolean {
-  return '$or' in filter || '$and' in filter
-}
-
-/**
- * Evaluate a filter that may contain $or, $and, and regular field conditions.
- *
- * - Regular field conditions (non-$ keys) are ANDed together
- * - $or: entity must match at least one sub-filter
- * - $and: entity must match all sub-filters
- */
-function matchesLogicalFilter(entity: DataLine, filter: Record<string, unknown>): boolean {
-  for (const [key, value] of Object.entries(filter)) {
-    if (key === '$or') {
-      const subFilters = value as Record<string, unknown>[]
-      const orMatch = subFilters.some(sub =>
-        matchesFilter(entity, sub as ScanFilter),
-      )
-      if (!orMatch) return false
-    } else if (key === '$and') {
-      const subFilters = value as Record<string, unknown>[]
-      const andMatch = subFilters.every(sub =>
-        matchesFilter(entity, sub as ScanFilter),
-      )
-      if (!andMatch) return false
-    } else {
-      // Regular field condition — delegate to matchesFilter for single field
-      if (!matchesFilter(entity, { [key]: value } as ScanFilter)) return false
-    }
-  }
-  return true
-}
-
-// =============================================================================
 // Sort helpers
 // =============================================================================
-
-/**
- * Resolve a dot-notation path on an object.
- */
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  const parts = path.split('.')
-  let current: unknown = obj
-  for (const part of parts) {
-    if (current === null || current === undefined || typeof current !== 'object') {
-      return undefined
-    }
-    current = (current as Record<string, unknown>)[part]
-  }
-  return current
-}
 
 /**
  * Sort entities by the given sort specification.
@@ -449,15 +395,10 @@ export class ParqueEngine {
     const buffer = this.buffers.get(table)
     if (!buffer) return []
 
-    let results: DataLine[]
-
-    // If filter contains logical operators, scan all and post-filter
-    if (filter && hasLogicalOperators(filter)) {
-      results = buffer.scan()
-      results = results.filter(entity => matchesLogicalFilter(entity, filter))
-    } else {
-      results = buffer.scan(filter as ScanFilter | undefined)
-    }
+    // The shared matchesFilter handles all operators including $or/$and,
+    // so we always pass the filter through to buffer.scan() which delegates
+    // to the unified filter module.
+    let results = buffer.scan(filter as ScanFilter | undefined)
 
     // Apply sort
     if (options?.sort) {
@@ -619,6 +560,7 @@ export class ParqueEngine {
     // $set: merge fields
     if (ops.$set) {
       for (const [key, value] of Object.entries(ops.$set)) {
+        if (DATA_SYSTEM_FIELDS.has(key)) continue  // Guard: protect system fields
         ;(result as Record<string, unknown>)[key] = value
       }
     }
@@ -626,6 +568,7 @@ export class ParqueEngine {
     // $inc: increment numeric fields
     if (ops.$inc) {
       for (const [key, amount] of Object.entries(ops.$inc)) {
+        if (DATA_SYSTEM_FIELDS.has(key)) continue  // Guard: protect system fields
         const current = (result as Record<string, unknown>)[key]
         const base = typeof current === 'number' ? current : 0
         ;(result as Record<string, unknown>)[key] = base + amount
@@ -635,6 +578,7 @@ export class ParqueEngine {
     // $unset: remove fields
     if (ops.$unset) {
       for (const key of Object.keys(ops.$unset)) {
+        if (DATA_SYSTEM_FIELDS.has(key)) continue  // Guard: protect system fields
         delete (result as Record<string, unknown>)[key]
       }
     }
@@ -715,6 +659,17 @@ export class ParqueEngine {
       return
     }
 
+    // 1a. Clean up orphaned .tmp files from interrupted compactions
+    for (const file of files) {
+      if (file.endsWith('.tmp')) {
+        try {
+          await unlink(join(this.dataDir, file))
+        } catch {
+          // Ignore errors during cleanup (file may already be gone)
+        }
+      }
+    }
+
     // 2. Discover table names from JSONL files
     const tables = new Set<string>()
     for (const file of files) {
@@ -725,8 +680,8 @@ export class ParqueEngine {
       if (file.endsWith('.jsonl.compacting') && !file.startsWith('events.') && !file.startsWith('rels.')) {
         tables.add(file.replace('.jsonl.compacting', ''))
       }
-      // Also discover from compacted data files
-      if (file.endsWith('.parquet') && file !== 'rels.parquet') {
+      // Also discover from compacted data files (exclude system files)
+      if (file.endsWith('.parquet') && file !== 'rels.parquet' && file !== 'events.parquet') {
         tables.add(file.replace('.parquet', ''))
       }
     }
@@ -837,26 +792,13 @@ export class ParqueEngine {
   // ===========================================================================
 
   /**
-   * Create a JSON-based StorageAdapter for local mode.
+   * Create a Parquet-based StorageAdapter for local mode.
    *
-   * This is a stand-in for the Parquet adapter. In local mode, data files
-   * are stored as JSON arrays for simplicity. The file extension remains
-   * .parquet for consistency with the compaction module's path conventions.
+   * Uses ParquetStorageAdapter so that compacted data files are real Parquet
+   * format, enabling Parquet-native tools to read them directly.
    */
   private createLocalStorageAdapter(): StorageAdapter {
-    return {
-      async readData(path: string): Promise<DataLine[]> {
-        try {
-          const content = await readFile(path, 'utf-8')
-          return JSON.parse(content) as DataLine[]
-        } catch {
-          return []
-        }
-      },
-      async writeData(path: string, data: DataLine[]): Promise<void> {
-        await writeFile(path, JSON.stringify(data), 'utf-8')
-      },
-    }
+    return new ParquetStorageAdapter()
   }
 
   // ===========================================================================

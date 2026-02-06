@@ -11,28 +11,21 @@
  * - Rels files: $op (string), $ts (number), f (string), p (string), r (string), t (string)
  * - Events files: id (string), ts (number), op (string), ns (string), eid (string),
  *                 before (string/JSON), after (string/JSON), actor (string)
+ *
+ * Encoding is delegated to parquet-encoders.ts (single source of truth).
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { FullStorageAdapter } from './storage-adapters'
-import type { DataLine, RelLine } from './types'
+import type { DataLine, RelLine, EventLine } from './types'
+import type { AnyEventLine } from './merge-events'
+import { encodeDataToParquet, encodeRelsToParquet, encodeEventsToParquet } from './parquet-encoders'
+import { toNumber } from './utils'
 
 // =============================================================================
 // Helpers
 // =============================================================================
-
-/** System fields stored as dedicated Parquet columns for DataLine */
-const DATA_SYSTEM_FIELDS = new Set(['$id', '$op', '$v', '$ts'])
-
-/**
- * Coerce a value to number. Handles BigInt (legacy INT64 files) and number (DOUBLE).
- */
-function toNumber(value: unknown): number {
-  if (typeof value === 'number') return value
-  if (typeof value === 'bigint') return Number(value)
-  return 0
-}
 
 /**
  * Create an AsyncBuffer wrapper around a Node.js Buffer for hyparquet.
@@ -79,8 +72,11 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
     let fileData: Buffer
     try {
       fileData = await readFile(path)
-    } catch {
-      return []
+    } catch (error: unknown) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return []
+      }
+      throw error
     }
 
     if (fileData.byteLength === 0) {
@@ -99,7 +95,14 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
     }>
 
     return rows.map(row => {
-      const dataFields = row.$data ? JSON.parse(row.$data) as Record<string, unknown> : {}
+      let dataFields: Record<string, unknown> = {}
+      if (row.$data) {
+        try {
+          dataFields = JSON.parse(row.$data) as Record<string, unknown>
+        } catch {
+          console.warn(`[parquet-adapter] Skipping corrupted $data JSON for entity ${row.$id}: ${row.$data.slice(0, 100)}`)
+        }
+      }
       return {
         ...dataFields,
         $id: row.$id,
@@ -112,43 +115,7 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
 
   async writeData(path: string, data: DataLine[]): Promise<void> {
     await ensureDir(path)
-
-    // Sort by $id for deterministic output and efficient lookups
-    const sorted = [...data].sort((a, b) => (a.$id < b.$id ? -1 : a.$id > b.$id ? 1 : 0))
-
-    // Separate system fields from data fields
-    const ids: string[] = []
-    const ops: string[] = []
-    const versions: number[] = []
-    const timestamps: number[] = []
-    const dataJsons: string[] = []
-
-    for (const entity of sorted) {
-      ids.push(entity.$id)
-      ops.push(entity.$op)
-      versions.push(entity.$v)
-      timestamps.push(entity.$ts + 0.0) // ensure DOUBLE (not INT32) via float coercion
-
-      // Pack remaining fields into $data JSON
-      const dataFields: Record<string, unknown> = {}
-      for (const [key, value] of Object.entries(entity)) {
-        if (!DATA_SYSTEM_FIELDS.has(key)) {
-          dataFields[key] = value
-        }
-      }
-      dataJsons.push(JSON.stringify(dataFields))
-    }
-
-    const columnData = [
-      { name: '$id', data: ids },
-      { name: '$op', data: ops },
-      { name: '$v', data: versions },
-      { name: '$ts', data: timestamps, type: 'DOUBLE' as const },
-      { name: '$data', data: dataJsons },
-    ]
-
-    const { parquetWriteBuffer } = await import('hyparquet-writer')
-    const buffer = parquetWriteBuffer({ columnData })
+    const buffer = await encodeDataToParquet(data)
     await writeFile(path, new Uint8Array(buffer))
   }
 
@@ -160,8 +127,11 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
     let fileData: Buffer
     try {
       fileData = await readFile(path)
-    } catch {
-      return []
+    } catch (error: unknown) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return []
+      }
+      throw error
     }
 
     if (fileData.byteLength === 0) {
@@ -192,18 +162,7 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
 
   async writeRels(path: string, data: RelLine[]): Promise<void> {
     await ensureDir(path)
-
-    const columnData = [
-      { name: '$op', data: data.map(r => r.$op) },
-      { name: '$ts', data: data.map(r => r.$ts + 0.0), type: 'DOUBLE' as const },
-      { name: 'f', data: data.map(r => r.f) },
-      { name: 'p', data: data.map(r => r.p) },
-      { name: 'r', data: data.map(r => r.r) },
-      { name: 't', data: data.map(r => r.t) },
-    ]
-
-    const { parquetWriteBuffer } = await import('hyparquet-writer')
-    const buffer = parquetWriteBuffer({ columnData })
+    const buffer = await encodeRelsToParquet(data)
     await writeFile(path, new Uint8Array(buffer))
   }
 
@@ -211,12 +170,15 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
   // Event operations
   // ---------------------------------------------------------------------------
 
-  async readEvents(path: string): Promise<Record<string, unknown>[]> {
+  async readEvents(path: string): Promise<AnyEventLine[]> {
     let fileData: Buffer
     try {
       fileData = await readFile(path)
-    } catch {
-      return []
+    } catch (error: unknown) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return []
+      }
+      throw error
     }
 
     if (fileData.byteLength === 0) {
@@ -238,19 +200,27 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
     }>
 
     return rows.map(row => {
-      const event: Record<string, unknown> = {
+      const event: EventLine = {
         id: row.id,
         ts: toNumber(row.ts),
-        op: row.op,
+        op: row.op as EventLine['op'],
         ns: row.ns,
         eid: row.eid,
       }
 
       if (row.before) {
-        event.before = JSON.parse(row.before)
+        try {
+          event.before = JSON.parse(row.before) as Record<string, unknown>
+        } catch {
+          console.warn(`[parquet-adapter] Skipping corrupted before JSON for event ${row.id}: ${row.before.slice(0, 100)}`)
+        }
       }
       if (row.after) {
-        event.after = JSON.parse(row.after)
+        try {
+          event.after = JSON.parse(row.after) as Record<string, unknown>
+        } catch {
+          console.warn(`[parquet-adapter] Skipping corrupted after JSON for event ${row.id}: ${row.after.slice(0, 100)}`)
+        }
       }
       if (row.actor) {
         event.actor = row.actor
@@ -260,22 +230,9 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
     })
   }
 
-  async writeEvents(path: string, data: Record<string, unknown>[]): Promise<void> {
+  async writeEvents(path: string, data: AnyEventLine[]): Promise<void> {
     await ensureDir(path)
-
-    const columnData = [
-      { name: 'id', data: data.map(e => (e.id as string) ?? '') },
-      { name: 'ts', data: data.map(e => ((e.ts as number) ?? 0) + 0.0), type: 'DOUBLE' as const },
-      { name: 'op', data: data.map(e => (e.op as string) ?? '') },
-      { name: 'ns', data: data.map(e => (e.ns as string) ?? '') },
-      { name: 'eid', data: data.map(e => (e.eid as string) ?? '') },
-      { name: 'before', data: data.map(e => e.before ? JSON.stringify(e.before) : '') },
-      { name: 'after', data: data.map(e => e.after ? JSON.stringify(e.after) : '') },
-      { name: 'actor', data: data.map(e => (e.actor as string) ?? '') },
-    ]
-
-    const { parquetWriteBuffer } = await import('hyparquet-writer')
-    const buffer = parquetWriteBuffer({ columnData })
+    const buffer = await encodeEventsToParquet(data)
     await writeFile(path, new Uint8Array(buffer))
   }
 }

@@ -11,6 +11,12 @@ export type { EngineConfig, AutoCompactOptions, UpdateOps, FindOptions } from '.
 // Types
 export type { DataLine, RelLine, EventLine, SchemaLine, Migration, Line, DataOp, RelOp, EventOp } from './types'
 
+// Shared utilities
+export { toNumber, DATA_SYSTEM_FIELDS } from './utils'
+
+// Filter (shared across all modes)
+export { matchesFilter, getNestedValue } from './filter'
+
 // Buffers
 export { TableBuffer } from './buffer'
 export type { ScanFilter } from './buffer'
@@ -27,6 +33,9 @@ export { serializeLine, deserializeLine, isDataLine, isRelLine, isEventLine, isS
 
 // Merge
 export { mergeResults } from './merge'
+export { mergeRelationships, relKey, relComparator } from './merge-rels'
+export { mergeEvents } from './merge-events'
+export type { AnyEventLine } from './merge-events'
 
 // Compaction
 export { compactDataTable, shouldCompact } from './compactor'
@@ -56,7 +65,8 @@ export { EngineDB, EngineCollection } from './parquedb-adapter'
 export type { EngineDBConfig } from './parquedb-adapter'
 
 // Worker thread compaction
-export { CompactionWorker, encodeDataToParquet, encodeRelsToParquet, encodeEventsToParquet } from './compaction-worker'
+export { encodeDataToParquet, encodeRelsToParquet, encodeEventsToParquet } from './parquet-encoders'
+export { CompactionWorker } from './compaction-worker'
 export type { CompactionRequest, CompactionResult } from './compaction-worker'
 
 // DO read path (merge-on-read)

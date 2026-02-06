@@ -113,25 +113,30 @@ export async function compactDataTable(
     return null
   }
 
-  // Step 2: Read existing data file (may be empty if first compaction)
-  const existing = await storage.readData(dataPath)
+  try {
+    // Step 2: Read existing data file (may be empty if first compaction)
+    const existing = await storage.readData(dataPath)
 
-  // Step 3: Read the rotated JSONL file
-  const jsonlData = await replay<DataLine>(compactingPath)
+    // Step 3: Read the rotated JSONL file
+    const jsonlData = await replay<DataLine>(compactingPath)
 
-  // Step 4: Merge using ReplacingMergeTree semantics
-  const merged = mergeResults(existing, jsonlData)
+    // Step 4: Merge using ReplacingMergeTree semantics
+    const merged = mergeResults(existing, jsonlData)
 
-  // Step 5: Write to a temporary file
-  const tmpPath = dataPath + '.tmp'
-  await storage.writeData(tmpPath, merged)
+    // Step 5: Write to a temporary file
+    const tmpPath = dataPath + '.tmp'
+    await storage.writeData(tmpPath, merged)
 
-  // Step 6: Atomic rename: .tmp -> .parquet
-  await rename(tmpPath, dataPath)
+    // Step 6: Atomic rename: .tmp -> .parquet
+    await rename(tmpPath, dataPath)
 
-  // Step 7: Cleanup the compacting file
-  await cleanup(compactingPath)
+    // Step 7: Cleanup the compacting file
+    await cleanup(compactingPath)
 
-  // Step 8: Return the count of entities in the compacted output
-  return merged.length
+    // Step 8: Return the count of entities in the compacted output
+    return merged.length
+  } catch (error) {
+    // On failure, leave the .compacting file for recovery
+    throw error
+  }
 }

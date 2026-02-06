@@ -265,6 +265,27 @@ describe('DeltaFormat createDataTransaction', () => {
     const addAction = result.transaction.actions.find(isAdd)
     expect(addAction).toBeDefined()
   })
+
+  it('handles empty data array without crashing', async () => {
+    const delta = createDelta()
+    delta.createInitialTransaction() // version 0
+
+    // Should not throw
+    const result = await delta.createDataTransaction([])
+    expect(result).toBeDefined()
+    expect(result.transaction).toBeDefined()
+    expect(result.transaction.actions).toBeDefined()
+
+    // The add action should have numRecords: 0
+    const addAction = result.transaction.actions.find(isAdd)
+    expect(addAction).toBeDefined()
+    if (addAction) {
+      const stats = JSON.parse(addAction.add.stats)
+      expect(stats.numRecords).toBe(0)
+      expect(stats.minValues).toEqual({})
+      expect(stats.maxValues).toEqual({})
+    }
+  })
 })
 
 // =============================================================================

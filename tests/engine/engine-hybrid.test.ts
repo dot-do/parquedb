@@ -37,6 +37,7 @@ import { ParqueEngine } from '@/engine/engine'
 import { replay } from '@/engine/jsonl-reader'
 import { mergeResults } from '@/engine/merge'
 import type { DataLine, RelLine } from '@/engine/types'
+import { makeLine, makeLink } from './helpers'
 
 // =============================================================================
 // Test Helpers
@@ -51,21 +52,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true })
 })
-
-/** Helper to create a DataLine with sensible defaults */
-function makeLine(overrides: Partial<DataLine> & { $id: string }): DataLine {
-  return {
-    $op: 'c',
-    $v: 1,
-    $ts: Date.now(),
-    ...overrides,
-  }
-}
-
-/** Helper to create a RelLine */
-function makeLink(f: string, p: string, r: string, t: string, ts = 1000): RelLine {
-  return { $op: 'l', $ts: ts, f, p, r, t }
-}
 
 /** Helper to write JSONL lines to a file */
 async function writeJsonl(path: string, lines: unknown[]): Promise<void> {

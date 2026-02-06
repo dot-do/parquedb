@@ -20,7 +20,7 @@
  * encodeDataToParquet.
  */
 
-import { encodeDataToParquet } from '../compaction-worker'
+import { encodeDataToParquet } from '../parquet-encoders'
 
 // =============================================================================
 // Configuration

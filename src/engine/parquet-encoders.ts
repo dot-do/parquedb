@@ -11,13 +11,12 @@
  */
 
 import type { DataLine, RelLine } from './types'
+import type { AnyEventLine } from './merge-events'
+import { DATA_SYSTEM_FIELDS } from './utils'
 
 // =============================================================================
 // Standalone Encoding Functions
 // =============================================================================
-
-/** System fields stored as dedicated Parquet columns for DataLine */
-const DATA_SYSTEM_FIELDS = new Set(['$id', '$op', '$v', '$ts'])
 
 /**
  * Encode an array of DataLine entities into a Parquet buffer.
@@ -87,20 +86,20 @@ export async function encodeRelsToParquet(
  * Encode an array of event records into a Parquet buffer.
  */
 export async function encodeEventsToParquet(
-  events: Array<Record<string, unknown>>,
+  events: Array<AnyEventLine>,
 ): Promise<ArrayBuffer> {
   const { parquetWriteBuffer } = await import('hyparquet-writer')
 
   return parquetWriteBuffer({
     columnData: [
-      { name: 'id', data: events.map(e => (e.id as string) ?? '') },
-      { name: 'ts', data: events.map(e => ((e.ts as number) ?? 0) + 0.0), type: 'DOUBLE' as const },
-      { name: 'op', data: events.map(e => (e.op as string) ?? '') },
-      { name: 'ns', data: events.map(e => (e.ns as string) ?? '') },
-      { name: 'eid', data: events.map(e => (e.eid as string) ?? '') },
-      { name: 'before', data: events.map(e => e.before ? JSON.stringify(e.before) : '') },
-      { name: 'after', data: events.map(e => e.after ? JSON.stringify(e.after) : '') },
-      { name: 'actor', data: events.map(e => (e.actor as string) ?? '') },
+      { name: 'id', data: events.map(e => e.id ?? '') },
+      { name: 'ts', data: events.map(e => (e.ts ?? 0) + 0.0), type: 'DOUBLE' as const },
+      { name: 'op', data: events.map(e => e.op ?? '') },
+      { name: 'ns', data: events.map(e => e.ns ?? '') },
+      { name: 'eid', data: events.map(e => 'eid' in e ? e.eid : '') },
+      { name: 'before', data: events.map(e => 'before' in e && e.before ? JSON.stringify(e.before) : '') },
+      { name: 'after', data: events.map(e => 'after' in e && e.after ? JSON.stringify(e.after) : '') },
+      { name: 'actor', data: events.map(e => ('actor' in e ? (e.actor as string) : '') ?? '') },
     ],
   })
 }

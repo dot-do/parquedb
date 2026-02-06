@@ -16,120 +16,17 @@
  */
 
 import type { DataLine } from '@/engine/types'
+import { matchesFilter } from '@/engine/filter'
+
+// Re-export matchesFilter so existing imports from buffer.ts continue to work
+export { matchesFilter }
 
 // =============================================================================
 // Filter types for scan()
 // =============================================================================
 
-/** Comparison operators supported in scan filters */
-interface ComparisonFilter {
-  $eq?: unknown
-  $ne?: unknown
-  $gt?: number | string
-  $gte?: number | string
-  $lt?: number | string
-  $lte?: number | string
-  $in?: unknown[]
-  $exists?: boolean
-}
-
 /** A scan filter: keys are field paths, values are literals or comparison objects */
 export type ScanFilter = Record<string, unknown>
-
-// =============================================================================
-// Internal helpers
-// =============================================================================
-
-/**
- * Resolve a dot-notation path on an object.
- * e.g. getNestedValue({ address: { city: 'NYC' } }, 'address.city') => 'NYC'
- */
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  const parts = path.split('.')
-  let current: unknown = obj
-  for (const part of parts) {
-    if (current === null || current === undefined || typeof current !== 'object') {
-      return undefined
-    }
-    current = (current as Record<string, unknown>)[part]
-  }
-  return current
-}
-
-/**
- * Check whether a value is a comparison filter object (has operator keys).
- */
-function isComparisonFilter(value: unknown): value is ComparisonFilter {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return false
-  }
-  const keys = Object.keys(value as object)
-  return keys.length > 0 && keys.every(k => k.startsWith('$'))
-}
-
-/**
- * Evaluate a single field condition against an entity value.
- */
-function matchFieldCondition(entityValue: unknown, condition: unknown): boolean {
-  // If the condition is a comparison filter object, evaluate each operator
-  if (isComparisonFilter(condition)) {
-    return matchComparisonFilter(entityValue, condition)
-  }
-  // Otherwise it's a direct equality check
-  return entityValue === condition
-}
-
-/**
- * Evaluate a comparison filter (e.g. { $gt: 18, $lt: 65 }) against a value.
- * All operators in the filter must match (implicit AND).
- */
-function matchComparisonFilter(value: unknown, filter: ComparisonFilter): boolean {
-  if ('$eq' in filter && value !== filter.$eq) return false
-  if ('$ne' in filter && value === filter.$ne) return false
-
-  if ('$gt' in filter) {
-    if (value === undefined || value === null) return false
-    if (!((value as number) > (filter.$gt as number))) return false
-  }
-  if ('$gte' in filter) {
-    if (value === undefined || value === null) return false
-    if (!((value as number) >= (filter.$gte as number))) return false
-  }
-  if ('$lt' in filter) {
-    if (value === undefined || value === null) return false
-    if (!((value as number) < (filter.$lt as number))) return false
-  }
-  if ('$lte' in filter) {
-    if (value === undefined || value === null) return false
-    if (!((value as number) <= (filter.$lte as number))) return false
-  }
-
-  if ('$in' in filter) {
-    if (!Array.isArray(filter.$in)) return false
-    if (!filter.$in.includes(value)) return false
-  }
-
-  if ('$exists' in filter) {
-    const exists = value !== undefined
-    if (filter.$exists && !exists) return false
-    if (!filter.$exists && exists) return false
-  }
-
-  return true
-}
-
-/**
- * Check whether an entity matches all conditions in a scan filter.
- */
-export function matchesFilter(entity: DataLine, filter: ScanFilter): boolean {
-  for (const [path, condition] of Object.entries(filter)) {
-    const value = getNestedValue(entity as unknown as Record<string, unknown>, path)
-    if (!matchFieldCondition(value, condition)) {
-      return false
-    }
-  }
-  return true
-}
 
 // =============================================================================
 // TableBuffer

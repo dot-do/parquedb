@@ -156,7 +156,7 @@ export class SqliteWal {
   // -------------------------------------------------------------------------
 
   /** Replay all unflushed lines for a table, in insertion order. */
-  replayUnflushed<T = Record<string, unknown>>(table: string): T[] {
+  replayUnflushed<T extends Record<string, unknown> = Record<string, unknown>>(table: string): T[] {
     const batches = this.getBatches(table)
     const lines: T[] = []
     for (const batch of batches) {

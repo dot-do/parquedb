@@ -21,19 +21,14 @@
 import { SqliteWal } from './sqlite-wal'
 import { mergeResults } from './merge'
 import type { DataLine, RelLine } from './types'
+import { mergeRelationships } from './merge-rels'
+import { mergeEvents } from './merge-events'
+import type { AnyEventLine } from './merge-events'
+import { toNumber } from './utils'
 
 // =============================================================================
 // Helpers
 // =============================================================================
-
-/**
- * Convert a value that may be BigInt (from hyparquet) to a plain number.
- */
-function toNumber(value: unknown): number {
-  if (typeof value === 'number') return value
-  if (typeof value === 'bigint') return Number(value)
-  return 0
-}
 
 /**
  * Read a Parquet file from R2 and decode its rows using hyparquet.
@@ -47,6 +42,8 @@ async function readParquetFromR2(
   if (!obj) return []
 
   const buffer = await obj.arrayBuffer()
+  if (buffer.byteLength === 0) return []
+
   const { parquetReadObjects } = await import('hyparquet')
   const asyncBuffer = {
     byteLength: buffer.byteLength,
@@ -64,7 +61,14 @@ async function readParquetFromR2(
  */
 function rowsToDataLines(rows: Record<string, unknown>[]): DataLine[] {
   return rows.map((row) => {
-    const dataFields = row.$data ? JSON.parse(row.$data as string) : {}
+    let dataFields: Record<string, unknown> = {}
+    if (row.$data) {
+      try {
+        dataFields = JSON.parse(row.$data as string) as Record<string, unknown>
+      } catch {
+        console.warn(`[do-read-path] Skipping corrupted $data JSON for entity ${row.$id}: ${(row.$data as string).slice(0, 100)}`)
+      }
+    }
     return {
       ...dataFields,
       $id: row.$id as string,
@@ -183,29 +187,8 @@ export class DOReadPath {
     // 2. Read WAL rels
     const walLines = this.wal.replayUnflushed<RelLine>('rels')
 
-    // 3. Merge by f:p:t composite key (latest $ts wins)
-    const merged = new Map<string, RelLine>()
-
-    for (const rel of r2Lines) {
-      const key = `${rel.f}:${rel.p}:${rel.t}`
-      merged.set(key, rel)
-    }
-
-    for (const rel of walLines) {
-      const key = `${rel.f}:${rel.p}:${rel.t}`
-      const existing = merged.get(key)
-      if (!existing || rel.$ts >= existing.$ts) {
-        merged.set(key, rel)
-      }
-    }
-
-    // 4. Filter out unlinks ($op === 'u')
-    const results: RelLine[] = []
-    for (const rel of merged.values()) {
-      if (rel.$op !== 'u') {
-        results.push(rel)
-      }
-    }
+    // 3–4. Merge using shared logic: dedup by f:p:t, $ts wins, filter unlinks, sort
+    const results = mergeRelationships(r2Lines, walLines)
 
     // 5. If fromId, filter by f === fromId
     if (fromId) {
@@ -218,17 +201,14 @@ export class DOReadPath {
   /**
    * Find events (append-only, no merge needed -- just concatenate).
    */
-  async findEvents(): Promise<Record<string, unknown>[]> {
+  async findEvents(): Promise<AnyEventLine[]> {
     // 1. Read R2 events
-    const r2Rows = await readParquetFromR2(this.bucket, 'events/events.parquet')
+    const r2Rows = await readParquetFromR2(this.bucket, 'events/events.parquet') as AnyEventLine[]
 
     // 2. Read WAL events
-    const walLines = this.wal.replayUnflushed<Record<string, unknown>>('events')
+    const walLines = this.wal.replayUnflushed<AnyEventLine>('events')
 
-    // 3. Concatenate and sort by ts
-    const all = [...r2Rows, ...walLines]
-    all.sort((a, b) => toNumber(a.ts) - toNumber(b.ts))
-
-    return all
+    // 3. Merge using shared logic: concatenate and sort by ts
+    return mergeEvents(r2Rows, walLines)
   }
 }

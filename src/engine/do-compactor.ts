@@ -27,27 +27,21 @@ import {
   encodeRelsToParquet,
   encodeEventsToParquet,
 } from './parquet-encoders'
-import type { DataLine, RelLine } from './types'
+import type { DataLine, RelLine, EventLine } from './types'
+import { mergeRelationships } from './merge-rels'
+import { mergeEvents } from './merge-events'
+import type { AnyEventLine } from './merge-events'
+import { toNumber, DATA_SYSTEM_FIELDS } from './utils'
 
 // =============================================================================
 // Helpers
 // =============================================================================
 
-/** Coerce a value to number. Handles BigInt (legacy INT64 files) and number (DOUBLE). */
-function toNumber(value: unknown): number {
-  if (typeof value === 'number') return value
-  if (typeof value === 'bigint') return Number(value)
-  return 0
-}
-
-/** System fields stored as dedicated Parquet columns for DataLine */
-const DATA_SYSTEM_FIELDS = new Set(['$id', '$op', '$v', '$ts'])
-
 /**
  * Read a Parquet file from R2 and decode rows using hyparquet.
  * Returns an empty array if the key does not exist.
  */
-async function readParquetFromR2<T>(bucket: R2Bucket, key: string): Promise<T[]> {
+async function readParquetFromR2<T extends Record<string, unknown>>(bucket: R2Bucket, key: string): Promise<T[]> {
   const obj = await bucket.get(key)
   if (!obj) return []
 
@@ -72,7 +66,14 @@ function decodeDataRows(
   rows: Array<{ $id: string; $op: string; $v: unknown; $ts: unknown; $data?: string }>,
 ): DataLine[] {
   return rows.map((row) => {
-    const dataFields = row.$data ? (JSON.parse(row.$data) as Record<string, unknown>) : {}
+    let dataFields: Record<string, unknown> = {}
+    if (row.$data) {
+      try {
+        dataFields = JSON.parse(row.$data) as Record<string, unknown>
+      } catch {
+        console.warn(`[do-compactor] Skipping corrupted $data JSON for entity ${row.$id}: ${row.$data.slice(0, 100)}`)
+      }
+    }
     return {
       ...dataFields,
       $id: row.$id,
@@ -100,7 +101,7 @@ function decodeRelRows(
 }
 
 /**
- * Decode raw Parquet event rows into event records.
+ * Decode raw Parquet event rows into EventLine records.
  */
 function decodeEventRows(
   rows: Array<{
@@ -113,21 +114,29 @@ function decodeEventRows(
     after?: string
     actor?: string
   }>,
-): Record<string, unknown>[] {
+): EventLine[] {
   return rows.map((row) => {
-    const event: Record<string, unknown> = {
+    const event: EventLine = {
       id: row.id,
       ts: toNumber(row.ts),
-      op: row.op,
+      op: row.op as EventLine['op'],
       ns: row.ns,
       eid: row.eid,
     }
 
     if (row.before && row.before !== '') {
-      event.before = JSON.parse(row.before)
+      try {
+        event.before = JSON.parse(row.before) as Record<string, unknown>
+      } catch {
+        console.warn(`[do-compactor] Skipping corrupted before JSON for event ${row.id}: ${row.before.slice(0, 100)}`)
+      }
     }
     if (row.after && row.after !== '') {
-      event.after = JSON.parse(row.after)
+      try {
+        event.after = JSON.parse(row.after) as Record<string, unknown>
+      } catch {
+        console.warn(`[do-compactor] Skipping corrupted after JSON for event ${row.id}: ${row.after.slice(0, 100)}`)
+      }
     }
     if (row.actor && row.actor !== '') {
       event.actor = row.actor
@@ -224,31 +233,8 @@ export class DOCompactor {
     }>(this.bucket, r2Key)
     const existing = decodeRelRows(existingRaw)
 
-    // 4. Merge by f:p:t key, overlay WAL mutations
-    const merged = new Map<string, RelLine>()
-    for (const rel of existing) {
-      merged.set(`${rel.f}:${rel.p}:${rel.t}`, rel)
-    }
-    for (const rel of walLines) {
-      merged.set(`${rel.f}:${rel.p}:${rel.t}`, rel)
-    }
-
-    // 5. Filter out unlinks ($op === 'u'), keep only links ($op === 'l')
-    const live: RelLine[] = []
-    for (const rel of merged.values()) {
-      if (rel.$op === 'l') {
-        live.push(rel)
-      }
-    }
-    live.sort((a, b) => {
-      if (a.f < b.f) return -1
-      if (a.f > b.f) return 1
-      if (a.p < b.p) return -1
-      if (a.p > b.p) return 1
-      if (a.t < b.t) return -1
-      if (a.t > b.t) return 1
-      return 0
-    })
+    // 4–5. Merge using shared logic: dedup by f:p:t, $ts wins, filter unlinks, sort
+    const live = mergeRelationships(existing, walLines)
 
     // 6. Encode to Parquet
     const buffer = await encodeRelsToParquet(live)
@@ -278,7 +264,7 @@ export class DOCompactor {
     if (batches.length === 0) return null
 
     // 2. Replay unflushed event lines
-    const walLines = this.wal.replayUnflushed<Record<string, unknown>>('events')
+    const walLines = this.wal.replayUnflushed<AnyEventLine>('events')
 
     // 3. Read existing Parquet from R2
     const r2Key = 'events/events.parquet'
@@ -294,15 +280,8 @@ export class DOCompactor {
     }>(this.bucket, r2Key)
     const existing = decodeEventRows(existingRaw)
 
-    // 4. Concatenate (append-only, no merge)
-    const all = [...existing, ...walLines]
-
-    // 5. Sort by ts for deterministic output
-    all.sort((a, b) => {
-      const tsA = typeof a.ts === 'number' ? a.ts : 0
-      const tsB = typeof b.ts === 'number' ? b.ts : 0
-      return tsA - tsB
-    })
+    // 4–5. Merge using shared logic: concatenate and sort by ts
+    const all = mergeEvents(existing, walLines)
 
     // 6. Encode to Parquet
     const buffer = await encodeEventsToParquet(all)

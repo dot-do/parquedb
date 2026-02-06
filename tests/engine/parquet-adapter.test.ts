@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { ParquetStorageAdapter } from '@/engine/parquet-adapter'
 import { mergeResults } from '@/engine/merge'
 import type { DataLine, RelLine } from '@/engine/types'
+import { makeLine, makeLink, makeUnlink } from './helpers'
 
 // =============================================================================
 // Test Helpers
@@ -30,25 +31,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true })
 })
-
-/** Helper to create a DataLine with sensible defaults */
-function makeLine(overrides: Partial<DataLine> & { $id: string }): DataLine {
-  return {
-    $op: 'c',
-    $v: 1,
-    $ts: Date.now(),
-    ...overrides,
-  }
-}
-
-/** Helper to create a RelLine */
-function makeLink(f: string, p: string, r: string, t: string, ts = 1000): RelLine {
-  return { $op: 'l', $ts: ts, f, p, r, t }
-}
-
-function makeUnlink(f: string, p: string, r: string, t: string, ts = 2000): RelLine {
-  return { $op: 'u', $ts: ts, f, p, r, t }
-}
 
 // =============================================================================
 // Data Tests
@@ -384,5 +366,46 @@ describe('ParquetStorageAdapter - Integration with compaction pipeline', () => {
     const diana = final.find(e => e.$id === 'u4')!
     expect(diana.name).toBe('Diana')
     expect(diana.$v).toBe(1)
+  })
+})
+
+// =============================================================================
+// Error Handling Tests
+// =============================================================================
+
+import { writeFile } from 'node:fs/promises'
+
+describe('ParquetStorageAdapter - Error handling', () => {
+  it('readData returns [] for missing file (ENOENT)', async () => {
+    const result = await adapter.readData(join(tempDir, 'does-not-exist.parquet'))
+    expect(result).toEqual([])
+  })
+
+  it('readData throws for corrupt parquet file', async () => {
+    const corruptPath = join(tempDir, 'corrupt.parquet')
+    await writeFile(corruptPath, 'this is not a valid parquet file')
+    await expect(adapter.readData(corruptPath)).rejects.toThrow()
+  })
+
+  it('readRels returns [] for missing file (ENOENT)', async () => {
+    const result = await adapter.readRels(join(tempDir, 'does-not-exist-rels.parquet'))
+    expect(result).toEqual([])
+  })
+
+  it('readRels throws for corrupt parquet file', async () => {
+    const corruptPath = join(tempDir, 'corrupt-rels.parquet')
+    await writeFile(corruptPath, 'not a parquet file at all')
+    await expect(adapter.readRels(corruptPath)).rejects.toThrow()
+  })
+
+  it('readEvents returns [] for missing file (ENOENT)', async () => {
+    const result = await adapter.readEvents(join(tempDir, 'does-not-exist-events.parquet'))
+    expect(result).toEqual([])
+  })
+
+  it('readEvents throws for corrupt parquet file', async () => {
+    const corruptPath = join(tempDir, 'corrupt-events.parquet')
+    await writeFile(corruptPath, 'garbage parquet data')
+    await expect(adapter.readEvents(corruptPath)).rejects.toThrow()
   })
 })

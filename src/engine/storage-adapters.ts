@@ -14,12 +14,15 @@
  * so a single adapter instance can serve all compaction needs.
  */
 
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { rotate, cleanup } from './rotation'
 import { replay } from './jsonl-reader'
 import { mergeResults } from './merge'
 import type { DataLine, RelLine } from './types'
+import { mergeRelationships } from './merge-rels'
+import { mergeEvents } from './merge-events'
+import type { AnyEventLine } from './merge-events'
 
 // Re-export the individual adapter interfaces from compactors for convenience
 export type { StorageAdapter } from './compactor'
@@ -47,9 +50,15 @@ export interface FullStorageAdapter {
   /** Write relationships to a compacted rels file */
   writeRels(path: string, data: RelLine[]): Promise<void>
   /** Read events from a compacted events file */
-  readEvents(path: string): Promise<Record<string, unknown>[]>
+  readEvents(path: string): Promise<AnyEventLine[]>
   /** Write events to a compacted events file */
-  writeEvents(path: string, data: Record<string, unknown>[]): Promise<void>
+  writeEvents(path: string, data: AnyEventLine[]): Promise<void>
+  /**
+   * Atomically rename a path (optional).
+   * If provided, hybrid compaction uses this for the .tmp -> final rename.
+   * If not provided, falls back to fs.rename (local disk).
+   */
+  rename?(fromPath: string, toPath: string): void | Promise<void>
 }
 
 // =============================================================================
@@ -70,8 +79,11 @@ export class LocalStorageAdapter implements FullStorageAdapter {
   async readData(path: string): Promise<DataLine[]> {
     try {
       return JSON.parse(await readFile(path, 'utf-8'))
-    } catch {
-      return []
+    } catch (error: unknown) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return []
+      }
+      throw error
     }
   }
 
@@ -82,8 +94,11 @@ export class LocalStorageAdapter implements FullStorageAdapter {
   async readRels(path: string): Promise<RelLine[]> {
     try {
       return JSON.parse(await readFile(path, 'utf-8'))
-    } catch {
-      return []
+    } catch (error: unknown) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return []
+      }
+      throw error
     }
   }
 
@@ -91,15 +106,18 @@ export class LocalStorageAdapter implements FullStorageAdapter {
     await writeFile(path, JSON.stringify(data))
   }
 
-  async readEvents(path: string): Promise<Record<string, unknown>[]> {
+  async readEvents(path: string): Promise<AnyEventLine[]> {
     try {
       return JSON.parse(await readFile(path, 'utf-8'))
-    } catch {
-      return []
+    } catch (error: unknown) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return []
+      }
+      throw error
     }
   }
 
-  async writeEvents(path: string, data: Record<string, unknown>[]): Promise<void> {
+  async writeEvents(path: string, data: AnyEventLine[]): Promise<void> {
     await writeFile(path, JSON.stringify(data))
   }
 }
@@ -144,11 +162,11 @@ export class MemoryStorageAdapter implements FullStorageAdapter {
 
   // --- Event operations ---
 
-  async readEvents(path: string): Promise<Record<string, unknown>[]> {
-    return (this.store.get(path) as Record<string, unknown>[] | undefined) ?? []
+  async readEvents(path: string): Promise<AnyEventLine[]> {
+    return (this.store.get(path) as AnyEventLine[] | undefined) ?? []
   }
 
-  async writeEvents(path: string, data: Record<string, unknown>[]): Promise<void> {
+  async writeEvents(path: string, data: AnyEventLine[]): Promise<void> {
     this.store.set(path, data)
   }
 
@@ -187,16 +205,31 @@ export class MemoryStorageAdapter implements FullStorageAdapter {
 // =============================================================================
 
 // These functions perform the same compaction as the existing compactors,
-// but handle the .tmp -> final rename within the storage adapter instead
-// of requiring a local filesystem rename. This makes them work with both
-// local and remote (in-memory) storage adapters.
+// but write to a .tmp file first and then atomically rename, using the
+// adapter's rename method if available, or falling back to fs.rename.
+
+/**
+ * Atomically rename a file using the adapter's rename if available,
+ * otherwise fall back to fs.rename (local disk).
+ */
+async function atomicRename(
+  storage: FullStorageAdapter,
+  fromPath: string,
+  toPath: string,
+): Promise<void> {
+  if (typeof storage.rename === 'function') {
+    await storage.rename(fromPath, toPath)
+  } else {
+    await rename(fromPath, toPath)
+  }
+}
 
 /**
  * Compact a data table using a hybrid-aware storage adapter.
  *
- * Unlike compactDataTable in compactor.ts which uses fs.rename for atomic swap,
- * this function writes directly to the final path via the adapter, avoiding
- * the need for local filesystem operations on the compacted data.
+ * Writes to a temporary file first, then renames atomically to avoid
+ * leaving a corrupted data file on failure. The .compacting file is
+ * preserved on error for recovery.
  *
  * JSONL rotation and cleanup still happen on local disk (the JSONL layer
  * is always local in hybrid mode).
@@ -213,6 +246,7 @@ export async function hybridCompactData(
 ): Promise<number | null> {
   const jsonlPath = join(dataDir, `${table}.jsonl`)
   const dataPath = join(dataDir, `${table}.parquet`)
+  const tmpPath = dataPath + '.tmp'
 
   // Step 1: Rotate the JSONL file (local disk operation)
   const compactingPath = await rotate(jsonlPath)
@@ -220,22 +254,30 @@ export async function hybridCompactData(
     return null
   }
 
-  // Step 2: Read existing data from remote storage
-  const existing = await storage.readData(dataPath)
+  try {
+    // Step 2: Read existing data from remote storage
+    const existing = await storage.readData(dataPath)
 
-  // Step 3: Read the rotated JSONL file (local disk)
-  const jsonlData = await replay<DataLine>(compactingPath)
+    // Step 3: Read the rotated JSONL file (local disk)
+    const jsonlData = await replay<DataLine>(compactingPath)
 
-  // Step 4: Merge using ReplacingMergeTree semantics
-  const merged = mergeResults(existing, jsonlData)
+    // Step 4: Merge using ReplacingMergeTree semantics
+    const merged = mergeResults(existing, jsonlData)
 
-  // Step 5: Write directly to the final path (no .tmp rename needed)
-  await storage.writeData(dataPath, merged)
+    // Step 5: Write to a temporary file for atomicity
+    await storage.writeData(tmpPath, merged)
 
-  // Step 6: Cleanup the compacting file (local disk)
-  await cleanup(compactingPath)
+    // Step 6: Atomic rename: .tmp -> .parquet
+    await atomicRename(storage, tmpPath, dataPath)
 
-  return merged.length
+    // Step 7: Cleanup the compacting file (local disk)
+    await cleanup(compactingPath)
+
+    return merged.length
+  } catch (error) {
+    // On failure, leave the .compacting file for recovery
+    throw error
+  }
 }
 
 /**
@@ -253,6 +295,7 @@ export async function hybridCompactRels(
 ): Promise<number | null> {
   const jsonlPath = join(dataDir, 'rels.jsonl')
   const parquetPath = join(dataDir, 'rels.parquet')
+  const tmpPath = parquetPath + '.tmp'
 
   // Rotate JSONL (local disk)
   const compactingPath = await rotate(jsonlPath)
@@ -260,50 +303,33 @@ export async function hybridCompactRels(
     return null
   }
 
-  // Read existing rels from remote storage
-  const existing = await storage.readRels(parquetPath)
+  try {
+    // Read existing rels from remote storage
+    const existing = await storage.readRels(parquetPath)
 
-  // Read rotated JSONL (local disk)
-  const mutations = await replay<RelLine>(compactingPath)
+    // Read rotated JSONL (local disk)
+    const mutations = await replay<RelLine>(compactingPath)
 
-  if (mutations.length === 0) {
-    await cleanup(compactingPath)
-    return null
-  }
-
-  // Build Map keyed by f:p:t, overlay mutations
-  const merged = new Map<string, RelLine>()
-  for (const rel of existing) {
-    merged.set(`${rel.f}:${rel.p}:${rel.t}`, rel)
-  }
-  for (const mutation of mutations) {
-    merged.set(`${mutation.f}:${mutation.p}:${mutation.t}`, mutation)
-  }
-
-  // Filter out tombstones, sort by (f, p, t)
-  const live: RelLine[] = []
-  for (const rel of merged.values()) {
-    if (rel.$op === 'l') {
-      live.push(rel)
+    if (mutations.length === 0) {
+      await cleanup(compactingPath)
+      return null
     }
+
+    // Merge using shared logic: dedup by f:p:t, $ts wins, filter tombstones, sort
+    const live = mergeRelationships(existing, mutations)
+
+    // Write to tmp file, then atomic rename
+    await storage.writeRels(tmpPath, live)
+    await atomicRename(storage, tmpPath, parquetPath)
+
+    // Cleanup
+    await cleanup(compactingPath)
+
+    return live.length
+  } catch (error) {
+    // On failure, leave the .compacting file for recovery
+    throw error
   }
-  live.sort((a, b) => {
-    if (a.f < b.f) return -1
-    if (a.f > b.f) return 1
-    if (a.p < b.p) return -1
-    if (a.p > b.p) return 1
-    if (a.t < b.t) return -1
-    if (a.t > b.t) return 1
-    return 0
-  })
-
-  // Write directly to final path (no .tmp rename)
-  await storage.writeRels(parquetPath, live)
-
-  // Cleanup
-  await cleanup(compactingPath)
-
-  return live.length
 }
 
 /**
@@ -321,6 +347,7 @@ export async function hybridCompactEvents(
 ): Promise<number | null> {
   const jsonlPath = join(dataDir, 'events.jsonl')
   const compactedPath = join(dataDir, 'events.compacted')
+  const tmpPath = compactedPath + '.tmp'
 
   // Rotate JSONL (local disk)
   const compactingPath = await rotate(jsonlPath)
@@ -328,32 +355,33 @@ export async function hybridCompactEvents(
     return null
   }
 
-  // Read existing events from remote storage
-  const existing = await storage.readEvents(compactedPath)
+  try {
+    // Read existing events from remote storage
+    const existing = await storage.readEvents(compactedPath)
 
-  // Read rotated JSONL (local disk)
-  const newEvents = await replay<Record<string, unknown>>(compactingPath)
+    // Read rotated JSONL (local disk)
+    const newEvents = await replay<AnyEventLine>(compactingPath)
 
-  if (newEvents.length === 0 && existing.length === 0) {
+    if (newEvents.length === 0 && existing.length === 0) {
+      await cleanup(compactingPath)
+      return null
+    }
+
+    // Merge using shared logic: concatenate and sort by ts
+    const all = mergeEvents(existing, newEvents)
+
+    // Write to tmp file, then atomic rename
+    await storage.writeEvents(tmpPath, all)
+    await atomicRename(storage, tmpPath, compactedPath)
+
+    // Cleanup
     await cleanup(compactingPath)
-    return null
+
+    return all.length
+  } catch (error) {
+    // On failure, leave the .compacting file for recovery
+    throw error
   }
-
-  // Concatenate and sort by ts
-  const all = [...existing, ...newEvents]
-  all.sort((a, b) => {
-    const tsA = typeof a.ts === 'number' ? a.ts : 0
-    const tsB = typeof b.ts === 'number' ? b.ts : 0
-    return tsA - tsB
-  })
-
-  // Write directly to final path (no .tmp rename)
-  await storage.writeEvents(compactedPath, all)
-
-  // Cleanup
-  await cleanup(compactingPath)
-
-  return all.length
 }
 
 /**

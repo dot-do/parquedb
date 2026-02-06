@@ -15,6 +15,7 @@ import { DOCompactor } from './do-compactor'
 import { DOReadPath } from './do-read-path'
 import { encodeDataToParquet, encodeRelsToParquet, encodeEventsToParquet } from './parquet-encoders'
 import type { DataLine, RelLine } from './types'
+import type { AnyEventLine } from './merge-events'
 
 // ---------------------------------------------------------------------------
 // Env
@@ -144,7 +145,7 @@ export class MergeTreeDO extends DurableObject {
     return this.readPath.findRels(fromId)
   }
 
-  async findEvents(): Promise<Record<string, unknown>[]> {
+  async findEvents(): Promise<AnyEventLine[]> {
     return this.readPath.findEvents()
   }
 
@@ -160,7 +161,7 @@ export class MergeTreeDO extends DurableObject {
     await this.bucket.put('rels/rels.parquet', buffer)
   }
 
-  async seedR2Events(events: Record<string, unknown>[]): Promise<void> {
+  async seedR2Events(events: AnyEventLine[]): Promise<void> {
     const buffer = await encodeEventsToParquet(events)
     await this.bucket.put('events/events.parquet', buffer)
   }

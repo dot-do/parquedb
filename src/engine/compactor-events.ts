@@ -22,13 +22,12 @@ import { join } from 'node:path'
 import { rotate, cleanup } from './rotation'
 import { replay } from './jsonl-reader'
 import { lineCount } from './jsonl-reader'
+import { mergeEvents } from './merge-events'
+import type { AnyEventLine } from './merge-events'
 
 // =============================================================================
 // Types
 // =============================================================================
-
-/** Generic event record -- the compactor treats events as opaque objects with a `ts` field. */
-type AnyEvent = Record<string, unknown>
 
 /**
  * Storage adapter interface for reading/writing compacted event files.
@@ -36,9 +35,9 @@ type AnyEvent = Record<string, unknown>
  */
 export interface EventStorageAdapter {
   /** Read all events from a compacted file. Returns [] if file doesn't exist. */
-  readEvents(path: string): Promise<AnyEvent[]>
+  readEvents(path: string): Promise<AnyEventLine[]>
   /** Write all events to a compacted file (overwrite). */
-  writeEvents(path: string, data: AnyEvent[]): Promise<void>
+  writeEvents(path: string, data: AnyEventLine[]): Promise<void>
 }
 
 /** Options for shouldCompact threshold check. */
@@ -87,7 +86,7 @@ export async function compactEvents(
     const existing = await storage.readEvents(compactedPath)
 
     // 3. Read rotated JSONL
-    const newEvents = await replay<AnyEvent>(compactingPath)
+    const newEvents = await replay<AnyEventLine>(compactingPath)
 
     // If rotated JSONL was empty, skip compaction
     if (newEvents.length === 0 && existing.length === 0) {
@@ -95,15 +94,8 @@ export async function compactEvents(
       return null
     }
 
-    // 4. Concatenate: [...existing, ...new]
-    const all = [...existing, ...newEvents]
-
-    // 5. Sort by ts (stable sort preserves insertion order for equal timestamps)
-    all.sort((a, b) => {
-      const tsA = typeof a.ts === 'number' ? a.ts : 0
-      const tsB = typeof b.ts === 'number' ? b.ts : 0
-      return tsA - tsB
-    })
+    // 4–5. Merge using shared logic: concatenate and sort by ts
+    const all = mergeEvents(existing, newEvents)
 
     // 6. Write to tmp file, then atomic rename
     await storage.writeEvents(tmpPath, all)

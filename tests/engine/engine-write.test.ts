@@ -364,3 +364,34 @@ describe('ParqueEngine - ID generation', () => {
     expect(sorted).toEqual(ids)
   })
 })
+
+// =============================================================================
+// System Field Protection
+// =============================================================================
+
+describe('ParqueEngine - system field protection', () => {
+  it('$set cannot overwrite $id', async () => {
+    await engine.create('users', { $id: 'u1', name: 'Alice' })
+    await engine.update('users', 'u1', { $set: { $id: 'evil', name: 'Bob' } })
+    const result = await engine.get('users', 'u1')
+    expect(result).toBeDefined()
+    expect(result!.$id).toBe('u1')  // NOT 'evil'
+    expect(result!.name).toBe('Bob')  // data field update works
+  })
+
+  it('$inc cannot increment $v or $ts', async () => {
+    await engine.create('users', { $id: 'u2', name: 'Alice', score: 10 })
+    await engine.update('users', 'u2', { $inc: { $v: 100, score: 5 } })
+    const result = await engine.get('users', 'u2')
+    expect(result!.$v).toBe(2)  // Normal version bump, NOT 102
+    expect(result!.score).toBe(15)  // data field increment works
+  })
+
+  it('$unset cannot remove $id or $op', async () => {
+    await engine.create('users', { $id: 'u3', name: 'Alice' })
+    await engine.update('users', 'u3', { $unset: { $id: true, name: true } })
+    const result = await engine.get('users', 'u3')
+    expect(result!.$id).toBe('u3')  // system field preserved
+    expect(result!.name).toBeUndefined()  // data field removed
+  })
+})

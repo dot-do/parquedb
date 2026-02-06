@@ -28,6 +28,7 @@ import { join } from 'node:path'
 import { rotate, cleanup } from './rotation'
 import { replay } from './jsonl-reader'
 import type { RelLine } from './types'
+import { mergeRelationships } from './merge-rels'
 
 // =============================================================================
 // Storage Adapter Interface
@@ -60,33 +61,7 @@ const DEFAULT_THRESHOLDS: CompactThresholds = {
   byteThreshold: 10 * 1024 * 1024, // 10 MB
 }
 
-// =============================================================================
-// Composite Key
-// =============================================================================
 
-/**
- * Build the dedup key for a relationship: `f:p:t`
- */
-function compositeKey(f: string, p: string, t: string): string {
-  return `${f}:${p}:${t}`
-}
-
-// =============================================================================
-// Sort Comparator
-// =============================================================================
-
-/**
- * Compare two RelLines by (f, p, t) for deterministic output ordering.
- */
-function relComparator(a: RelLine, b: RelLine): number {
-  if (a.f < b.f) return -1
-  if (a.f > b.f) return 1
-  if (a.p < b.p) return -1
-  if (a.p > b.p) return 1
-  if (a.t < b.t) return -1
-  if (a.t > b.t) return 1
-  return 0
-}
 
 // =============================================================================
 // compactRelationships
@@ -127,29 +102,8 @@ export async function compactRelationships(
       return null
     }
 
-    // 4. Build Map keyed by `f:p:t` from existing data
-    const merged = new Map<string, RelLine>()
-    for (const rel of existing) {
-      const key = compositeKey(rel.f, rel.p, rel.t)
-      merged.set(key, rel)
-    }
-
-    // 5. Overlay JSONL entries: links replace/add, unlinks tombstone
-    for (const mutation of mutations) {
-      const key = compositeKey(mutation.f, mutation.p, mutation.t)
-      merged.set(key, mutation)
-    }
-
-    // 6. Filter out tombstones ($op='u') — only keep live links
-    const live: RelLine[] = []
-    for (const rel of merged.values()) {
-      if (rel.$op === 'l') {
-        live.push(rel)
-      }
-    }
-
-    // 7. Sort by (f, p, t)
-    live.sort(relComparator)
+    // 4–7. Merge using shared logic: dedup by f:p:t, $ts wins, filter tombstones, sort
+    const live = mergeRelationships(existing, mutations)
 
     // 8. Write to tmp, atomic rename
     await storage.writeRels(tmpPath, live)
