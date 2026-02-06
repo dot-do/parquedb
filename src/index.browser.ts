@@ -540,10 +540,6 @@ export {
   enableIcebergMetadata,
   parqueDBTypeToIceberg,
   icebergTypeToParqueDB,
-  NativeIcebergMetadataManager,
-  NativeIcebergStorageAdapter,
-  createNativeIcebergManager,
-  enableNativeIcebergMetadata,
   type IcebergMetadataOptions,
   type IcebergSnapshotRef,
   type IcebergDataFile,
@@ -551,13 +547,20 @@ export {
   type IcebergField,
   type IcebergType,
   type IcebergCommitResult,
+} from './integrations/iceberg'
+
+export {
+  NativeIcebergMetadataManager,
+  NativeIcebergStorageAdapter,
+  createNativeIcebergManager,
+  enableNativeIcebergMetadata,
   type NativeIcebergOptions,
   type IcebergNativeSchema,
   type PartitionSpecDefinition,
   type SortOrderDefinition,
   type NativeDataFile,
   type NativeCommitResult,
-} from './integrations'
+} from './integrations/iceberg-native'
 
 // =============================================================================
 // Sync Module (Push/Pull/Sync)
