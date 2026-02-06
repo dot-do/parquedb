@@ -37,6 +37,11 @@ class MockSqlStorage {
   private nextId = 1
   private tableCreated = false
 
+  /** Test helper: total number of rows including flushed (for verifying cleanup). */
+  get totalRowCount(): number {
+    return this.rows.length
+  }
+
   exec(query: string, ...bindings: unknown[]): { toArray(): unknown[] } {
     const q = query.trim()
 
@@ -705,6 +710,108 @@ describe('DO Workflow Integration (DOCompactor + DOReadPath)', () => {
       const users = await reader.find('users', { role: 'user' })
       expect(users).toHaveLength(1)
       expect(users[0].name).toBe('Bob')
+    })
+  })
+
+  // =========================================================================
+  // WAL cleanup after compaction
+  // =========================================================================
+  describe('WAL cleanup after compaction', () => {
+    it('compactTable removes flushed WAL entries from SQLite', async () => {
+      const { sql, wal, compactor } = createTestContext()
+
+      // Write data to WAL
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice' })
+      wal.append('users', { $id: 'u2', $op: 'c', $v: 1, $ts: 1001, name: 'Bob' })
+
+      // Before compaction: 2 rows in SQLite
+      expect(sql.totalRowCount).toBe(2)
+
+      // Compact: should mark flushed AND cleanup
+      await compactor.compactTable('users')
+
+      // After compaction: flushed rows should be deleted, not just marked
+      expect(sql.totalRowCount).toBe(0)
+      expect(wal.getUnflushedCount()).toBe(0)
+
+      // replayUnflushed should return empty
+      expect(wal.replayUnflushed('users')).toHaveLength(0)
+    })
+
+    it('compactRels removes flushed WAL entries from SQLite', async () => {
+      const { sql, wal, compactor } = createTestContext()
+
+      // Write rels to WAL
+      wal.append('rels', { $op: 'l', $ts: 1000, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+      wal.append('rels', { $op: 'l', $ts: 1001, f: 'u1', p: 'posts', r: 'author', t: 'p2' })
+
+      // Before compaction: 2 rows in SQLite
+      expect(sql.totalRowCount).toBe(2)
+
+      // Compact rels
+      await compactor.compactRels()
+
+      // After compaction: flushed rows should be deleted
+      expect(sql.totalRowCount).toBe(0)
+      expect(wal.replayUnflushed('rels')).toHaveLength(0)
+    })
+
+    it('compactEvents removes flushed WAL entries from SQLite', async () => {
+      const { sql, wal, compactor } = createTestContext()
+
+      // Write events to WAL
+      wal.append('events', { id: 'e1', ts: 1000, op: 'c', ns: 'users', eid: 'u1' })
+      wal.append('events', { id: 'e2', ts: 1001, op: 'c', ns: 'users', eid: 'u2' })
+
+      // Before compaction: 2 rows in SQLite
+      expect(sql.totalRowCount).toBe(2)
+
+      // Compact events
+      await compactor.compactEvents()
+
+      // After compaction: flushed rows should be deleted
+      expect(sql.totalRowCount).toBe(0)
+      expect(wal.replayUnflushed('events')).toHaveLength(0)
+    })
+
+    it('compactAll removes all flushed WAL entries from SQLite', async () => {
+      const { sql, wal, compactor } = createTestContext()
+
+      // Write data, rels, and events to WAL
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice' })
+      wal.append('posts', { $id: 'p1', $op: 'c', $v: 1, $ts: 1001, title: 'Hello' })
+      wal.append('rels', { $op: 'l', $ts: 1002, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+      wal.append('events', { id: 'e1', ts: 1003, op: 'c', ns: 'users', eid: 'u1' })
+
+      // Before compaction: 4 rows in SQLite
+      expect(sql.totalRowCount).toBe(4)
+
+      // Compact all
+      await compactor.compactAll()
+
+      // After compaction: all flushed rows should be deleted
+      expect(sql.totalRowCount).toBe(0)
+      expect(wal.getUnflushedCount()).toBe(0)
+    })
+
+    it('cleanup only removes flushed rows, preserving unflushed ones', async () => {
+      const { sql, wal, compactor } = createTestContext()
+
+      // Write data for two tables
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice' })
+      wal.append('posts', { $id: 'p1', $op: 'c', $v: 1, $ts: 1001, title: 'Hello' })
+
+      // Before compaction: 2 rows total
+      expect(sql.totalRowCount).toBe(2)
+
+      // Compact only users (not posts)
+      await compactor.compactTable('users')
+
+      // After compaction: users row deleted, posts row still present
+      expect(sql.totalRowCount).toBe(1)
+      expect(wal.getUnflushedCount()).toBe(1) // posts still unflushed
+      expect(wal.replayUnflushed('users')).toHaveLength(0)
+      expect(wal.replayUnflushed('posts')).toHaveLength(1)
     })
   })
 })

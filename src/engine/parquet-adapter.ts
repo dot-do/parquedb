@@ -7,7 +7,7 @@
  * better compression and enabling predicate pushdown for queries.
  *
  * Column layouts:
- * - Data files: $id (string), $op (string), $v (number), $ts (number), $data (string/JSON)
+ * - Data files: $id (string), $op (string), $v (number), $ts (number), $data (VARIANT)
  * - Rels files: $op (string), $ts (number), f (string), p (string), r (string), t (string)
  * - Events files: id (string), ts (number), op (string), ns (string), eid (string),
  *                 before (string/JSON), after (string/JSON), actor (string)
@@ -18,11 +18,10 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { FullStorageAdapter } from './storage-adapters'
-import type { DataLine, RelLine, EventLine } from './types'
+import type { DataLine, RelLine } from './types'
 import type { AnyEventLine } from './merge-events'
 import { encodeDataToParquet, encodeRelsToParquet, encodeEventsToParquet } from './parquet-encoders'
-import { toNumber } from './utils'
-import { parseDataField } from './parquet-data-utils'
+import { decodeDataRows, decodeRelRows, decodeEventRows } from './r2-parquet-utils'
 
 // =============================================================================
 // Helpers
@@ -36,7 +35,7 @@ function toAsyncBuffer(buffer: Buffer): { byteLength: number; slice: (start: num
   return {
     byteLength: buffer.byteLength,
     slice: async (start: number, end?: number) => {
-      const sliced = buffer.slice(start, end ?? buffer.byteLength)
+      const sliced = buffer.subarray(start, end ?? buffer.byteLength)
       return sliced.buffer.slice(sliced.byteOffset, sliced.byteOffset + sliced.byteLength)
     },
   }
@@ -89,24 +88,8 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
     const { parquetReadObjects } = await import('hyparquet')
     const asyncBuffer = toAsyncBuffer(fileData)
 
-    const rows = await parquetReadObjects({ file: asyncBuffer }) as Array<{
-      $id: string
-      $op: string
-      $v: number
-      $ts: number
-      $data: unknown
-    }>
-
-    return rows.map(row => {
-      const dataFields = parseDataField(row.$data)
-      return {
-        ...dataFields,
-        $id: row.$id,
-        $op: row.$op as DataLine['$op'],
-        $v: toNumber(row.$v),
-        $ts: toNumber(row.$ts),
-      }
-    })
+    const rows = await parquetReadObjects({ file: asyncBuffer }) as Record<string, unknown>[]
+    return decodeDataRows(rows)
   }
 
   async writeData(path: string, data: DataLine[]): Promise<void> {
@@ -137,23 +120,8 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
     const { parquetReadObjects } = await import('hyparquet')
     const asyncBuffer = toAsyncBuffer(fileData)
 
-    const rows = await parquetReadObjects({ file: asyncBuffer }) as Array<{
-      $op: string
-      $ts: number
-      f: string
-      p: string
-      r: string
-      t: string
-    }>
-
-    return rows.map(row => ({
-      $op: row.$op as RelLine['$op'],
-      $ts: toNumber(row.$ts),
-      f: row.f,
-      p: row.p,
-      r: row.r,
-      t: row.t,
-    }))
+    const rows = await parquetReadObjects({ file: asyncBuffer }) as Record<string, unknown>[]
+    return decodeRelRows(rows)
   }
 
   async writeRels(path: string, data: RelLine[]): Promise<void> {
@@ -184,46 +152,8 @@ export class ParquetStorageAdapter implements FullStorageAdapter {
     const { parquetReadObjects } = await import('hyparquet')
     const asyncBuffer = toAsyncBuffer(fileData)
 
-    const rows = await parquetReadObjects({ file: asyncBuffer }) as Array<{
-      id: string
-      ts: number
-      op: string
-      ns: string
-      eid: string
-      before: string
-      after: string
-      actor: string
-    }>
-
-    return rows.map(row => {
-      const event: EventLine = {
-        id: row.id,
-        ts: toNumber(row.ts),
-        op: row.op as EventLine['op'],
-        ns: row.ns,
-        eid: row.eid,
-      }
-
-      if (row.before) {
-        try {
-          event.before = JSON.parse(row.before) as Record<string, unknown>
-        } catch {
-          console.warn(`[parquet-adapter] Skipping corrupted before JSON for event ${row.id}: ${row.before.slice(0, 100)}`)
-        }
-      }
-      if (row.after) {
-        try {
-          event.after = JSON.parse(row.after) as Record<string, unknown>
-        } catch {
-          console.warn(`[parquet-adapter] Skipping corrupted after JSON for event ${row.id}: ${row.after.slice(0, 100)}`)
-        }
-      }
-      if (row.actor) {
-        event.actor = row.actor
-      }
-
-      return event
-    })
+    const rows = await parquetReadObjects({ file: asyncBuffer }) as Record<string, unknown>[]
+    return decodeEventRows(rows)
   }
 
   async writeEvents(path: string, data: AnyEventLine[]): Promise<void> {

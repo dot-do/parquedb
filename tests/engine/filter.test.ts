@@ -398,6 +398,62 @@ describe('matchesFilter - $regex', () => {
   it('supports RegExp object as $regex value', () => {
     expect(matchesFilter({ name: 'ALICE' }, { name: { $regex: /alice/i } })).toBe(true)
   })
+
+  it('compiles string regex once and reuses across multiple entities', () => {
+    // Use a single filter object across many entities to exercise caching
+    const filter = { name: { $regex: '^A' } }
+
+    const entities = [
+      { name: 'Alice' },
+      { name: 'Bob' },
+      { name: 'Anna' },
+      { name: 'Charlie' },
+      { name: 'Arnold' },
+      { name: 'Dave' },
+    ]
+
+    const results = entities.filter(e => matchesFilter(e, filter))
+    expect(results).toEqual([
+      { name: 'Alice' },
+      { name: 'Anna' },
+      { name: 'Arnold' },
+    ])
+
+    // After first call, the string should have been compiled to RegExp in-place
+    expect(filter.name.$regex).toBeInstanceOf(RegExp)
+  })
+
+  it('caches compiled regex and produces correct results on repeated calls', () => {
+    const filter = { email: { $regex: '@example\\.com$' } }
+
+    // First pass
+    expect(matchesFilter({ email: 'a@example.com' }, filter)).toBe(true)
+    expect(matchesFilter({ email: 'b@other.com' }, filter)).toBe(false)
+
+    // $regex should now be a compiled RegExp
+    expect(filter.email.$regex).toBeInstanceOf(RegExp)
+
+    // Second pass with the same (now compiled) filter still works
+    expect(matchesFilter({ email: 'c@example.com' }, filter)).toBe(true)
+    expect(matchesFilter({ email: 'd@nope.org' }, filter)).toBe(false)
+  })
+
+  it('works correctly with $not and cached $regex', () => {
+    const filter = { email: { $not: { $regex: '@blocked\\.com$' } } }
+
+    const entities = [
+      { email: 'good@ok.com' },
+      { email: 'bad@blocked.com' },
+      { email: 'also-good@fine.com' },
+      { email: 'also-bad@blocked.com' },
+    ]
+
+    const results = entities.filter(e => matchesFilter(e, filter))
+    expect(results).toEqual([
+      { email: 'good@ok.com' },
+      { email: 'also-good@fine.com' },
+    ])
+  })
 })
 
 // =============================================================================

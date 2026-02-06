@@ -17,6 +17,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ParquetStorageAdapter } from '@/engine/parquet-adapter'
+import { SqliteWal } from '@/engine/sqlite-wal'
 
 // =============================================================================
 // Test Helpers
@@ -325,5 +326,176 @@ describe('do-compactor decode functions - corrupted JSON', () => {
     // ev3: valid before, corrupted after
     expect(result[2]!.before).toEqual({ title: 'Updated' })
     expect(result[2]!.after).toBeUndefined()
+  })
+})
+
+// =============================================================================
+// sqlite-wal.ts: replayUnflushed() with corrupted batch JSON
+// =============================================================================
+
+/**
+ * Create a mock SqlStorage backed by an in-memory store.
+ * Supports the minimal subset needed by SqliteWal: CREATE TABLE, INSERT, SELECT, UPDATE, DELETE.
+ */
+function createMockSqlStorage() {
+  const rows: Array<{
+    id: number
+    ts: number
+    kind: string
+    batch: string
+    row_count: number
+    flushed: number
+  }> = []
+  let nextId = 1
+
+  const storage = {
+    exec(query: string, ...bindings: unknown[]) {
+      const q = query.trim()
+
+      // CREATE TABLE — no-op
+      if (q.startsWith('CREATE TABLE')) {
+        return { toArray: () => [] }
+      }
+
+      // INSERT
+      if (q.startsWith('INSERT INTO wal')) {
+        const [ts, kind, batch, row_count] = bindings as [number, string, string, number]
+        rows.push({ id: nextId++, ts, kind, batch, row_count, flushed: 0 })
+        return { toArray: () => [] }
+      }
+
+      // SELECT with kind filter (getBatches)
+      if (q.includes('WHERE kind = ?') && q.includes('flushed = 0') && q.includes('ORDER BY id')) {
+        const kind = bindings[0] as string
+        const filtered = rows
+          .filter((r) => r.kind === kind && r.flushed === 0)
+          .sort((a, b) => a.id - b.id)
+        return { toArray: () => filtered.map((r) => ({ ...r })) }
+      }
+
+      // SELECT all unflushed (getAllBatches)
+      if (q.includes('flushed = 0') && q.includes('ORDER BY id') && !q.includes('kind = ?')) {
+        const filtered = rows.filter((r) => r.flushed === 0).sort((a, b) => a.id - b.id)
+        return { toArray: () => filtered.map((r) => ({ ...r })) }
+      }
+
+      // SELECT SUM for count
+      if (q.includes('SUM(row_count)')) {
+        if (q.includes('kind = ?')) {
+          const kind = bindings[0] as string
+          const count = rows.filter((r) => r.kind === kind && r.flushed === 0).reduce((sum, r) => sum + r.row_count, 0)
+          return { toArray: () => [{ count }] }
+        }
+        const count = rows.filter((r) => r.flushed === 0).reduce((sum, r) => sum + r.row_count, 0)
+        return { toArray: () => [{ count }] }
+      }
+
+      // SELECT DISTINCT kind
+      if (q.includes('DISTINCT kind')) {
+        const kinds = [...new Set(rows.filter((r) => r.flushed === 0).map((r) => r.kind))].sort()
+        return { toArray: () => kinds.map((kind) => ({ kind })) }
+      }
+
+      // UPDATE (markFlushed)
+      if (q.startsWith('UPDATE wal')) {
+        for (const id of bindings as number[]) {
+          const row = rows.find((r) => r.id === id)
+          if (row) row.flushed = 1
+        }
+        return { toArray: () => [] }
+      }
+
+      // DELETE
+      if (q.startsWith('DELETE')) {
+        const before = rows.length
+        rows.splice(0, rows.length, ...rows.filter((r) => r.flushed !== 1))
+        return { toArray: () => [] }
+      }
+
+      return { toArray: () => [] }
+    },
+
+    /** Inject a raw batch row directly for testing corrupted data */
+    _injectRawBatch(kind: string, batchStr: string, row_count: number) {
+      rows.push({ id: nextId++, ts: Date.now(), kind, batch: batchStr, row_count, flushed: 0 })
+    },
+  }
+
+  return storage
+}
+
+describe('SqliteWal.replayUnflushed() - corrupted batch JSON', () => {
+  it('should not crash when a batch contains corrupted JSON', () => {
+    const storage = createMockSqlStorage()
+    const wal = new SqliteWal(storage as any)
+
+    // Append a valid batch
+    wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000 })
+
+    // Inject a corrupted batch directly
+    storage._injectRawBatch('users', '<<<NOT VALID JSON>>>', 1)
+
+    // Append another valid batch
+    wal.append('users', { $id: 'u2', $op: 'c', $v: 1, $ts: 2000 })
+
+    // replayUnflushed should NOT throw, and should return the valid batches
+    const result = wal.replayUnflushed('users')
+
+    // Should get lines from the two valid batches, skipping the corrupted one
+    expect(result).toHaveLength(2)
+    expect(result[0]).toEqual({ $id: 'u1', $op: 'c', $v: 1, $ts: 1000 })
+    expect(result[1]).toEqual({ $id: 'u2', $op: 'c', $v: 1, $ts: 2000 })
+  })
+
+  it('should return empty array when all batches are corrupted', () => {
+    const storage = createMockSqlStorage()
+    const wal = new SqliteWal(storage as any)
+
+    storage._injectRawBatch('posts', '{{{BAD}}}', 1)
+    storage._injectRawBatch('posts', 'not-an-array', 1)
+    storage._injectRawBatch('posts', '', 1)
+
+    const result = wal.replayUnflushed('posts')
+
+    expect(result).toHaveLength(0)
+  })
+
+  it('should log a warning for each corrupted batch', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const storage = createMockSqlStorage()
+    const wal = new SqliteWal(storage as any)
+
+    storage._injectRawBatch('events', 'CORRUPT_1', 1)
+    storage._injectRawBatch('events', 'CORRUPT_2', 1)
+
+    wal.replayUnflushed('events')
+
+    expect(warnSpy).toHaveBeenCalledTimes(2)
+    expect(warnSpy.mock.calls[0]![0]).toContain('CORRUPT_1')
+    expect(warnSpy.mock.calls[1]![0]).toContain('CORRUPT_2')
+
+    warnSpy.mockRestore()
+  })
+
+  it('should handle a mix of valid and corrupted batches in order', () => {
+    const storage = createMockSqlStorage()
+    const wal = new SqliteWal(storage as any)
+
+    wal.appendBatch('rels', [
+      { $op: 'c', $ts: 100, f: 'a', p: 'likes', r: 'likedBy', t: 'b' },
+      { $op: 'c', $ts: 200, f: 'c', p: 'likes', r: 'likedBy', t: 'd' },
+    ])
+
+    storage._injectRawBatch('rels', 'corrupted-middle-batch', 3)
+
+    wal.append('rels', { $op: 'c', $ts: 300, f: 'e', p: 'follows', r: 'followedBy', t: 'f' })
+
+    const result = wal.replayUnflushed('rels')
+
+    // First batch had 2 lines, corrupted one is skipped, last batch had 1 line
+    expect(result).toHaveLength(3)
+    expect(result[0]).toMatchObject({ f: 'a', p: 'likes' })
+    expect(result[1]).toMatchObject({ f: 'c', p: 'likes' })
+    expect(result[2]).toMatchObject({ f: 'e', p: 'follows' })
   })
 })

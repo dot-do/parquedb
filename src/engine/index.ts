@@ -9,7 +9,7 @@ export { ParqueEngine } from './engine'
 export type { EngineConfig, AutoCompactOptions, UpdateOps, FindOptions } from './engine'
 
 // Types
-export type { DataLine, RelLine, EventLine, SchemaLine, Migration, Line, DataOp, RelOp, EventOp } from './types'
+export type { DataLine, RelLine, EventLine, SchemaLine, Migration, Line, DataOp, RelOp, EventOp, SchemaOp } from './types'
 
 // Shared utilities
 export { toNumber, DATA_SYSTEM_FIELDS } from './utils'
@@ -68,6 +68,12 @@ export type { EngineDBConfig } from './parquedb-adapter'
 export { encodeDataToParquet, encodeRelsToParquet, encodeEventsToParquet } from './parquet-encoders'
 export { CompactionWorker } from './compaction-worker'
 export type { CompactionRequest, CompactionResult } from './compaction-worker'
+
+// Parquet data utilities
+export { parseDataField } from './parquet-data-utils'
+
+// R2 Parquet utilities (shared row decoders)
+export { readParquetFromR2, decodeDataRows, decodeRelRows, decodeEventRows } from './r2-parquet-utils'
 
 // DO read path (merge-on-read)
 export { DOReadPath } from './do-read-path'

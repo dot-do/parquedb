@@ -293,8 +293,7 @@ function decodeArray(
   }
 
   if (numElements === 0) {
-    // Empty array: header + numElements + one offset
-    const emptyOffsets = offsetSize // just the zero offset
+    // Empty array: header + numElements + offsets section
     return { value: [], bytesRead: pos + (numElements + 1) * offsetSize - offset }
   }
 
@@ -325,8 +324,10 @@ function decodeArray(
 
 /**
  * Read an unsigned integer in little-endian format.
+ * @internal Exported for testing; not part of the public API.
  */
-function readUnsigned(buf: Uint8Array, pos: number, byteWidth: number): number {
+export function readUnsigned(buf: Uint8Array, pos: number, byteWidth: number): number {
+  if (byteWidth > 4) throw new Error('readUnsigned: byteWidth must be <= 4')
   let value = 0
   for (let i = 0; i < byteWidth; i++) {
     value |= buf[pos + i] << (i * 8)

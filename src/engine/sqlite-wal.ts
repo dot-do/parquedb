@@ -160,8 +160,12 @@ export class SqliteWal {
     const batches = this.getBatches(table)
     const lines: T[] = []
     for (const batch of batches) {
-      const parsed = JSON.parse(batch.batch) as T[]
-      lines.push(...parsed)
+      try {
+        const parsed = JSON.parse(batch.batch) as T[]
+        lines.push(...parsed)
+      } catch {
+        console.warn(`[sqlite-wal] Skipping corrupted WAL batch ${batch.id} for table '${table}': ${batch.batch.slice(0, 100)}`)
+      }
     }
     return lines
   }

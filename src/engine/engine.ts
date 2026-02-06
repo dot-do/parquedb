@@ -434,14 +434,20 @@ export class ParqueEngine {
   /**
    * Count entities in a table matching an optional filter.
    *
+   * Optimized: counts matching entities directly in the buffer without
+   * materializing them into an array. Skips sort/skip/limit since only
+   * the total count of matching entities is needed.
+   *
    * @returns The number of matching entities (0 if table doesn't exist).
    */
   async count(
     table: string,
     filter?: Record<string, unknown>,
   ): Promise<number> {
-    const results = await this.find(table, filter)
-    return results.length
+    const buffer = this.buffers.get(table)
+    if (!buffer) return 0
+
+    return buffer.count(filter as ScanFilter | undefined)
   }
 
   // ---------------------------------------------------------------------------

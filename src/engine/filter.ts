@@ -128,10 +128,12 @@ function evaluateComparison(value: unknown, filter: ComparisonFilter): boolean {
 
   if ('$regex' in filter) {
     if (typeof value !== 'string') return false
-    const regex = filter.$regex instanceof RegExp
-      ? filter.$regex
-      : new RegExp(filter.$regex as string)
-    if (!regex.test(value)) return false
+    // Pre-compile string patterns to RegExp on first use, then cache on the
+    // filter object so subsequent per-entity evaluations skip recompilation.
+    if (!(filter.$regex instanceof RegExp)) {
+      ;(filter as { $regex: RegExp }).$regex = new RegExp(filter.$regex as string)
+    }
+    if (!filter.$regex.test(value)) return false
   }
 
   return true

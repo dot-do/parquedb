@@ -286,6 +286,58 @@ describe('IcebergFormat.createSnapshot', () => {
     expect(result3.metadata.snapshots[2].summary.addedRecords).toBe(1)
   })
 
+  it('handles empty data array without crashing (parquedb-zou5.2)', async () => {
+    const format = createFormat()
+
+    // createSnapshot(null, []) should not crash - core regression test
+    const result = await format.createSnapshot(null, [])
+    expect(result).toBeDefined()
+
+    // Metadata should be valid
+    expect(result.metadata.formatVersion).toBe(2)
+    expect(result.metadata.snapshots).toHaveLength(1)
+    expect(result.metadata.currentSnapshotId).toBe(1)
+
+    // Snapshot summary should show 0 records
+    const snapshot = result.metadata.snapshots[0]
+    expect(snapshot.summary.addedRecords).toBe(0)
+    expect(snapshot.summary.addedDataFiles).toBe(1)
+
+    // Manifest should exist with 0-record entry
+    expect(result.manifest).toHaveLength(1)
+    expect(result.manifest[0].dataFile.recordCount).toBe(0)
+    expect(result.manifest[0].dataFile.fileSizeInBytes).toBeGreaterThan(0)
+
+    // Column stats should be empty (no data to compute bounds from)
+    const entry = result.manifest[0]
+    expect(Object.keys(entry.dataFile.lowerBounds)).toHaveLength(0)
+    expect(Object.keys(entry.dataFile.upperBounds)).toHaveLength(0)
+
+    // Data buffer should be valid Parquet
+    expect(result.dataBuffer).toBeInstanceOf(ArrayBuffer)
+    expect(result.dataBuffer.byteLength).toBeGreaterThan(0)
+
+    // All paths should be valid
+    expect(result.metadataPath).toContain('metadata/v')
+    expect(result.dataPath).toContain('data/')
+    expect(result.dataPath.endsWith('.parquet')).toBe(true)
+  })
+
+  it('handles empty data array with existing metadata (parquedb-zou5.2)', async () => {
+    const format = createFormat()
+
+    // First, create a valid snapshot with data
+    const result1 = await format.createSnapshot(null, makeSampleData(3))
+    expect(result1.metadata.snapshots).toHaveLength(1)
+
+    // Now create an empty snapshot on top - should not crash
+    const result2 = await format.createSnapshot(result1.metadata, [])
+    expect(result2).toBeDefined()
+    expect(result2.metadata.snapshots).toHaveLength(2)
+    expect(result2.metadata.snapshots[1].summary.addedRecords).toBe(0)
+    expect(result2.metadata.currentSnapshotId).toBe(2)
+  })
+
   it('11. snapshot summary has correct record counts', async () => {
     const format = createFormat()
 

@@ -24,83 +24,12 @@ import type { DataLine, RelLine } from './types'
 import { mergeRelationships } from './merge-rels'
 import { mergeEvents } from './merge-events'
 import type { AnyEventLine } from './merge-events'
-import { toNumber } from './utils'
-import { parseDataField } from './parquet-data-utils'
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-/**
- * Read a Parquet file from R2 and decode its rows using hyparquet.
- * Returns an empty array if the object does not exist.
- */
-async function readParquetFromR2(
-  bucket: R2Bucket,
-  key: string,
-): Promise<Record<string, unknown>[]> {
-  const obj = await bucket.get(key)
-  if (!obj) return []
-
-  const buffer = await obj.arrayBuffer()
-  if (buffer.byteLength === 0) return []
-
-  const { parquetReadObjects } = await import('hyparquet')
-  const asyncBuffer = {
-    byteLength: buffer.byteLength,
-    slice: async (start: number, end?: number) =>
-      buffer.slice(start, end ?? buffer.byteLength),
-  }
-  return (await parquetReadObjects({ file: asyncBuffer })) as Record<string, unknown>[]
-}
-
-/**
- * Convert raw Parquet rows to DataLine[].
- *
- * Parquet stores system fields ($id, $op, $v, $ts) as dedicated columns
- * and remaining entity data in a $data column. The $data column is either:
- * - A JS object (new JSON converted type, auto-decoded by hyparquet)
- * - A JSON string (legacy UTF8 format, parsed via fallback)
- */
-function rowsToDataLines(rows: Record<string, unknown>[]): DataLine[] {
-  return rows.map((row) => {
-    const dataFields = parseDataField(row.$data)
-    return {
-      ...dataFields,
-      $id: row.$id as string,
-      $op: row.$op as DataLine['$op'],
-      $v: toNumber(row.$v),
-      $ts: toNumber(row.$ts),
-    }
-  })
-}
-
-/**
- * Convert raw Parquet rows to RelLine[].
- */
-function rowsToRelLines(rows: Record<string, unknown>[]): RelLine[] {
-  return rows.map((row) => ({
-    $op: row.$op as RelLine['$op'],
-    $ts: toNumber(row.$ts),
-    f: row.f as string,
-    p: row.p as string,
-    r: row.r as string,
-    t: row.t as string,
-  }))
-}
-
-/**
- * Simple equality filter: every key in the filter must match the entity value.
- */
-function matchesFilter(
-  entity: Record<string, unknown>,
-  filter: Record<string, unknown>,
-): boolean {
-  for (const [key, value] of Object.entries(filter)) {
-    if (entity[key] !== value) return false
-  }
-  return true
-}
+import { matchesFilter } from './filter'
+import {
+  readParquetFromR2,
+  decodeDataRows,
+  decodeRelRows,
+} from './r2-parquet-utils'
 
 // =============================================================================
 // DOReadPath
@@ -122,7 +51,7 @@ export class DOReadPath {
   async find(table: string, filter?: Record<string, unknown>): Promise<DataLine[]> {
     // 1. Read R2 Parquet
     const r2Rows = await readParquetFromR2(this.bucket, `data/${table}.parquet`)
-    const r2Lines = rowsToDataLines(r2Rows)
+    const r2Lines = decodeDataRows(r2Rows)
 
     // 2. Read WAL
     const walLines = this.wal.replayUnflushed<DataLine>(table)
@@ -151,7 +80,7 @@ export class DOReadPath {
 
     // 2. Read R2 for the base entity
     const r2Rows = await readParquetFromR2(this.bucket, `data/${table}.parquet`)
-    const r2Lines = rowsToDataLines(r2Rows).filter((l) => l.$id === id)
+    const r2Lines = decodeDataRows(r2Rows).filter((l) => l.$id === id)
 
     // 3. Merge and pick highest $v
     const allLines = [...r2Lines, ...walLines]
@@ -178,7 +107,7 @@ export class DOReadPath {
   async findRels(fromId?: string): Promise<RelLine[]> {
     // 1. Read R2 rels
     const r2Rows = await readParquetFromR2(this.bucket, 'rels/rels.parquet')
-    const r2Lines = rowsToRelLines(r2Rows)
+    const r2Lines = decodeRelRows(r2Rows)
 
     // 2. Read WAL rels
     const walLines = this.wal.replayUnflushed<RelLine>('rels')

@@ -270,13 +270,17 @@ describe('DeltaFormat createDataTransaction', () => {
     const delta = createDelta()
     delta.createInitialTransaction() // version 0
 
-    // Should not throw
+    // Should not throw - this is the core regression test for parquedb-zou5.2
     const result = await delta.createDataTransaction([])
     expect(result).toBeDefined()
     expect(result.transaction).toBeDefined()
     expect(result.transaction.actions).toBeDefined()
 
-    // The add action should have numRecords: 0
+    // Version should still increment
+    expect(result.transaction.version).toBe(1)
+    expect(delta.version).toBe(1)
+
+    // The add action should have numRecords: 0 with empty min/max
     const addAction = result.transaction.actions.find(isAdd)
     expect(addAction).toBeDefined()
     if (addAction) {
@@ -284,6 +288,37 @@ describe('DeltaFormat createDataTransaction', () => {
       expect(stats.numRecords).toBe(0)
       expect(stats.minValues).toEqual({})
       expect(stats.maxValues).toEqual({})
+    }
+
+    // dataBuffer should be a valid (possibly empty-content) Parquet file
+    expect(result.dataBuffer).toBeInstanceOf(ArrayBuffer)
+    expect(result.dataBuffer.byteLength).toBeGreaterThan(0)
+
+    // dataPath should still be a valid path
+    expect(result.dataPath).toMatch(/^data\/part-00000-[0-9a-f-]+\.parquet$/)
+  })
+
+  it('handles empty data array with previousDataPaths', async () => {
+    const delta = createDelta()
+    delta.createInitialTransaction()
+
+    const previousPaths = ['data/part-00000-old-uuid.parquet']
+
+    // Should not crash even with empty data and previous paths to remove
+    const result = await delta.createDataTransaction([], previousPaths)
+    expect(result).toBeDefined()
+
+    // Should have a remove action for the previous file
+    const removeActions = result.transaction.actions.filter(isRemove)
+    expect(removeActions).toHaveLength(1)
+    expect(removeActions[0].remove.path).toBe('data/part-00000-old-uuid.parquet')
+
+    // Should still have an add action for the (empty) new file
+    const addAction = result.transaction.actions.find(isAdd)
+    expect(addAction).toBeDefined()
+    if (addAction) {
+      const stats = JSON.parse(addAction.add.stats)
+      expect(stats.numRecords).toBe(0)
     }
   })
 })

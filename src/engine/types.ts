@@ -20,8 +20,11 @@ export type DataOp = 'c' | 'u' | 'd'
 /** RelLine operations: link, unlink */
 export type RelOp = 'l' | 'u'
 
-/** EventLine operations: create, update, delete, schema */
-export type EventOp = 'c' | 'u' | 'd' | 's'
+/** EventLine operations: create, update, delete */
+export type EventOp = 'c' | 'u' | 'd'
+
+/** SchemaLine operation */
+export type SchemaOp = 's'
 
 // =============================================================================
 // DataLine -- entity state (full entity after mutation)
@@ -146,7 +149,7 @@ export interface SchemaLine {
   /** Epoch milliseconds timestamp */
   ts: number
   /** Operation: always 's' for schema */
-  op: 's'
+  op: SchemaOp
   /** Table/namespace name */
   ns: string
   /** Full schema at this point: { fieldName: typeString } */

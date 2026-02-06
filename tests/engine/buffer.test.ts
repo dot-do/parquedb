@@ -297,6 +297,78 @@ describe('TableBuffer', () => {
   })
 
   // =========================================================================
+  // 10b. count() - optimized counting without materialization
+  // =========================================================================
+  describe('count()', () => {
+    it('counts all live entities when no filter is provided', () => {
+      buffer.set(makeLine({ $id: 'user-1', name: 'Alice' }))
+      buffer.set(makeLine({ $id: 'user-2', name: 'Bob' }))
+      buffer.set(makeLine({ $id: 'user-3', name: 'Charlie' }))
+
+      expect(buffer.count()).toBe(3)
+    })
+
+    it('excludes tombstones from count', () => {
+      buffer.set(makeLine({ $id: 'user-1', name: 'Alice' }))
+      buffer.set(makeLine({ $id: 'user-2', name: 'Bob' }))
+      buffer.set(makeLine({ $id: 'user-3', name: 'Charlie' }))
+      buffer.delete('user-2', 2, Date.now())
+
+      expect(buffer.count()).toBe(2)
+    })
+
+    it('returns 0 when buffer is empty', () => {
+      expect(buffer.count()).toBe(0)
+    })
+
+    it('returns 0 when all entries are tombstones', () => {
+      buffer.set(makeLine({ $id: 'user-1', name: 'Alice' }))
+      buffer.delete('user-1', 2, Date.now())
+
+      expect(buffer.count()).toBe(0)
+    })
+
+    it('counts entities matching a simple equality filter', () => {
+      buffer.set(makeLine({ $id: 'user-1', name: 'Alice', role: 'admin' }))
+      buffer.set(makeLine({ $id: 'user-2', name: 'Bob', role: 'user' }))
+      buffer.set(makeLine({ $id: 'user-3', name: 'Charlie', role: 'admin' }))
+
+      expect(buffer.count({ role: 'admin' })).toBe(2)
+    })
+
+    it('counts entities matching comparison operators', () => {
+      buffer.set(makeLine({ $id: 'user-1', name: 'Alice', age: 30 }))
+      buffer.set(makeLine({ $id: 'user-2', name: 'Bob', age: 25 }))
+      buffer.set(makeLine({ $id: 'user-3', name: 'Charlie', age: 35 }))
+
+      expect(buffer.count({ age: { $gt: 28 } })).toBe(2)
+      expect(buffer.count({ age: { $lte: 25 } })).toBe(1)
+    })
+
+    it('returns same result as scan().length', () => {
+      buffer.set(makeLine({ $id: 'user-1', name: 'Alice', role: 'admin', age: 30 }))
+      buffer.set(makeLine({ $id: 'user-2', name: 'Bob', role: 'user', age: 25 }))
+      buffer.set(makeLine({ $id: 'user-3', name: 'Charlie', role: 'admin', age: 35 }))
+      buffer.delete('user-2', 2, Date.now())
+
+      const filter = { role: 'admin' }
+      expect(buffer.count(filter)).toBe(buffer.scan(filter).length)
+
+      expect(buffer.count()).toBe(buffer.scan().length)
+
+      const noMatch = { role: 'superadmin' }
+      expect(buffer.count(noMatch)).toBe(buffer.scan(noMatch).length)
+    })
+
+    it('does not count tombstoned entities even if they match filter', () => {
+      buffer.set(makeLine({ $id: 'user-1', name: 'Alice' }))
+      buffer.delete('user-1', 2, Date.now())
+
+      expect(buffer.count({ name: 'Alice' })).toBe(0)
+    })
+  })
+
+  // =========================================================================
   // 11. clear()
   // =========================================================================
   describe('clear()', () => {

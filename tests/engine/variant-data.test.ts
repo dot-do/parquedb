@@ -16,6 +16,7 @@ import {
   encodeDataToParquet,
 } from '@/engine/parquet-encoders'
 import { parseDataField } from '@/engine/parquet-data-utils'
+import { decodeVariant, readUnsigned } from '@/engine/variant-decoder'
 import { makeLine, decodeParquet, toNumber } from './helpers'
 
 // =============================================================================
@@ -447,5 +448,32 @@ describe('VARIANT $data: ParquetStorageAdapter integration', () => {
     } finally {
       await rm(tmpDir, { recursive: true, force: true })
     }
+  })
+})
+
+// =============================================================================
+// 10. readUnsigned byteWidth Validation
+// =============================================================================
+
+describe('readUnsigned byteWidth validation', () => {
+  it('should read 1-byte unsigned correctly', () => {
+    const buf = new Uint8Array([0xFF])
+    expect(readUnsigned(buf, 0, 1)).toBe(255)
+  })
+
+  it('should read 2-byte unsigned correctly (little-endian)', () => {
+    const buf = new Uint8Array([0x01, 0x02])
+    expect(readUnsigned(buf, 0, 2)).toBe(0x0201)
+  })
+
+  it('should read 4-byte unsigned correctly', () => {
+    const buf = new Uint8Array([0x01, 0x00, 0x00, 0x00])
+    expect(readUnsigned(buf, 0, 4)).toBe(1)
+  })
+
+  it('should throw for byteWidth > 4', () => {
+    const buf = new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
+    expect(() => readUnsigned(buf, 0, 5)).toThrow('readUnsigned: byteWidth must be <= 4')
+    expect(() => readUnsigned(buf, 0, 8)).toThrow('readUnsigned: byteWidth must be <= 4')
   })
 })

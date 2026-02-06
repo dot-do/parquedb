@@ -27,120 +27,11 @@ import {
   encodeRelsToParquet,
   encodeEventsToParquet,
 } from './parquet-encoders'
-import type { DataLine, RelLine, EventLine } from './types'
+import type { DataLine, RelLine } from './types'
 import { mergeRelationships } from './merge-rels'
 import { mergeEvents } from './merge-events'
 import type { AnyEventLine } from './merge-events'
-import { toNumber } from './utils'
-import { parseDataField } from './parquet-data-utils'
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-/**
- * Read a Parquet file from R2 and decode rows using hyparquet.
- * Returns an empty array if the key does not exist.
- */
-async function readParquetFromR2<T extends Record<string, unknown>>(bucket: R2Bucket, key: string): Promise<T[]> {
-  const obj = await bucket.get(key)
-  if (!obj) return []
-
-  const buffer = await obj.arrayBuffer()
-  if (buffer.byteLength === 0) return []
-
-  const { parquetReadObjects } = await import('hyparquet')
-  const asyncBuffer = {
-    byteLength: buffer.byteLength,
-    slice: async (start: number, end?: number) =>
-      buffer.slice(start, end ?? buffer.byteLength),
-  }
-
-  return (await parquetReadObjects({ file: asyncBuffer })) as T[]
-}
-
-/**
- * Decode raw Parquet data rows into DataLine objects.
- * Handles the $data column which is either:
- * - A JS object (new JSON converted type, auto-decoded by hyparquet)
- * - A JSON string (legacy UTF8 format, parsed via fallback)
- */
-function decodeDataRows(
-  rows: Array<{ $id: string; $op: string; $v: unknown; $ts: unknown; $data?: unknown }>,
-): DataLine[] {
-  return rows.map((row) => {
-    const dataFields = parseDataField(row.$data)
-    return {
-      ...dataFields,
-      $id: row.$id,
-      $op: row.$op as DataLine['$op'],
-      $v: toNumber(row.$v),
-      $ts: toNumber(row.$ts),
-    }
-  })
-}
-
-/**
- * Decode raw Parquet rel rows into RelLine objects.
- */
-function decodeRelRows(
-  rows: Array<{ $op: string; $ts: unknown; f: string; p: string; r: string; t: string }>,
-): RelLine[] {
-  return rows.map((row) => ({
-    $op: row.$op as RelLine['$op'],
-    $ts: toNumber(row.$ts),
-    f: row.f,
-    p: row.p,
-    r: row.r,
-    t: row.t,
-  }))
-}
-
-/**
- * Decode raw Parquet event rows into EventLine records.
- */
-function decodeEventRows(
-  rows: Array<{
-    id: string
-    ts: unknown
-    op: string
-    ns: string
-    eid: string
-    before?: string
-    after?: string
-    actor?: string
-  }>,
-): EventLine[] {
-  return rows.map((row) => {
-    const event: EventLine = {
-      id: row.id,
-      ts: toNumber(row.ts),
-      op: row.op as EventLine['op'],
-      ns: row.ns,
-      eid: row.eid,
-    }
-
-    if (row.before && row.before !== '') {
-      try {
-        event.before = JSON.parse(row.before) as Record<string, unknown>
-      } catch {
-        console.warn(`[do-compactor] Skipping corrupted before JSON for event ${row.id}: ${row.before.slice(0, 100)}`)
-      }
-    }
-    if (row.after && row.after !== '') {
-      try {
-        event.after = JSON.parse(row.after) as Record<string, unknown>
-      } catch {
-        console.warn(`[do-compactor] Skipping corrupted after JSON for event ${row.id}: ${row.after.slice(0, 100)}`)
-      }
-    }
-    if (row.actor && row.actor !== '') {
-      event.actor = row.actor
-    }
-
-    return event
-  })
-}
+import { readParquetFromR2, decodeDataRows, decodeRelRows, decodeEventRows } from './r2-parquet-utils'
 
 // =============================================================================
 // DOCompactor
@@ -175,13 +66,7 @@ export class DOCompactor {
 
     // 3. Read existing Parquet from R2
     const r2Key = `data/${table}.parquet`
-    const existingRaw = await readParquetFromR2<{
-      $id: string
-      $op: string
-      $v: unknown
-      $ts: unknown
-      $data?: unknown
-    }>(this.bucket, r2Key)
+    const existingRaw = await readParquetFromR2(this.bucket, r2Key)
     const existing = decodeDataRows(existingRaw)
 
     // 4. Merge using ReplacingMergeTree semantics
@@ -193,9 +78,10 @@ export class DOCompactor {
     // 6. Write to R2
     await this.bucket.put(r2Key, buffer)
 
-    // 7. Mark flushed
+    // 7. Mark flushed and cleanup
     const batchIds = batches.map((b) => b.id)
     this.wal.markFlushed(batchIds)
+    this.wal.cleanup()
 
     return { count: merged.length, flushed: batchIds.length }
   }
@@ -219,14 +105,7 @@ export class DOCompactor {
 
     // 3. Read existing Parquet from R2
     const r2Key = 'rels/rels.parquet'
-    const existingRaw = await readParquetFromR2<{
-      $op: string
-      $ts: unknown
-      f: string
-      p: string
-      r: string
-      t: string
-    }>(this.bucket, r2Key)
+    const existingRaw = await readParquetFromR2(this.bucket, r2Key)
     const existing = decodeRelRows(existingRaw)
 
     // 4–5. Merge using shared logic: dedup by f:p:t, $ts wins, filter unlinks, sort
@@ -238,9 +117,10 @@ export class DOCompactor {
     // 7. Write to R2
     await this.bucket.put(r2Key, buffer)
 
-    // 8. Mark flushed
+    // 8. Mark flushed and cleanup
     const batchIds = batches.map((b) => b.id)
     this.wal.markFlushed(batchIds)
+    this.wal.cleanup()
 
     return { count: live.length, flushed: batchIds.length }
   }
@@ -264,16 +144,7 @@ export class DOCompactor {
 
     // 3. Read existing Parquet from R2
     const r2Key = 'events/events.parquet'
-    const existingRaw = await readParquetFromR2<{
-      id: string
-      ts: unknown
-      op: string
-      ns: string
-      eid: string
-      before?: string
-      after?: string
-      actor?: string
-    }>(this.bucket, r2Key)
+    const existingRaw = await readParquetFromR2(this.bucket, r2Key)
     const existing = decodeEventRows(existingRaw)
 
     // 4–5. Merge using shared logic: concatenate and sort by ts
@@ -285,9 +156,10 @@ export class DOCompactor {
     // 7. Write to R2
     await this.bucket.put(r2Key, buffer)
 
-    // 8. Mark flushed
+    // 8. Mark flushed and cleanup
     const batchIds = batches.map((b) => b.id)
     this.wal.markFlushed(batchIds)
+    this.wal.cleanup()
 
     return { count: all.length, flushed: batchIds.length }
   }

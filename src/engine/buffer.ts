@@ -103,6 +103,27 @@ export class TableBuffer {
   }
 
   /**
+   * Count live entities matching an optional filter, without collecting them
+   * into an array.
+   *
+   * This is more efficient than `scan(filter).length` because it avoids
+   * allocating the results array entirely — only a counter is maintained.
+   */
+  count(filter?: ScanFilter): number {
+    let count = 0
+    for (const entity of this.store.values()) {
+      // Skip tombstones
+      if (entity.$op === 'd') continue
+
+      // Apply filter if provided
+      if (filter && !matchesFilter(entity, filter)) continue
+
+      count++
+    }
+    return count
+  }
+
+  /**
    * Remove all entries from the buffer.
    */
   clear(): void {

@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import type { EventLine, SchemaLine, EventOp } from '@/engine/types'
+import type { EventLine, SchemaLine, EventOp, SchemaOp } from '@/engine/types'
 import { isEventLine, isSchemaLine } from '@/engine/jsonl'
 import { mergeEvents } from '@/engine/merge-events'
 
@@ -76,9 +76,10 @@ describe('EventLine type shape', () => {
   })
 
   it('op field accepts only c, u, d', () => {
-    const ops: EventOp[] = ['c', 'u', 'd', 's']
-    const eventOps = ops.filter((op): op is EventLine['op'] => op === 'c' || op === 'u' || op === 'd')
+    const eventOps: EventOp[] = ['c', 'u', 'd']
+    const schemaOps: SchemaOp[] = ['s']
     expect(eventOps).toEqual(['c', 'u', 'd'])
+    expect(schemaOps).toEqual(['s'])
   })
 
   it('update event has both before and after', () => {
