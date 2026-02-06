@@ -50,7 +50,7 @@ export default defineWorkspace([
     test: {
       name: 'node:unit',
       root: '.',
-      include: ['tests/unit/**/*.test.ts'],
+      include: ['tests/unit/**/*.test.ts', 'tests/engine/**/*.test.ts'],
       exclude: ['**/*.workers.test.ts', '**/*.browser.test.ts'],
       globals: true,
       pool: 'forks',
@@ -65,6 +65,33 @@ export default defineWorkspace([
       maxConcurrency: 1, // Run tests within a file sequentially to avoid temp dir races
       sequence: {
         shuffle: false, // Keep deterministic order for debugging
+      },
+      setupFiles: ['tests/setup.ts'],
+      testTimeout: 30000,
+    },
+  },
+
+  // Engine tests - MergeTree engine components (buffer, compaction, WAL)
+  {
+    resolve: sharedResolve,
+    test: {
+      name: 'node:engine',
+      root: '.',
+      include: ['tests/engine/**/*.test.ts'],
+      exclude: ['**/*.workers.test.ts', '**/*.browser.test.ts'],
+      globals: true,
+      pool: 'forks',
+      poolOptions: {
+        forks: {
+          maxForks: optimalForks,
+          minForks: 2,
+          isolate: true,
+        },
+      },
+      fileParallelism: true,
+      maxConcurrency: 1,
+      sequence: {
+        shuffle: false,
       },
       setupFiles: ['tests/setup.ts'],
       testTimeout: 30000,
@@ -246,6 +273,37 @@ export default defineWorkspace([
             durableObjects: {
               PARQUEDB: {
                 className: 'ParqueDBDO',
+                useSQLite: true,
+              },
+            },
+          },
+        },
+      },
+    },
+  }),
+
+  // Engine worker tests (DO SQLite WAL)
+  defineWorkersConfig({
+    test: {
+      name: 'engine:workers',
+      root: '.',
+      include: ['tests/engine/**/*.workers.test.ts'],
+      globals: true,
+      testTimeout: 60000,
+      hookTimeout: 30000,
+      poolOptions: {
+        workers: {
+          isolatedStorage: true,
+          main: './src/engine/test-worker.ts',
+          miniflare: {
+            compatibilityDate: '2026-01-28',
+            compatibilityFlags: ['nodejs_compat'],
+            r2Buckets: {
+              BUCKET: 'parquedb-test',
+            },
+            durableObjects: {
+              MERGETREE: {
+                className: 'MergeTreeDO',
                 useSQLite: true,
               },
             },
