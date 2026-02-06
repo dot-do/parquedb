@@ -398,14 +398,21 @@ export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {
   // Extract collection options
   const collectionOptions = extractAllCollectionOptions(input)
 
-  const parqueDBConfig: ParqueDBConfig = {
+  const extra = config as Record<string, unknown>
+  const parqueDBConfig: ParqueDBConfig & Record<string, unknown> = {
     storage,
     defaultNamespace: config.defaultNamespace,
     storageRouter,
     collectionOptions,
   }
+  if (extra.eventSourcedConfig) {
+    parqueDBConfig.eventSourcedConfig = extra.eventSourcedConfig
+  }
+  if (extra.maxCacheSize !== undefined) {
+    parqueDBConfig.maxCacheSize = extra.maxCacheSize
+  }
 
-  const db = new ParqueDB(parqueDBConfig)
+  const db = new ParqueDB(parqueDBConfig as ParqueDBConfig)
 
   // Parse typed schemas using GraphDL
   const graphInput = convertToGraphDLInput(input)

@@ -459,6 +459,11 @@ export function resolveRelationshipIdsBatch(
  * @param options - Options including autoCreate flag
  * @returns Resolved relationship info, or null if the value cannot be resolved
  * @throws {RelationshipResolutionError} if target doesn't exist and autoCreate is false
+ *
+ * NOTE: Auto-creation is non-transitive. If an auto-created entity itself has
+ * relationship fields referencing non-existent targets, those will throw
+ * RelationshipResolutionError rather than cascading auto-creation. This prevents
+ * infinite recursion in circular relationship graphs.
  */
 async function resolveOrCreate(
   ctx: EntityMutationContext,
@@ -514,14 +519,9 @@ async function resolveOrCreate(
       return { fullId, displayName: String(existing.name || fullId) }
     }
 
-    if (!options?.autoCreate) {
-      throw new RelationshipResolutionError(fullId, 'not_found',
-        `Related entity '${fullId}' does not exist`)
-    }
-
     // Auto-create with full provided data, setting $type so createEntity derives correct schema
     const createData = { ...obj, $type: targetTypeName }
-    const entity = await createEntity(ctx, targetNs, createData as CreateInput, { skipValidation: true })
+    const entity = await createEntity(ctx, targetNs, createData as CreateInput, {})
     return { fullId: entity.$id, displayName: String(entity.name) }
   }
 
@@ -543,6 +543,11 @@ async function resolveOrCreate(
  *
  * When autoCreate is enabled, missing target entities are auto-created rather than
  * throwing a RelationshipResolutionError.
+ *
+ * NOTE: Auto-creation is non-transitive. If an auto-created entity itself has
+ * relationship fields referencing non-existent targets, those will throw
+ * RelationshipResolutionError rather than cascading auto-creation. This prevents
+ * infinite recursion in circular relationship graphs.
  *
  * @param ctx - The mutation context with entities and schema
  * @param typeName - The type being created (e.g., 'Post')
