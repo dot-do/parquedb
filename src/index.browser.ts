@@ -67,7 +67,7 @@ export { Collection, clearGlobalStorage, getEventsForEntity, getEntityStateAtTim
 // Types
 // =============================================================================
 
-export * from './types'
+export * from './types/index'
 
 // =============================================================================
 // Storage Backends
@@ -85,8 +85,8 @@ export {
   isStreamable,
   isMultipart,
   isTransactional,
-} from './storage'
-export type { R2BackendOptions, StorageCapabilities } from './storage'
+} from './storage/index'
+export type { R2BackendOptions, StorageCapabilities } from './storage/index'
 
 // =============================================================================
 // Schema
@@ -112,12 +112,12 @@ export {
   inferSchema,
   inferSchemaFromCollections,
   inferredToTypeDefinition,
-} from './schema'
+} from './schema/index'
 
 export type {
   ValidationMode,
   SchemaValidatorOptions,
-} from './schema'
+} from './schema/index'
 
 // =============================================================================
 // Query Utilities
@@ -197,7 +197,7 @@ export {
   isFacetStage,
   isBucketStage,
   isSampleStage,
-} from './aggregation'
+} from './aggregation/index'
 
 // =============================================================================
 // Indexes
@@ -222,7 +222,7 @@ export {
   type RangeQuery,
   type FTSSearchOptions,
   type FTSSearchResult,
-} from './indexes'
+} from './indexes/index'
 
 // =============================================================================
 // Events (CDC / Time-Travel)
@@ -241,7 +241,7 @@ export {
   parseRelTarget,
   entityTarget,
   relTarget,
-} from './events'
+} from './events/index'
 
 // =============================================================================
 // Embeddings (Workers AI & Vercel AI SDK)
@@ -275,7 +275,7 @@ export {
   type AutoEmbedFieldConfig,
   type AutoEmbedConfig,
   type ProcessEmbeddingsOptions,
-} from './embeddings'
+} from './embeddings/index'
 
 // =============================================================================
 // Observability (Hooks & Metrics)
@@ -302,7 +302,7 @@ export {
   type ObservabilityHook,
   type OperationMetrics,
   type AggregatedMetrics,
-} from './observability'
+} from './observability/index'
 
 // =============================================================================
 // Migration Utilities
@@ -323,7 +323,7 @@ export {
   type BsonImportOptions,
   type MigrationResult,
   type MigrationError,
-} from './migration'
+} from './migration/index'
 
 // =============================================================================
 // Error Handling
@@ -382,7 +382,7 @@ export {
   assertValid,
   assertFound,
   type SerializedError,
-} from './errors'
+} from './errors/index'
 
 // =============================================================================
 // Mutation Layer
@@ -411,7 +411,7 @@ export {
   setField,
   unsetField,
   validateUpdateOperators,
-} from './mutation'
+} from './mutation/index'
 
 // =============================================================================
 // Constants
@@ -483,7 +483,7 @@ export {
   type SQLQueryResult,
   type TranslatedQuery,
   type TranslatedMutation,
-} from './integrations/sql'
+} from './integrations/sql/index'
 
 // =============================================================================
 // Entity Backends (Pluggable Storage Formats)
@@ -514,7 +514,7 @@ export {
   type VacuumResult,
   type BackendStats,
   type EntityBackendCapabilities,
-} from './backends'
+} from './backends/index'
 
 // =============================================================================
 // Relationships (Batch Loading)
@@ -527,7 +527,7 @@ export {
   type BatchLoadResult,
   type BatchLoaderOptions,
   type BatchLoaderDB,
-} from './relationships'
+} from './relationships/index'
 
 // =============================================================================
 // Integrations (Iceberg, etc.)
@@ -584,7 +584,7 @@ export {
   type SyncResult,
   type SyncError,
   type SyncEngineOptions,
-} from './sync'
+} from './sync/index'
 
 // =============================================================================
 // Remote Client (Public Database Access)
@@ -629,7 +629,7 @@ export {
   type CsrfOptions,
   type CsrfValidationResult,
   type CsrfTokenPayload,
-} from './security'
+} from './security/index'
 
 // =============================================================================
 // Search Client (Tree-Shakable)
@@ -643,7 +643,7 @@ export {
   createSearchClient,
   type IMDBTitle,
   type ONETOccupation,
-} from './search'
+} from './search/index'
 
 // =============================================================================
 // Version
