@@ -1291,6 +1291,7 @@ export class ParqueDBImpl {
           const entity = await this.create<T>(namespace, createData, {
             actor,
             skipValidation,
+            autoCreate: options?.autoCreate,
           })
 
           result.insertedCount++

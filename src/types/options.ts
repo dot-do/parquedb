@@ -373,6 +373,9 @@ export interface CreateOptions {
 
   /** Return the created entity (default: true) */
   returnDocument?: boolean | undefined
+
+  /** Auto-create missing relationship targets instead of throwing */
+  autoCreate?: boolean | undefined
 }
 
 // =============================================================================
