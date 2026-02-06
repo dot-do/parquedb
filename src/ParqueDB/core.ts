@@ -609,6 +609,56 @@ export class ParqueDBImpl {
   }
 
   // ===========================================================================
+  // Public API - Storage Hydration
+  // ===========================================================================
+
+  /** Whether loadFromStorage has been called */
+  private _hydrated = false
+  /** Promise for in-progress hydration (prevents concurrent calls) */
+  private _hydratingPromise: Promise<number> | null = null
+
+  /**
+   * Load all entities from storage into the in-memory store.
+   * Call this after initialization when using FsBackend to
+   * populate the entity store from previously persisted events.
+   *
+   * This is idempotent - calling it multiple times is safe.
+   *
+   * @returns The number of entities loaded
+   */
+  async loadFromStorage(): Promise<number> {
+    if (this._hydrated) return 0
+    if (this._hydratingPromise) return this._hydratingPromise
+
+    this._hydratingPromise = this._loadFromStorageImpl()
+    try {
+      const count = await this._hydratingPromise
+      return count
+    } finally {
+      this._hydratingPromise = null
+    }
+  }
+
+  private async _loadFromStorageImpl(): Promise<number> {
+    if (!this._useEventSourcing || !this._eventSourcedBackend) {
+      this._hydrated = true
+      return 0
+    }
+
+    const reconstructed = await this._eventSourcedBackend.reconstructAllEntities()
+
+    // Copy reconstructed entities into the global entity store
+    let count = 0
+    for (const [fullId, entity] of reconstructed) {
+      this.entities.set(fullId, entity)
+      count++
+    }
+
+    this._hydrated = true
+    return count
+  }
+
+  // ===========================================================================
   // Public API - CRUD Operations
   // ===========================================================================
 
@@ -617,6 +667,10 @@ export class ParqueDBImpl {
     filter?: Filter,
     options?: FindOptions<T>
   ): Promise<PaginatedResult<Entity<T>>> {
+    // Auto-hydrate from storage on first find() call
+    if (!this._hydrated && this._useEventSourcing && this._eventSourcedBackend) {
+      await this.loadFromStorage()
+    }
     return findEntities<T>(this.getEntityContext(), namespace, filter, options)
   }
 

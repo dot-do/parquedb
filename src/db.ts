@@ -358,12 +358,19 @@ export function DB(input: DBInput = { schema: 'flexible' }, config: DBConfig = {
 
   // If flexible mode, create simple config without router
   if (isFlexibleMode(input)) {
-    const parqueDBConfig: ParqueDBConfig = {
+    const extra = config as Record<string, unknown>
+    const parqueDBConfig: ParqueDBConfig & Record<string, unknown> = {
       storage,
       defaultNamespace: config.defaultNamespace,
     }
+    if (extra.eventSourcedConfig) {
+      parqueDBConfig.eventSourcedConfig = extra.eventSourcedConfig
+    }
+    if (extra.maxCacheSize !== undefined) {
+      parqueDBConfig.maxCacheSize = extra.maxCacheSize
+    }
 
-    const db = new ParqueDB(parqueDBConfig)
+    const db = new ParqueDB(parqueDBConfig as ParqueDBConfig)
     const dbWithSql = db as DBInstance
     dbWithSql.sql = createSQL(db)
     return dbWithSql

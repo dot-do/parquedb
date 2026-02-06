@@ -756,7 +756,7 @@ export class EventSourcedBackend implements EventSourcedOperations {
     // Read from all batch files
     for (const batchFile of this.batchFiles) {
       const batchEvents = await this.readEventsFromFile(batchFile.path)
-      events.push(...batchEvents)
+      for (let i = 0; i < batchEvents.length; i++) events.push(batchEvents[i])
 
       // Update event count for this batch file
       batchFile.eventCount = batchEvents.length
@@ -972,22 +972,25 @@ export class EventSourcedBackend implements EventSourcedOperations {
     this.totalEventCount += newEventCount
 
     // Write data.parquet (primary entity storage for deployment/queries)
-    if (this.entitiesDirty && this.entities.size > 0) {
-      await this.writeDataParquet(writer)
-      this.entitiesDirty = false
-    } else if (buffer.events.length > 0 && this.entities.size === 0) {
-      // Log when events exist but no entities were tracked
-      // This could indicate a target format issue
-      logger.debug(
-        `Skipping data.parquet write: ${buffer.events.length} events processed but no entities tracked. ` +
-        `Check that event targets use "ns:id" format.`
-      )
-    }
+    // Skip during bulk operations to avoid O(n) rewrites of growing files
+    if (!this.bulkOperationInProgress) {
+      if (this.entitiesDirty && this.entities.size > 0) {
+        await this.writeDataParquet(writer)
+        this.entitiesDirty = false
+      } else if (buffer.events.length > 0 && this.entities.size === 0) {
+        // Log when events exist but no entities were tracked
+        // This could indicate a target format issue
+        logger.debug(
+          `Skipping data.parquet write: ${buffer.events.length} events processed but no entities tracked. ` +
+          `Check that event targets use "ns:id" format.`
+        )
+      }
 
-    // Write rels.parquet (relationship index for queries)
-    if (this.relsDirty) {
-      await this.writeRelsParquet(writer)
-      this.relsDirty = false
+      // Write rels.parquet (relationship index for queries)
+      if (this.relsDirty) {
+        await this.writeRelsParquet(writer)
+        this.relsDirty = false
+      }
     }
 
     // Update sequence
