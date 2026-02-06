@@ -13,25 +13,13 @@
  * 7. Delete .jsonl.compacting
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, writeFile, readFile, rm, stat, access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { compactDataTable, shouldCompact } from '@/engine/compactor'
 import type { StorageAdapter, CompactOptions } from '@/engine/compactor'
 import type { DataLine } from '@/engine/types'
-
-// =============================================================================
-// Mock the rotation module (being built in parallel)
-// =============================================================================
-
-vi.mock('@/engine/rotation', () => ({
-  rotate: vi.fn(),
-  cleanup: vi.fn(),
-  getCompactingPath: vi.fn((basePath: string) => basePath + '.compacting'),
-}))
-
-import { rotate, cleanup, getCompactingPath } from '@/engine/rotation'
 
 // =============================================================================
 // Test Helpers
@@ -41,7 +29,6 @@ let tempDir: string
 
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), 'compactor-data-test-'))
-  vi.clearAllMocks()
 })
 
 afterEach(async () => {
@@ -109,7 +96,6 @@ describe('compactDataTable', () => {
   describe('first compaction (no existing data file)', () => {
     it('1. compacts 3 entities in JSONL into a new output file', async () => {
       const jsonlPath = join(tempDir, 'users.jsonl')
-      const compactingPath = jsonlPath + '.compacting'
       const dataPath = join(tempDir, 'users.parquet')
 
       const entities = [
@@ -118,13 +104,8 @@ describe('compactDataTable', () => {
         makeLine({ $id: 'u3', name: 'Charlie' }),
       ]
 
-      // Write the compacting file (rotation already happened)
-      await writeJsonlFile(compactingPath, entities)
-
-      // Mock rotation: return the compacting path
-      vi.mocked(rotate).mockResolvedValue(compactingPath)
-      vi.mocked(cleanup).mockResolvedValue(undefined)
-      vi.mocked(getCompactingPath).mockReturnValue(compactingPath)
+      // Write the JSONL file (rotation will rename it to .compacting)
+      await writeJsonlFile(jsonlPath, entities)
 
       const count = await compactDataTable(tempDir, 'users', storage)
 
@@ -137,7 +118,6 @@ describe('compactDataTable', () => {
 
     it('2. output is sorted by $id', async () => {
       const jsonlPath = join(tempDir, 'users.jsonl')
-      const compactingPath = jsonlPath + '.compacting'
       const dataPath = join(tempDir, 'users.parquet')
 
       const entities = [
@@ -146,11 +126,7 @@ describe('compactDataTable', () => {
         makeLine({ $id: 'bob', name: 'Bob' }),
       ]
 
-      await writeJsonlFile(compactingPath, entities)
-
-      vi.mocked(rotate).mockResolvedValue(compactingPath)
-      vi.mocked(cleanup).mockResolvedValue(undefined)
-      vi.mocked(getCompactingPath).mockReturnValue(compactingPath)
+      await writeJsonlFile(jsonlPath, entities)
 
       await compactDataTable(tempDir, 'users', storage)
 
@@ -163,16 +139,12 @@ describe('compactDataTable', () => {
       const compactingPath = jsonlPath + '.compacting'
 
       const entities = [makeLine({ $id: 'u1', name: 'Alice' })]
-      await writeJsonlFile(compactingPath, entities)
-
-      vi.mocked(rotate).mockResolvedValue(compactingPath)
-      vi.mocked(cleanup).mockResolvedValue(undefined)
-      vi.mocked(getCompactingPath).mockReturnValue(compactingPath)
+      await writeJsonlFile(jsonlPath, entities)
 
       await compactDataTable(tempDir, 'users', storage)
 
-      // Verify cleanup was called with the compacting path
-      expect(cleanup).toHaveBeenCalledWith(compactingPath)
+      // Verify the .compacting file was removed
+      expect(await fileExists(compactingPath)).toBe(false)
     })
   })
 
@@ -182,7 +154,6 @@ describe('compactDataTable', () => {
   describe('compaction with existing data', () => {
     it('5. 3 entities in data file + 2 new entities in JSONL -> output has 5 entities', async () => {
       const jsonlPath = join(tempDir, 'users.jsonl')
-      const compactingPath = jsonlPath + '.compacting'
       const dataPath = join(tempDir, 'users.parquet')
 
       // Write existing data file
@@ -198,11 +169,7 @@ describe('compactDataTable', () => {
         makeLine({ $id: 'u4', name: 'Diana' }),
         makeLine({ $id: 'u5', name: 'Eve' }),
       ]
-      await writeJsonlFile(compactingPath, newEntities)
-
-      vi.mocked(rotate).mockResolvedValue(compactingPath)
-      vi.mocked(cleanup).mockResolvedValue(undefined)
-      vi.mocked(getCompactingPath).mockReturnValue(compactingPath)
+      await writeJsonlFile(jsonlPath, newEntities)
 
       const count = await compactDataTable(tempDir, 'users', storage)
 
@@ -213,7 +180,6 @@ describe('compactDataTable', () => {
 
     it('6. 3 entities in data file + 1 update in JSONL -> output has 3 entities', async () => {
       const jsonlPath = join(tempDir, 'users.jsonl')
-      const compactingPath = jsonlPath + '.compacting'
       const dataPath = join(tempDir, 'users.parquet')
 
       const existing = [
@@ -226,11 +192,7 @@ describe('compactDataTable', () => {
       const updates = [
         makeLine({ $id: 'u2', $v: 2, $op: 'u', name: 'Bob Updated' }),
       ]
-      await writeJsonlFile(compactingPath, updates)
-
-      vi.mocked(rotate).mockResolvedValue(compactingPath)
-      vi.mocked(cleanup).mockResolvedValue(undefined)
-      vi.mocked(getCompactingPath).mockReturnValue(compactingPath)
+      await writeJsonlFile(jsonlPath, updates)
 
       const count = await compactDataTable(tempDir, 'users', storage)
 
@@ -241,7 +203,6 @@ describe('compactDataTable', () => {
 
     it('7. updated entity has the JSONL version (higher $v)', async () => {
       const jsonlPath = join(tempDir, 'users.jsonl')
-      const compactingPath = jsonlPath + '.compacting'
       const dataPath = join(tempDir, 'users.parquet')
 
       const existing = [
@@ -253,11 +214,7 @@ describe('compactDataTable', () => {
       const updates = [
         makeLine({ $id: 'u1', $v: 2, $op: 'u', name: 'Alice Updated' }),
       ]
-      await writeJsonlFile(compactingPath, updates)
-
-      vi.mocked(rotate).mockResolvedValue(compactingPath)
-      vi.mocked(cleanup).mockResolvedValue(undefined)
-      vi.mocked(getCompactingPath).mockReturnValue(compactingPath)
+      await writeJsonlFile(jsonlPath, updates)
 
       await compactDataTable(tempDir, 'users', storage)
 
@@ -274,7 +231,6 @@ describe('compactDataTable', () => {
   describe('tombstone handling', () => {
     it('8. entity in data file + delete in JSONL -> entity removed from output', async () => {
       const jsonlPath = join(tempDir, 'users.jsonl')
-      const compactingPath = jsonlPath + '.compacting'
       const dataPath = join(tempDir, 'users.parquet')
 
       const existing = [
@@ -286,11 +242,7 @@ describe('compactDataTable', () => {
       const deletes = [
         makeLine({ $id: 'u1', $v: 2, $op: 'd' }),
       ]
-      await writeJsonlFile(compactingPath, deletes)
-
-      vi.mocked(rotate).mockResolvedValue(compactingPath)
-      vi.mocked(cleanup).mockResolvedValue(undefined)
-      vi.mocked(getCompactingPath).mockReturnValue(compactingPath)
+      await writeJsonlFile(jsonlPath, deletes)
 
       const count = await compactDataTable(tempDir, 'users', storage)
 
@@ -302,7 +254,6 @@ describe('compactDataTable', () => {
 
     it('9. multiple deletes: only non-deleted entities remain', async () => {
       const jsonlPath = join(tempDir, 'users.jsonl')
-      const compactingPath = jsonlPath + '.compacting'
       const dataPath = join(tempDir, 'users.parquet')
 
       const existing = [
@@ -317,11 +268,7 @@ describe('compactDataTable', () => {
         makeLine({ $id: 'u1', $v: 2, $op: 'd' }),
         makeLine({ $id: 'u3', $v: 2, $op: 'd' }),
       ]
-      await writeJsonlFile(compactingPath, deletes)
-
-      vi.mocked(rotate).mockResolvedValue(compactingPath)
-      vi.mocked(cleanup).mockResolvedValue(undefined)
-      vi.mocked(getCompactingPath).mockReturnValue(compactingPath)
+      await writeJsonlFile(jsonlPath, deletes)
 
       const count = await compactDataTable(tempDir, 'users', storage)
 
@@ -337,20 +284,16 @@ describe('compactDataTable', () => {
   // ===========================================================================
   describe('edge cases', () => {
     it('10. empty JSONL (nothing to compact) -> rotation returns null, no compaction needed', async () => {
-      // rotation returns null when there is nothing to rotate
-      vi.mocked(rotate).mockResolvedValue(null)
-      vi.mocked(getCompactingPath).mockReturnValue(join(tempDir, 'users.jsonl.compacting'))
-
+      // No JSONL file exists, so rotation returns null
       const count = await compactDataTable(tempDir, 'users', storage)
 
       expect(count).toBeNull()
-      // cleanup should NOT be called when rotation returns null
-      expect(cleanup).not.toHaveBeenCalled()
+      // .compacting file should not exist since rotation was skipped
+      expect(await fileExists(join(tempDir, 'users.jsonl.compacting'))).toBe(false)
     })
 
     it('11. large compaction: 1000 entities in data file + 100 new in JSONL -> correct merge', async () => {
       const jsonlPath = join(tempDir, 'users.jsonl')
-      const compactingPath = jsonlPath + '.compacting'
       const dataPath = join(tempDir, 'users.parquet')
 
       const existing: DataLine[] = []
@@ -371,11 +314,7 @@ describe('compactDataTable', () => {
           name: `New-${i}`,
         }))
       }
-      await writeJsonlFile(compactingPath, newEntities)
-
-      vi.mocked(rotate).mockResolvedValue(compactingPath)
-      vi.mocked(cleanup).mockResolvedValue(undefined)
-      vi.mocked(getCompactingPath).mockReturnValue(compactingPath)
+      await writeJsonlFile(jsonlPath, newEntities)
 
       const count = await compactDataTable(tempDir, 'users', storage)
 
@@ -386,7 +325,6 @@ describe('compactDataTable', () => {
 
     it('12. entity created and deleted in same JSONL -> not in output', async () => {
       const jsonlPath = join(tempDir, 'users.jsonl')
-      const compactingPath = jsonlPath + '.compacting'
       const dataPath = join(tempDir, 'users.parquet')
 
       // No existing data file
@@ -396,11 +334,7 @@ describe('compactDataTable', () => {
         makeLine({ $id: 'u1', $v: 2, $op: 'd' }),
         makeLine({ $id: 'u2', $v: 1, $op: 'c', name: 'Bob' }),
       ]
-      await writeJsonlFile(compactingPath, lines)
-
-      vi.mocked(rotate).mockResolvedValue(compactingPath)
-      vi.mocked(cleanup).mockResolvedValue(undefined)
-      vi.mocked(getCompactingPath).mockReturnValue(compactingPath)
+      await writeJsonlFile(jsonlPath, lines)
 
       const count = await compactDataTable(tempDir, 'users', storage)
 
@@ -417,18 +351,13 @@ describe('compactDataTable', () => {
   describe('atomic swap', () => {
     it('13. output is written to .tmp first, then renamed (verify .tmp does not exist after)', async () => {
       const jsonlPath = join(tempDir, 'users.jsonl')
-      const compactingPath = jsonlPath + '.compacting'
       const dataPath = join(tempDir, 'users.parquet')
       const tmpPath = dataPath + '.tmp'
 
       const entities = [
         makeLine({ $id: 'u1', name: 'Alice' }),
       ]
-      await writeJsonlFile(compactingPath, entities)
-
-      vi.mocked(rotate).mockResolvedValue(compactingPath)
-      vi.mocked(cleanup).mockResolvedValue(undefined)
-      vi.mocked(getCompactingPath).mockReturnValue(compactingPath)
+      await writeJsonlFile(jsonlPath, entities)
 
       await compactDataTable(tempDir, 'users', storage)
 

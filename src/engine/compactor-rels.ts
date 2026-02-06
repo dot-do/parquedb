@@ -23,10 +23,10 @@
  * - Sorting by (f, p, t) enables efficient range scans on the output file
  */
 
-import { rename } from 'node:fs/promises'
+import { rename, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { rotate, cleanup } from './rotation'
-import { replay } from './jsonl-reader'
+import { replay, lineCount } from './jsonl-reader'
 import type { RelLine } from './types'
 import { mergeRelationships } from './merge-rels'
 
@@ -134,11 +134,9 @@ export async function shouldCompact(
   jsonlPath: string,
   thresholds: CompactThresholds = DEFAULT_THRESHOLDS,
 ): Promise<boolean> {
-  const { stat: statFn } = await import('node:fs/promises')
-
   let fileInfo
   try {
-    fileInfo = await statFn(jsonlPath)
+    fileInfo = await stat(jsonlPath)
   } catch {
     // File doesn't exist — nothing to compact
     return false
@@ -150,7 +148,6 @@ export async function shouldCompact(
   }
 
   // Check line threshold
-  const { lineCount } = await import('./jsonl-reader')
   const lines = await lineCount(jsonlPath)
   return lines >= thresholds.lineThreshold
 }

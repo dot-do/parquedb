@@ -123,22 +123,45 @@ export async function encodeRelsToParquet(
 
 /**
  * Encode an array of event records into a Parquet buffer.
+ *
+ * Uses a single pass over the events array to collect all 8 column arrays
+ * simultaneously, matching the pattern used by encodeDataToParquet.
  */
 export async function encodeEventsToParquet(
   events: Array<AnyEventLine>,
 ): Promise<ArrayBuffer> {
   const { parquetWriteBuffer } = await import('hyparquet-writer')
 
+  const ids: string[] = []
+  const timestamps: number[] = []
+  const ops: string[] = []
+  const namespaces: string[] = []
+  const eids: string[] = []
+  const befores: string[] = []
+  const afters: string[] = []
+  const actors: string[] = []
+
+  for (const e of events) {
+    ids.push(e.id ?? '')
+    timestamps.push((e.ts ?? 0) + 0.0)
+    ops.push(e.op ?? '')
+    namespaces.push(e.ns ?? '')
+    eids.push('eid' in e ? (e as { eid: string }).eid : '')
+    befores.push('before' in e && e.before ? JSON.stringify(e.before) : '')
+    afters.push('after' in e && e.after ? JSON.stringify(e.after) : '')
+    actors.push(('actor' in e ? (e.actor as string) : '') ?? '')
+  }
+
   return parquetWriteBuffer({
     columnData: [
-      { name: 'id', data: events.map(e => e.id ?? '') },
-      { name: 'ts', data: events.map(e => (e.ts ?? 0) + 0.0), type: 'DOUBLE' as const },
-      { name: 'op', data: events.map(e => e.op ?? '') },
-      { name: 'ns', data: events.map(e => e.ns ?? '') },
-      { name: 'eid', data: events.map(e => 'eid' in e ? e.eid : '') },
-      { name: 'before', data: events.map(e => 'before' in e && e.before ? JSON.stringify(e.before) : '') },
-      { name: 'after', data: events.map(e => 'after' in e && e.after ? JSON.stringify(e.after) : '') },
-      { name: 'actor', data: events.map(e => ('actor' in e ? (e.actor as string) : '') ?? '') },
+      { name: 'id', data: ids },
+      { name: 'ts', data: timestamps, type: 'DOUBLE' as const },
+      { name: 'op', data: ops },
+      { name: 'ns', data: namespaces },
+      { name: 'eid', data: eids },
+      { name: 'before', data: befores },
+      { name: 'after', data: afters },
+      { name: 'actor', data: actors },
     ],
   })
 }

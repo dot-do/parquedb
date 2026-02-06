@@ -358,6 +358,102 @@ describe('isSchemaLine', () => {
 })
 
 // =============================================================================
+// Edge Cases: empty object, null, undefined, extra fields
+// =============================================================================
+
+describe('edge cases', () => {
+  it('empty object is rejected by all type guards', () => {
+    const empty = {} as unknown as Line
+    expect(isDataLine(empty)).toBe(false)
+    expect(isRelLine(empty)).toBe(false)
+    expect(isEventLine(empty)).toBe(false)
+    expect(isSchemaLine(empty)).toBe(false)
+  })
+
+  it('object with only unrelated keys is rejected by all type guards', () => {
+    const obj = { foo: 'bar', baz: 42 } as unknown as Line
+    expect(isDataLine(obj)).toBe(false)
+    expect(isRelLine(obj)).toBe(false)
+    expect(isEventLine(obj)).toBe(false)
+    expect(isSchemaLine(obj)).toBe(false)
+  })
+
+  it('object with extra fields beyond DataLine still passes isDataLine', () => {
+    const obj = { $id: 'u1', $op: 'c' as const, $v: 1, $ts: 1000, extraField: true, anotherExtra: [1, 2, 3] }
+    expect(isDataLine(obj as unknown as Line)).toBe(true)
+  })
+
+  it('object with extra fields beyond RelLine still passes isRelLine', () => {
+    const obj = { $op: 'l' as const, $ts: 1000, f: 'u1', p: 'author', r: 'posts', t: 'p1', extra: 'value' }
+    expect(isRelLine(obj as unknown as Line)).toBe(true)
+  })
+
+  it('object with extra fields beyond EventLine still passes isEventLine', () => {
+    const obj = { id: 'e1', ts: 1000, op: 'c' as const, ns: 'users', eid: 'u1', customMeta: { x: 1 } }
+    expect(isEventLine(obj as unknown as Line)).toBe(true)
+  })
+
+  it('object with extra fields beyond SchemaLine still passes isSchemaLine', () => {
+    const obj = { id: 's1', ts: 1000, op: 's' as const, ns: 'users', schema: { name: 'string' }, extra: true }
+    expect(isSchemaLine(obj as unknown as Line)).toBe(true)
+  })
+})
+
+// =============================================================================
+// Ambiguous Objects: fields from multiple line types
+// =============================================================================
+
+describe('ambiguous objects', () => {
+  it('object with DataLine + RelLine fields: isDataLine true if $op matches DataOp', () => {
+    // Has $id, $v (DataLine), plus f, p, r, t (RelLine), with $op=c (DataOp)
+    const obj = { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, f: 'u1', p: 'author', r: 'posts', t: 'p1' } as unknown as Line
+    expect(isDataLine(obj)).toBe(true)
+    // isRelLine should be false because $op='c' is not a RelOp
+    expect(isRelLine(obj)).toBe(false)
+  })
+
+  it('object with DataLine + RelLine fields: isRelLine true if $op matches RelOp', () => {
+    // Has $id, $v (DataLine), plus f, p, r, t (RelLine), with $op=l (RelOp)
+    const obj = { $id: 'u1', $op: 'l', $v: 1, $ts: 1000, f: 'u1', p: 'author', r: 'posts', t: 'p1' } as unknown as Line
+    expect(isDataLine(obj)).toBe(false)
+    expect(isRelLine(obj)).toBe(true)
+  })
+
+  it('object with EventLine + SchemaLine fields: isEventLine true if op matches EventOp', () => {
+    // Has id, ns, eid (EventLine), plus schema (SchemaLine), with op=c (EventOp)
+    const obj = { id: 'e1', ts: 1000, op: 'c', ns: 'users', eid: 'u1', schema: { name: 'string' } } as unknown as Line
+    expect(isEventLine(obj)).toBe(true)
+    // isSchemaLine should be false because op='c' is not SchemaOp
+    expect(isSchemaLine(obj)).toBe(false)
+  })
+
+  it('object with EventLine + SchemaLine fields: isSchemaLine true if op=s', () => {
+    // Has id, ns, schema (SchemaLine), plus eid (EventLine), with op=s
+    const obj = { id: 's1', ts: 1000, op: 's', ns: 'users', eid: 'u1', schema: { name: 'string' } } as unknown as Line
+    expect(isSchemaLine(obj)).toBe(true)
+    // isEventLine should be false because op='s' is not EventOp
+    expect(isEventLine(obj)).toBe(false)
+  })
+
+  it('object with all fields from all types: discrimination via $op', () => {
+    // Frankenstein object with fields from every line type
+    const obj = {
+      $id: 'u1', $op: 'c', $v: 1, $ts: 1000,
+      f: 'u1', p: 'author', r: 'posts', t: 'p1',
+      id: 'e1', ts: 1000, op: 'c', ns: 'users', eid: 'u1', schema: { name: 'string' },
+    } as unknown as Line
+    // isDataLine: has $id, $v, $op='c' (valid DataOp) => true
+    expect(isDataLine(obj)).toBe(true)
+    // isRelLine: has f, p, r, t, $op='c' (not a RelOp) => false
+    expect(isRelLine(obj)).toBe(false)
+    // isEventLine: has id, ns, eid, op='c' (valid EventOp) => true
+    expect(isEventLine(obj)).toBe(true)
+    // isSchemaLine: has id, ns, schema, op='c' (not 's') => false
+    expect(isSchemaLine(obj)).toBe(false)
+  })
+})
+
+// =============================================================================
 // Cross-type Discrimination
 // =============================================================================
 

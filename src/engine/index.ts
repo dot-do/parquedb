@@ -9,17 +9,19 @@ export { ParqueEngine } from './engine'
 export type { EngineConfig, AutoCompactOptions, UpdateOps, FindOptions } from './engine'
 
 // Types
-export type { DataLine, RelLine, EventLine, SchemaLine, Migration, Line, DataOp, RelOp, EventOp, SchemaOp } from './types'
+export type { DataLine, RelLine, EventLine, SchemaLine, Migration, Line, DataOp, RelOp, EventOp, SchemaOp, EntityId, TableName } from './types'
+export { entityId, tableName } from './types'
 
 // Shared utilities
 export { toNumber, DATA_SYSTEM_FIELDS } from './utils'
 
 // Filter (shared across all modes)
 export { matchesFilter, getNestedValue } from './filter'
+export type { ComparisonFilter } from './filter'
 
 // Buffers
 export { TableBuffer } from './buffer'
-export type { ScanFilter } from './buffer'
+export type { ScanFilter, FieldCondition } from './buffer'
 export { RelationshipBuffer } from './rel-buffer'
 
 // Schema

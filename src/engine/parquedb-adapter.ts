@@ -13,8 +13,7 @@
 
 import { ParqueEngine } from './engine'
 import type { EngineConfig } from './engine'
-import type { DataLine } from './types'
-import type { FindOptions, UpdateOps } from './engine'
+import type { DataLine, FindOptions, UpdateOps } from './types'
 
 // =============================================================================
 // Configuration

@@ -343,4 +343,61 @@ describe('mergeResults', () => {
       expect(result).toHaveLength(0)
     })
   })
+
+  // ===========================================================================
+  // Version tie-breaking (zou5.26)
+  // ===========================================================================
+  describe('version tie-breaking', () => {
+    it('21. same $id, same $v, different data: buffer version wins', () => {
+      // When both parquet and buffer have the same $id at the same $v,
+      // the buffer entry wins because it is overlaid second (>= comparison).
+      const parquet = [
+        makeLine({ $id: 'user-1', $v: 3, $op: 'u', name: 'Parquet-Name', score: 100 }),
+      ]
+      const buffer = [
+        makeLine({ $id: 'user-1', $v: 3, $op: 'u', name: 'Buffer-Name', score: 200 }),
+      ]
+      const result = mergeResults(parquet, buffer)
+      expect(result).toHaveLength(1)
+      expect(result[0].$id).toBe('user-1')
+      expect(result[0].name).toBe('Buffer-Name')
+      expect(result[0].score).toBe(200)
+      expect(result[0].$v).toBe(3)
+    })
+
+    it('22. parquet has higher $v than buffer: parquet version wins', () => {
+      // When parquet has been compacted with a more recent version than
+      // what exists in the buffer (e.g. stale buffer after partial replay),
+      // parquet's higher version takes precedence.
+      const parquet = [
+        makeLine({ $id: 'item-42', $v: 5, $op: 'u', name: 'Parquet-V5', status: 'compacted' }),
+      ]
+      const buffer = [
+        makeLine({ $id: 'item-42', $v: 2, $op: 'u', name: 'Buffer-V2', status: 'stale' }),
+      ]
+      const result = mergeResults(parquet, buffer)
+      expect(result).toHaveLength(1)
+      expect(result[0].$id).toBe('item-42')
+      expect(result[0].name).toBe('Parquet-V5')
+      expect(result[0].status).toBe('compacted')
+      expect(result[0].$v).toBe(5)
+    })
+
+    it('23. buffer has higher $v than parquet: buffer version wins', () => {
+      // The most common scenario: buffer contains mutations that haven't
+      // been compacted yet, so buffer's version is higher.
+      const parquet = [
+        makeLine({ $id: 'item-42', $v: 1, $op: 'c', name: 'Original', status: 'created' }),
+      ]
+      const buffer = [
+        makeLine({ $id: 'item-42', $v: 4, $op: 'u', name: 'Updated-3-Times', status: 'active' }),
+      ]
+      const result = mergeResults(parquet, buffer)
+      expect(result).toHaveLength(1)
+      expect(result[0].$id).toBe('item-42')
+      expect(result[0].name).toBe('Updated-3-Times')
+      expect(result[0].status).toBe('active')
+      expect(result[0].$v).toBe(4)
+    })
+  })
 })

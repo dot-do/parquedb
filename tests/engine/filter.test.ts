@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { matchesFilter, getNestedValue } from '@/engine/filter'
+import type { ComparisonFilter } from '@/engine/filter'
+import type { ScanFilter } from '@/engine/buffer'
 
 /**
  * Shared Filter Module Test Suite
@@ -704,5 +706,56 @@ describe('matchesFilter - edge cases', () => {
     expect(matchesFilter({ name: 'Alice', age: 30, role: 'admin' }, filter)).toBe(true)
     expect(matchesFilter({ name: 'System', age: 5, role: 'bot' }, filter)).toBe(true)
     expect(matchesFilter({ name: 'Bob', age: 15, role: 'user' }, filter)).toBe(false)
+  })
+})
+
+// =============================================================================
+// Type exports
+// =============================================================================
+
+describe('ComparisonFilter type export', () => {
+  it('can be used to type a comparison filter object', () => {
+    const filter: ComparisonFilter = { $gt: 18, $lt: 65 }
+    expect(matchesFilter({ age: 30 }, { age: filter })).toBe(true)
+  })
+
+  it('supports all comparison operators', () => {
+    const eqFilter: ComparisonFilter = { $eq: 'Alice' }
+    const neFilter: ComparisonFilter = { $ne: 'Bob' }
+    const gtFilter: ComparisonFilter = { $gt: 10 }
+    const gteFilter: ComparisonFilter = { $gte: 10 }
+    const ltFilter: ComparisonFilter = { $lt: 100 }
+    const lteFilter: ComparisonFilter = { $lte: 100 }
+    const inFilter: ComparisonFilter = { $in: ['a', 'b'] }
+    const ninFilter: ComparisonFilter = { $nin: ['c', 'd'] }
+    const existsFilter: ComparisonFilter = { $exists: true }
+    const regexFilter: ComparisonFilter = { $regex: '^test' }
+    const notFilter: ComparisonFilter = { $not: { $eq: 'banned' } }
+
+    // Verify they are usable at runtime (not just compile-time)
+    expect(matchesFilter({ name: 'Alice' }, { name: eqFilter })).toBe(true)
+    expect(matchesFilter({ name: 'Alice' }, { name: neFilter })).toBe(true)
+    expect(matchesFilter({ val: 50 }, { val: gtFilter })).toBe(true)
+    expect(matchesFilter({ val: 10 }, { val: gteFilter })).toBe(true)
+    expect(matchesFilter({ val: 50 }, { val: ltFilter })).toBe(true)
+    expect(matchesFilter({ val: 100 }, { val: lteFilter })).toBe(true)
+    expect(matchesFilter({ tag: 'a' }, { tag: inFilter })).toBe(true)
+    expect(matchesFilter({ tag: 'a' }, { tag: ninFilter })).toBe(true)
+    expect(matchesFilter({ name: 'Alice' }, { name: existsFilter })).toBe(true)
+    expect(matchesFilter({ name: 'testing' }, { name: regexFilter })).toBe(true)
+    expect(matchesFilter({ name: 'ok' }, { name: notFilter })).toBe(true)
+  })
+})
+
+describe('ScanFilter type export', () => {
+  it('can be used to type a scan filter with field conditions', () => {
+    const filter: ScanFilter = { name: 'Alice', age: { $gt: 18 } }
+    expect(matchesFilter({ name: 'Alice', age: 30 }, filter)).toBe(true)
+  })
+
+  it('is re-exported from engine index', async () => {
+    // Dynamic import to verify the barrel export works
+    const engineExports = await import('@/engine/index')
+    expect(engineExports.matchesFilter).toBe(matchesFilter)
   })
 })

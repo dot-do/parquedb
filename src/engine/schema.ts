@@ -14,6 +14,7 @@
  */
 
 import type { SchemaLine, Migration } from './types'
+import { IdGenerator } from './utils'
 
 // =============================================================================
 // Types
@@ -40,6 +41,8 @@ export class SchemaRegistry {
   private current: Map<string, Record<string, string>>
   /** Full history per table (for time-travel), ordered by timestamp */
   private history: Map<string, SchemaVersion[]>
+  /** Shared ID generator with monotonic counter */
+  private readonly idGen = new IdGenerator()
 
   constructor() {
     this.current = new Map()
@@ -299,12 +302,11 @@ export class SchemaRegistry {
   // ===========================================================================
 
   /**
-   * Generate a unique ID: base-36 timestamp + random suffix.
+   * Generate a time-sortable, unique ID (ULID-like).
+   * Delegates to the shared IdGenerator in utils.ts.
    */
   private generateId(): string {
-    const ts = Date.now().toString(36).padStart(9, '0')
-    const rand = Math.random().toString(36).substring(2, 8)
-    return ts + rand
+    return this.idGen.generateId()
   }
 
   /**
@@ -319,7 +321,8 @@ export class SchemaRegistry {
     if (!this.history.has(event.ns)) {
       this.history.set(event.ns, [])
     }
-    const versions = this.history.get(event.ns)!
+    const versions = this.history.get(event.ns)
+    if (!versions) return
     versions.push({
       schema: { ...event.schema },
       ts: event.ts,

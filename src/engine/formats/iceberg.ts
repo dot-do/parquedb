@@ -111,15 +111,27 @@ export interface IcebergManifestEntry {
 // UUID Generation
 // =============================================================================
 
-/** Generate a UUID, falling back to timestamp-based if crypto.randomUUID is unavailable */
+/**
+ * Generate a UUID v4, using crypto.randomUUID() as the primary path
+ * (available in Node 19+, Cloudflare Workers, Bun). Falls back to a
+ * manual implementation that correctly sets the version (4) and variant
+ * bits (RFC 4122 section 4.4).
+ */
 function generateUuid(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
   }
-  // Fallback: timestamp + random hex
-  const ts = Date.now().toString(16).padStart(12, '0')
-  const rand = Math.random().toString(16).slice(2, 14).padStart(12, '0')
-  return `${ts.slice(0, 8)}-${ts.slice(8, 12)}-4${rand.slice(0, 3)}-${rand.slice(3, 7)}-${rand.slice(7, 12)}00000`.slice(0, 36)
+  // Fallback: build a UUID v4 from random bytes
+  // Format: xxxxxxxx-xxxx-4xxx-Nxxx-xxxxxxxxxxxx
+  // where N has bits 6-7 set to 10 (variant 1), so first hex digit is 8, 9, a, or b
+  const hex = () => Math.random().toString(16).slice(2, 10).padStart(8, '0')
+  const a = hex()
+  const b = hex()
+  const c = hex()
+  const d = hex()
+  // Set version nibble to 4 and variant bits (first nibble of byte 8 forced to 8-b)
+  const variantNibble = (8 + (parseInt(c[4], 16) & 0x3)).toString(16)
+  return `${a.slice(0, 8)}-${b.slice(0, 4)}-4${b.slice(5, 8)}-${variantNibble}${c.slice(5, 8)}-${d.slice(0, 8)}${a.slice(4, 8)}`.slice(0, 36)
 }
 
 // =============================================================================

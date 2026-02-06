@@ -52,13 +52,31 @@ describe('JsonlWriter', () => {
   // Tracking
   // ===========================================================================
 
-  it('tracks lineCount and byteCount', async () => {
+  it('getLineCount returns correct count after appends', async () => {
     writer = new JsonlWriter(join(dir, 'test.jsonl'))
     expect(writer.getLineCount()).toBe(0)
-    expect(writer.getByteCount()).toBe(0)
-    await writer.append({ name: 'Alice' })
+    await writer.append({ a: 1 })
     expect(writer.getLineCount()).toBe(1)
-    expect(writer.getByteCount()).toBeGreaterThan(0)
+    await writer.append({ b: 2 })
+    expect(writer.getLineCount()).toBe(2)
+    await writer.appendBatch([{ c: 3 }, { d: 4 }, { e: 5 }])
+    expect(writer.getLineCount()).toBe(5)
+  })
+
+  it('getByteCount returns correct byte count', async () => {
+    writer = new JsonlWriter(join(dir, 'test.jsonl'))
+    expect(writer.getByteCount()).toBe(0)
+
+    const line = { name: 'Alice' }
+    const expectedBytes = Buffer.byteLength(JSON.stringify(line) + '\n', 'utf-8')
+    await writer.append(line)
+    expect(writer.getByteCount()).toBe(expectedBytes)
+
+    const batch = [{ x: 1 }, { y: 2 }]
+    const batchData = batch.map(l => JSON.stringify(l) + '\n').join('')
+    const batchBytes = Buffer.byteLength(batchData, 'utf-8')
+    await writer.appendBatch(batch)
+    expect(writer.getByteCount()).toBe(expectedBytes + batchBytes)
   })
 
   it('getPath returns the file path', () => {
@@ -81,6 +99,12 @@ describe('JsonlWriter', () => {
     writer = new JsonlWriter(join(dir, 'test.jsonl'))
     await writer.close()
     await expect(writer.appendBatch([{ a: 1 }])).rejects.toThrow('JsonlWriter is closed')
+  })
+
+  it('throws on flush after close', async () => {
+    writer = new JsonlWriter(join(dir, 'test.jsonl'))
+    await writer.close()
+    await expect(writer.flush()).rejects.toThrow('JsonlWriter is closed')
   })
 
   it('close is idempotent', async () => {
@@ -162,7 +186,7 @@ describe('JsonlWriter', () => {
   // Concurrent writes
   // ===========================================================================
 
-  it('concurrent appends maintain integrity', async () => {
+  it('concurrent appends are serialized (20 concurrent appends produce 20 valid JSON lines)', async () => {
     writer = new JsonlWriter(join(dir, 'test.jsonl'))
     const promises = Array.from({ length: 20 }, (_, i) =>
       writer.append({ index: i })
@@ -172,9 +196,14 @@ describe('JsonlWriter', () => {
 
     const lines = (await readFile(join(dir, 'test.jsonl'), 'utf-8')).trim().split('\n')
     expect(lines).toHaveLength(20)
+
     // Each line should be valid JSON
-    for (const line of lines) {
-      expect(() => JSON.parse(line)).not.toThrow()
-    }
+    const parsed = lines.map((line) => JSON.parse(line))
+    // All 20 indices should be present (order may vary due to concurrency)
+    const indices = parsed.map((obj: { index: number }) => obj.index).sort((a: number, b: number) => a - b)
+    expect(indices).toEqual(Array.from({ length: 20 }, (_, i) => i))
+
+    // lineCount should reflect all 20 writes
+    expect(writer.getLineCount()).toBe(20)
   })
 })

@@ -21,7 +21,7 @@
 // =============================================================================
 
 /** Comparison operators supported in filters */
-interface ComparisonFilter {
+export interface ComparisonFilter {
   $eq?: unknown
   $ne?: unknown
   $gt?: number | string

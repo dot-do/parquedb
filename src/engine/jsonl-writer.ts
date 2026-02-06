@@ -38,7 +38,7 @@ export class JsonlWriter {
    * If the underlying appendFile fails, this call rejects but the write queue
    * resets to a resolved state so subsequent writes can still succeed.
    */
-  async append(line: Record<string, unknown>): Promise<void> {
+  async append<T extends Record<string, unknown>>(line: T): Promise<void> {
     this.assertNotClosed()
 
     const data = JSON.stringify(line) + '\n'
@@ -69,7 +69,7 @@ export class JsonlWriter {
    * If the underlying appendFile fails, this call rejects but the write queue
    * resets to a resolved state so subsequent writes can still succeed.
    */
-  async appendBatch(lines: Record<string, unknown>[]): Promise<void> {
+  async appendBatch<T extends Record<string, unknown>>(lines: T[]): Promise<void> {
     this.assertNotClosed()
 
     const data = lines.map((line) => JSON.stringify(line) + '\n').join('')

@@ -164,3 +164,43 @@ export interface SchemaLine {
 
 /** Any JSONL line type in the MergeTree engine */
 export type Line = DataLine | RelLine | EventLine | SchemaLine
+
+// =============================================================================
+// Update Operators (engine-level)
+// =============================================================================
+
+export interface UpdateOps {
+  $set?: Record<string, unknown>
+  $inc?: Record<string, number>
+  $unset?: Record<string, boolean>
+}
+
+// =============================================================================
+// Find Options (engine-level)
+// =============================================================================
+
+export interface FindOptions {
+  limit?: number
+  skip?: number
+  sort?: Record<string, 1 | -1>
+}
+
+// =============================================================================
+// Branded Types
+// =============================================================================
+
+/** Branded type for entity IDs */
+export type EntityId = string & { readonly __brand: 'EntityId' }
+
+/** Branded type for table/namespace names */
+export type TableName = string & { readonly __brand: 'TableName' }
+
+/** Helper to create a branded EntityId from a plain string */
+export function entityId(id: string): EntityId {
+  return id as EntityId
+}
+
+/** Helper to create a branded TableName from a plain string */
+export function tableName(name: string): TableName {
+  return name as TableName
+}

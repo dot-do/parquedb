@@ -26,8 +26,11 @@ import type { StorageAdapter, CompactOptions } from './compactor'
 import { needsRecovery, getCompactingPath } from './rotation'
 import { mergeResults } from './merge'
 import { ParquetStorageAdapter } from './parquet-adapter'
-import type { DataLine, EventLine } from './types'
-import { DATA_SYSTEM_FIELDS } from './utils'
+import type { DataLine, EventLine, UpdateOps, FindOptions } from './types'
+import { DATA_SYSTEM_FIELDS, IdGenerator } from './utils'
+
+// Re-export so existing consumers that import from './engine' still work
+export type { UpdateOps, FindOptions } from './types'
 
 // =============================================================================
 // Configuration
@@ -44,26 +47,6 @@ export interface EngineConfig {
   dataDir: string
   /** Optional threshold-based auto-compaction */
   autoCompact?: AutoCompactOptions
-}
-
-// =============================================================================
-// Update operators
-// =============================================================================
-
-export interface UpdateOps {
-  $set?: Record<string, unknown>
-  $inc?: Record<string, number>
-  $unset?: Record<string, boolean>
-}
-
-// =============================================================================
-// Find options
-// =============================================================================
-
-export interface FindOptions {
-  limit?: number
-  skip?: number
-  sort?: Record<string, 1 | -1>
 }
 
 // =============================================================================
@@ -135,10 +118,8 @@ export class ParqueEngine {
   /** Track known table names (discovered during init or writes) */
   private readonly knownTables: Set<string> = new Set()
 
-  /** Last timestamp used in ID generation (for monotonic counter) */
-  private lastIdTs = 0
-  /** Monotonic counter within the same millisecond */
-  private idCounter = 0
+  /** Shared ID generator with monotonic counter */
+  private readonly idGen = new IdGenerator()
 
   constructor(config: EngineConfig) {
     this.dataDir = config.dataDir
@@ -184,8 +165,8 @@ export class ParqueEngine {
     // Write to JSONL files
     const dataWriter = this.getDataWriter(table)
     const evtWriter = this.getEventWriter()
-    await dataWriter.append(dataLine as unknown as Record<string, unknown>)
-    await evtWriter.append(eventLine as unknown as Record<string, unknown>)
+    await dataWriter.append(dataLine)
+    await evtWriter.append(eventLine)
 
     // Update in-memory buffer
     this.getBuffer(table).set(dataLine)
@@ -240,8 +221,8 @@ export class ParqueEngine {
     // Batch writes
     const dataWriter = this.getDataWriter(table)
     const evtWriter = this.getEventWriter()
-    await dataWriter.appendBatch(dataLines as unknown as Record<string, unknown>[])
-    await evtWriter.appendBatch(eventLines as unknown as Record<string, unknown>[])
+    await dataWriter.appendBatch(dataLines)
+    await evtWriter.appendBatch(eventLines)
 
     // Update in-memory buffers
     const buffer = this.getBuffer(table)
@@ -306,8 +287,8 @@ export class ParqueEngine {
     // Write to JSONL files
     const dataWriter = this.getDataWriter(table)
     const evtWriter = this.getEventWriter()
-    await dataWriter.append(updated as unknown as Record<string, unknown>)
-    await evtWriter.append(eventLine as unknown as Record<string, unknown>)
+    await dataWriter.append(updated)
+    await evtWriter.append(eventLine)
 
     // Update in-memory buffer
     buffer.set(updated)
@@ -363,8 +344,8 @@ export class ParqueEngine {
     // Write to JSONL files
     const dataWriter = this.getDataWriter(table)
     const evtWriter = this.getEventWriter()
-    await dataWriter.append(dataLine as unknown as Record<string, unknown>)
-    await evtWriter.append(eventLine as unknown as Record<string, unknown>)
+    await dataWriter.append(dataLine)
+    await evtWriter.append(eventLine)
 
     // Update in-memory buffer with tombstone
     buffer.delete(id, newVersion, ts)
@@ -531,24 +512,10 @@ export class ParqueEngine {
 
   /**
    * Generate a time-sortable, unique ID (ULID-like).
-   *
-   * Format: {timestamp_base36_padded}{counter_base36_padded}{random_base36}
-   * - Timestamp portion ensures lexicographic sort across milliseconds
-   * - Counter portion ensures sort order within the same millisecond
-   * - Random portion provides additional uniqueness
+   * Delegates to the shared IdGenerator in utils.ts.
    */
   private generateId(): string {
-    const now = Date.now()
-    if (now === this.lastIdTs) {
-      this.idCounter++
-    } else {
-      this.lastIdTs = now
-      this.idCounter = 0
-    }
-    const ts = now.toString(36).padStart(9, '0')
-    const counter = this.idCounter.toString(36).padStart(4, '0')
-    const rand = Math.random().toString(36).substring(2, 6)
-    return ts + counter + rand
+    return this.idGen.generateId()
   }
 
   /**

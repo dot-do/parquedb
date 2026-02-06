@@ -135,9 +135,10 @@ export class CompactionWorker {
     if (!this.worker) {
       return Promise.reject(new Error('Worker not started'))
     }
+    const worker = this.worker
     return new Promise((resolve, reject) => {
       this.pending.set(request.id, { resolve, reject })
-      this.worker!.postMessage(request)
+      worker.postMessage(request)
     })
   }
 }

@@ -16,17 +16,47 @@
  */
 
 import type { DataLine } from '@/engine/types'
+import type { ComparisonFilter } from '@/engine/filter'
 import { matchesFilter } from '@/engine/filter'
 
 // Re-export matchesFilter so existing imports from buffer.ts continue to work
 export { matchesFilter }
 
+// Re-export ComparisonFilter so consumers can import from buffer.ts
+export type { ComparisonFilter }
+
 // =============================================================================
 // Filter types for scan()
 // =============================================================================
 
-/** A scan filter: keys are field paths, values are literals or comparison objects */
-export type ScanFilter = Record<string, unknown>
+/** Value for a field condition: a literal for implicit $eq, or a ComparisonFilter object */
+export type FieldCondition = ComparisonFilter | string | number | boolean | null | undefined
+
+/**
+ * A MongoDB-style scan filter.
+ *
+ * Keys are either field paths (supporting dot notation for nested fields) or
+ * logical operators (`$or`, `$and`).
+ *
+ * Field values can be:
+ * - Literals (implicit `$eq`): `{ name: 'Alice' }`
+ * - ComparisonFilter objects: `{ age: { $gt: 18, $lt: 65 } }`
+ * - Dot-notation for nested fields: `{ 'address.city': 'NYC' }`
+ *
+ * Logical operators:
+ * - `$or`: Array of sub-filters, at least one must match
+ * - `$and`: Array of sub-filters, all must match
+ *
+ * All top-level conditions are ANDed together.
+ */
+export interface ScanFilter {
+  /** Logical OR: at least one sub-filter must match */
+  $or?: ScanFilter[]
+  /** Logical AND: all sub-filters must match */
+  $and?: ScanFilter[]
+  /** Field path conditions (implicit $eq or ComparisonFilter) */
+  [field: string]: FieldCondition | ScanFilter[] | undefined
+}
 
 // =============================================================================
 // TableBuffer

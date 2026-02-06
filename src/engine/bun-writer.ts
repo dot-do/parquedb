@@ -26,6 +26,7 @@ export class BunJsonlWriter {
   private writer: { write(data: string | Uint8Array): number; flush(): Promise<void>; end(): void } | null = null
   private highWaterMark: number
   private lineCount = 0
+  private _byteCount = 0
   private closed = false
 
   constructor(path: string, options?: BunJsonlWriterOptions) {
@@ -44,7 +45,7 @@ export class BunJsonlWriter {
   }
 
   /** Append a single line to the JSONL file */
-  async append(line: Record<string, unknown>): Promise<void> {
+  async append<T extends Record<string, unknown>>(line: T): Promise<void> {
     this.assertNotClosed()
     const serialized = JSON.stringify(line) + '\n'
 
@@ -56,10 +57,11 @@ export class BunJsonlWriter {
       await appendFile(this.path, serialized)
     }
     this.lineCount++
+    this._byteCount += serialized.length
   }
 
   /** Append multiple lines as a batch */
-  async appendBatch(lines: Record<string, unknown>[]): Promise<void> {
+  async appendBatch<T extends Record<string, unknown>>(lines: T[]): Promise<void> {
     this.assertNotClosed()
     if (lines.length === 0) return
 
@@ -73,6 +75,7 @@ export class BunJsonlWriter {
       await appendFile(this.path, data)
     }
     this.lineCount += lines.length
+    this._byteCount += data.length
   }
 
   /** Flush any buffered data to disk */
@@ -99,6 +102,14 @@ export class BunJsonlWriter {
   /** Get the number of lines written */
   get count(): number {
     return this.lineCount
+  }
+
+  /**
+   * Returns the total number of bytes written since construction.
+   * Useful for compaction threshold checks (e.g., trigger compaction at 64MB).
+   */
+  getByteCount(): number {
+    return this._byteCount
   }
 
   /** Whether this writer uses Bun FileSink */

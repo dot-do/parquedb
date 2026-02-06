@@ -16,9 +16,9 @@
  */
 
 import { rename, stat } from 'node:fs/promises'
+import { join } from 'node:path'
 import { rotate, cleanup } from './rotation'
-import { replay } from './jsonl-reader'
-import { lineCount } from './jsonl-reader'
+import { replay, lineCount } from './jsonl-reader'
 import { mergeResults } from './merge'
 import type { DataLine } from './types'
 
@@ -102,8 +102,8 @@ export async function compactDataTable(
   table: string,
   storage: StorageAdapter,
 ): Promise<number | null> {
-  const jsonlPath = `${dataDir}/${table}.jsonl`
-  const dataPath = `${dataDir}/${table}.parquet`
+  const jsonlPath = join(dataDir, `${table}.jsonl`)
+  const dataPath = join(dataDir, `${table}.parquet`)
 
   // Step 1: Rotate the JSONL file
   const compactingPath = await rotate(jsonlPath)
