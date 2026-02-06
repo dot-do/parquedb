@@ -29,6 +29,7 @@ import {
   readParquetFromR2,
   decodeDataRows,
   decodeRelRows,
+  decodeEventRows,
 } from './r2-parquet-utils'
 
 // =============================================================================
@@ -127,13 +128,14 @@ export class DOReadPath {
    * Find events (append-only, no merge needed -- just concatenate).
    */
   async findEvents(): Promise<AnyEventLine[]> {
-    // 1. Read R2 events
-    const r2Rows = await readParquetFromR2(this.bucket, 'events/events.parquet') as AnyEventLine[]
+    // 1. Read R2 events and decode through decodeEventRows
+    const r2Rows = await readParquetFromR2(this.bucket, 'events/events.parquet')
+    const r2Events = decodeEventRows(r2Rows)
 
     // 2. Read WAL events
     const walLines = this.wal.replayUnflushed<AnyEventLine>('events')
 
     // 3. Merge using shared logic: concatenate and sort by ts
-    return mergeEvents(r2Rows, walLines)
+    return mergeEvents(r2Events, walLines)
   }
 }

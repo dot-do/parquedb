@@ -12,6 +12,7 @@
 import { rename, writeFile, unlink, access } from 'node:fs/promises'
 
 const COMPACTING_SUFFIX = '.compacting'
+const TMP_SUFFIX = '.tmp'
 
 /**
  * Get the .compacting path for a base JSONL path.
@@ -81,8 +82,63 @@ export async function cleanup(compactingPath: string): Promise<void> {
 }
 
 /**
- * Check if a .compacting file exists (indicating an interrupted compaction).
+ * Get the .tmp path for a data file path.
+ *
+ * During compaction, the merged result is first written to a .tmp file
+ * before being atomically renamed to the final path. If a crash occurs
+ * between writing the .tmp file and the rename, the .tmp file is orphaned.
+ */
+export function getTmpPath(dataPath: string): string {
+  return dataPath + TMP_SUFFIX
+}
+
+/**
+ * Derive the data file path (e.g. table.parquet) from a JSONL base path
+ * (e.g. table.jsonl). Used to check for orphaned .tmp files alongside
+ * .compacting recovery.
+ */
+function deriveDataPath(jsonlBasePath: string): string {
+  return jsonlBasePath.replace(/\.jsonl$/, '.parquet')
+}
+
+/**
+ * Check if an orphaned .tmp file exists for a given data file path.
+ *
+ * An orphaned .tmp file indicates a crash between writing the compacted
+ * output and renaming it to the final path.
+ */
+export async function hasOrphanedTmp(dataPath: string): Promise<boolean> {
+  return fileExists(getTmpPath(dataPath))
+}
+
+/**
+ * Clean up an orphaned .tmp file for a given data file path.
+ * No-op if the .tmp file does not exist.
+ */
+export async function cleanupTmp(dataPath: string): Promise<void> {
+  try {
+    await unlink(getTmpPath(dataPath))
+  } catch (err: unknown) {
+    if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return
+    }
+    throw err
+  }
+}
+
+/**
+ * Check if recovery is needed for a table's JSONL base path.
+ *
+ * Returns true if EITHER:
+ * - A .compacting file exists (interrupted compaction, JSONL not yet merged)
+ * - An orphaned .tmp file exists for the corresponding data path
+ *   (interrupted rename after merge)
  */
 export async function needsRecovery(basePath: string): Promise<boolean> {
-  return fileExists(getCompactingPath(basePath))
+  const hasCompacting = await fileExists(getCompactingPath(basePath))
+  if (hasCompacting) return true
+
+  // Also check for orphaned .tmp file for the corresponding data path
+  const dataPath = deriveDataPath(basePath)
+  return fileExists(getTmpPath(dataPath))
 }

@@ -327,6 +327,132 @@ describe('hybridCompactData - atomic write with tmp file', () => {
 })
 
 // =============================================================================
+// 2b. engine.recoverCompaction() handles .tmp files alongside .compacting
+// =============================================================================
+
+describe('ParqueEngine.init() - .tmp recovery in recoverCompaction', () => {
+  it('cleans up .tmp file when .compacting also exists (crash during write phase)', async () => {
+    // Simulate crash during compaction step 5 (write .tmp):
+    // - .compacting exists (JSONL was rotated)
+    // - .tmp exists (partial or complete write happened)
+    // Recovery should re-merge from .compacting and clean up both artifacts.
+    const jsonlPath = join(tempDir, 'users.jsonl')
+    const compactingPath = jsonlPath + '.compacting'
+    const tmpPath = join(tempDir, 'users.parquet.tmp')
+
+    // Create .compacting file with valid data
+    await writeJsonlFile(compactingPath, [
+      makeLine({ $id: 'u1', name: 'Alice' }),
+    ])
+
+    // Create orphaned .tmp file (interrupted write)
+    await writeFile(tmpPath, 'partial garbage data')
+
+    // Create empty JSONL for new writes (as if rotation already happened)
+    await writeFile(jsonlPath, '', 'utf-8')
+
+    const engine = new ParqueEngine({ dataDir: tempDir })
+    await engine.init()
+
+    // The .tmp file should have been cleaned up
+    expect(await fileExists(tmpPath)).toBe(false)
+
+    // The .compacting file should also have been consumed by recovery
+    expect(await fileExists(compactingPath)).toBe(false)
+
+    // The data should be recovered from the .compacting file
+    const results = await engine.find('users')
+    expect(results).toHaveLength(1)
+    expect(results[0].$id).toBe('u1')
+
+    await engine.close()
+  })
+
+  it('cleans up .tmp file when only .tmp exists (crash during rename phase)', async () => {
+    // Simulate crash during compaction step 6 (rename .tmp -> .parquet):
+    // - No .compacting (already deleted or rename happened first)
+    // - .tmp exists (write completed but rename failed)
+    // Since we do not know if the .tmp is complete, we safely delete it.
+    const tmpPath = join(tempDir, 'users.parquet.tmp')
+    const jsonlPath = join(tempDir, 'users.jsonl')
+
+    // Create orphaned .tmp file
+    await writeFile(tmpPath, JSON.stringify([
+      makeLine({ $id: 'u1', name: 'Alice' }),
+    ]))
+
+    // Create JSONL with the same data (it was not rotated, so data is still there)
+    await writeJsonlFile(jsonlPath, [
+      makeLine({ $id: 'u1', name: 'Alice' }),
+    ])
+
+    const engine = new ParqueEngine({ dataDir: tempDir })
+    await engine.init()
+
+    // The .tmp file should be cleaned up
+    expect(await fileExists(tmpPath)).toBe(false)
+
+    // Data should be loaded from the JSONL file
+    const results = await engine.find('users')
+    expect(results).toHaveLength(1)
+    expect(results[0].$id).toBe('u1')
+
+    await engine.close()
+  })
+
+  it('handles multiple tables with mixed .tmp and .compacting states', async () => {
+    // Table A: has .compacting + .tmp (mid-compaction crash)
+    const aJsonl = join(tempDir, 'tableA.jsonl')
+    const aCompacting = aJsonl + '.compacting'
+    const aTmp = join(tempDir, 'tableA.parquet.tmp')
+    await writeJsonlFile(aCompacting, [
+      makeLine({ $id: 'a1', name: 'RecordA' }),
+    ])
+    await writeFile(aTmp, 'orphaned')
+    await writeFile(aJsonl, '', 'utf-8')
+
+    // Table B: has only .tmp (orphaned tmp, no compacting)
+    const bJsonl = join(tempDir, 'tableB.jsonl')
+    const bTmp = join(tempDir, 'tableB.parquet.tmp')
+    await writeJsonlFile(bJsonl, [
+      makeLine({ $id: 'b1', name: 'RecordB' }),
+    ])
+    await writeFile(bTmp, 'orphaned')
+
+    // Table C: clean state (no artifacts)
+    const cJsonl = join(tempDir, 'tableC.jsonl')
+    await writeJsonlFile(cJsonl, [
+      makeLine({ $id: 'c1', name: 'RecordC' }),
+    ])
+
+    const engine = new ParqueEngine({ dataDir: tempDir })
+    await engine.init()
+
+    // All .tmp files should be cleaned up
+    expect(await fileExists(aTmp)).toBe(false)
+    expect(await fileExists(bTmp)).toBe(false)
+
+    // .compacting should be consumed
+    expect(await fileExists(aCompacting)).toBe(false)
+
+    // All tables should have their data
+    const aResults = await engine.find('tableA')
+    expect(aResults).toHaveLength(1)
+    expect(aResults[0].$id).toBe('a1')
+
+    const bResults = await engine.find('tableB')
+    expect(bResults).toHaveLength(1)
+    expect(bResults[0].$id).toBe('b1')
+
+    const cResults = await engine.find('tableC')
+    expect(cResults).toHaveLength(1)
+    expect(cResults[0].$id).toBe('c1')
+
+    await engine.close()
+  })
+})
+
+// =============================================================================
 // 3. engine.init() cleans up orphaned .tmp files
 // =============================================================================
 

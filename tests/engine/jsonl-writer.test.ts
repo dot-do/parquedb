@@ -206,4 +206,268 @@ describe('JsonlWriter', () => {
     // lineCount should reflect all 20 writes
     expect(writer.getLineCount()).toBe(20)
   })
+
+  // ===========================================================================
+  // Concurrent write stress tests (zou5.28)
+  // ===========================================================================
+
+  it('50 concurrent append() calls produce exactly 50 valid JSONL lines with no interleaving', async () => {
+    const filePath = join(dir, 'stress-append.jsonl')
+    writer = new JsonlWriter(filePath)
+
+    // Fire 50 append() calls concurrently
+    const promises = Array.from({ length: 50 }, (_, i) =>
+      writer.append({ $id: `entity-${i}`, $type: 'test', value: `data-${i}` })
+    )
+    await Promise.all(promises)
+    await writer.close()
+
+    const raw = await readFile(filePath, 'utf-8')
+    const lines = raw.trim().split('\n')
+
+    // Exactly 50 lines
+    expect(lines).toHaveLength(50)
+
+    // Every line must be valid JSON (no partial writes or interleaving)
+    const parsed = lines.map((line, idx) => {
+      let obj: any
+      try {
+        obj = JSON.parse(line)
+      } catch (e) {
+        throw new Error(`Line ${idx} is not valid JSON: "${line}"`)
+      }
+      return obj
+    })
+
+    // Every entity $id appears exactly once
+    const ids = parsed.map((obj: any) => obj.$id)
+    const uniqueIds = new Set(ids)
+    expect(uniqueIds.size).toBe(50)
+
+    // All expected IDs are present
+    const expectedIds = new Set(Array.from({ length: 50 }, (_, i) => `entity-${i}`))
+    expect(uniqueIds).toEqual(expectedIds)
+
+    // Internal counters match
+    expect(writer.getLineCount()).toBe(50)
+    expect(writer.getByteCount()).toBeGreaterThan(0)
+  })
+
+  it('5 concurrent appendBatch() calls with 10 lines each produce exactly 50 valid JSONL lines', async () => {
+    const filePath = join(dir, 'stress-batch.jsonl')
+    writer = new JsonlWriter(filePath)
+
+    // Fire 5 appendBatch() calls concurrently, each with 10 lines
+    const promises = Array.from({ length: 5 }, (_, batchIdx) => {
+      const batch = Array.from({ length: 10 }, (_, lineIdx) => ({
+        $id: `batch-${batchIdx}-line-${lineIdx}`,
+        $type: 'test',
+        batchIdx,
+        lineIdx,
+      }))
+      return writer.appendBatch(batch)
+    })
+    await Promise.all(promises)
+    await writer.close()
+
+    const raw = await readFile(filePath, 'utf-8')
+    const lines = raw.trim().split('\n')
+
+    // Exactly 50 lines
+    expect(lines).toHaveLength(50)
+
+    // Every line must be valid JSON
+    const parsed = lines.map((line, idx) => {
+      let obj: any
+      try {
+        obj = JSON.parse(line)
+      } catch (e) {
+        throw new Error(`Line ${idx} is not valid JSON: "${line}"`)
+      }
+      return obj
+    })
+
+    // Every $id appears exactly once
+    const ids = parsed.map((obj: any) => obj.$id)
+    const uniqueIds = new Set(ids)
+    expect(uniqueIds.size).toBe(50)
+
+    // All expected IDs are present
+    const expectedIds = new Set(
+      Array.from({ length: 5 }, (_, b) =>
+        Array.from({ length: 10 }, (_, l) => `batch-${b}-line-${l}`)
+      ).flat()
+    )
+    expect(uniqueIds).toEqual(expectedIds)
+
+    // Each batch's 10 lines must appear consecutively (batch atomicity)
+    // Since appendBatch writes all lines in a single appendFile call,
+    // a batch's lines should not be interleaved with another batch's lines.
+    for (let batchIdx = 0; batchIdx < 5; batchIdx++) {
+      const batchLinePositions = parsed
+        .map((obj: any, pos: number) => (obj.batchIdx === batchIdx ? pos : -1))
+        .filter((pos: number) => pos !== -1)
+
+      expect(batchLinePositions).toHaveLength(10)
+
+      // Positions should be contiguous (consecutive)
+      for (let i = 1; i < batchLinePositions.length; i++) {
+        expect(batchLinePositions[i]).toBe(batchLinePositions[i - 1] + 1)
+      }
+    }
+
+    // Internal counters match
+    expect(writer.getLineCount()).toBe(50)
+  })
+
+  it('mixed concurrent append() and appendBatch() produces correct total lines with no corruption', async () => {
+    const filePath = join(dir, 'stress-mixed.jsonl')
+    writer = new JsonlWriter(filePath)
+
+    // 30 individual appends + 4 batches of 5 = 30 + 20 = 50 total lines
+    const appendPromises = Array.from({ length: 30 }, (_, i) =>
+      writer.append({ $id: `single-${i}`, $type: 'single', index: i })
+    )
+
+    const batchPromises = Array.from({ length: 4 }, (_, batchIdx) => {
+      const batch = Array.from({ length: 5 }, (_, lineIdx) => ({
+        $id: `batch-${batchIdx}-${lineIdx}`,
+        $type: 'batch',
+        batchIdx,
+        lineIdx,
+      }))
+      return writer.appendBatch(batch)
+    })
+
+    // Fire all writes concurrently (mix of append and appendBatch)
+    await Promise.all([...appendPromises, ...batchPromises])
+    await writer.close()
+
+    const raw = await readFile(filePath, 'utf-8')
+    const lines = raw.trim().split('\n')
+
+    // Total line count: 30 singles + 4 batches * 5 = 50
+    expect(lines).toHaveLength(50)
+
+    // Every line must be valid JSON -- no partial writes or interleaving
+    const parsed = lines.map((line, idx) => {
+      let obj: any
+      try {
+        obj = JSON.parse(line)
+      } catch (e) {
+        throw new Error(`Line ${idx} is not valid JSON: "${line}"`)
+      }
+      return obj
+    })
+
+    // Every $id appears exactly once
+    const ids = parsed.map((obj: any) => obj.$id)
+    const uniqueIds = new Set(ids)
+    expect(uniqueIds.size).toBe(50)
+
+    // Verify all single IDs present
+    for (let i = 0; i < 30; i++) {
+      expect(uniqueIds.has(`single-${i}`)).toBe(true)
+    }
+
+    // Verify all batch IDs present
+    for (let b = 0; b < 4; b++) {
+      for (let l = 0; l < 5; l++) {
+        expect(uniqueIds.has(`batch-${b}-${l}`)).toBe(true)
+      }
+    }
+
+    // Batch lines must still be contiguous (batch atomicity preserved under mixed load)
+    for (let batchIdx = 0; batchIdx < 4; batchIdx++) {
+      const batchLinePositions = parsed
+        .map((obj: any, pos: number) => (obj.$type === 'batch' && obj.batchIdx === batchIdx ? pos : -1))
+        .filter((pos: number) => pos !== -1)
+
+      expect(batchLinePositions).toHaveLength(5)
+
+      // Positions should be contiguous
+      for (let i = 1; i < batchLinePositions.length; i++) {
+        expect(batchLinePositions[i]).toBe(batchLinePositions[i - 1] + 1)
+      }
+    }
+
+    // Internal counters match
+    expect(writer.getLineCount()).toBe(50)
+    expect(writer.getByteCount()).toBeGreaterThan(0)
+  })
+
+  it('no partial writes: every line has correct structure after concurrent stress', async () => {
+    const filePath = join(dir, 'stress-integrity.jsonl')
+    writer = new JsonlWriter(filePath)
+
+    // Write entities with large-ish payloads to increase chance of partial write detection
+    const promises = Array.from({ length: 50 }, (_, i) =>
+      writer.append({
+        $id: `integrity-${i}`,
+        $type: 'document',
+        payload: 'x'.repeat(200), // 200 char payload to make lines non-trivial
+        index: i,
+        ts: Date.now(),
+      })
+    )
+    await Promise.all(promises)
+    await writer.close()
+
+    const raw = await readFile(filePath, 'utf-8')
+
+    // File must end with newline (no truncated last line)
+    expect(raw.endsWith('\n')).toBe(true)
+
+    const lines = raw.trim().split('\n')
+    expect(lines).toHaveLength(50)
+
+    // Parse every line and validate structure
+    const parsed = lines.map((line, idx) => {
+      let obj: any
+      try {
+        obj = JSON.parse(line)
+      } catch (e) {
+        throw new Error(`Line ${idx} is corrupted (invalid JSON): "${line.substring(0, 80)}..."`)
+      }
+
+      // Verify structural integrity of each record
+      expect(obj).toHaveProperty('$id')
+      expect(obj).toHaveProperty('$type', 'document')
+      expect(obj).toHaveProperty('payload')
+      expect(obj.payload).toHaveLength(200)
+      expect(obj).toHaveProperty('index')
+      expect(typeof obj.index).toBe('number')
+
+      return obj
+    })
+
+    // All IDs unique and present
+    const ids = new Set(parsed.map((obj: any) => obj.$id))
+    expect(ids.size).toBe(50)
+  })
+
+  it('byteCount is accurate after concurrent mixed writes', async () => {
+    const filePath = join(dir, 'stress-bytes.jsonl')
+    writer = new JsonlWriter(filePath)
+
+    const appendPromises = Array.from({ length: 25 }, (_, i) =>
+      writer.append({ $id: `a-${i}`, v: i })
+    )
+    const batchPromises = Array.from({ length: 5 }, (_, b) =>
+      writer.appendBatch(
+        Array.from({ length: 5 }, (_, l) => ({ $id: `b-${b}-${l}`, v: b * 5 + l }))
+      )
+    )
+
+    await Promise.all([...appendPromises, ...batchPromises])
+    await writer.close()
+
+    // Total lines: 25 + 5*5 = 50
+    expect(writer.getLineCount()).toBe(50)
+
+    // byteCount should match the actual file size
+    const raw = await readFile(filePath, 'utf-8')
+    const actualBytes = Buffer.byteLength(raw, 'utf-8')
+    expect(writer.getByteCount()).toBe(actualBytes)
+  })
 })

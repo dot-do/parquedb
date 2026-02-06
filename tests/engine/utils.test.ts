@@ -49,12 +49,13 @@ describe('toNumber', () => {
 })
 
 describe('DATA_SYSTEM_FIELDS', () => {
-  it('contains exactly the four system fields', () => {
+  it('contains exactly the five system fields', () => {
     expect(DATA_SYSTEM_FIELDS.has('$id')).toBe(true)
     expect(DATA_SYSTEM_FIELDS.has('$op')).toBe(true)
     expect(DATA_SYSTEM_FIELDS.has('$v')).toBe(true)
     expect(DATA_SYSTEM_FIELDS.has('$ts')).toBe(true)
-    expect(DATA_SYSTEM_FIELDS.size).toBe(4)
+    expect(DATA_SYSTEM_FIELDS.has('$data')).toBe(true)
+    expect(DATA_SYSTEM_FIELDS.size).toBe(5)
   })
 
   it('does not contain user data fields', () => {

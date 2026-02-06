@@ -15,6 +15,12 @@ export { entityId, tableName } from './types'
 // Shared utilities
 export { toNumber, DATA_SYSTEM_FIELDS } from './utils'
 
+// Mutation operators (extracted from engine.ts)
+export { applyUpdate, extractData } from './mutation'
+
+// Sort utilities (extracted from engine.ts)
+export { sortEntities, resolveDataField } from './sort'
+
 // Filter (shared across all modes)
 export { matchesFilter, getNestedValue } from './filter'
 export type { ComparisonFilter } from './filter'
@@ -41,19 +47,18 @@ export type { AnyEventLine } from './merge-events'
 
 // Compaction
 export { compactDataTable, shouldCompact } from './compactor'
-export type { StorageAdapter, CompactOptions } from './compactor'
+export type { CompactOptions } from './compactor'
 export { compactRelationships } from './compactor-rels'
-export type { RelStorageAdapter } from './compactor-rels'
-export { compactEvents } from './compactor-events'
-export type { EventStorageAdapter } from './compactor-events'
+export { compactEvents, compactEventsPartitioned, readAllPartitions, applyRetention, getPartitionKey } from './compactor-events'
+export type { PartitionedCompactResult, PartitionedCompactOptions, RetentionOptions } from './compactor-events'
 
 // Rotation
 export { rotate, cleanup, needsRecovery, getCompactingPath } from './rotation'
 
-// Storage adapters
+// Storage adapters (unified interface hierarchy)
 export { LocalStorageAdapter, MemoryStorageAdapter } from './storage-adapters'
 export { hybridCompactData, hybridCompactRels, hybridCompactEvents, hybridCompactAll } from './storage-adapters'
-export type { FullStorageAdapter } from './storage-adapters'
+export type { FullStorageAdapter, StorageAdapter, RelStorageAdapter, EventStorageAdapter } from './storage-adapters'
 
 // Parquet storage adapter
 export { ParquetStorageAdapter } from './parquet-adapter'

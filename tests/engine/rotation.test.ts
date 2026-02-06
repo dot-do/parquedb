@@ -13,7 +13,15 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, writeFile, readFile, rm, stat, access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { rotate, cleanup, needsRecovery, getCompactingPath } from '@/engine/rotation'
+import {
+  rotate,
+  cleanup,
+  needsRecovery,
+  getCompactingPath,
+  getTmpPath,
+  hasOrphanedTmp,
+  cleanupTmp,
+} from '@/engine/rotation'
 
 // =============================================================================
 // Test Fixtures
@@ -172,6 +180,123 @@ describe('JSONL File Rotation', () => {
     })
 
     it('returns false if no .compacting file', async () => {
+      const basePath = join(tempDir, 'table.jsonl')
+
+      const result = await needsRecovery(basePath)
+
+      expect(result).toBe(false)
+    })
+  })
+
+  // =============================================================================
+  // getTmpPath() Tests
+  // =============================================================================
+
+  describe('getTmpPath(dataPath)', () => {
+    it('returns dataPath + .tmp', () => {
+      const dataPath = '/data/tables/users.parquet'
+
+      const result = getTmpPath(dataPath)
+
+      expect(result).toBe('/data/tables/users.parquet.tmp')
+    })
+  })
+
+  // =============================================================================
+  // hasOrphanedTmp() Tests
+  // =============================================================================
+
+  describe('hasOrphanedTmp(dataPath)', () => {
+    it('returns true if .tmp file exists for a data path', async () => {
+      const dataPath = join(tempDir, 'users.parquet')
+      await writeFile(dataPath + '.tmp', 'partial data', 'utf-8')
+
+      const result = await hasOrphanedTmp(dataPath)
+
+      expect(result).toBe(true)
+    })
+
+    it('returns false if no .tmp file exists', async () => {
+      const dataPath = join(tempDir, 'users.parquet')
+
+      const result = await hasOrphanedTmp(dataPath)
+
+      expect(result).toBe(false)
+    })
+
+    it('returns true even when the final data file also exists', async () => {
+      const dataPath = join(tempDir, 'users.parquet')
+      await writeFile(dataPath, 'good data', 'utf-8')
+      await writeFile(dataPath + '.tmp', 'orphaned partial', 'utf-8')
+
+      const result = await hasOrphanedTmp(dataPath)
+
+      expect(result).toBe(true)
+    })
+  })
+
+  // =============================================================================
+  // cleanupTmp() Tests
+  // =============================================================================
+
+  describe('cleanupTmp(dataPath)', () => {
+    it('deletes the .tmp file for a data path', async () => {
+      const dataPath = join(tempDir, 'users.parquet')
+      const tmpPath = dataPath + '.tmp'
+      await writeFile(tmpPath, 'orphaned partial data', 'utf-8')
+
+      await cleanupTmp(dataPath)
+
+      expect(await fileExists(tmpPath)).toBe(false)
+    })
+
+    it('is a no-op if .tmp file does not exist', async () => {
+      const dataPath = join(tempDir, 'users.parquet')
+
+      // Should not throw
+      await expect(cleanupTmp(dataPath)).resolves.toBeUndefined()
+    })
+
+    it('does not remove the final data file', async () => {
+      const dataPath = join(tempDir, 'users.parquet')
+      await writeFile(dataPath, 'good data', 'utf-8')
+      await writeFile(dataPath + '.tmp', 'orphaned', 'utf-8')
+
+      await cleanupTmp(dataPath)
+
+      expect(await fileExists(dataPath)).toBe(true)
+      expect(await fileExists(dataPath + '.tmp')).toBe(false)
+    })
+  })
+
+  // =============================================================================
+  // needsRecovery() - extended to detect .tmp files
+  // =============================================================================
+
+  describe('needsRecovery - with .tmp file detection', () => {
+    it('returns true when only a .tmp file exists (no .compacting)', async () => {
+      const basePath = join(tempDir, 'table.jsonl')
+      // Create orphaned .tmp for the corresponding data path
+      const dataPath = basePath.replace('.jsonl', '.parquet')
+      await writeFile(dataPath + '.tmp', 'orphaned data', 'utf-8')
+
+      const result = await needsRecovery(basePath)
+
+      expect(result).toBe(true)
+    })
+
+    it('returns true when both .compacting and .tmp files exist', async () => {
+      const basePath = join(tempDir, 'table.jsonl')
+      await writeFile(basePath + '.compacting', 'compacting data', 'utf-8')
+      const dataPath = basePath.replace('.jsonl', '.parquet')
+      await writeFile(dataPath + '.tmp', 'orphaned data', 'utf-8')
+
+      const result = await needsRecovery(basePath)
+
+      expect(result).toBe(true)
+    })
+
+    it('returns false when neither .compacting nor .tmp files exist', async () => {
       const basePath = join(tempDir, 'table.jsonl')
 
       const result = await needsRecovery(basePath)

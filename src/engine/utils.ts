@@ -28,7 +28,7 @@ export function toNumber(value: unknown): number {
 // =============================================================================
 
 /** System fields stored as dedicated Parquet columns for DataLine */
-export const DATA_SYSTEM_FIELDS = new Set(['$id', '$op', '$v', '$ts'])
+export const DATA_SYSTEM_FIELDS = new Set(['$id', '$op', '$v', '$ts', '$data'])
 
 // =============================================================================
 // ID Generation

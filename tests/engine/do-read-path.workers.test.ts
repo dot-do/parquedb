@@ -258,8 +258,22 @@ describe('DOReadPath.findRels()', () => {
     const rels = await stub.findRels()
     expect(rels).toHaveLength(2)
 
-    const targets = rels.map((r) => r.t).sort()
-    expect(targets).toEqual(['p1', 'p2'])
+    // Sort by target for deterministic assertions
+    const sorted = [...rels].sort((a, b) => a.t.localeCompare(b.t))
+
+    // Verify all fields on the R2 relationship
+    expect(sorted[0].$op).toBe('l')
+    expect(sorted[0].f).toBe('u1')
+    expect(sorted[0].p).toBe('posts')
+    expect(sorted[0].r).toBe('author')
+    expect(sorted[0].t).toBe('p1')
+
+    // Verify all fields on the WAL relationship
+    expect(sorted[1].$op).toBe('l')
+    expect(sorted[1].f).toBe('u1')
+    expect(sorted[1].p).toBe('posts')
+    expect(sorted[1].r).toBe('author')
+    expect(sorted[1].t).toBe('p2')
   })
 
   // 12. findRels filters out unlinks
@@ -277,6 +291,12 @@ describe('DOReadPath.findRels()', () => {
 
     const rels = await stub.findRels()
     expect(rels).toHaveLength(1)
+
+    // Verify all fields on the remaining (non-unlinked) relationship
+    expect(rels[0].$op).toBe('l')
+    expect(rels[0].f).toBe('u1')
+    expect(rels[0].p).toBe('posts')
+    expect(rels[0].r).toBe('author')
     expect(rels[0].t).toBe('p2')
   })
 
@@ -291,12 +311,18 @@ describe('DOReadPath.findRels()', () => {
 
     const u1Rels = await stub.findRels('u1')
     expect(u1Rels).toHaveLength(1)
+    expect(u1Rels[0].$op).toBe('l')
     expect(u1Rels[0].f).toBe('u1')
+    expect(u1Rels[0].p).toBe('posts')
+    expect(u1Rels[0].r).toBe('author')
     expect(u1Rels[0].t).toBe('p1')
 
     const u2Rels = await stub.findRels('u2')
     expect(u2Rels).toHaveLength(1)
+    expect(u2Rels[0].$op).toBe('l')
     expect(u2Rels[0].f).toBe('u2')
+    expect(u2Rels[0].p).toBe('posts')
+    expect(u2Rels[0].r).toBe('author')
     expect(u2Rels[0].t).toBe('p2')
   })
 })
@@ -322,12 +348,178 @@ describe('DOReadPath.findEvents()', () => {
     const events = await stub.findEvents()
     expect(events).toHaveLength(3)
 
+    // Helper to coerce BigInt/number to number for comparison
+    const toNum = (v: unknown) => (typeof v === 'bigint' ? Number(v) : (v as number))
+
     // Should be sorted by ts
-    const timestamps = events.map((e) => {
-      const ts = e.ts
-      return typeof ts === 'bigint' ? Number(ts) : (ts as number)
-    })
+    const timestamps = events.map((e) => toNum(e.ts))
     expect(timestamps[0]).toBeLessThanOrEqual(timestamps[1] as number)
     expect(timestamps[1]).toBeLessThanOrEqual(timestamps[2] as number)
+
+    // Verify event IDs
+    const ids = events.map((e) => e.id)
+    expect(ids).toEqual(['e1', 'e2', 'e3'])
+
+    // Verify operations
+    expect(events[0].op).toBe('c')
+    expect(events[1].op).toBe('c')
+    expect(events[2].op).toBe('u')
+
+    // Verify namespaces
+    expect(events[0].ns).toBe('users')
+    expect(events[1].ns).toBe('users')
+    expect(events[2].ns).toBe('users')
+
+    // Verify entity IDs
+    expect(events[0].eid).toBe('u1')
+    expect(events[1].eid).toBe('u2')
+    expect(events[2].eid).toBe('u1')
+
+    // Verify timestamps
+    expect(toNum(events[0].ts)).toBe(1000)
+    expect(toNum(events[1].ts)).toBe(1002)
+    expect(toNum(events[2].ts)).toBe(2000)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Tests: Recovery (R2 + WAL full content verification)
+// ---------------------------------------------------------------------------
+
+describe('DOReadPath recovery', () => {
+  // 15. Recovery: merged data content is fully verified after R2 + WAL merge
+  it('recovers full entity content from R2 + WAL merge', async () => {
+    const stub = getStub()
+
+    // R2 has baseline entities
+    await stub.seedR2Data('projects', [
+      { $id: 'proj1', $op: 'c', $v: 1, $ts: 1000, name: 'Alpha', status: 'active' },
+      { $id: 'proj2', $op: 'c', $v: 1, $ts: 1001, name: 'Beta', status: 'active' },
+      { $id: 'proj3', $op: 'c', $v: 1, $ts: 1002, name: 'Gamma', status: 'draft' },
+    ])
+
+    // WAL has: update proj1, delete proj2, create proj4
+    await stub.append('projects', { $id: 'proj1', $op: 'u', $v: 2, $ts: 2000, name: 'Alpha v2', status: 'completed' })
+    await stub.append('projects', { $id: 'proj2', $op: 'd', $v: 2, $ts: 2001 })
+    await stub.append('projects', { $id: 'proj4', $op: 'c', $v: 1, $ts: 2002, name: 'Delta', status: 'active' })
+
+    const results = await stub.find('projects')
+    expect(results).toHaveLength(3)
+
+    // Verify proj1 was updated with correct content
+    const proj1 = results.find((r) => r.$id === 'proj1')
+    expect(proj1).toBeDefined()
+    expect(proj1!.$op).toBe('u')
+    expect(proj1!.$v).toBe(2)
+    expect(proj1!.name).toBe('Alpha v2')
+    expect(proj1!.status).toBe('completed')
+
+    // Verify proj2 was deleted (should not appear)
+    const proj2 = results.find((r) => r.$id === 'proj2')
+    expect(proj2).toBeUndefined()
+
+    // Verify proj3 unchanged from R2
+    const proj3 = results.find((r) => r.$id === 'proj3')
+    expect(proj3).toBeDefined()
+    expect(proj3!.$op).toBe('c')
+    expect(proj3!.$v).toBe(1)
+    expect(proj3!.name).toBe('Gamma')
+    expect(proj3!.status).toBe('draft')
+
+    // Verify proj4 created from WAL
+    const proj4 = results.find((r) => r.$id === 'proj4')
+    expect(proj4).toBeDefined()
+    expect(proj4!.$op).toBe('c')
+    expect(proj4!.$v).toBe(1)
+    expect(proj4!.name).toBe('Delta')
+    expect(proj4!.status).toBe('active')
+  })
+
+  // 16. Recovery: merged rels content is fully verified
+  it('recovers full relationship content from R2 + WAL merge', async () => {
+    const stub = getStub()
+
+    // R2 has baseline rels
+    await stub.seedR2Rels([
+      { $op: 'l', $ts: 1000, f: 'u1', p: 'authored', r: 'author', t: 'p1' },
+      { $op: 'l', $ts: 1001, f: 'u1', p: 'authored', r: 'author', t: 'p2' },
+      { $op: 'l', $ts: 1002, f: 'u2', p: 'liked', r: 'likedBy', t: 'p1' },
+    ])
+
+    // WAL: unlink u1->p1, add u1->p3
+    await stub.append('rels', { $op: 'u', $ts: 2000, f: 'u1', p: 'authored', r: 'author', t: 'p1' })
+    await stub.append('rels', { $op: 'l', $ts: 2001, f: 'u1', p: 'authored', r: 'author', t: 'p3' })
+
+    const rels = await stub.findRels()
+    expect(rels).toHaveLength(3)
+
+    // Sort for deterministic order
+    const sorted = [...rels].sort((a, b) => `${a.f}-${a.p}-${a.t}`.localeCompare(`${b.f}-${b.p}-${b.t}`))
+
+    // u1 -> authored -> p2 (survived from R2)
+    expect(sorted[0].$op).toBe('l')
+    expect(sorted[0].f).toBe('u1')
+    expect(sorted[0].p).toBe('authored')
+    expect(sorted[0].r).toBe('author')
+    expect(sorted[0].t).toBe('p2')
+
+    // u1 -> authored -> p3 (added from WAL)
+    expect(sorted[1].$op).toBe('l')
+    expect(sorted[1].f).toBe('u1')
+    expect(sorted[1].p).toBe('authored')
+    expect(sorted[1].r).toBe('author')
+    expect(sorted[1].t).toBe('p3')
+
+    // u2 -> liked -> p1 (survived from R2, different predicate)
+    expect(sorted[2].$op).toBe('l')
+    expect(sorted[2].f).toBe('u2')
+    expect(sorted[2].p).toBe('liked')
+    expect(sorted[2].r).toBe('likedBy')
+    expect(sorted[2].t).toBe('p1')
+  })
+
+  // 17. Recovery: merged events content is fully verified
+  it('recovers full event content from R2 + WAL merge', async () => {
+    const stub = getStub()
+
+    // R2 has baseline events
+    await stub.seedR2Events([
+      { id: 'ev1', ts: 1000, op: 'c', ns: 'projects', eid: 'proj1' },
+      { id: 'ev2', ts: 1001, op: 'c', ns: 'tasks', eid: 't1' },
+    ])
+
+    // WAL has newer events across multiple namespaces
+    await stub.append('events', { id: 'ev3', ts: 2000, op: 'u', ns: 'projects', eid: 'proj1' })
+    await stub.append('events', { id: 'ev4', ts: 2001, op: 'd', ns: 'tasks', eid: 't1' })
+
+    const events = await stub.findEvents()
+    expect(events).toHaveLength(4)
+
+    const toNum = (v: unknown) => (typeof v === 'bigint' ? Number(v) : (v as number))
+
+    // Verify all events by ID
+    const ids = events.map((e) => e.id)
+    expect(ids).toEqual(['ev1', 'ev2', 'ev3', 'ev4'])
+
+    // Verify each event's full content
+    expect(events[0].op).toBe('c')
+    expect(events[0].ns).toBe('projects')
+    expect(events[0].eid).toBe('proj1')
+    expect(toNum(events[0].ts)).toBe(1000)
+
+    expect(events[1].op).toBe('c')
+    expect(events[1].ns).toBe('tasks')
+    expect(events[1].eid).toBe('t1')
+    expect(toNum(events[1].ts)).toBe(1001)
+
+    expect(events[2].op).toBe('u')
+    expect(events[2].ns).toBe('projects')
+    expect(events[2].eid).toBe('proj1')
+    expect(toNum(events[2].ts)).toBe(2000)
+
+    expect(events[3].op).toBe('d')
+    expect(events[3].ns).toBe('tasks')
+    expect(events[3].eid).toBe('t1')
+    expect(toNum(events[3].ts)).toBe(2001)
   })
 })

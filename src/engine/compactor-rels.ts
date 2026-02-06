@@ -29,21 +29,10 @@ import { rotate, cleanup } from './rotation'
 import { replay, lineCount } from './jsonl-reader'
 import type { RelLine } from './types'
 import { mergeRelationships } from './merge-rels'
+import type { RelStorageAdapter } from './storage-adapters'
 
-// =============================================================================
-// Storage Adapter Interface
-// =============================================================================
-
-/**
- * Adapter for reading/writing the compacted relationships file.
- *
- * In production, this reads/writes Parquet files.
- * In tests, this reads/writes JSON files as a stand-in.
- */
-export interface RelStorageAdapter {
-  readRels(path: string): Promise<RelLine[]>
-  writeRels(path: string, data: RelLine[]): Promise<void>
-}
+// Re-export so existing consumers that import from './compactor-rels' still work
+export type { RelStorageAdapter } from './storage-adapters'
 
 // =============================================================================
 // Compaction Thresholds
@@ -62,6 +51,26 @@ const DEFAULT_THRESHOLDS: CompactThresholds = {
 }
 
 
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/**
+ * Atomically rename a file using the adapter's rename if available,
+ * otherwise fall back to fs.rename (local disk).
+ */
+async function atomicRename(
+  storage: RelStorageAdapter,
+  fromPath: string,
+  toPath: string,
+): Promise<void> {
+  if ('rename' in storage && typeof (storage as any).rename === 'function') {
+    await (storage as any).rename(fromPath, toPath)
+  } else {
+    await rename(fromPath, toPath)
+  }
+}
 
 // =============================================================================
 // compactRelationships
@@ -107,7 +116,7 @@ export async function compactRelationships(
 
     // 8. Write to tmp, atomic rename
     await storage.writeRels(tmpPath, live)
-    await rename(tmpPath, parquetPath)
+    await atomicRename(storage, tmpPath, parquetPath)
 
     // 9. Cleanup .compacting file
     await cleanup(compactingPath)

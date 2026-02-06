@@ -814,4 +814,532 @@ describe('DO Workflow Integration (DOCompactor + DOReadPath)', () => {
       expect(wal.replayUnflushed('posts')).toHaveLength(1)
     })
   })
+
+  // =========================================================================
+  // Events workflow (full lifecycle)
+  // =========================================================================
+  describe('Events workflow', () => {
+    it('Write events -> Read from WAL -> Compact -> Read from R2', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // 1. Write events to WAL
+      wal.append('events', { id: 'e1', ts: 1000, op: 'c', ns: 'users', eid: 'u1' })
+      wal.append('events', { id: 'e2', ts: 1001, op: 'c', ns: 'posts', eid: 'p1' })
+
+      // 2. Read from WAL - both events should be present
+      const walEvents = await reader.findEvents()
+      expect(walEvents).toHaveLength(2)
+      expect(walEvents[0].id).toBe('e1')
+      expect(walEvents[1].id).toBe('e2')
+
+      // 3. Compact events
+      const result = await compactor.compactEvents()
+      expect(result).not.toBeNull()
+      expect(result!.count).toBe(2)
+
+      // 4. Read from R2 (WAL is flushed)
+      const r2Events = await reader.findEvents()
+      expect(r2Events).toHaveLength(2)
+      expect(r2Events[0].id).toBe('e1')
+      expect(r2Events[1].id).toBe('e2')
+    })
+
+    it('Events append-only: compacted + new WAL events are concatenated', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // 1. Write initial events and compact
+      wal.append('events', { id: 'e1', ts: 1000, op: 'c', ns: 'users', eid: 'u1' })
+      wal.append('events', { id: 'e2', ts: 1001, op: 'c', ns: 'users', eid: 'u2' })
+      await compactor.compactEvents()
+
+      // 2. Write more events to WAL (not compacted)
+      wal.append('events', { id: 'e3', ts: 2000, op: 'u', ns: 'users', eid: 'u1' })
+
+      // 3. Read should merge R2 (e1, e2) + WAL (e3) = 3 events
+      const events = await reader.findEvents()
+      expect(events).toHaveLength(3)
+
+      // 4. Verify sorted by ts
+      const timestamps = events.map((e) => e.ts as number)
+      expect(timestamps[0]).toBeLessThanOrEqual(timestamps[1])
+      expect(timestamps[1]).toBeLessThanOrEqual(timestamps[2])
+    })
+
+    it('second compaction appends new events to existing R2 events', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // 1. First compaction
+      wal.append('events', { id: 'e1', ts: 1000, op: 'c', ns: 'users', eid: 'u1' })
+      await compactor.compactEvents()
+
+      // 2. More events + second compaction
+      wal.append('events', { id: 'e2', ts: 2000, op: 'u', ns: 'users', eid: 'u1' })
+      wal.append('events', { id: 'e3', ts: 3000, op: 'd', ns: 'users', eid: 'u1' })
+      const result = await compactor.compactEvents()
+      expect(result!.count).toBe(3) // All three events appended
+
+      // 3. Read back - all 3 events
+      const events = await reader.findEvents()
+      expect(events).toHaveLength(3)
+      expect(events[0].id).toBe('e1')
+      expect(events[1].id).toBe('e2')
+      expect(events[2].id).toBe('e3')
+    })
+  })
+
+  // =========================================================================
+  // Batch writes through full lifecycle
+  // =========================================================================
+  describe('Batch writes through lifecycle', () => {
+    it('appendBatch -> compact -> read back all entities', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // Write a batch of entities
+      wal.appendBatch('users', [
+        { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice' },
+        { $id: 'u2', $op: 'c', $v: 1, $ts: 1001, name: 'Bob' },
+        { $id: 'u3', $op: 'c', $v: 1, $ts: 1002, name: 'Charlie' },
+      ])
+
+      // Read from WAL
+      const walResults = await reader.find('users')
+      expect(walResults).toHaveLength(3)
+
+      // Compact
+      const result = await compactor.compactTable('users')
+      expect(result!.count).toBe(3)
+      expect(result!.flushed).toBe(1) // Single batch = 1 WAL entry
+
+      // Read from R2
+      const r2Results = await reader.find('users')
+      expect(r2Results).toHaveLength(3)
+      expect(r2Results[0].$id).toBe('u1')
+      expect(r2Results[1].$id).toBe('u2')
+      expect(r2Results[2].$id).toBe('u3')
+    })
+
+    it('appendBatch for rels -> compact -> read back', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      wal.appendBatch('rels', [
+        { $op: 'l', $ts: 1000, f: 'u1', p: 'posts', r: 'author', t: 'p1' },
+        { $op: 'l', $ts: 1001, f: 'u1', p: 'posts', r: 'author', t: 'p2' },
+        { $op: 'l', $ts: 1002, f: 'u2', p: 'posts', r: 'author', t: 'p3' },
+      ])
+
+      // Read from WAL
+      const walRels = await reader.findRels()
+      expect(walRels).toHaveLength(3)
+
+      // Compact
+      await compactor.compactRels()
+
+      // Read from R2
+      const r2Rels = await reader.findRels()
+      expect(r2Rels).toHaveLength(3)
+
+      // Filter by fromId
+      const u1Rels = await reader.findRels('u1')
+      expect(u1Rels).toHaveLength(2)
+      const u2Rels = await reader.findRels('u2')
+      expect(u2Rels).toHaveLength(1)
+    })
+  })
+
+  // =========================================================================
+  // shouldCompact threshold interaction
+  // =========================================================================
+  describe('shouldCompact threshold interaction', () => {
+    it('shouldCompact returns false before writes and true after sufficient writes', () => {
+      const { wal, compactor } = createTestContext()
+
+      // No data: should not compact
+      expect(compactor.shouldCompact(1)).toBe(false)
+      expect(compactor.shouldCompact()).toBe(false) // default threshold = 100
+
+      // Add some data
+      for (let i = 0; i < 5; i++) {
+        wal.append('users', { $id: `u${i}`, $op: 'c', $v: 1, $ts: 1000 + i, name: `User${i}` })
+      }
+
+      // Below default threshold (100) but above 5
+      expect(compactor.shouldCompact(5)).toBe(true)
+      expect(compactor.shouldCompact(6)).toBe(false)
+      expect(compactor.shouldCompact()).toBe(false)
+    })
+
+    it('shouldCompact returns false after compaction clears WAL', async () => {
+      const { wal, compactor } = createTestContext()
+
+      // Write 10 entities
+      for (let i = 0; i < 10; i++) {
+        wal.append('users', { $id: `u${i}`, $op: 'c', $v: 1, $ts: 1000 + i, name: `User${i}` })
+      }
+
+      expect(compactor.shouldCompact(5)).toBe(true)
+
+      // Compact
+      await compactor.compactTable('users')
+
+      // After compaction, WAL is empty
+      expect(compactor.shouldCompact(1)).toBe(false)
+    })
+
+    it('shouldCompact accounts for data across multiple tables', () => {
+      const { wal, compactor } = createTestContext()
+
+      // 3 users + 3 posts + 2 rels + 2 events = 10 total
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice' })
+      wal.append('users', { $id: 'u2', $op: 'c', $v: 1, $ts: 1001, name: 'Bob' })
+      wal.append('users', { $id: 'u3', $op: 'c', $v: 1, $ts: 1002, name: 'Charlie' })
+      wal.append('posts', { $id: 'p1', $op: 'c', $v: 1, $ts: 1003, title: 'Hello' })
+      wal.append('posts', { $id: 'p2', $op: 'c', $v: 1, $ts: 1004, title: 'World' })
+      wal.append('posts', { $id: 'p3', $op: 'c', $v: 1, $ts: 1005, title: 'Foo' })
+      wal.append('rels', { $op: 'l', $ts: 1006, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+      wal.append('rels', { $op: 'l', $ts: 1007, f: 'u2', p: 'posts', r: 'author', t: 'p2' })
+      wal.append('events', { id: 'e1', ts: 1008, op: 'c', ns: 'users', eid: 'u1' })
+      wal.append('events', { id: 'e2', ts: 1009, op: 'c', ns: 'posts', eid: 'p1' })
+
+      expect(compactor.shouldCompact(10)).toBe(true)
+      expect(compactor.shouldCompact(11)).toBe(false)
+    })
+  })
+
+  // =========================================================================
+  // Re-creation after delete
+  // =========================================================================
+  describe('Re-creation after delete', () => {
+    it('entity can be re-created with same $id after delete + compaction', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // 1. Create and compact
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice' })
+      await compactor.compactTable('users')
+
+      // 2. Delete and compact
+      wal.append('users', { $id: 'u1', $op: 'd', $v: 2, $ts: 2000 })
+      await compactor.compactTable('users')
+
+      // Verify deleted
+      const deleted = await reader.find('users')
+      expect(deleted).toHaveLength(0)
+
+      // 3. Re-create same ID with higher $v
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 3, $ts: 3000, name: 'Alice Reborn' })
+
+      // 4. Read via DOReadPath should see the re-created entity
+      const results = await reader.find('users')
+      expect(results).toHaveLength(1)
+      expect(results[0].$id).toBe('u1')
+      expect(results[0].name).toBe('Alice Reborn')
+      expect(results[0].$v).toBe(3)
+    })
+
+    it('re-created entity survives another compaction cycle', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // Create -> Compact -> Delete -> Compact -> Re-create -> Compact
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice' })
+      await compactor.compactTable('users')
+
+      wal.append('users', { $id: 'u1', $op: 'd', $v: 2, $ts: 2000 })
+      await compactor.compactTable('users')
+
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 3, $ts: 3000, name: 'Alice Reborn' })
+      await compactor.compactTable('users')
+
+      // Should survive the final compaction
+      const results = await reader.find('users')
+      expect(results).toHaveLength(1)
+      expect(results[0].name).toBe('Alice Reborn')
+      expect(results[0].$v).toBe(3)
+    })
+  })
+
+  // =========================================================================
+  // Multiple WAL mutations before compaction
+  // =========================================================================
+  describe('Multiple WAL mutations before compaction', () => {
+    it('multiple updates to same entity in WAL: highest $v wins after compaction', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // Multiple mutations to same entity without compacting in between
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice' })
+      wal.append('users', { $id: 'u1', $op: 'u', $v: 2, $ts: 2000, name: 'Alice v2' })
+      wal.append('users', { $id: 'u1', $op: 'u', $v: 3, $ts: 3000, name: 'Alice v3' })
+
+      // Before compaction: read should see the v3 version
+      const preCompact = await reader.find('users')
+      expect(preCompact).toHaveLength(1)
+      expect(preCompact[0].name).toBe('Alice v3')
+      expect(preCompact[0].$v).toBe(3)
+
+      // Compact all three at once
+      await compactor.compactTable('users')
+
+      // After compaction: still v3
+      const postCompact = await reader.find('users')
+      expect(postCompact).toHaveLength(1)
+      expect(postCompact[0].name).toBe('Alice v3')
+      expect(postCompact[0].$v).toBe(3)
+    })
+
+    it('create + delete in same WAL batch: entity is absent from results', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // Create and immediately delete without compacting
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice' })
+      wal.append('users', { $id: 'u1', $op: 'd', $v: 2, $ts: 2000 })
+
+      // Read should return empty (delete wins)
+      const results = await reader.find('users')
+      expect(results).toHaveLength(0)
+
+      // Compact: should produce empty Parquet (deleted entity removed)
+      const result = await compactor.compactTable('users')
+      expect(result!.count).toBe(0) // No live entities
+
+      // Post-compact read still empty
+      const postCompact = await reader.find('users')
+      expect(postCompact).toHaveLength(0)
+    })
+
+    it('link + unlink same rel in WAL: rel is absent from results', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // Link and unlink same relationship in WAL without compacting
+      wal.append('rels', { $op: 'l', $ts: 1000, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+      wal.append('rels', { $op: 'u', $ts: 2000, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+
+      // Read should show no rels (unlink wins)
+      const results = await reader.findRels()
+      expect(results).toHaveLength(0)
+
+      // After compaction, still no rels
+      await compactor.compactRels()
+      const postCompact = await reader.findRels()
+      expect(postCompact).toHaveLength(0)
+    })
+  })
+
+  // =========================================================================
+  // Multiple tables with interleaved compaction timing
+  // =========================================================================
+  describe('Multiple tables with interleaved compaction', () => {
+    it('compacting one table does not affect unflushed data in another', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // Write to both tables
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice' })
+      wal.append('posts', { $id: 'p1', $op: 'c', $v: 1, $ts: 1001, title: 'Hello' })
+
+      // Compact only users
+      await compactor.compactTable('users')
+
+      // Users should be in R2, posts still in WAL
+      const users = await reader.find('users')
+      expect(users).toHaveLength(1)
+      expect(users[0].name).toBe('Alice')
+
+      const posts = await reader.find('posts')
+      expect(posts).toHaveLength(1)
+      expect(posts[0].title).toBe('Hello')
+
+      // WAL should only have posts data
+      expect(wal.getUnflushedCount()).toBe(1)
+      expect(wal.getUnflushedTables()).toEqual(['posts'])
+    })
+
+    it('staggered compaction: users first, then posts, then rels', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // Write all types
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice' })
+      wal.append('posts', { $id: 'p1', $op: 'c', $v: 1, $ts: 1001, title: 'Hello' })
+      wal.append('rels', { $op: 'l', $ts: 1002, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+      wal.append('events', { id: 'e1', ts: 1003, op: 'c', ns: 'users', eid: 'u1' })
+
+      // Compact users first
+      await compactor.compactTable('users')
+      expect(wal.getUnflushedCount()).toBe(3) // posts + rels + events
+
+      // Write more users (these go to WAL)
+      wal.append('users', { $id: 'u2', $op: 'c', $v: 1, $ts: 2000, name: 'Bob' })
+
+      // Compact posts
+      await compactor.compactTable('posts')
+      expect(wal.getUnflushedCount()).toBe(3) // rels + events + u2
+
+      // Compact rels
+      await compactor.compactRels()
+      expect(wal.getUnflushedCount()).toBe(2) // events + u2
+
+      // Compact events
+      await compactor.compactEvents()
+      expect(wal.getUnflushedCount()).toBe(1) // only u2
+
+      // Read back all data - verify each came from its appropriate source
+      const users = await reader.find('users')
+      expect(users).toHaveLength(2) // u1 from R2 + u2 from WAL
+
+      const posts = await reader.find('posts')
+      expect(posts).toHaveLength(1)
+
+      const rels = await reader.findRels()
+      expect(rels).toHaveLength(1)
+
+      const events = await reader.findEvents()
+      expect(events).toHaveLength(1)
+
+      // Final compaction for u2
+      await compactor.compactTable('users')
+      expect(wal.getUnflushedCount()).toBe(0)
+
+      // Everything now from R2
+      const finalUsers = await reader.find('users')
+      expect(finalUsers).toHaveLength(2)
+    })
+  })
+
+  // =========================================================================
+  // Relationship re-link after unlink
+  // =========================================================================
+  describe('Relationship re-link after unlink', () => {
+    it('rel can be re-linked after unlink + compaction', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // 1. Link and compact
+      wal.append('rels', { $op: 'l', $ts: 1000, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+      await compactor.compactRels()
+
+      // 2. Unlink and compact
+      wal.append('rels', { $op: 'u', $ts: 2000, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+      await compactor.compactRels()
+
+      // Verify unlinked
+      const unlinked = await reader.findRels()
+      expect(unlinked).toHaveLength(0)
+
+      // 3. Re-link with newer timestamp
+      wal.append('rels', { $op: 'l', $ts: 3000, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+
+      // 4. Read should see the re-linked relationship
+      const relinked = await reader.findRels()
+      expect(relinked).toHaveLength(1)
+      expect(relinked[0].f).toBe('u1')
+      expect(relinked[0].t).toBe('p1')
+      expect(relinked[0].$op).toBe('l')
+    })
+
+    it('re-linked relationship survives compaction', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // Link -> Compact -> Unlink -> Compact -> Re-link -> Compact
+      wal.append('rels', { $op: 'l', $ts: 1000, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+      await compactor.compactRels()
+
+      wal.append('rels', { $op: 'u', $ts: 2000, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+      await compactor.compactRels()
+
+      wal.append('rels', { $op: 'l', $ts: 3000, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+      await compactor.compactRels()
+
+      const results = await reader.findRels()
+      expect(results).toHaveLength(1)
+      expect(results[0].$op).toBe('l')
+      expect(results[0].$ts).toBe(3000)
+    })
+  })
+
+  // =========================================================================
+  // End-to-end: Full DO lifecycle simulation
+  // =========================================================================
+  describe('Full DO lifecycle simulation', () => {
+    it('simulates realistic DO workflow: writes, reads, periodic compaction', async () => {
+      const { wal, compactor, reader } = createTestContext()
+
+      // --- Phase 1: Initial writes ---
+      wal.append('users', { $id: 'u1', $op: 'c', $v: 1, $ts: 1000, name: 'Alice', role: 'admin' })
+      wal.append('users', { $id: 'u2', $op: 'c', $v: 1, $ts: 1001, name: 'Bob', role: 'user' })
+      wal.append('posts', { $id: 'p1', $op: 'c', $v: 1, $ts: 1002, title: 'First Post', authorId: 'u1' })
+      wal.append('rels', { $op: 'l', $ts: 1003, f: 'u1', p: 'posts', r: 'author', t: 'p1' })
+      wal.append('events', { id: 'e1', ts: 1000, op: 'c', ns: 'users', eid: 'u1' })
+      wal.append('events', { id: 'e2', ts: 1001, op: 'c', ns: 'users', eid: 'u2' })
+      wal.append('events', { id: 'e3', ts: 1002, op: 'c', ns: 'posts', eid: 'p1' })
+
+      // All reads from WAL
+      expect((await reader.find('users'))).toHaveLength(2)
+      expect((await reader.find('posts'))).toHaveLength(1)
+      expect((await reader.findRels('u1'))).toHaveLength(1)
+      expect((await reader.findEvents())).toHaveLength(3)
+
+      // --- Phase 2: First compaction (simulate alarm trigger) ---
+      expect(compactor.shouldCompact(5)).toBe(true)
+      await compactor.compactAll()
+      expect(compactor.shouldCompact(1)).toBe(false)
+
+      // All reads now from R2
+      expect((await reader.find('users'))).toHaveLength(2)
+      expect((await reader.find('posts'))).toHaveLength(1)
+      expect((await reader.findRels('u1'))).toHaveLength(1)
+      expect((await reader.findEvents())).toHaveLength(3)
+
+      // --- Phase 3: More writes (buffered in WAL) ---
+      wal.append('users', { $id: 'u1', $op: 'u', $v: 2, $ts: 2000, name: 'Alice Smith', role: 'admin' })
+      wal.append('posts', { $id: 'p2', $op: 'c', $v: 1, $ts: 2001, title: 'Second Post', authorId: 'u1' })
+      wal.append('rels', { $op: 'l', $ts: 2002, f: 'u1', p: 'posts', r: 'author', t: 'p2' })
+      wal.append('events', { id: 'e4', ts: 2000, op: 'u', ns: 'users', eid: 'u1' })
+      wal.append('events', { id: 'e5', ts: 2001, op: 'c', ns: 'posts', eid: 'p2' })
+
+      // Reads merge R2 + WAL
+      const users = await reader.find('users')
+      expect(users).toHaveLength(2)
+      expect(users.find((u) => u.$id === 'u1')!.name).toBe('Alice Smith')
+      expect(users.find((u) => u.$id === 'u2')!.name).toBe('Bob')
+
+      const posts = await reader.find('posts')
+      expect(posts).toHaveLength(2)
+
+      const u1Rels = await reader.findRels('u1')
+      expect(u1Rels).toHaveLength(2) // p1 (R2) + p2 (WAL)
+
+      const events = await reader.findEvents()
+      expect(events).toHaveLength(5) // 3 (R2) + 2 (WAL)
+
+      // --- Phase 4: Delete a user ---
+      wal.append('users', { $id: 'u2', $op: 'd', $v: 2, $ts: 3000 })
+      wal.append('events', { id: 'e6', ts: 3000, op: 'd', ns: 'users', eid: 'u2' })
+
+      // u2 should be gone
+      const usersAfterDelete = await reader.find('users')
+      expect(usersAfterDelete).toHaveLength(1)
+      expect(usersAfterDelete[0].$id).toBe('u1')
+
+      // Filter still works across merged data
+      const admins = await reader.find('users', { role: 'admin' })
+      expect(admins).toHaveLength(1)
+      expect(admins[0].name).toBe('Alice Smith')
+
+      // --- Phase 5: Final compaction ---
+      await compactor.compactAll()
+
+      // Final verification: all data consistent after compaction
+      const finalUsers = await reader.find('users')
+      expect(finalUsers).toHaveLength(1)
+      expect(finalUsers[0].$id).toBe('u1')
+      expect(finalUsers[0].name).toBe('Alice Smith')
+
+      const finalPosts = await reader.find('posts')
+      expect(finalPosts).toHaveLength(2)
+
+      const finalRels = await reader.findRels('u1')
+      expect(finalRels).toHaveLength(2)
+
+      const finalEvents = await reader.findEvents()
+      expect(finalEvents).toHaveLength(6) // All 6 events preserved (append-only)
+
+      // WAL completely empty
+      expect(wal.getUnflushedCount()).toBe(0)
+    })
+  })
 })

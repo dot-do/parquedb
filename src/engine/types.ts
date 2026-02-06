@@ -33,14 +33,18 @@ export type SchemaOp = 's'
 /**
  * DataLine represents entity mutations written to {table}.jsonl.
  *
- * System fields are prefixed with `$`. All other fields are entity data.
- * On delete operations, only system fields are present.
+ * System fields are prefixed with `$`. User data lives in the `$data` field.
+ * For backward compatibility, user fields are also spread flat on the object
+ * (accessible via the index signature), but engine internals should always
+ * use `entity.$data` to avoid unsafe double-casts.
+ *
+ * On delete operations, only system fields are present ($data is omitted).
  *
  * @example
  * // Create
- * {"$id":"01J5A..","$op":"c","$v":1,"$ts":1738857600000,"name":"Alice","email":"alice@a.co"}
+ * {"$id":"01J5A..","$op":"c","$v":1,"$ts":1738857600000,"$data":{"name":"Alice","email":"alice@a.co"},"name":"Alice","email":"alice@a.co"}
  * // Update
- * {"$id":"01J5A..","$op":"u","$v":2,"$ts":1738857600050,"name":"Alice Smith","email":"alice@a.co"}
+ * {"$id":"01J5A..","$op":"u","$v":2,"$ts":1738857600050,"$data":{"name":"Alice Smith","email":"alice@a.co"},"name":"Alice Smith","email":"alice@a.co"}
  * // Delete
  * {"$id":"01J5B..","$op":"d","$v":2,"$ts":1738857600099}
  */
@@ -53,7 +57,9 @@ export interface DataLine {
   $v: number
   /** Epoch milliseconds timestamp */
   $ts: number
-  /** Entity data fields (any additional key-value pairs) */
+  /** User data fields packed into a single object (canonical location) */
+  $data: Record<string, unknown>
+  /** @deprecated Flat user fields for backward compatibility. Use $data instead. */
   [key: string]: unknown
 }
 

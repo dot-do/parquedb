@@ -18,16 +18,18 @@ import { join } from 'node:path'
 import { readdir, unlink } from 'node:fs/promises'
 import { TableBuffer } from './buffer'
 import type { ScanFilter } from './buffer'
-import { getNestedValue } from './filter'
 import { JsonlWriter } from './jsonl-writer'
 import { replay, replayInto } from './jsonl-reader'
 import { compactDataTable, shouldCompact as shouldCompactData } from './compactor'
-import type { StorageAdapter, CompactOptions } from './compactor'
-import { needsRecovery, getCompactingPath } from './rotation'
+import type { CompactOptions } from './compactor'
+import type { StorageAdapter } from './storage-adapters'
+import { needsRecovery, getCompactingPath, cleanupTmp } from './rotation'
 import { mergeResults } from './merge'
 import { ParquetStorageAdapter } from './parquet-adapter'
 import type { DataLine, EventLine, UpdateOps, FindOptions } from './types'
 import { DATA_SYSTEM_FIELDS, IdGenerator } from './utils'
+import { applyUpdate, extractData } from './mutation'
+import { sortEntities } from './sort'
 
 // Re-export so existing consumers that import from './engine' still work
 export type { UpdateOps, FindOptions } from './types'
@@ -47,59 +49,6 @@ export interface EngineConfig {
   dataDir: string
   /** Optional threshold-based auto-compaction */
   autoCompact?: AutoCompactOptions
-}
-
-// =============================================================================
-// System field prefix — used to separate system fields from entity data
-// =============================================================================
-
-/**
- * Extract only the user-data fields from a DataLine (exclude $id, $op, $v, $ts).
- */
-function extractData(entity: DataLine): Record<string, unknown> {
-  const data: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(entity)) {
-    if (!DATA_SYSTEM_FIELDS.has(key)) {
-      data[key] = value
-    }
-  }
-  return data
-}
-
-// =============================================================================
-// Sort helpers
-// =============================================================================
-
-/**
- * Sort entities by the given sort specification.
- *
- * The sort object maps field paths to 1 (ascending) or -1 (descending).
- * Multiple fields are used as tiebreakers in insertion order.
- */
-function sortEntities(entities: DataLine[], sort: Record<string, 1 | -1>): DataLine[] {
-  const sortKeys = Object.entries(sort)
-  return [...entities].sort((a, b) => {
-    for (const [field, direction] of sortKeys) {
-      const aVal = getNestedValue(a as unknown as Record<string, unknown>, field)
-      const bVal = getNestedValue(b as unknown as Record<string, unknown>, field)
-
-      let cmp = 0
-      if (aVal === bVal) {
-        cmp = 0
-      } else if (aVal === undefined || aVal === null) {
-        cmp = -1
-      } else if (bVal === undefined || bVal === null) {
-        cmp = 1
-      } else if (typeof aVal === 'number' && typeof bVal === 'number') {
-        cmp = aVal - bVal
-      } else {
-        cmp = String(aVal) < String(bVal) ? -1 : 1
-      }
-
-      if (cmp !== 0) return cmp * direction
-    }
-    return 0
-  })
 }
 
 // =============================================================================
@@ -142,14 +91,22 @@ export class ParqueEngine {
     const id = typeof data.$id === 'string' ? data.$id : this.generateId()
     const ts = Date.now()
 
-    // Build the DataLine (full entity state)
-    const { $id: _discardId, ...rest } = data
+    // Separate user data from system/meta fields
+    const userData: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(data)) {
+      if (!DATA_SYSTEM_FIELDS.has(key)) {
+        userData[key] = value
+      }
+    }
+
+    // Build the DataLine with $data + flat compat spread
     const dataLine: DataLine = {
       $id: id,
       $op: 'c',
       $v: 1,
       $ts: ts,
-      ...rest,
+      $data: userData,
+      ...userData,  // backward compatibility: flat spread
     }
 
     // Build the EventLine
@@ -195,14 +152,22 @@ export class ParqueEngine {
 
     for (const data of items) {
       const id = typeof data.$id === 'string' ? data.$id : this.generateId()
-      const { $id: _discardId, ...rest } = data
+
+      // Separate user data from system/meta fields
+      const userData: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(data)) {
+        if (!DATA_SYSTEM_FIELDS.has(key)) {
+          userData[key] = value
+        }
+      }
 
       const dataLine: DataLine = {
         $id: id,
         $op: 'c',
         $v: 1,
         $ts: ts,
-        ...rest,
+        $data: userData,
+        ...userData,  // backward compatibility: flat spread
       }
 
       const eventLine: EventLine = {
@@ -266,7 +231,7 @@ export class ParqueEngine {
     const beforeData = extractData(existing)
 
     // Apply update operators to produce new entity state
-    const updated = this.applyUpdate(existing, ops)
+    const updated = applyUpdate(existing, ops)
     updated.$op = 'u'
     updated.$v = existing.$v + 1
     updated.$ts = ts
@@ -323,12 +288,13 @@ export class ParqueEngine {
     const beforeData = extractData(existing)
     const newVersion = existing.$v + 1
 
-    // Tombstone DataLine — only system fields
+    // Tombstone DataLine — only system fields, empty $data
     const dataLine: DataLine = {
       $id: id,
       $op: 'd',
       $v: newVersion,
       $ts: ts,
+      $data: {},
     }
 
     // EventLine with before state
@@ -518,47 +484,6 @@ export class ParqueEngine {
     return this.idGen.generateId()
   }
 
-  /**
-   * Apply update operators to an existing entity, producing a new DataLine.
-   *
-   * Operators:
-   * - $set: shallow merge fields into entity
-   * - $inc: add to numeric fields (default 0 if field missing)
-   * - $unset: delete fields from entity
-   */
-  private applyUpdate(entity: DataLine, ops: UpdateOps): DataLine {
-    // Clone the entity (shallow copy is sufficient for top-level fields)
-    const result: DataLine = { ...entity }
-
-    // $set: merge fields
-    if (ops.$set) {
-      for (const [key, value] of Object.entries(ops.$set)) {
-        if (DATA_SYSTEM_FIELDS.has(key)) continue  // Guard: protect system fields
-        ;(result as Record<string, unknown>)[key] = value
-      }
-    }
-
-    // $inc: increment numeric fields
-    if (ops.$inc) {
-      for (const [key, amount] of Object.entries(ops.$inc)) {
-        if (DATA_SYSTEM_FIELDS.has(key)) continue  // Guard: protect system fields
-        const current = (result as Record<string, unknown>)[key]
-        const base = typeof current === 'number' ? current : 0
-        ;(result as Record<string, unknown>)[key] = base + amount
-      }
-    }
-
-    // $unset: remove fields
-    if (ops.$unset) {
-      for (const key of Object.keys(ops.$unset)) {
-        if (DATA_SYSTEM_FIELDS.has(key)) continue  // Guard: protect system fields
-        delete (result as Record<string, unknown>)[key]
-      }
-    }
-
-    return result
-  }
-
   // ===========================================================================
   // Get By ID
   // ===========================================================================
@@ -632,14 +557,13 @@ export class ParqueEngine {
       return
     }
 
-    // 1a. Clean up orphaned .tmp files from interrupted compactions
+    // 1a. Clean up orphaned .tmp files from interrupted compactions.
+    // Uses cleanupTmp() from rotation.ts for consistent .tmp file handling.
     for (const file of files) {
       if (file.endsWith('.tmp')) {
-        try {
-          await unlink(join(this.dataDir, file))
-        } catch {
-          // Ignore errors during cleanup (file may already be gone)
-        }
+        // Derive the data path by stripping the .tmp suffix, then use cleanupTmp
+        const dataPath = join(this.dataDir, file.slice(0, -4))
+        await cleanupTmp(dataPath)
       }
     }
 
@@ -784,11 +708,18 @@ export class ParqueEngine {
    * If a .compacting file exists, it means a previous compaction was interrupted.
    * We complete it by running the same merge logic: read existing data file,
    * read the .compacting JSONL, merge, and write the result.
+   *
+   * Also cleans up any orphaned .tmp files for the table's data path,
+   * since these indicate a crash between writing the compacted output
+   * and renaming it to the final path.
    */
   private async recoverCompaction(table: string, storage: StorageAdapter): Promise<void> {
     const jsonlPath = join(this.dataDir, `${table}.jsonl`)
     const compactingPath = getCompactingPath(jsonlPath)
     const dataPath = join(this.dataDir, `${table}.parquet`)
+
+    // Clean up any orphaned .tmp file before re-merging
+    await cleanupTmp(dataPath)
 
     // Read existing data file
     const existing = await storage.readData(dataPath)

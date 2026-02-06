@@ -11,8 +11,9 @@
  * 6. Atomic swap: rename .tmp -> .parquet
  * 7. Delete .jsonl.compacting
  *
- * The storage format is abstracted behind a StorageAdapter interface so
- * tests can use simple JSON files while production uses Parquet.
+ * The storage format is abstracted behind the StorageAdapter interface
+ * (a Pick<> subset of FullStorageAdapter) so tests can use simple JSON
+ * files while production uses Parquet.
  */
 
 import { rename, stat } from 'node:fs/promises'
@@ -21,6 +22,10 @@ import { rotate, cleanup } from './rotation'
 import { replay, lineCount } from './jsonl-reader'
 import { mergeResults } from './merge'
 import type { DataLine } from './types'
+import type { StorageAdapter } from './storage-adapters'
+
+// Re-export so existing consumers that import from './compactor' still work
+export type { StorageAdapter } from './storage-adapters'
 
 // =============================================================================
 // Types
@@ -31,13 +36,6 @@ export interface CompactOptions {
   maxBytes?: number
   /** Compact when JSONL file exceeds this many lines */
   maxLines?: number
-}
-
-export interface StorageAdapter {
-  /** Read entities from a data file (Parquet or JSON) */
-  readData(path: string): Promise<DataLine[]>
-  /** Write entities to a data file (Parquet or JSON) */
-  writeData(path: string, data: DataLine[]): Promise<void>
 }
 
 // =============================================================================
@@ -90,6 +88,22 @@ export async function shouldCompact(
 // =============================================================================
 
 /**
+ * Atomically rename a file using the adapter's rename if available,
+ * otherwise fall back to fs.rename (local disk).
+ */
+async function atomicRename(
+  storage: StorageAdapter,
+  fromPath: string,
+  toPath: string,
+): Promise<void> {
+  if ('rename' in storage && typeof (storage as any).rename === 'function') {
+    await (storage as any).rename(fromPath, toPath)
+  } else {
+    await rename(fromPath, toPath)
+  }
+}
+
+/**
  * Compact a data table: merge JSONL buffer into the data file.
  *
  * @param dataDir - Directory containing the table files
@@ -128,7 +142,7 @@ export async function compactDataTable(
     await storage.writeData(tmpPath, merged)
 
     // Step 6: Atomic rename: .tmp -> .parquet
-    await rename(tmpPath, dataPath)
+    await atomicRename(storage, tmpPath, dataPath)
 
     // Step 7: Cleanup the compacting file
     await cleanup(compactingPath)

@@ -10,6 +10,7 @@
  */
 
 import type { DataLine, RelLine, EventLine } from './types'
+import type { AnyEventLine } from './merge-events'
 import { toNumber } from './utils'
 import { parseDataField } from './parquet-data-utils'
 
@@ -51,16 +52,18 @@ export async function readParquetFromR2(
  * System fields ($id, $op, $v, $ts) are extracted as typed columns.
  * The $data column is parsed via parseDataField which handles VARIANT binary,
  * JSON objects (auto-decoded by hyparquet), and legacy JSON strings.
+ * User fields are stored in both $data (canonical) and flat (backward compat).
  */
 export function decodeDataRows(rows: Record<string, unknown>[]): DataLine[] {
   return rows.map((row) => {
     const dataFields = parseDataField(row.$data)
     return {
-      ...dataFields,
+      ...dataFields,           // backward compat: flat spread
       $id: row.$id as string,
       $op: row.$op as DataLine['$op'],
       $v: toNumber(row.$v),
       $ts: toNumber(row.$ts),
+      $data: dataFields,       // canonical location for user data
     }
   })
 }
@@ -80,12 +83,16 @@ export function decodeRelRows(rows: Record<string, unknown>[]): RelLine[] {
 }
 
 /**
- * Decode raw Parquet event rows into EventLine records.
+ * Decode raw Parquet event rows into AnyEventLine records.
+ *
+ * Returns AnyEventLine[] (EventLine | SchemaLine) to match the event
+ * pipeline's canonical type. Currently decodes rows as EventLine shape;
+ * SchemaLine support may be extended in the future.
  *
  * Handles optional before/after JSON fields and actor field.
  * Logs warnings for corrupted JSON but does not throw.
  */
-export function decodeEventRows(rows: Record<string, unknown>[]): EventLine[] {
+export function decodeEventRows(rows: Record<string, unknown>[]): AnyEventLine[] {
   return rows.map((row) => {
     const event: EventLine = {
       id: row.id as string,

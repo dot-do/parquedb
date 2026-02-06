@@ -173,6 +173,31 @@ function matchComparisonEval(value: unknown, filter: ComparisonFilter): boolean 
 }
 
 // =============================================================================
+// $data-aware field resolution
+// =============================================================================
+
+/**
+ * Resolve a field value from an entity, checking $data for user fields.
+ *
+ * If the entity has a $data property (Record<string, unknown>), user field
+ * lookups are resolved from $data first, falling back to top-level properties
+ * for system fields ($id, $op, $v, $ts) and backward compatibility.
+ *
+ * This eliminates the need for double-casts like (entity as unknown as Record<string,unknown>).
+ */
+function resolveEntityField(entity: Record<string, unknown>, path: string): unknown {
+  // Check if entity has $data (DataLine with user data in $data)
+  const $data = entity.$data
+  if ($data !== undefined && $data !== null && typeof $data === 'object' && !Array.isArray($data)) {
+    // Try resolving from $data first
+    const val = getNestedValue($data as Record<string, unknown>, path)
+    if (val !== undefined) return val
+  }
+  // Fallback to top-level (system fields, or backward compat flat fields)
+  return getNestedValue(entity, path)
+}
+
+// =============================================================================
 // Public API
 // =============================================================================
 
@@ -209,7 +234,9 @@ export function matchesFilter(
       if (!andMatch) return false
     } else {
       // Regular field condition
-      const value = getNestedValue(entity, key)
+      // If entity has $data, resolve user fields from $data first,
+      // falling back to top-level for system fields and backward compat
+      const value = resolveEntityField(entity, key)
       if (!matchFieldCondition(value, condition)) return false
     }
   }

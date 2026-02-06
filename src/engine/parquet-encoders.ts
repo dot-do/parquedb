@@ -61,13 +61,20 @@ export async function encodeDataToParquet(
     ops.push(entity.$op)
     versions.push(entity.$v)
     timestamps.push(entity.$ts + 0.0) // ensure DOUBLE (not INT32) via float coercion
-    const dataFields: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(entity)) {
-      if (!DATA_SYSTEM_FIELDS.has(key)) {
-        dataFields[key] = value
+
+    // Prefer $data (canonical location) when available; fall back to flat fields
+    const $data = entity.$data
+    if ($data && typeof $data === 'object' && !Array.isArray($data) && Object.keys($data as Record<string, unknown>).length > 0) {
+      dataObjects.push($data as Record<string, unknown>)
+    } else {
+      const dataFields: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(entity)) {
+        if (!DATA_SYSTEM_FIELDS.has(key)) {
+          dataFields[key] = value
+        }
       }
+      dataObjects.push(dataFields)
     }
-    dataObjects.push(dataFields)
   }
 
   // Create VARIANT column for $data (schema + encoded binary data)

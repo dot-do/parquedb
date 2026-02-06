@@ -9,9 +9,10 @@
  * - LocalStorageAdapter: reads/writes JSON files on local disk (default)
  * - MemoryStorageAdapter: in-memory Map (simulates R2/S3 for testing)
  *
- * The FullStorageAdapter interface unifies the three separate adapter interfaces
- * (StorageAdapter, RelStorageAdapter, EventStorageAdapter) used by the compactors,
- * so a single adapter instance can serve all compaction needs.
+ * FullStorageAdapter is the primary (canonical) interface for storage adapters.
+ * The three narrower types (StorageAdapter, RelStorageAdapter, EventStorageAdapter)
+ * are Pick<> aliases for backward compatibility, so callers that only need a
+ * subset of the methods can still declare a narrow parameter type.
  */
 
 import { readFile, writeFile, rename } from 'node:fs/promises'
@@ -24,11 +25,6 @@ import { mergeRelationships } from './merge-rels'
 import { mergeEvents } from './merge-events'
 import type { AnyEventLine } from './merge-events'
 
-// Re-export the individual adapter interfaces from compactors for convenience
-export type { StorageAdapter } from './compactor'
-export type { RelStorageAdapter } from './compactor-rels'
-export type { EventStorageAdapter } from './compactor-events'
-
 // =============================================================================
 // FullStorageAdapter — unified interface for data, rels, and events
 // =============================================================================
@@ -36,9 +32,9 @@ export type { EventStorageAdapter } from './compactor-events'
 /**
  * A unified storage adapter that handles data, relationships, and events.
  *
- * This interface combines the three separate adapter interfaces used by the
- * individual compactors (StorageAdapter, RelStorageAdapter, EventStorageAdapter)
- * into a single object, so one adapter can serve all compaction needs.
+ * This is the primary interface for all storage adapters. Individual compactors
+ * accept Pick<> subsets of this interface so that callers can provide either a
+ * full adapter or a narrow one with only the relevant methods.
  */
 export interface FullStorageAdapter {
   /** Read entities from a data file */
@@ -55,11 +51,24 @@ export interface FullStorageAdapter {
   writeEvents(path: string, data: AnyEventLine[]): Promise<void>
   /**
    * Atomically rename a path (optional).
-   * If provided, hybrid compaction uses this for the .tmp -> final rename.
+   * If provided, compaction uses this for the .tmp -> final rename.
    * If not provided, falls back to fs.rename (local disk).
    */
   rename?(fromPath: string, toPath: string): void | Promise<void>
 }
+
+// =============================================================================
+// Narrow type aliases (Pick<> subsets of FullStorageAdapter)
+// =============================================================================
+
+/** Storage adapter for data compaction (readData + writeData). */
+export type StorageAdapter = Pick<FullStorageAdapter, 'readData' | 'writeData'>
+
+/** Storage adapter for relationship compaction (readRels + writeRels). */
+export type RelStorageAdapter = Pick<FullStorageAdapter, 'readRels' | 'writeRels'>
+
+/** Storage adapter for event compaction (readEvents + writeEvents). */
+export type EventStorageAdapter = Pick<FullStorageAdapter, 'readEvents' | 'writeEvents'>
 
 // =============================================================================
 // LocalStorageAdapter — reads/writes JSON files on local disk

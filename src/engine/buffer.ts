@@ -103,7 +103,7 @@ export class TableBuffer {
    * can suppress any matching entity from the Parquet layer during merge-on-read.
    */
   delete(id: string, version: number, ts: number): void {
-    this.store.set(id, { $id: id, $op: 'd', $v: version, $ts: ts })
+    this.store.set(id, { $id: id, $op: 'd', $v: version, $ts: ts, $data: {} })
   }
 
   /**
