@@ -33,6 +33,13 @@ import {
   rowToEvent,
 } from '../backends/parquet-utils'
 import { logger } from '../utils/logger'
+import {
+  DEFAULT_AUTO_COMPACTION_ENABLED,
+  DEFAULT_AUTO_COMPACTION_EVENT_THRESHOLD,
+  DEFAULT_AUTO_COMPACTION_BATCH_FILE_THRESHOLD,
+  DEFAULT_AUTO_COMPACTION_ON_STARTUP,
+  DEFAULT_AUTO_COMPACTION_INTERVAL_MS,
+} from '../constants'
 
 // =============================================================================
 // Types
@@ -73,6 +80,24 @@ export interface EntitySnapshot {
 }
 
 /**
+ * Compaction configuration for the EventSourcedBackend.
+ *
+ * Controls when and how automatic event log compaction runs.
+ * Compaction merges multiple batch files into a single file,
+ * reducing startup hydration time.
+ */
+export interface CompactionConfig {
+  /** Whether automatic compaction is enabled (default: true) */
+  enabled?: boolean
+  /** Trigger compaction when total events exceed this count (default: 10000) */
+  eventThreshold?: number
+  /** Trigger compaction when batch file count exceeds this (default: 100) */
+  batchFileThreshold?: number
+  /** Run compaction on startup if thresholds are exceeded (default: false) */
+  autoCompactOnStartup?: boolean
+}
+
+/**
  * Configuration for event-sourced backend
  */
 export interface EventSourcedConfig {
@@ -92,6 +117,13 @@ export interface EventSourcedConfig {
   autoCompactEventThreshold?: number
   /** Auto-compact after this many ms since last compaction (default: 60000 = 1 minute) */
   autoCompactIntervalMs?: number
+  /**
+   * Compaction configuration.
+   *
+   * When provided, these settings take precedence over the legacy
+   * autoCompactFileThreshold / autoCompactEventThreshold fields.
+   */
+  compaction?: CompactionConfig
 }
 
 /**
@@ -153,11 +185,21 @@ interface BatchFileInfo {
   eventCount: number
 }
 
+/**
+ * Resolved compaction configuration with all values defined
+ */
+interface ResolvedCompactionConfig {
+  enabled: boolean
+  eventThreshold: number
+  batchFileThreshold: number
+  autoCompactOnStartup: boolean
+}
+
 // =============================================================================
 // Default Configuration
 // =============================================================================
 
-const DEFAULT_CONFIG: Required<EventSourcedConfig> = {
+const DEFAULT_CONFIG: Required<Omit<EventSourcedConfig, 'compaction'>> = {
   maxBufferedEvents: 100,
   maxBufferedBytes: 1024 * 1024, // 1MB
   autoSnapshotThreshold: 100,
@@ -166,6 +208,13 @@ const DEFAULT_CONFIG: Required<EventSourcedConfig> = {
   autoCompactFileThreshold: 10, // Compact when >10 batch files
   autoCompactEventThreshold: 1000, // Compact when >1000 total events
   autoCompactIntervalMs: 60 * 1000, // Compact at most once per minute
+}
+
+const DEFAULT_COMPACTION_CONFIG: ResolvedCompactionConfig = {
+  enabled: DEFAULT_AUTO_COMPACTION_ENABLED,
+  eventThreshold: DEFAULT_AUTO_COMPACTION_EVENT_THRESHOLD,
+  batchFileThreshold: DEFAULT_AUTO_COMPACTION_BATCH_FILE_THRESHOLD,
+  autoCompactOnStartup: DEFAULT_AUTO_COMPACTION_ON_STARTUP,
 }
 
 // =============================================================================
@@ -184,7 +233,8 @@ const DEFAULT_CONFIG: Required<EventSourcedConfig> = {
  */
 export class EventSourcedBackend implements EventSourcedOperations {
   private storage: StorageBackend
-  private config: Required<EventSourcedConfig>
+  private config: Required<Omit<EventSourcedConfig, 'compaction'>>
+  private compactionConfig: ResolvedCompactionConfig
 
   /** Event buffers per namespace */
   private eventBuffers: Map<string, EventBuffer> = new Map()
@@ -231,9 +281,27 @@ export class EventSourcedBackend implements EventSourcedOperations {
   /** Total events across all batch files (for threshold checking) */
   private totalEventCount = 0
 
+  /** Whether a compaction is currently in progress (prevents concurrent runs) */
+  private compactionInProgress = false
+
   constructor(storage: StorageBackend, config?: EventSourcedConfig) {
     this.storage = storage
-    this.config = { ...DEFAULT_CONFIG, ...config }
+    const { compaction: _compaction, ...rest } = config ?? {}
+    this.config = { ...DEFAULT_CONFIG, ...rest }
+
+    // Resolve compaction config: new `compaction` sub-object takes precedence,
+    // with fallback to legacy flat fields, then to defaults.
+    this.compactionConfig = {
+      enabled: config?.compaction?.enabled ?? DEFAULT_COMPACTION_CONFIG.enabled,
+      eventThreshold: config?.compaction?.eventThreshold
+        ?? config?.autoCompactEventThreshold
+        ?? DEFAULT_COMPACTION_CONFIG.eventThreshold,
+      batchFileThreshold: config?.compaction?.batchFileThreshold
+        ?? config?.autoCompactFileThreshold
+        ?? DEFAULT_COMPACTION_CONFIG.batchFileThreshold,
+      autoCompactOnStartup: config?.compaction?.autoCompactOnStartup
+        ?? DEFAULT_COMPACTION_CONFIG.autoCompactOnStartup,
+    }
   }
 
   // ===========================================================================
@@ -260,6 +328,14 @@ export class EventSourcedBackend implements EventSourcedOperations {
     await this.deriveSequencesFromEvents()
 
     this.initialized = true
+
+    // Run startup compaction if configured and thresholds are met
+    if (this.compactionConfig.autoCompactOnStartup && this.compactionConfig.enabled) {
+      if (this.shouldAutoCompact()) {
+        logger.info('[EventSourcedBackend] Running startup compaction')
+        await this.compact()
+      }
+    }
   }
 
   /**
@@ -1114,31 +1190,46 @@ export class EventSourcedBackend implements EventSourcedOperations {
   }
 
   /**
-   * Check if auto-compaction should run based on thresholds
+   * Check if auto-compaction should run based on thresholds.
+   *
+   * Uses the resolved compactionConfig which merges the new `compaction`
+   * sub-object with legacy flat fields and defaults.
    */
   private shouldAutoCompact(): boolean {
+    // Skip if compaction is disabled
+    if (!this.compactionConfig.enabled) return false
+
     // Skip if bulk operation in progress
     if (this.bulkOperationInProgress) return false
 
+    // Skip if a compaction is already running
+    if (this.compactionInProgress) return false
+
     // Skip if we just compacted recently
     const now = Date.now()
-    if (now - this.lastCompactedAt < this.config.autoCompactIntervalMs) return false
+    if (now - this.lastCompactedAt < (this.config.autoCompactIntervalMs ?? DEFAULT_AUTO_COMPACTION_INTERVAL_MS)) return false
 
-    // Check file count threshold
-    if (this.batchFiles.length > this.config.autoCompactFileThreshold) return true
+    // Check batch file count threshold
+    if (this.batchFiles.length >= this.compactionConfig.batchFileThreshold) return true
 
     // Check event count threshold
-    if (this.totalEventCount > this.config.autoCompactEventThreshold) return true
+    if (this.totalEventCount >= this.compactionConfig.eventThreshold) return true
 
     return false
   }
 
   /**
-   * Run auto-compaction if thresholds are met
+   * Run auto-compaction if thresholds are met.
+   *
+   * This is called after every flush. The compaction itself is non-blocking
+   * (fire-and-forget) so that writes are not delayed by compaction overhead.
    */
   private async maybeAutoCompact(): Promise<void> {
     if (this.shouldAutoCompact()) {
-      await this.compact()
+      // Run compaction in the background to avoid blocking writes
+      this.compact().catch((err) => {
+        logger.error('[EventSourcedBackend] Auto-compaction failed:', err)
+      })
     }
   }
 
@@ -1147,30 +1238,62 @@ export class EventSourcedBackend implements EventSourcedOperations {
   // ===========================================================================
 
   /**
-   * Compact all batch files into a single events file
+   * Compact all batch files into a single events file.
    *
    * This merges all batch files into a single compacted file for
    * more efficient reads. Should be called after bulk operations complete.
+   *
+   * **Safety protocol:**
+   * 1. Read all events from existing batch files
+   * 2. Write a new compacted batch file
+   * 3. Verify the compacted file is readable and contains the expected event count
+   * 4. Only after verification, delete the old batch files
+   * 5. Update internal tracking
+   *
+   * If any step fails, the old batch files are preserved and the partial
+   * compacted file is cleaned up.
    *
    * @returns Number of events compacted
    */
   async compact(): Promise<number> {
     await this.ensureInitialized()
 
+    // Prevent concurrent compaction runs
+    if (this.compactionInProgress) {
+      return this.totalEventCount
+    }
+
+    this.compactionInProgress = true
+
+    try {
+      return await this.doCompact()
+    } finally {
+      this.compactionInProgress = false
+    }
+  }
+
+  /**
+   * Internal compaction implementation.
+   */
+  private async doCompact(): Promise<number> {
     // Skip if only one batch file (already compacted)
     if (this.batchFiles.length <= 1) {
       this.lastCompactedAt = Date.now()
       return this.totalEventCount
     }
 
-    // Read all events from batch files
+    // Snapshot the batch files to compact (new files added during compaction are safe)
+    const filesToCompact = [...this.batchFiles]
+    const expectedEventCount = filesToCompact.reduce((sum, f) => sum + f.eventCount, 0)
+
+    // Step 1: Read all events from batch files
     const allEvents = await this.readAllStoredEvents()
     if (allEvents.length === 0) {
       this.lastCompactedAt = Date.now()
       return 0
     }
 
-    // Write compacted file
+    // Step 2: Write compacted file
     const eventRows = allEvents.map((event) => eventToRow(event))
     const eventSchema = buildEventParquetSchema()
     const writer = new ParquetWriter(this.storage, { compression: 'lz4' })
@@ -1180,28 +1303,90 @@ export class EventSourcedBackend implements EventSourcedOperations {
 
     await writer.write(compactedPath, eventRows, eventSchema)
 
-    // Delete old batch files
-    const oldBatchFiles = this.batchFiles
-    for (const batchFile of oldBatchFiles) {
+    // Step 3: Verify the compacted file
+    let verified = false
+    try {
+      const verifyEvents = await this.readEventsFromFile(compactedPath)
+      if (verifyEvents.length === allEvents.length) {
+        verified = true
+      } else {
+        logger.error(
+          `[EventSourcedBackend] Compaction verification failed: ` +
+          `expected ${allEvents.length} events, got ${verifyEvents.length}. ` +
+          `Aborting compaction, old files preserved.`
+        )
+      }
+    } catch (err) {
+      logger.error('[EventSourcedBackend] Compaction verification read failed:', err)
+    }
+
+    if (!verified) {
+      // Clean up the bad compacted file, preserve originals
+      try {
+        await this.storage.delete(compactedPath)
+      } catch {
+        // Best-effort cleanup
+      }
+      this.batchSeq-- // Reclaim the sequence number
+      return this.totalEventCount
+    }
+
+    // Step 4: Delete old batch files (safe -- compacted file is verified)
+    for (const batchFile of filesToCompact) {
       try {
         await this.storage.delete(batchFile.path)
       } catch {
-        // Ignore delete errors
+        // Ignore individual delete errors -- at worst we have duplicates
+        // that will be de-duped on next compaction
+        logger.warn(`[EventSourcedBackend] Failed to delete old batch file: ${batchFile.path}`)
       }
     }
 
-    // Reset batch file tracking
-    this.batchFiles = [{
-      path: compactedPath,
-      seq: compactedSeq,
-      eventCount: allEvents.length,
-    }]
+    // Step 5: Update internal tracking
+    // Keep any batch files that were added during compaction (after our snapshot)
+    const compactedPaths = new Set(filesToCompact.map(f => f.path))
+    const newFilesDuringCompaction = this.batchFiles.filter(f => !compactedPaths.has(f.path))
 
-    // Update tracking
-    this.totalEventCount = allEvents.length
+    this.batchFiles = [
+      {
+        path: compactedPath,
+        seq: compactedSeq,
+        eventCount: allEvents.length,
+      },
+      ...newFilesDuringCompaction,
+    ]
+
+    // Recalculate total
+    this.totalEventCount = this.batchFiles.reduce((sum, f) => sum + f.eventCount, 0)
     this.lastCompactedAt = Date.now()
 
+    logger.info(
+      `[EventSourcedBackend] Compaction complete: ` +
+      `${filesToCompact.length} files -> 1 file, ${allEvents.length} events`
+    )
+
     return allEvents.length
+  }
+
+  /**
+   * Get compaction statistics for monitoring and diagnostics
+   */
+  getCompactionStats(): {
+    batchFileCount: number
+    totalEventCount: number
+    lastCompactedAt: number
+    compactionInProgress: boolean
+    compactionConfig: ResolvedCompactionConfig
+    needsCompaction: boolean
+  } {
+    return {
+      batchFileCount: this.batchFiles.length,
+      totalEventCount: this.totalEventCount,
+      lastCompactedAt: this.lastCompactedAt,
+      compactionInProgress: this.compactionInProgress,
+      compactionConfig: { ...this.compactionConfig },
+      needsCompaction: this.shouldAutoCompact(),
+    }
   }
 
   /**
@@ -1220,6 +1405,7 @@ export class EventSourcedBackend implements EventSourcedOperations {
     this.batchSeq = 0
     this.lastCompactedAt = 0
     this.bulkOperationInProgress = false
+    this.compactionInProgress = false
     this.totalEventCount = 0
   }
 

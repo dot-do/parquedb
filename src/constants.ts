@@ -1206,6 +1206,35 @@ export const DEFAULT_COMPACTION_MAX_SEGMENT_AGE = '24h'
 export const DEFAULT_COMPACTION_RETENTION = '30d'
 
 // =============================================================================
+// Auto-Compaction Constants (EventSourcedBackend)
+// =============================================================================
+
+/**
+ * Default: auto-compaction is enabled
+ */
+export const DEFAULT_AUTO_COMPACTION_ENABLED = true
+
+/**
+ * Default event threshold for auto-compaction (10,000 total events)
+ */
+export const DEFAULT_AUTO_COMPACTION_EVENT_THRESHOLD = 10000
+
+/**
+ * Default batch file threshold for auto-compaction (100 batch files)
+ */
+export const DEFAULT_AUTO_COMPACTION_BATCH_FILE_THRESHOLD = 100
+
+/**
+ * Default: do NOT auto-compact on startup (can be slow for large datasets)
+ */
+export const DEFAULT_AUTO_COMPACTION_ON_STARTUP = false
+
+/**
+ * Minimum interval between auto-compaction runs in ms (default: 60 seconds)
+ */
+export const DEFAULT_AUTO_COMPACTION_INTERVAL_MS = 60 * 1000
+
+// =============================================================================
 // Studio Settings Constants
 // =============================================================================
 

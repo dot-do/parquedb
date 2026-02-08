@@ -237,6 +237,7 @@ export {
   type EntitySnapshot,
   type EventSourcedConfig,
   type EventSourcedOperations,
+  type CompactionConfig,
 } from './EventSourcedBackend'
 
 // =============================================================================
