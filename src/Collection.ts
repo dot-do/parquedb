@@ -794,10 +794,9 @@ export class Collection<T extends EntityData = EntityData> {
       if (!cursor.includes('/')) {
         throw new Error('Invalid cursor format: malformed cursor')
       }
-      // Check if it looks like a tampered base64 cursor (starts with eyJ which is base64 for {"i)
-      if (cursor.startsWith('eyJ')) {
-        throw new Error('Invalid cursor: tampered or expired cursor')
-      }
+      // Note: base64-encoded cursors (e.g. starting with 'eyJ') are valid
+      // and should not be rejected. Cursor integrity should be verified
+      // through proper signing/verification, not prefix matching.
     }
 
     const limit = options?.limit ?? DEFAULT_PAGINATE_LIMIT

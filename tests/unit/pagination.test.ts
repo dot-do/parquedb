@@ -230,13 +230,17 @@ describe('Pagination', () => {
       ).rejects.toThrow(/invalid cursor|malformed cursor/i)
     })
 
-    it('throws error for expired or tampered cursor', async () => {
-      // A cursor from a different collection or with wrong signature
-      const tamperedCursor = 'eyJpZCI6ImZha2UiLCJ0cyI6MTIzNH0='
+    it('does not reject base64-encoded cursors with eyJ prefix', async () => {
+      // Base64-encoded cursors starting with 'eyJ' are valid and should not
+      // be rejected by prefix matching. The cursor still needs a '/' to pass
+      // format validation (namespace/id format).
+      const base64Cursor = 'eyJpZCI6ImZha2UiLCJ0cyI6MTIzNH0=/some-id'
 
+      // Should not throw "tampered or expired" — it may fail for other
+      // reasons (e.g. cursor not found in dataset) but not prefix rejection
       await expect(
-        (collection as any).findPaginated({}, { cursor: tamperedCursor })
-      ).rejects.toThrow(/invalid cursor|expired|tampered/i)
+        (collection as any).findPaginated({}, { cursor: base64Cursor })
+      ).resolves.toBeDefined()
     })
 
     it('returns hasMore=true when more results exist', async () => {

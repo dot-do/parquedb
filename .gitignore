@@ -170,6 +170,12 @@ data/
 data-v3/
 imdb-1m/
 
+# Event batch parquets are ephemeral local artifacts
+.db/events/
+
+# Local parquet DB artifacts
+.db/
+
 # =============================================================================
 # Backup and Debug Files
 # =============================================================================
