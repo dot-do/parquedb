@@ -2,10 +2,12 @@
  * Compaction Route Handlers
  *
  * Handles /compaction/* routes for event-driven compaction monitoring.
+ * Uses Workers RPC to call CompactionStateDO methods directly.
  */
 
 import type { RouteHandlerContext } from '../route-registry'
 import { buildErrorResponse } from '../responses'
+import type { CompactionStateDO } from '../../workflows/compaction-queue-consumer'
 
 /**
  * Handle GET /compaction/status - Get compaction status for namespace(s)
@@ -21,17 +23,19 @@ export async function handleCompactionStatus(ctx: RouteHandlerContext): Promise<
     return buildErrorResponse(request, new Error('Compaction State DO not available'), 500, startTime)
   }
 
-  // Capture reference after null check for use in callbacks
   const compactionState = env.COMPACTION_STATE
 
   const namespaceParam = url.searchParams.get('namespace')
   const namespacesParam = url.searchParams.get('namespaces')
 
-  // Single namespace query - direct to its sharded DO
+  // Single namespace query - direct to its sharded DO via RPC
   if (namespaceParam) {
     const id = compactionState.idFromName(namespaceParam)
-    const stub = compactionState.get(id)
-    return stub.fetch(new Request(new URL('/status', request.url).toString()))
+    const stub = compactionState.get(id) as unknown as CompactionStateDO
+    const data = await stub.getCompactionStatus()
+    return new Response(JSON.stringify(data, null, 2), {
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 
   // Multiple namespaces query - aggregate from multiple DOs
@@ -46,14 +50,13 @@ export async function handleCompactionStatus(ctx: RouteHandlerContext): Promise<
       )
     }
 
-    // Query all namespace DOs in parallel
+    // Query all namespace DOs in parallel via RPC
     const results = await Promise.all(
       namespaces.map(async (namespace) => {
         const id = compactionState.idFromName(namespace)
-        const stub = compactionState.get(id)
+        const stub = compactionState.get(id) as unknown as CompactionStateDO
         try {
-          const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
-          const data = await response.json() as Record<string, unknown>
+          const data = await stub.getCompactionStatus()
           return { namespace, ...data }
         } catch (err) {
           return { namespace, error: err instanceof Error ? err.message : 'Unknown error' }
@@ -111,7 +114,6 @@ export async function handleCompactionHealth(ctx: RouteHandlerContext): Promise<
     return buildErrorResponse(request, new Error('Compaction State DO not available'), 500, startTime)
   }
 
-  // Capture reference after null check for use in callbacks
   const compactionState = env.COMPACTION_STATE
 
   const namespacesParam = url.searchParams.get('namespaces')
@@ -153,21 +155,19 @@ export async function handleCompactionHealth(ctx: RouteHandlerContext): Promise<
 
   type NamespaceHealth = import('../../workflows/compaction-queue-consumer').NamespaceHealth
 
-  // Query all namespace DOs in parallel
+  // Query all namespace DOs in parallel via RPC
   const namespaceHealthMap: Record<string, NamespaceHealth> = {}
 
   await Promise.all(
     namespaces.map(async (namespace) => {
       const id = compactionState.idFromName(namespace)
-      const stub = compactionState.get(id)
+      const stub = compactionState.get(id) as unknown as CompactionStateDO
       try {
-        const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
-        const data = await response.json()
+        const data = await stub.getCompactionStatus()
 
         if (isCompactionStatusResponse(data)) {
           namespaceHealthMap[namespace] = evaluateNamespaceHealth(namespace, data, healthConfig)
         } else {
-          // Namespace has no data yet - treat as healthy
           namespaceHealthMap[namespace] = {
             namespace,
             status: 'healthy',
@@ -181,7 +181,6 @@ export async function handleCompactionHealth(ctx: RouteHandlerContext): Promise<
           }
         }
       } catch (err) {
-        // Error querying namespace - mark as unhealthy
         namespaceHealthMap[namespace] = {
           namespace,
           status: 'unhealthy',

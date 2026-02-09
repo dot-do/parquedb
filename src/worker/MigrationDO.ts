@@ -107,6 +107,152 @@ export class MigrationDO extends DurableObject<Env> {
     this.storage = ctx.storage
   }
 
+  // ===========================================================================
+  // Public RPC Methods
+  // ===========================================================================
+
+  /**
+   * Start a new migration job (RPC)
+   */
+  async startMigration(params: MigrationRequest): Promise<{
+    message?: string
+    error?: string
+    job: MigrationJob
+  }> {
+    // Check for existing job
+    const existingJob = await this.storage.get<MigrationJob>('currentJob')
+    if (existingJob && existingJob.status === 'running') {
+      return { error: 'Migration already in progress', job: existingJob }
+    }
+
+    const storage = this.getR2Backend()
+
+    // Discover namespaces if not specified
+    let namespaces = params.namespaces
+    if (!namespaces || namespaces.length === 0) {
+      namespaces = await discoverNamespaces(storage)
+    }
+
+    if (namespaces.length === 0) {
+      throw new Error('No namespaces found to migrate')
+    }
+
+    // Create job
+    const job: MigrationJob = {
+      id: `migration-${Date.now()}`,
+      from: params.from ?? 'auto',
+      to: params.to,
+      namespaces,
+      batchSize: params.batchSize ?? DEFAULT_MIGRATION_BATCH_SIZE,
+      deleteSource: params.deleteSource ?? false,
+      status: 'running',
+      progress: {
+        currentNamespace: namespaces[0] ?? null,
+        namespacesCompleted: [],
+        entitiesMigrated: 0,
+        currentOffset: 0,
+        errors: [],
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      completedAt: null,
+    }
+
+    await this.storage.put('currentJob', job)
+
+    // Schedule processing via alarm
+    await this.ctx.storage.setAlarm(Date.now() + MIGRATION_DO_ALARM_INITIAL_DELAY_MS)
+    logger.info('Alarm set for migration processing')
+
+    this.ctx.waitUntil(Promise.resolve().then(() => {
+      logger.info('waitUntil: Migration job created', { jobId: job.id })
+    }))
+
+    return { message: 'Migration started', job }
+  }
+
+  /**
+   * Get current migration status (RPC)
+   */
+  async getMigrationStatus(): Promise<{
+    status?: string
+    message?: string
+    job?: MigrationJob
+    progressPercent?: number
+    summary?: {
+      total: number
+      completed: number
+      current: string | null
+      entitiesMigrated: number
+      errors: number
+    }
+  }> {
+    const job = await this.storage.get<MigrationJob>('currentJob')
+
+    if (!job) {
+      return { status: 'idle', message: 'No migration job found' }
+    }
+
+    const progress = job.namespaces.length > 0
+      ? (job.progress.namespacesCompleted.length / job.namespaces.length) * 100
+      : 0
+
+    return {
+      job,
+      progressPercent: Math.round(progress),
+      summary: {
+        total: job.namespaces.length,
+        completed: job.progress.namespacesCompleted.length,
+        current: job.progress.currentNamespace,
+        entitiesMigrated: job.progress.entitiesMigrated,
+        errors: job.progress.errors.length,
+      },
+    }
+  }
+
+  /**
+   * Cancel current migration (RPC)
+   */
+  async cancelMigration(): Promise<{
+    message?: string
+    error?: string
+    job?: MigrationJob
+  }> {
+    const job = await this.storage.get<MigrationJob>('currentJob')
+
+    if (!job || job.status !== 'running') {
+      throw new Error('No active migration to cancel')
+    }
+
+    // Cancel alarm
+    await this.ctx.storage.deleteAlarm()
+
+    job.status = 'failed'
+    job.progress.errors.push('Cancelled by user')
+    job.completedAt = Date.now()
+    job.updatedAt = Date.now()
+
+    await this.storage.put('currentJob', job)
+
+    return { message: 'Migration cancelled', job }
+  }
+
+  /**
+   * List all migration jobs (RPC)
+   */
+  async getMigrationJobs(): Promise<{
+    current: MigrationJob | null
+    history: MigrationJob[]
+  }> {
+    const currentJob = await this.storage.get<MigrationJob>('currentJob') ?? null
+    const history = await this.storage.get<MigrationJob[]>('jobHistory') ?? []
+
+    return {
+      current: currentJob,
+      history: history.slice(-10),
+    }
+  }
+
   /**
    * Get R2Backend instance (lazy initialization)
    */

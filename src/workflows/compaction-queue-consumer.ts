@@ -31,6 +31,7 @@
  * - Stuck "processing" windows are cleaned up via timeout
  */
 
+import { DurableObject } from 'cloudflare:workers'
 import { logger } from '../utils/logger'
 import type { BackendType } from '../backends'
 import type { CompactionQueueEnv as Env } from './types'
@@ -686,11 +687,10 @@ export async function getAggregatedCompactionStatus(
   const useSharding = shouldUseTimeBucketSharding(namespace, config)
 
   if (!useSharding) {
-    // For non-sharded namespaces, query single DO
+    // For non-sharded namespaces, query single DO via RPC
     const stateId = env.COMPACTION_STATE.idFromName(namespace)
-    const stateDO = env.COMPACTION_STATE.get(stateId)
-    const response = await stateDO.fetch('http://internal/status')
-    const data = await response.json() as CompactionStatusResponse
+    const stateDO = env.COMPACTION_STATE.get(stateId) as unknown as CompactionStateDO
+    const data = await stateDO.getCompactionStatus()
 
     return {
       namespace: data.namespace,
@@ -721,8 +721,7 @@ export async function getAggregatedCompactionStatus(
       const stateDO = env.COMPACTION_STATE.get(stateId)
 
       try {
-        const response = await stateDO.fetch('http://internal/status')
-        const data = await response.json() as CompactionStatusResponse
+        const data = await (stateDO as unknown as CompactionStateDO).getCompactionStatus()
         results.push({ doId, status: data })
       } catch {
         // DO might not exist yet if no data was written in that bucket
@@ -978,34 +977,24 @@ export async function handleCompactionQueue(
       }
       // Get DO instance using the (possibly time-bucket-sharded) ID
       const stateId = env.COMPACTION_STATE.idFromName(doId)
-      const stateDO = env.COMPACTION_STATE.get(stateId)
+      const stateDO = env.COMPACTION_STATE.get(stateId) as unknown as CompactionStateDO
 
       // Extract namespace from first update (all updates in this group have same namespace)
       const namespace = updates[0]?.namespace ?? ''
 
-      const response = await stateDO.fetch('http://internal/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          namespace, // Include namespace for DO to know its identity
-          doId, // Include DO ID for logging/debugging
-          updates,
-          config: {
-            windowSizeMs,
-            minFilesToCompact,
-            maxWaitTimeMs,
-            targetFormat,
-            writerInactiveThresholdMs,
-            processingTimeoutMs,
-            bucketCleanupAgeMs,
-          },
-        }),
+      const data = await stateDO.updateCompaction({
+        namespace,
+        updates,
+        config: {
+          windowSizeMs,
+          minFilesToCompact,
+          maxWaitTimeMs,
+          targetFormat,
+          writerInactiveThresholdMs,
+          processingTimeoutMs,
+          bucketCleanupAgeMs,
+        },
       })
-
-      const data = await response.json()
-      if (!isWindowsReadyResponse(data)) {
-        throw new Error(`Invalid response from CompactionStateDO for DO '${doId}': expected { windowsReady: Array<WindowReadyEntry> }`)
-      }
 
       // Track doId with each ready window for Phase 2
       for (const window of data.windowsReady) {
@@ -1023,7 +1012,7 @@ export async function handleCompactionQueue(
     }
     // Use the doId that was tracked with the ready window
     const stateId = env.COMPACTION_STATE.idFromName(window.doId)
-    const stateDO = env.COMPACTION_STATE.get(stateId)
+    const stateDO = env.COMPACTION_STATE.get(stateId) as unknown as CompactionStateDO
 
     // Check if we can dispatch (rate limit, circuit breaker, backpressure)
     // High-priority namespaces can bypass backpressure but still respect rate limits
@@ -1039,13 +1028,7 @@ export async function handleCompactionQueue(
       })
 
       // Rollback to pending state so window can be retried later
-      await stateDO.fetch('http://internal/rollback-processing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          windowKey: window.windowKey,
-        }),
-      })
+      await stateDO.rollbackProcessing({ windowKey: window.windowKey })
       continue
     }
 
@@ -1080,13 +1063,9 @@ export async function handleCompactionQueue(
       logger.info('Workflow started', { workflowId: result.result.id, doId: window.doId })
 
       // Phase 2a: Confirm dispatch success - mark as dispatched
-      await stateDO.fetch('http://internal/confirm-dispatch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          windowKey: window.windowKey,
-          workflowId: result.result.id,
-        }),
+      await stateDO.confirmDispatch({
+        windowKey: window.windowKey,
+        workflowId: result.result.id,
       })
     } else if (result.skipped) {
       // Skipped due to rate limiting, circuit breaker, or backpressure
@@ -1098,13 +1077,7 @@ export async function handleCompactionQueue(
       })
 
       // Rollback to pending state so window can be retried later
-      await stateDO.fetch('http://internal/rollback-processing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          windowKey: window.windowKey,
-        }),
-      })
+      await stateDO.rollbackProcessing({ windowKey: window.windowKey })
     } else {
       // Workflow creation failed - circuit breaker will track this
       logger.error('Failed to start compaction workflow', {
@@ -1115,13 +1088,7 @@ export async function handleCompactionQueue(
       })
 
       // Phase 2b: Rollback on failure - reset to pending
-      await stateDO.fetch('http://internal/rollback-processing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          windowKey: window.windowKey,
-        }),
-      })
+      await stateDO.rollbackProcessing({ windowKey: window.windowKey })
     }
   }
 
@@ -1189,11 +1156,10 @@ export async function recoverStuckWindows(
   for (const doId of doIds) {
     try {
       const stateId = env.COMPACTION_STATE.idFromName(doId)
-      const stateDO = env.COMPACTION_STATE.get(stateId)
+      const stateDO = env.COMPACTION_STATE.get(stateId) as unknown as CompactionStateDO
 
-      // Get stuck windows
-      const response = await stateDO.fetch('http://internal/get-stuck-windows')
-      const data = await response.json() as StuckWindowsResponse
+      // Get stuck windows via RPC
+      const data = await stateDO.getStuckWindows()
 
       for (const stuckWindow of data.stuckWindows) {
         try {
@@ -1226,13 +1192,9 @@ export async function recoverStuckWindows(
               provisionalWorkflowId: stuckWindow.provisionalWorkflowId,
             })
 
-            await stateDO.fetch('http://internal/confirm-dispatch', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                windowKey: stuckWindow.windowKey,
-                workflowId: stuckWindow.provisionalWorkflowId,
-              }),
+            await stateDO.confirmDispatch({
+              windowKey: stuckWindow.windowKey,
+              workflowId: stuckWindow.provisionalWorkflowId,
             })
             recovered++
           } else {
@@ -1244,13 +1206,7 @@ export async function recoverStuckWindows(
               workflowExists,
             })
 
-            await stateDO.fetch('http://internal/rollback-processing', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                windowKey: stuckWindow.windowKey,
-              }),
-            })
+            await stateDO.rollbackProcessing({ windowKey: stuckWindow.windowKey })
             recovered++
           }
         } catch (err) {
@@ -1333,8 +1289,8 @@ interface StoredMetadata {
  * - processing: workflow.create() in progress (with timeout for stuck windows)
  * - dispatched: Workflow successfully created, window can be deleted after completion
  */
-export class CompactionStateDO {
-  private state: DurableObjectState
+export class CompactionStateDO extends DurableObject {
+  private doState: DurableObjectState
   /** The namespace this DO instance handles (set on first update) */
   private namespace: string = ''
   /** Windows keyed by windowStart timestamp */
@@ -1351,8 +1307,9 @@ export class CompactionStateDO {
   /** Configurable timeout: time after which a processing window is considered stuck */
   private processingTimeoutMs: number = DEFAULT_PROCESSING_TIMEOUT_MS
 
-  constructor(state: DurableObjectState) {
-    this.state = state
+  constructor(state: DurableObjectState, env: Record<string, unknown>) {
+    super(state, env)
+    this.doState = state
   }
 
   /**
@@ -1373,7 +1330,7 @@ export class CompactionStateDO {
     if (this.initialized) return
 
     // Try new per-window storage format first (128KB limit fix)
-    const metadata = await this.state.storage.get<StoredMetadata>('metadata')
+    const metadata = await this.doState.storage.get<StoredMetadata>('metadata')
     if (metadata) {
       this.namespace = metadata.namespace ?? ''
       this.priority = metadata.priority ?? 2
@@ -1381,7 +1338,7 @@ export class CompactionStateDO {
       this.writerLastSeen = new Map(Object.entries(metadata.writerLastSeen))
 
       // Load windows from per-window keys
-      const windowEntries = await this.state.storage.list({ prefix: 'window:' })
+      const windowEntries = await this.doState.storage.list({ prefix: 'window:' })
       for (const [key, value] of windowEntries) {
         const sw = value as StoredWindowState
         const windowKey = key.replace('window:', '')
@@ -1397,7 +1354,7 @@ export class CompactionStateDO {
       }
     } else {
       // Fall back to legacy single-key format for backwards compatibility
-      const stored = await this.state.storage.get<StoredState>('compactionState')
+      const stored = await this.doState.storage.get<StoredState>('compactionState')
       if (stored) {
         logger.info('Migrating from legacy compactionState format to per-window storage', {
           namespace: stored.namespace,
@@ -1429,7 +1386,7 @@ export class CompactionStateDO {
         await this.saveState()
 
         // Delete legacy key to complete migration
-        await this.state.storage.delete('compactionState')
+        await this.doState.storage.delete('compactionState')
 
         logger.info('Migration to per-window storage complete', {
           namespace: this.namespace,
@@ -1458,7 +1415,7 @@ export class CompactionStateDO {
       writerLastSeen: Object.fromEntries(this.writerLastSeen),
       priority: this.priority,
     }
-    await this.state.storage.put('metadata', metadata)
+    await this.doState.storage.put('metadata', metadata)
 
     // Save each window in its own key (prevents 128KB limit issues)
     for (const [key, window] of this.windows) {
@@ -1471,7 +1428,7 @@ export class CompactionStateDO {
         totalSize: window.totalSize,
         processingStatus: window.processingStatus,
       }
-      await this.state.storage.put(`window:${key}`, storedWindow)
+      await this.doState.storage.put(`window:${key}`, storedWindow)
     }
   }
 
@@ -1519,6 +1476,129 @@ export class CompactionStateDO {
     return 'none'
   }
 
+  // ===========================================================================
+  // Public RPC Methods
+  // ===========================================================================
+
+  /**
+   * Get compaction status (RPC)
+   */
+  async getCompactionStatus(): Promise<CompactionStatusResponse & {
+    priority: NamespacePriority
+    effectiveMaxWaitTimeMs: number
+    backpressure: BackpressureLevel
+    queueMetrics: { pendingWindows: number; processingWindows: number; dispatchedWindows: number }
+    health: { status: string; issues: string[] }
+  }> {
+    await this.ensureInitialized()
+    return this.buildStatusResponse()
+  }
+
+  /**
+   * Update compaction state with new file writes (RPC)
+   */
+  async updateCompaction(params: {
+    namespace: string
+    updates: Array<{
+      namespace: string
+      writerId: string
+      file: string
+      timestamp: number
+      size: number
+    }>
+    config: {
+      windowSizeMs: number
+      minFilesToCompact: number
+      maxWaitTimeMs: number
+      targetFormat: string
+      writerInactiveThresholdMs?: number | undefined
+      processingTimeoutMs?: number | undefined
+      bucketCleanupAgeMs?: number | undefined
+    }
+  }): Promise<{ windowsReady: WindowReadyEntry[]; skippedDueToBackpressure?: boolean }> {
+    await this.ensureInitialized()
+    return this.processUpdate(params)
+  }
+
+  /**
+   * Configure namespace priority (RPC)
+   */
+  async setConfig(params: { priority?: number | undefined }): Promise<{ success: boolean; priority: NamespacePriority }> {
+    await this.ensureInitialized()
+
+    if (params.priority !== undefined) {
+      if (typeof params.priority !== 'number' || params.priority < 0 || params.priority > 3) {
+        throw new Error('Priority must be 0, 1, 2, or 3')
+      }
+      this.priority = params.priority as NamespacePriority
+    }
+
+    await this.saveState()
+
+    logger.info('Namespace priority configured', {
+      namespace: this.namespace,
+      priority: this.priority,
+    })
+
+    return { success: true, priority: this.priority }
+  }
+
+  /**
+   * Set external backpressure level (RPC)
+   */
+  async setBackpressureLevel(level: BackpressureLevel): Promise<{ success: boolean; backpressure: BackpressureLevel }> {
+    await this.ensureInitialized()
+
+    if (!['none', 'normal', 'severe'].includes(level)) {
+      throw new Error('Invalid backpressure level')
+    }
+
+    this.backpressureLevel = level
+
+    logger.info('Backpressure level set', {
+      namespace: this.namespace,
+      backpressure: this.backpressureLevel,
+    })
+
+    return { success: true, backpressure: this.backpressureLevel }
+  }
+
+  /**
+   * Confirm successful workflow dispatch (RPC)
+   */
+  async confirmDispatch(params: { windowKey: string; workflowId: string }): Promise<{ success: boolean }> {
+    await this.ensureInitialized()
+    return this.processConfirmDispatch(params)
+  }
+
+  /**
+   * Rollback failed workflow dispatch (RPC)
+   */
+  async rollbackProcessing(params: { windowKey: string }): Promise<{ success: boolean }> {
+    await this.ensureInitialized()
+    return this.processRollbackProcessing(params)
+  }
+
+  /**
+   * Notify workflow completion (RPC)
+   */
+  async workflowComplete(params: { windowKey: string; workflowId: string; success: boolean }): Promise<{ success: boolean; alreadyDeleted?: boolean }> {
+    await this.ensureInitialized()
+    return this.processWorkflowComplete(params)
+  }
+
+  /**
+   * Get windows stuck in processing state (RPC)
+   */
+  async getStuckWindows(): Promise<StuckWindowsResponse> {
+    await this.ensureInitialized()
+    return this.buildStuckWindowsResponse()
+  }
+
+  // ===========================================================================
+  // Legacy fetch() handler (kept for backwards compatibility)
+  // ===========================================================================
+
   async fetch(request: Request): Promise<Response> {
     await this.ensureInitialized()
     const url = new URL(request.url)
@@ -1559,82 +1639,66 @@ export class CompactionStateDO {
   }
 
   /**
-   * Handle /config endpoint - configure namespace priority
+   * Handle /config endpoint - configure namespace priority (legacy fetch)
    */
   private async handleConfig(request: Request): Promise<Response> {
     const body = await request.json() as { priority?: number | undefined }
-
-    if (body.priority !== undefined) {
-      // Validate priority is 0-3
-      if (typeof body.priority !== 'number' || body.priority < 0 || body.priority > 3) {
-        return new Response(JSON.stringify({ error: 'Priority must be 0, 1, 2, or 3' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-      this.priority = body.priority as NamespacePriority
-    }
-
-    await this.saveState()
-
-    logger.info('Namespace priority configured', {
-      namespace: this.namespace,
-      priority: this.priority,
-    })
-
-    return new Response(JSON.stringify({ success: true, priority: this.priority }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-
-  /**
-   * Handle /set-backpressure endpoint - set external backpressure level
-   * This is typically called by the queue consumer based on global system state
-   */
-  private async handleSetBackpressure(request: Request): Promise<Response> {
-    const body = await request.json() as { level: BackpressureLevel }
-
-    if (!['none', 'normal', 'severe'].includes(body.level)) {
-      return new Response(JSON.stringify({ error: 'Invalid backpressure level' }), {
+    try {
+      const result = await this.setConfig(body)
+      return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } })
+    } catch (err) {
+      return new Response(JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
       })
     }
+  }
 
-    this.backpressureLevel = body.level
-
-    logger.info('Backpressure level set', {
-      namespace: this.namespace,
-      backpressure: this.backpressureLevel,
-    })
-
-    return new Response(JSON.stringify({ success: true, backpressure: this.backpressureLevel }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
+  /**
+   * Handle /set-backpressure endpoint (legacy fetch)
+   */
+  private async handleSetBackpressure(request: Request): Promise<Response> {
+    const body = await request.json() as { level: BackpressureLevel }
+    try {
+      const result = await this.setBackpressureLevel(body.level)
+      return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } })
+    } catch (err) {
+      return new Response(JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
   }
 
   private async handleUpdate(request: Request): Promise<Response> {
-    const body = await request.json() as {
-      namespace: string
-      updates: Array<{
-        namespace: string
-        writerId: string
-        file: string
-        timestamp: number
-        size: number
-      }>
-      config: {
-        windowSizeMs: number
-        minFilesToCompact: number
-        maxWaitTimeMs: number
-        targetFormat: string
-        writerInactiveThresholdMs?: number | undefined
-        processingTimeoutMs?: number | undefined
-        bucketCleanupAgeMs?: number | undefined
-      }
-    }
+    const body = await request.json() as Parameters<CompactionStateDO['updateCompaction']>[0]
+    const result = await this.processUpdate(body)
+    return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } })
+  }
 
-    const { namespace, updates, config } = body
+  /**
+   * Shared update logic used by both RPC and fetch handlers
+   */
+  private async processUpdate(params: {
+    namespace: string
+    updates: Array<{
+      namespace: string
+      writerId: string
+      file: string
+      timestamp: number
+      size: number
+    }>
+    config: {
+      windowSizeMs: number
+      minFilesToCompact: number
+      maxWaitTimeMs: number
+      targetFormat: string
+      writerInactiveThresholdMs?: number | undefined
+      processingTimeoutMs?: number | undefined
+      bucketCleanupAgeMs?: number | undefined
+    }
+  }): Promise<{ windowsReady: WindowReadyEntry[]; skippedDueToBackpressure?: boolean }> {
+    const { namespace, updates, config } = params
     const now = Date.now()
     const windowsReady: WindowReadyEntry[] = []
 
@@ -1703,9 +1767,7 @@ export class CompactionStateDO {
         priority: this.priority,
         backpressure: this.backpressureLevel,
       })
-      return new Response(JSON.stringify({ windowsReady: [], skippedDueToBackpressure: true }), {
-        headers: { 'Content-Type': 'application/json' },
-      })
+      return { windowsReady: [], skippedDueToBackpressure: true }
     }
 
     // Use priority-based max wait time
@@ -1764,9 +1826,7 @@ export class CompactionStateDO {
     // Emit metrics for observability dashboard
     this.emitMetrics(now)
 
-    return new Response(JSON.stringify({ windowsReady, skippedDueToBackpressure: false }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
+    return { windowsReady, skippedDueToBackpressure: false }
   }
 
   /**
@@ -1828,44 +1888,86 @@ export class CompactionStateDO {
   }
 
   /**
-   * Phase 2a: Confirm successful workflow dispatch
-   * Marks window as "dispatched" with the workflow ID
+   * Phase 2a: Confirm successful workflow dispatch (legacy fetch)
    */
   private async handleConfirmDispatch(request: Request): Promise<Response> {
-    const body = await request.json() as {
-      windowKey: string
-      workflowId: string
-    }
-
-    const { windowKey, workflowId } = body
-    const window = this.windows.get(windowKey)
-
-    if (!window) {
-      return new Response(JSON.stringify({ error: 'Window not found' }), {
-        status: 404,
+    const body = await request.json() as { windowKey: string; workflowId: string }
+    try {
+      const result = await this.processConfirmDispatch(body)
+      return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } })
+    } catch (err) {
+      const status = (err as { status?: number }).status ?? 409
+      return new Response(JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' }), {
+        status,
         headers: { 'Content-Type': 'application/json' },
       })
     }
+  }
 
-    // Validate state transition using state machine
+  /**
+   * Phase 2b: Rollback failed workflow dispatch (legacy fetch)
+   */
+  private async handleRollbackProcessing(request: Request): Promise<Response> {
+    const body = await request.json() as { windowKey: string }
+    try {
+      const result = await this.processRollbackProcessing(body)
+      return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } })
+    } catch (err) {
+      const status = (err as { status?: number }).status ?? 409
+      return new Response(JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+  }
+
+  /**
+   * Called by workflow on completion (legacy fetch)
+   */
+  private async handleWorkflowComplete(request: Request): Promise<Response> {
+    const body = await request.json() as { windowKey: string; workflowId: string; success: boolean }
+    try {
+      const result = await this.processWorkflowComplete(body)
+      return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } })
+    } catch (err) {
+      const status = (err as { status?: number }).status ?? 409
+      return new Response(JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+  }
+
+  /**
+   * Get stuck windows (legacy fetch)
+   */
+  private handleGetStuckWindows(): Response {
+    const result = this.buildStuckWindowsResponse()
+    return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } })
+  }
+
+  // ===========================================================================
+  // Shared Logic Methods (used by both RPC and fetch handlers)
+  // ===========================================================================
+
+  private async processConfirmDispatch(params: { windowKey: string; workflowId: string }): Promise<{ success: boolean }> {
+    const { windowKey, workflowId } = params
+    const window = this.windows.get(windowKey)
+
+    if (!window) {
+      throw Object.assign(new Error('Window not found'), { status: 404 })
+    }
+
     const currentState = getStateName(window.processingStatus)
     const targetState: WindowStateName = 'dispatched'
 
     if (!isValidStateTransition(currentState, targetState)) {
-      const validTransitions = WINDOW_STATE_TRANSITIONS[currentState]
-      return new Response(JSON.stringify({
-        error: `Invalid state transition: ${currentState} → ${targetState}`,
-        currentState,
-        targetState,
-        validTransitions,
-        description: getTransitionDescription(currentState, targetState),
-      }), {
-        status: 409,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      throw Object.assign(
+        new Error(`Invalid state transition: ${currentState} -> ${targetState}. ${getTransitionDescription(currentState, targetState)}`),
+        { status: 409 }
+      )
     }
 
-    // Mark as dispatched
     window.processingStatus = {
       state: 'dispatched',
       workflowId,
@@ -1881,49 +1983,27 @@ export class CompactionStateDO {
       transition: getTransitionDescription(currentState, targetState),
     })
 
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
+    return { success: true }
   }
 
-  /**
-   * Phase 2b: Rollback failed workflow dispatch
-   * Resets window to "pending" state so it can be retried
-   */
-  private async handleRollbackProcessing(request: Request): Promise<Response> {
-    const body = await request.json() as {
-      windowKey: string
-    }
-
-    const { windowKey } = body
+  private async processRollbackProcessing(params: { windowKey: string }): Promise<{ success: boolean }> {
+    const { windowKey } = params
     const window = this.windows.get(windowKey)
 
     if (!window) {
-      return new Response(JSON.stringify({ error: 'Window not found' }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      throw Object.assign(new Error('Window not found'), { status: 404 })
     }
 
-    // Validate state transition using state machine
     const currentState = getStateName(window.processingStatus)
     const targetState: WindowStateName = 'pending'
 
     if (!isValidStateTransition(currentState, targetState)) {
-      const validTransitions = WINDOW_STATE_TRANSITIONS[currentState]
-      return new Response(JSON.stringify({
-        error: `Invalid state transition: ${currentState} → ${targetState}`,
-        currentState,
-        targetState,
-        validTransitions,
-        description: getTransitionDescription(currentState, targetState),
-      }), {
-        status: 409,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      throw Object.assign(
+        new Error(`Invalid state transition: ${currentState} -> ${targetState}. ${getTransitionDescription(currentState, targetState)}`),
+        { status: 409 }
+      )
     }
 
-    // Reset to pending for retry
     window.processingStatus = { state: 'pending' }
 
     await this.saveState()
@@ -1934,67 +2014,37 @@ export class CompactionStateDO {
       transition: getTransitionDescription(currentState, targetState),
     })
 
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
+    return { success: true }
   }
 
-  /**
-   * Called by workflow on completion to clean up the window
-   * This is the final step - window can now be safely deleted
-   */
-  private async handleWorkflowComplete(request: Request): Promise<Response> {
-    const body = await request.json() as {
-      windowKey: string
-      workflowId: string
-      success: boolean
-    }
-
-    const { windowKey, workflowId, success } = body
+  private async processWorkflowComplete(params: { windowKey: string; workflowId: string; success: boolean }): Promise<{ success: boolean; alreadyDeleted?: boolean }> {
+    const { windowKey, workflowId, success } = params
     const window = this.windows.get(windowKey)
 
     if (!window) {
-      // Window already cleaned up, that's fine
-      return new Response(JSON.stringify({ success: true, alreadyDeleted: true }), {
-        headers: { 'Content-Type': 'application/json' },
-      })
+      return { success: true, alreadyDeleted: true }
     }
 
-    // Validate state transition using state machine
     const currentState = getStateName(window.processingStatus)
     const targetState: WindowStateName = success ? 'deleted' : 'pending'
 
     if (!isValidStateTransition(currentState, targetState)) {
-      const validTransitions = WINDOW_STATE_TRANSITIONS[currentState]
-      return new Response(JSON.stringify({
-        error: `Invalid state transition: ${currentState} → ${targetState}`,
-        currentState,
-        targetState,
-        validTransitions,
-        description: getTransitionDescription(currentState, targetState),
-      }), {
-        status: 409,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      throw Object.assign(
+        new Error(`Invalid state transition: ${currentState} -> ${targetState}. ${getTransitionDescription(currentState, targetState)}`),
+        { status: 409 }
+      )
     }
 
-    // Verify workflow ID matches (only when in dispatched state)
     if (window.processingStatus.state === 'dispatched' && window.processingStatus.workflowId !== workflowId) {
-      return new Response(JSON.stringify({
-        error: 'Workflow ID mismatch',
-        expected: window.processingStatus.workflowId,
-        received: workflowId,
-      }), {
-        status: 409,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      throw Object.assign(
+        new Error(`Workflow ID mismatch: expected ${window.processingStatus.workflowId}, received ${workflowId}`),
+        { status: 409 }
+      )
     }
 
     if (success) {
-      // Workflow completed successfully - delete the window (terminal state)
       this.windows.delete(windowKey)
-      // Delete the per-window storage key
-      await this.state.storage.delete(`window:${windowKey}`)
+      await this.doState.storage.delete(`window:${windowKey}`)
       logger.info('Window completed and deleted', {
         namespace: this.namespace,
         windowKey,
@@ -2002,7 +2052,6 @@ export class CompactionStateDO {
         transition: getTransitionDescription(currentState, targetState),
       })
     } else {
-      // Workflow failed - reset to pending for retry
       window.processingStatus = { state: 'pending' }
       logger.warn('Workflow failed, window reset to pending', {
         namespace: this.namespace,
@@ -2014,30 +2063,12 @@ export class CompactionStateDO {
 
     await this.saveState()
 
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
+    return { success: true }
   }
 
-  /**
-   * Get windows stuck in "processing" state that need recovery
-   * Returns windows with their provisional workflow IDs so the queue consumer
-   * can check workflow status and decide whether to confirm or rollback
-   *
-   * This is part of the two-phase commit crash recovery:
-   * 1. If workflow.create() succeeded but confirm-dispatch failed, the workflow exists
-   * 2. Queue consumer checks workflow status using provisionalWorkflowId
-   * 3. If workflow is running/complete, call /confirm-dispatch
-   * 4. If workflow doesn't exist or errored, call /rollback-processing
-   */
-  private handleGetStuckWindows(): Response {
+  private buildStuckWindowsResponse(): StuckWindowsResponse {
     const now = Date.now()
-    const stuckWindows: Array<{
-      windowKey: string
-      provisionalWorkflowId: string
-      startedAt: number
-      stuckDurationMs: number
-    }> = []
+    const stuckWindows: StuckWindowInfo[] = []
 
     for (const [windowKey, window] of this.windows) {
       if (
@@ -2053,12 +2084,7 @@ export class CompactionStateDO {
       }
     }
 
-    return new Response(JSON.stringify({
-      namespace: this.namespace,
-      stuckWindows,
-    }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
+    return { namespace: this.namespace, stuckWindows }
   }
 
   /**
@@ -2092,6 +2118,13 @@ export class CompactionStateDO {
   }
 
   private handleStatus(): Response {
+    const status = this.buildStatusResponse()
+    return new Response(JSON.stringify(status, null, 2), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  private buildStatusResponse() {
     const now = Date.now()
 
     // Calculate queue metrics
@@ -2103,7 +2136,6 @@ export class CompactionStateDO {
     let windowsStuckInProcessing = 0
 
     for (const window of this.windows.values()) {
-      // Calculate age from windowEnd (when the window closed)
       const windowAge = now - window.windowEnd
       if (windowAge > oldestWindowAge) {
         oldestWindowAge = windowAge
@@ -2118,7 +2150,6 @@ export class CompactionStateDO {
           break
         case 'processing':
           processingWindows++
-          // Count stuck processing windows (using configurable processing timeout)
           if (now - window.processingStatus.startedAt > this.processingTimeoutMs) {
             windowsStuckInProcessing++
           }
@@ -2129,9 +2160,8 @@ export class CompactionStateDO {
       }
     }
 
-    // Calculate health status based on priority
     const effectiveMaxWaitTimeMs = this.getEffectiveMaxWaitTimeMs()
-    const healthThresholdMs = effectiveMaxWaitTimeMs * 2 // 2x the wait time is concerning
+    const healthThresholdMs = effectiveMaxWaitTimeMs * 2
     let healthStatus: 'healthy' | 'degraded' | 'unhealthy' = 'healthy'
     const healthIssues: string[] = []
 
@@ -2145,28 +2175,23 @@ export class CompactionStateDO {
       healthIssues.push(`${windowsStuckInProcessing} window(s) stuck in processing`)
     }
 
-    const status = {
+    return {
       namespace: this.namespace,
-      // Priority-based scheduling fields
       priority: this.priority,
       effectiveMaxWaitTimeMs: this.getEffectiveMaxWaitTimeMs(),
       backpressure: this.calculateBackpressureLevel(),
-      // Queue metrics
       activeWindows: this.windows.size,
       queueMetrics: {
         pendingWindows,
         processingWindows,
         dispatchedWindows,
       },
-      // Health status
       health: {
         status: healthStatus,
         issues: healthIssues,
       },
-      // Writer info
       knownWriters: Array.from(this.knownWriters),
       activeWriters: this.getActiveWriters(now),
-      // Alerting metrics for health monitoring
       oldestWindowAge,
       totalPendingFiles,
       windowsStuckInProcessing,
@@ -2180,10 +2205,6 @@ export class CompactionStateDO {
         processingStatus: w.processingStatus,
       })),
     }
-
-    return new Response(JSON.stringify(status, null, 2), {
-      headers: { 'Content-Type': 'application/json' },
-    })
   }
 
   private getActiveWriters(now: number): string[] {

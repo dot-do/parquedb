@@ -1099,13 +1099,9 @@ export default {
         }
 
         const id = env.MIGRATION.idFromName('default')
-        const stub = env.MIGRATION.get(id)
+        const migrationStub = env.MIGRATION.get(id) as unknown as import('./MigrationDO').MigrationDO
 
-        // Forward to Migration DO
-        // Map: /migrate -> /migrate (POST starts migration)
-        //      /migrate/status -> /status
-        //      /migrate/cancel -> /cancel
-        //      /migrate/jobs -> /jobs
+        // Map paths to Migration DO RPC methods
         let migrationPath = path.replace('/migrate', '')
         if (migrationPath === '' && request.method === 'GET') {
           migrationPath = '/status'
@@ -1113,15 +1109,46 @@ export default {
           migrationPath = '/migrate'
         }
 
-        const migrationUrl = new URL(request.url)
-        migrationUrl.pathname = migrationPath
+        try {
+          let data: unknown
 
-        const response = await stub.fetch(new Request(migrationUrl.toString(), {
-          method: request.method,
-          headers: request.headers,
-          body: request.body,
-        }))
-        return withRateLimitHeaders(response)
+          switch (migrationPath) {
+            case '/migrate': {
+              if (request.method === 'POST') {
+                const body = await request.json()
+                data = await migrationStub.startMigration(body as Parameters<typeof migrationStub.startMigration>[0])
+                return withRateLimitHeaders(new Response(JSON.stringify(data), {
+                  status: 202,
+                  headers: { 'Content-Type': 'application/json' },
+                }))
+              }
+              break
+            }
+            case '/status':
+              data = await migrationStub.getMigrationStatus()
+              return withRateLimitHeaders(new Response(JSON.stringify(data), {
+                headers: { 'Content-Type': 'application/json' },
+              }))
+            case '/cancel': {
+              if (request.method === 'POST') {
+                data = await migrationStub.cancelMigration()
+                return withRateLimitHeaders(new Response(JSON.stringify(data), {
+                  headers: { 'Content-Type': 'application/json' },
+                }))
+              }
+              break
+            }
+            case '/jobs':
+              data = await migrationStub.getMigrationJobs()
+              return withRateLimitHeaders(new Response(JSON.stringify(data), {
+                headers: { 'Content-Type': 'application/json' },
+              }))
+          }
+
+          return withRateLimitHeaders(new Response('Not Found', { status: 404 }))
+        } catch (err) {
+          return withRateLimitHeaders(buildErrorResponse(request, err instanceof Error ? err : new Error(String(err)), 500, startTime))
+        }
       }
 
       // =======================================================================
@@ -1223,15 +1250,17 @@ export default {
         const namespaceParam = url.searchParams.get('namespace')
         const namespacesParam = url.searchParams.get('namespaces')
 
-        // Single namespace query - direct to its sharded DO
+        // Single namespace query - direct to its sharded DO via RPC
         if (namespaceParam) {
           const id = compactionState.idFromName(namespaceParam)
-          const stub = compactionState.get(id)
-          const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
-          return withRateLimitHeaders(response)
+          const compactionStub = compactionState.get(id) as unknown as import('../workflows/compaction-queue-consumer').CompactionStateDO
+          const data = await compactionStub.getCompactionStatus()
+          return withRateLimitHeaders(new Response(JSON.stringify(data, null, 2), {
+            headers: { 'Content-Type': 'application/json' },
+          }))
         }
 
-        // Multiple namespaces query - aggregate from multiple DOs
+        // Multiple namespaces query - aggregate from multiple DOs via RPC
         if (namespacesParam) {
           const namespaces = namespacesParam.split(',').map(ns => ns.trim()).filter(Boolean)
           if (namespaces.length === 0) {
@@ -1243,14 +1272,13 @@ export default {
             ))
           }
 
-          // Query all namespace DOs in parallel
+          // Query all namespace DOs in parallel via RPC
           const results = await Promise.all(
             namespaces.map(async (namespace) => {
               const id = compactionState.idFromName(namespace)
-              const stub = compactionState.get(id)
+              const compactionStub = compactionState.get(id) as unknown as import('../workflows/compaction-queue-consumer').CompactionStateDO
               try {
-                const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
-                const data = await response.json() as Record<string, unknown>
+                const data = await compactionStub.getCompactionStatus()
                 return { namespace, ...data }
               } catch (err) {
                 return { namespace, error: err instanceof Error ? err.message : 'Unknown error' }
@@ -1354,10 +1382,9 @@ export default {
         await Promise.all(
           namespaces.map(async (namespace) => {
             const id = compactionStateHealth.idFromName(namespace)
-            const stub = compactionStateHealth.get(id)
+            const compactionStub = compactionStateHealth.get(id) as unknown as import('../workflows/compaction-queue-consumer').CompactionStateDO
             try {
-              const response = await stub.fetch(new Request(new URL('/status', request.url).toString()))
-              const data = await response.json()
+              const data = await compactionStub.getCompactionStatus()
 
               if (isCompactionStatusResponse(data)) {
                 namespaceHealthMap[namespace] = evaluateNamespaceHealth(namespace, data, healthConfig)
