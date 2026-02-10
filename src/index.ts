@@ -1343,6 +1343,15 @@ export {
   type SyncResult,
   type SyncError,
   type SyncEngineOptions,
+  // Event-level bidirectional sync (lightweight CDC sync)
+  resolveEventSync,
+  computeEventSyncCursor,
+  type EventSyncEvent,
+  type EventSyncConflictStrategy,
+  type EventSyncConflictInfo,
+  type EventSyncResult,
+  type ResolveEventSyncParams,
+  type ResolveEventSyncResult,
 } from './sync'
 
 // =============================================================================
@@ -1487,6 +1496,12 @@ export {
   createSearchClient,
   type IMDBTitle,
   type ONETOccupation,
+  // Entity search (cross-type full-text scoring)
+  scoreEntity,
+  searchEntities,
+  type ScoreResult,
+  type EntitySearchParams,
+  type EntitySearchResult,
 } from './search'
 
 // =============================================================================

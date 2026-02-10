@@ -62,3 +62,15 @@ export * from './lock'
 // Schema evolution and snapshots
 export * from './schema-snapshot'
 export * from './schema-evolution'
+
+// Event-level bidirectional sync (lightweight CDC sync)
+export {
+  resolveEventSync,
+  computeEventSyncCursor,
+  type SyncEvent as EventSyncEvent,
+  type EventSyncConflictStrategy,
+  type EventSyncConflictInfo,
+  type EventSyncResult,
+  type ResolveEventSyncParams,
+  type ResolveEventSyncResult,
+} from './event-sync'

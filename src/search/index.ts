@@ -56,3 +56,12 @@ export {
   type UNSPSCFilters,
   type BuiltinSearchClient,
 } from './client.js'
+
+// Entity search (cross-type full-text scoring)
+export {
+  scoreEntity,
+  searchEntities,
+  type ScoreResult,
+  type SearchParams as EntitySearchParams,
+  type EntitySearchResult,
+} from './entity-search'

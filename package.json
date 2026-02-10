@@ -53,6 +53,10 @@
       "browser": "./dist/config/auth.browser.js",
       "import": "./dist/config/auth.js",
       "types": "./dist/config/auth.d.ts"
+    },
+    "./sync": {
+      "import": "./dist/sync/index.js",
+      "types": "./dist/sync/index.d.ts"
     }
   },
   "browser": {
