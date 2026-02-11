@@ -8,6 +8,8 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "workerd": "./dist/index.browser.js",
+      "worker": "./dist/index.browser.js",
       "browser": "./dist/index.browser.js",
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
@@ -29,6 +31,8 @@
       "types": "./dist/integrations/hono/index.d.ts"
     },
     "./config": {
+      "workerd": "./dist/config/index.browser.js",
+      "worker": "./dist/config/index.browser.js",
       "browser": "./dist/config/index.browser.js",
       "import": "./dist/config/index.js",
       "types": "./dist/config/index.d.ts"
@@ -50,6 +54,8 @@
       "types": "./dist/integrations/fastify/index.d.ts"
     },
     "./auth": {
+      "workerd": "./dist/config/auth.browser.js",
+      "worker": "./dist/config/auth.browser.js",
       "browser": "./dist/config/auth.browser.js",
       "import": "./dist/config/auth.js",
       "types": "./dist/config/auth.d.ts"
