@@ -80,8 +80,7 @@ export class FlushManager {
       if (totalCount >= this.flushConfig.maxEvents) break
     }
 
-    if (totalCount < this.flushConfig.minEvents) {
-      // Not enough events to flush
+    if (totalCount === 0) {
       return
     }
 
@@ -148,8 +147,8 @@ export class FlushManager {
     if (unflushedEventCount >= this.flushConfig.maxEvents) {
       // Flush immediately if we hit max events
       await this.flushToParquet()
-    } else if (unflushedEventCount >= this.flushConfig.minEvents && !this.flushAlarmSet) {
-      // Schedule flush after interval
+    } else if (unflushedEventCount > 0) {
+      // Always schedule flush for ANY unflushed events — data MUST reach R2
       await this.ctx.storage.setAlarm(Date.now() + this.flushConfig.maxInterval)
       this.flushAlarmSet = true
     }

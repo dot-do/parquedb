@@ -366,8 +366,12 @@ export class ParqueDBDO extends DurableObject<Env> {
 
     const dataJson = JSON.stringify(dataWithoutLinks)
 
-    // EVENT SOURCING: Entity state is derived from events, no need to write to entities table
-    // The events_wal is the single source of truth
+    // Write to entities table for materialization (snapshot for R2 parquet reads)
+    this.sql.exec(
+      `INSERT INTO entities (ns, id, type, name, version, created_at, created_by, updated_at, updated_by, deleted_at, deleted_by, data)
+       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, NULL, NULL, ?)`,
+      ns, id, $type, name, now, actor, now, actor, dataJson
+    )
 
     // Create relationships
     for (const link of links) {
@@ -792,7 +796,12 @@ export class ParqueDBDO extends DurableObject<Env> {
     const newVersion = current.version + 1
     const dataJson = JSON.stringify(data)
 
-    // EVENT SOURCING: Entity state is derived from events, no need to update entities table
+    // Update entities table for materialization (snapshot for R2 parquet reads)
+    this.sql.exec(
+      `INSERT OR REPLACE INTO entities (ns, id, type, name, version, created_at, created_by, updated_at, updated_by, deleted_at, deleted_by, data)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+      ns, id, type, name, newVersion, current.created_at, current.created_by, now, actor, dataJson
+    )
 
     // Invalidate cache for this entity
     this.invalidateCache(ns, id)
@@ -870,7 +879,15 @@ export class ParqueDBDO extends DurableObject<Env> {
       throw new Error(`Version mismatch: expected ${options.expectedVersion}, got ${current.version}`)
     }
 
-    // EVENT SOURCING: Entity state is derived from events, no need to update entities table
+    // Update entities table for materialization
+    if (options.hard) {
+      this.sql.exec(`DELETE FROM entities WHERE ns = ? AND id = ?`, ns, id)
+    } else {
+      this.sql.exec(
+        `UPDATE entities SET deleted_at = ?, deleted_by = ?, version = version + 1, updated_at = ?, updated_by = ? WHERE ns = ? AND id = ?`,
+        now, actor, now, actor, ns, id
+      )
+    }
 
     // Handle relationships (still use relationships table)
     if (options.hard) {
@@ -1563,11 +1580,10 @@ export class ParqueDBDO extends DurableObject<Env> {
     const eventJson = JSON.stringify(event)
     buffer.sizeBytes += eventJson.length
 
-    // Check if we should flush
-    if (buffer.events.length >= EVENT_BATCH_COUNT_THRESHOLD ||
-        buffer.sizeBytes >= EVENT_BATCH_SIZE_THRESHOLD) {
-      await this.flushNsEventBatch(ns)
-    }
+    // Always flush to SQLite immediately to ensure durability.
+    // flushNsEventBatch is a single INSERT — sub-millisecond.
+    // Without this, events remain in-memory only and are lost if the DO is evicted.
+    await this.flushNsEventBatch(ns)
   }
 
   /**
@@ -1603,11 +1619,8 @@ export class ParqueDBDO extends DurableObject<Env> {
     const eventJson = JSON.stringify(fullEvent)
     buffer.sizeBytes += eventJson.length
 
-    // Check if we should flush
-    if (buffer.events.length >= EVENT_BATCH_COUNT_THRESHOLD ||
-        buffer.sizeBytes >= EVENT_BATCH_SIZE_THRESHOLD) {
-      await this.flushNsEventBatch(ns)
-    }
+    // Always flush to SQLite immediately for durability
+    await this.flushNsEventBatch(ns)
 
     return eventId
   }
@@ -1858,13 +1871,8 @@ export class ParqueDBDO extends DurableObject<Env> {
     const eventJson = JSON.stringify(fullEvent)
     buffer.sizeBytes += eventJson.length
 
-    // Check if we should flush
-    if (
-      buffer.events.length >= EVENT_BATCH_COUNT_THRESHOLD ||
-      buffer.sizeBytes >= EVENT_BATCH_SIZE_THRESHOLD
-    ) {
-      await this.flushRelEventBatch(ns)
-    }
+    // Always flush to SQLite immediately for durability
+    await this.flushRelEventBatch(ns)
 
     return eventId
   }
@@ -2148,8 +2156,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       if (allEvents.length >= this.flushConfig.maxEvents) break
     }
 
-    if (allEvents.length < this.flushConfig.minEvents) {
-      // Not enough events to flush
+    if (allEvents.length === 0) {
       return
     }
 
@@ -2208,6 +2215,81 @@ export class ParqueDBDO extends DurableObject<Env> {
       allEvents[allEvents.length - 1]!.id,
       parquetPath
     )
+
+    // Materialize entity snapshot to R2 for QueryExecutor reads.
+    // QueryExecutor reads from {ns}.parquet — write a full snapshot from the entities table.
+    await this.materializeEntitySnapshot(ns)
+  }
+
+  /**
+   * Write a materialized entity snapshot to R2 as {ns}.parquet
+   *
+   * The QueryExecutor reads from `{ns}.parquet` with columns `$id` and `$data`.
+   * This method queries the entities SQLite table and writes the snapshot.
+   */
+  private async materializeEntitySnapshot(ns: string): Promise<void> {
+    interface EntityRow extends Record<string, SqlStorageValue> {
+      ns: string
+      id: string
+      type: string
+      name: string
+      version: number
+      created_at: string
+      created_by: string
+      updated_at: string
+      updated_by: string
+      deleted_at: string | null
+      deleted_by: string | null
+      data: string
+    }
+
+    const rows = [...this.sql.exec<EntityRow>(
+      `SELECT ns, id, type, name, version, created_at, created_by, updated_at, updated_by, deleted_at, deleted_by, data
+       FROM entities WHERE ns = ? AND deleted_at IS NULL`,
+      ns
+    )]
+
+    if (rows.length === 0) return
+
+    // Build parquet columns: $id and $data (JSON string with all entity fields)
+    const ids: string[] = []
+    const dataStrings: string[] = []
+
+    for (const row of rows) {
+      const entityId = `${row.ns}/${row.id}`
+      ids.push(entityId)
+
+      // Parse stored data and merge with metadata
+      const storedData = row.data ? JSON.parse(row.data) : {}
+      const fullData = {
+        $type: row.type,
+        name: row.name,
+        version: row.version,
+        createdAt: row.created_at,
+        createdBy: row.created_by,
+        updatedAt: row.updated_at,
+        updatedBy: row.updated_by,
+        ...storedData,
+      }
+      dataStrings.push(JSON.stringify(fullData))
+    }
+
+    // Write snapshot parquet file. QueryExecutor reads from {ns}.parquet
+    const snapshotPath = `${ns}.parquet`
+
+    try {
+      const { parquetWriteBuffer } = await import('hyparquet-writer')
+      const snapshotColumnData = [
+        { name: '$id', data: ids },
+        { name: '$data', data: dataStrings },
+      ]
+      const buffer = parquetWriteBuffer({ columnData: snapshotColumnData })
+      await this.env.BUCKET.put(snapshotPath, buffer)
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      // Non-fatal: events are already in R2, snapshot is for read performance
+      console.error(`Failed to write entity snapshot for ${ns}: ${message}`)
+    }
   }
 
   /**
@@ -2270,8 +2352,7 @@ export class ParqueDBDO extends DurableObject<Env> {
       if (allEvents.length >= this.flushConfig.maxEvents) break
     }
 
-    if (allEvents.length < this.flushConfig.minEvents) {
-      // Not enough events to flush
+    if (allEvents.length === 0) {
       return
     }
 
@@ -2357,8 +2438,16 @@ export class ParqueDBDO extends DurableObject<Env> {
   override async alarm(): Promise<void> {
     this.flushAlarmSet = false
 
-    // Flush all buffered events to Parquet/R2
-    await this.flushToParquet()
+    try {
+      // Flush all buffered events to Parquet/R2
+      await this.flushToParquet()
+      console.log('[ParqueDBDO] alarm: flush completed successfully')
+    } catch (error) {
+      console.error('[ParqueDBDO] alarm: flush failed', error instanceof Error ? error.message : error)
+      // Re-schedule alarm on failure so we retry
+      await this.ctx.storage.setAlarm(Date.now() + this.flushConfig.maxInterval)
+      this.flushAlarmSet = true
+    }
   }
 
   /**
@@ -2372,8 +2461,9 @@ export class ParqueDBDO extends DurableObject<Env> {
     if (count >= this.flushConfig.maxEvents) {
       // Flush immediately if we hit max events
       await this.flushToParquet()
-    } else if (count >= this.flushConfig.minEvents && !this.flushAlarmSet) {
-      // Schedule flush after interval
+    } else if (count > 0) {
+      // Always schedule a flush alarm for ANY unflushed events.
+      // Data MUST reach R2 — no dead zone where events sit in SQLite forever.
       await this.ctx.storage.setAlarm(Date.now() + this.flushConfig.maxInterval)
       this.flushAlarmSet = true
     }

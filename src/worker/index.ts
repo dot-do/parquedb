@@ -1563,6 +1563,61 @@ export default {
         return withRateLimitHeaders(response)
       }
 
+      // Manual flush trigger for a specific namespace
+      if (path === '/debug/flush') {
+        const ns = url.searchParams.get('ns')
+        if (!ns) {
+          return new Response(JSON.stringify({ error: 'Missing ns query parameter' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        try {
+          const stub = getDOStubByName<ParqueDBDOStub>(env.PARQUEDB, ns)
+          await stub.flushToParquet()
+          return new Response(JSON.stringify({ success: true, message: `Flush triggered for ${ns}` }), {
+            headers: { 'Content-Type': 'application/json' },
+          })
+        } catch (error) {
+          return new Response(JSON.stringify({
+            error: 'Flush failed',
+            message: error instanceof Error ? error.message : String(error),
+          }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+      }
+
+      // Diagnostic: check DO internal state
+      if (path === '/debug/do-state') {
+        const ns = url.searchParams.get('ns')
+        if (!ns) {
+          return new Response(JSON.stringify({ error: 'Missing ns query parameter' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        try {
+          const stub = getDOStubByName<ParqueDBDOStub>(env.PARQUEDB, ns)
+          const count = await stub.getUnflushedEventCount()
+          return new Response(JSON.stringify({
+            ns,
+            unflushedEventCount: count,
+          }, null, 2), {
+            headers: { 'Content-Type': 'application/json' },
+          })
+        } catch (error) {
+          return new Response(JSON.stringify({
+            error: 'DO state check failed',
+            message: error instanceof Error ? error.message : String(error),
+          }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+      }
+
       if (path === '/debug/entity') {
         const response = await handleDebugEntity(context, env)
         return withRateLimitHeaders(response)
