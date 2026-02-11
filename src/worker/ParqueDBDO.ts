@@ -368,7 +368,7 @@ export class ParqueDBDO extends DurableObject<Env> {
 
     // Write to entities table for materialization (snapshot for R2 parquet reads)
     this.sql.exec(
-      `INSERT INTO entities (ns, id, type, name, version, created_at, created_by, updated_at, updated_by, deleted_at, deleted_by, data)
+      `INSERT OR REPLACE INTO entities (ns, id, type, name, version, created_at, created_by, updated_at, updated_by, deleted_at, deleted_by, data)
        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, NULL, NULL, ?)`,
       ns, id, $type, name, now, actor, now, actor, dataJson
     )
