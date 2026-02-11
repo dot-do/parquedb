@@ -332,12 +332,12 @@ export class ParqueDBDO extends DurableObject<Env> {
 
     const now = new Date().toISOString()
     const actor = options.actor || 'system/anonymous'
-    // Use Sqids for short, human-friendly IDs based on namespace counter
-    const id = this.getNextId(ns)
+    // Use caller-supplied ID if present, otherwise generate from namespace counter
+    const id = (data as Record<string, unknown>).id as string || this.getNextId(ns)
     const entityIdValue = `${ns}/${id}`
 
-    // Extract $type and name, rest goes to data
-    const { $type, name, ...rest } = data
+    // Extract $type, name, and id — rest goes to data
+    const { $type, name, id: _suppliedId, ...rest } = data as Record<string, unknown> & { $type?: string; name?: string; id?: string }
     if (!$type) {
       throw new Error('Entity must have $type')
     }
@@ -1207,6 +1207,97 @@ export class ParqueDBDO extends DurableObject<Env> {
 
     // Entity not found in events - does not exist
     return null
+  }
+
+  // ===========================================================================
+  // SQLite Entity Table Reads (for read-after-write consistency)
+  // ===========================================================================
+
+  /**
+   * Get a single entity from the SQLite entities table by namespace + ID.
+   * Returns the entity in the same format as event-sourced get().
+   */
+  getEntityFromSqlite(ns: string, id: string): Entity | null {
+    interface Row extends Record<string, SqlStorageValue> {
+      ns: string; id: string; type: string; name: string; version: number
+      created_at: string; created_by: string; updated_at: string; updated_by: string
+      deleted_at: string | null; deleted_by: string | null; data: string
+    }
+    const rows = [...this.sql.exec<Row>(
+      `SELECT ns, id, type, name, version, created_at, created_by, updated_at, updated_by, deleted_at, deleted_by, data
+       FROM entities WHERE ns = ? AND id = ? AND deleted_at IS NULL LIMIT 1`, ns, id
+    )]
+    if (rows.length === 0) return null
+    return this.sqliteRowToEntity(rows[0])
+  }
+
+  /**
+   * Find entities from the SQLite entities table for a namespace.
+   * Supports limit/offset pagination. Filter/sort done in-memory for simplicity.
+   */
+  findEntitiesFromSqlite(ns: string, options?: { limit?: number; offset?: number }): {
+    items: Entity[]; total: number; hasMore: boolean
+  } {
+    interface Row extends Record<string, SqlStorageValue> {
+      ns: string; id: string; type: string; name: string; version: number
+      created_at: string; created_by: string; updated_at: string; updated_by: string
+      deleted_at: string | null; deleted_by: string | null; data: string
+    }
+    const limit = options?.limit ?? 20
+    const offset = options?.offset ?? 0
+
+    // Get total count
+    interface CountRow extends Record<string, SqlStorageValue> { cnt: number }
+    const countRows = [...this.sql.exec<CountRow>(
+      `SELECT COUNT(*) as cnt FROM entities WHERE ns = ? AND deleted_at IS NULL`, ns
+    )]
+    const total = countRows[0]?.cnt ?? 0
+
+    // Get page
+    const rows = [...this.sql.exec<Row>(
+      `SELECT ns, id, type, name, version, created_at, created_by, updated_at, updated_by, deleted_at, deleted_by, data
+       FROM entities WHERE ns = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      ns, limit, offset
+    )]
+
+    return {
+      items: rows.map(r => this.sqliteRowToEntity(r)),
+      total,
+      hasMore: offset + rows.length < total,
+    }
+  }
+
+  /**
+   * Count entities in the SQLite entities table for a namespace.
+   */
+  countEntitiesFromSqlite(ns: string): number {
+    interface CountRow extends Record<string, SqlStorageValue> { cnt: number }
+    const rows = [...this.sql.exec<CountRow>(
+      `SELECT COUNT(*) as cnt FROM entities WHERE ns = ? AND deleted_at IS NULL`, ns
+    )]
+    return rows[0]?.cnt ?? 0
+  }
+
+  /** Convert a SQLite entities row to an Entity object */
+  private sqliteRowToEntity(row: Record<string, SqlStorageValue> & {
+    ns: string; id: string; type: string; name: string; version: number
+    created_at: string; created_by: string; updated_at: string; updated_by: string
+    deleted_at: string | null; deleted_by: string | null; data: string
+  }): Entity {
+    const stored = row.data ? JSON.parse(row.data) : {}
+    return {
+      $id: `${row.ns}/${row.id}`,
+      $type: row.type,
+      name: row.name,
+      version: row.version,
+      createdAt: row.created_at,
+      createdBy: row.created_by,
+      updatedAt: row.updated_at,
+      updatedBy: row.updated_by,
+      deletedAt: row.deleted_at ?? undefined,
+      deletedBy: row.deleted_by ?? undefined,
+      ...stored,
+    } as Entity
   }
 
   /**

@@ -418,11 +418,11 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
   /**
    * Find entities matching a filter
    *
-   * Goes directly to R2 with Cache API for performance.
-   * Uses predicate pushdown for efficient Parquet scanning.
+   * Reads from the DO's SQLite entities table for consistency.
+   * Entities are always available immediately after create/update.
    *
    * @param ns - Namespace to query
-   * @param filter - MongoDB-style filter
+   * @param filter - MongoDB-style filter (applied in-memory for now)
    * @param options - Query options (sort, limit, project, etc.)
    * @returns Matching entities with pagination info
    */
@@ -432,13 +432,22 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     options: FindOptions<T> = {}
   ): Promise<FindResult<T>> {
     await this.ensureInitialized()
-    return this.queryExecutor.find<T>(ns, filter, options)
+
+    // Route through DO for read-after-write consistency
+    const stub = getDOStubByName<ParqueDBDOStub & {
+      findEntitiesFromSqlite(ns: string, options?: { limit?: number; offset?: number }): Promise<{ items: unknown[]; total: number; hasMore: boolean }>
+    }>(this.env.PARQUEDB, ns)
+    const result = await stub.findEntitiesFromSqlite(ns, {
+      limit: options.limit ?? 20,
+      offset: options.offset ?? 0,
+    })
+    return result as FindResult<T>
   }
 
   /**
    * Get a single entity by ID
    *
-   * Uses bloom filter for fast negative lookups.
+   * Reads from the DO for immediate consistency after writes.
    *
    * @param ns - Namespace
    * @param id - Entity ID
@@ -451,7 +460,12 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     _options: GetOptions = {}
   ): Promise<T | null> {
     await this.ensureInitialized()
-    return this.queryExecutor.get<T>(ns, id, _options)
+
+    // Route through DO for read-after-write consistency
+    const stub = getDOStubByName<ParqueDBDOStub & {
+      getEntityFromSqlite(ns: string, id: string): Promise<T | null>
+    }>(this.env.PARQUEDB, ns)
+    return stub.getEntityFromSqlite(ns, id)
   }
 
   /**
@@ -463,7 +477,12 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
    */
   async count(ns: string, filter: Filter = {}): Promise<number> {
     await this.ensureInitialized()
-    return this.queryExecutor.count(ns, filter)
+
+    // Route through DO for read-after-write consistency
+    const stub = getDOStubByName<ParqueDBDOStub & {
+      countEntitiesFromSqlite(ns: string): Promise<number>
+    }>(this.env.PARQUEDB, ns)
+    return stub.countEntitiesFromSqlite(ns)
   }
 
   /**
