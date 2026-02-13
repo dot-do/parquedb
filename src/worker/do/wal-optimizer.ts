@@ -303,9 +303,13 @@ export class WalOptimizer {
       return { rowsSaved: 0, batchesMerged: 0 }
     }
 
-    // Delete old batches
-    const placeholders = batchIds.map(() => '?').join(',')
-    this.sql.exec(`DELETE FROM events_wal WHERE id IN (${placeholders})`, ...batchIds)
+    // Delete old batches (batched to avoid SQLite parameter limit)
+    const BATCH_SIZE = 99 // Cloudflare DO SQLite max 100 params per statement
+    for (let i = 0; i < batchIds.length; i += BATCH_SIZE) {
+      const batch = batchIds.slice(i, i + BATCH_SIZE)
+      const placeholders = batch.map(() => '?').join(',')
+      this.sql.exec(`DELETE FROM events_wal WHERE id IN (${placeholders})`, ...batch)
+    }
 
     // Insert compacted batches
     const now = new Date().toISOString()

@@ -116,13 +116,17 @@ export class FlushManager {
       throw new Error(`Failed to write Parquet file to R2: ${message}`)
     }
 
-    // Mark batches as flushed
+    // Mark batches as flushed (batched to avoid SQLite parameter limit)
     if (batchIds.length > 0) {
-      const placeholders = batchIds.map(() => '?').join(',')
-      this.sql.exec(
-        `UPDATE event_batches SET flushed = 1 WHERE id IN (${placeholders})`,
-        ...batchIds
-      )
+      const BATCH_SIZE = 99 // Cloudflare DO SQLite max 100 params per statement
+      for (let i = 0; i < batchIds.length; i += BATCH_SIZE) {
+        const batch = batchIds.slice(i, i + BATCH_SIZE)
+        const placeholders = batch.map(() => '?').join(',')
+        this.sql.exec(
+          `UPDATE event_batches SET flushed = 1 WHERE id IN (${placeholders})`,
+          ...batch
+        )
+      }
     }
 
     // Record checkpoint

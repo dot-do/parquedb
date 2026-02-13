@@ -256,15 +256,18 @@ export class SqliteWal {
 
     this.ensureTable()
 
-    // Use parameterized query with ? placeholders for each ID
-    // The placeholders string is generated from array length, not user input
-    const placeholders = batchIds.map(() => '?').join(',')
-    this.sql.exec(
-      `UPDATE ${this.escapedTableName}
-       SET flushed = 1
-       WHERE id IN (${placeholders})`,
-      ...batchIds
-    )
+    // Batch to avoid SQLite parameter limit (Cloudflare DO max 100 params)
+    const BATCH_SIZE = 99
+    for (let i = 0; i < batchIds.length; i += BATCH_SIZE) {
+      const batch = batchIds.slice(i, i + BATCH_SIZE)
+      const placeholders = batch.map(() => '?').join(',')
+      this.sql.exec(
+        `UPDATE ${this.escapedTableName}
+         SET flushed = 1
+         WHERE id IN (${placeholders})`,
+        ...batch
+      )
+    }
   }
 
   /**

@@ -2412,13 +2412,17 @@ export class ParqueDBDO extends DurableObject<Env> {
       throw new Error(`Failed to write namespace events Parquet file to R2: ${message}`)
     }
 
-    // Delete flushed WAL entries
+    // Delete flushed WAL entries (batched to avoid Cloudflare DO SQLite 100-param limit)
     if (walIds.length > 0) {
-      const placeholders = walIds.map(() => '?').join(',')
-      this.sql.exec(
-        `DELETE FROM events_wal WHERE id IN (${placeholders})`,
-        ...walIds
-      )
+      const BATCH_SIZE = 99
+      for (let i = 0; i < walIds.length; i += BATCH_SIZE) {
+        const batch = walIds.slice(i, i + BATCH_SIZE)
+        const placeholders = batch.map(() => '?').join(',')
+        this.sql.exec(
+          `DELETE FROM events_wal WHERE id IN (${placeholders})`,
+          ...batch
+        )
+      }
     }
 
     // Record checkpoint for namespace events
@@ -2602,13 +2606,17 @@ export class ParqueDBDO extends DurableObject<Env> {
       throw new Error(`Failed to write relationship events Parquet file to R2: ${message}`)
     }
 
-    // Delete flushed WAL entries
+    // Delete flushed WAL entries (batched to avoid Cloudflare DO SQLite 100-param limit)
     if (walIds.length > 0) {
-      const placeholders = walIds.map(() => '?').join(',')
-      this.sql.exec(
-        `DELETE FROM rels_wal WHERE id IN (${placeholders})`,
-        ...walIds
-      )
+      const BATCH_SIZE = 99
+      for (let i = 0; i < walIds.length; i += BATCH_SIZE) {
+        const batch = walIds.slice(i, i + BATCH_SIZE)
+        const placeholders = batch.map(() => '?').join(',')
+        this.sql.exec(
+          `DELETE FROM rels_wal WHERE id IN (${placeholders})`,
+          ...batch
+        )
+      }
     }
 
     // Record checkpoint for relationship events

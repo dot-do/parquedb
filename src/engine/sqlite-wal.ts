@@ -111,8 +111,12 @@ export class SqliteWal {
   /** Mark specific batches as flushed (compacted to Parquet). */
   markFlushed(batchIds: number[]): void {
     if (batchIds.length === 0) return
-    const placeholders = batchIds.map(() => '?').join(',')
-    this.sql.exec(`UPDATE wal SET flushed = 1 WHERE id IN (${placeholders})`, ...batchIds)
+    const BATCH_SIZE = 99 // Cloudflare DO SQLite max 100 params per statement
+    for (let i = 0; i < batchIds.length; i += BATCH_SIZE) {
+      const batch = batchIds.slice(i, i + BATCH_SIZE)
+      const placeholders = batch.map(() => '?').join(',')
+      this.sql.exec(`UPDATE wal SET flushed = 1 WHERE id IN (${placeholders})`, ...batch)
+    }
   }
 
   /** Remove all flushed (already-compacted) batches from SQLite. */

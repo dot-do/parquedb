@@ -197,9 +197,13 @@ export function matchesFilter(row: unknown, filter: Filter, config?: FilterConfi
   // Handle special operators - skip for now (these need specialized handling)
   // $text, $vector, $geo are handled by specialized index queries
 
+  // System fields that are filterable as regular field names (not operators)
+  const SYSTEM_FIELDS = new Set(['$id', '$type', '$context', '$version', '$createdAt', '$createdBy', '$updatedAt', '$updatedBy'])
+
   // Check each field filter
   for (const [field, condition] of Object.entries(filter)) {
-    if (field.startsWith('$')) continue
+    // Skip logical/comparison operators but allow system fields as regular field names
+    if (field.startsWith('$') && !SYSTEM_FIELDS.has(field)) continue
 
     const fieldValue = getNestedValue(obj, field)
 

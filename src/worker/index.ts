@@ -435,11 +435,13 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
 
     // Route through DO for read-after-write consistency
     const stub = getDOStubByName<ParqueDBDOStub & {
-      findEntitiesFromSqlite(ns: string, options?: { limit?: number; offset?: number }): Promise<{ items: unknown[]; total: number; hasMore: boolean }>
+      findEntitiesFromSqlite(ns: string, options?: { limit?: number; offset?: number; sort?: Record<string, 1 | -1>; filter?: Record<string, unknown> }): Promise<{ items: unknown[]; total: number; hasMore: boolean }>
     }>(this.env.PARQUEDB, ns)
     const result = await stub.findEntitiesFromSqlite(ns, {
       limit: options.limit ?? 20,
       offset: options.offset ?? 0,
+      sort: options.sort as Record<string, 1 | -1> | undefined,
+      filter: (filter && Object.keys(filter).length > 0) ? filter as Record<string, unknown> : undefined,
     })
     return result as FindResult<T>
   }
