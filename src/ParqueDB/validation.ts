@@ -21,6 +21,9 @@ export const VALID_FILTER_OPERATORS = new Set([
   '$text', '$vector', '$geo',
 ])
 
+/** System fields that are filterable as regular field names (not operators) */
+const SYSTEM_FIELDS = new Set(['$id', '$type', '$context', '$version', '$createdAt', '$createdBy', '$updatedAt', '$updatedBy'])
+
 /** Valid update operators */
 export const VALID_UPDATE_OPERATORS = new Set([
   '$set', '$unset', '$rename', '$setOnInsert',
@@ -65,6 +68,17 @@ export function validateFilter(filter: Filter): void {
   if (!filter || typeof filter !== 'object') return
 
   for (const [key, value] of Object.entries(filter)) {
+    if (key.startsWith('$') && SYSTEM_FIELDS.has(key)) {
+      // System fields ($id, $type, etc.) are filterable as regular field names
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        for (const op of Object.keys(value as object)) {
+          if (op.startsWith('$') && !VALID_FILTER_OPERATORS.has(op)) {
+            throw new ValidationError('filter', '', `Invalid filter operator: ${op}`, { fieldName: op })
+          }
+        }
+      }
+      continue
+    }
     if (key.startsWith('$')) {
       if (!VALID_FILTER_OPERATORS.has(key)) {
         throw new ValidationError('filter', '', `Invalid filter operator: ${key}`, {
