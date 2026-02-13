@@ -1233,9 +1233,9 @@ export class ParqueDBDO extends DurableObject<Env> {
 
   /**
    * Find entities from the SQLite entities table for a namespace.
-   * Supports limit/offset pagination. Filter/sort done in-memory for simplicity.
+   * Supports limit/offset pagination, sort, and basic filter.
    */
-  findEntitiesFromSqlite(ns: string, options?: { limit?: number; offset?: number }): {
+  findEntitiesFromSqlite(ns: string, options?: { limit?: number; offset?: number; sort?: Record<string, 1 | -1>; filter?: Record<string, unknown> }): {
     items: Entity[]; total: number; hasMore: boolean
   } {
     interface Row extends Record<string, SqlStorageValue> {
@@ -1246,24 +1246,150 @@ export class ParqueDBDO extends DurableObject<Env> {
     const limit = options?.limit ?? 20
     const offset = options?.offset ?? 0
 
-    // Get total count
+    // Build WHERE clauses from filter
+    const whereClauses = ['ns = ?', 'deleted_at IS NULL']
+    const whereParams: unknown[] = [ns]
+
+    if (options?.filter && Object.keys(options.filter).length > 0) {
+      this._buildFilterClauses(options.filter, whereClauses, whereParams)
+    }
+
+    const whereSQL = whereClauses.join(' AND ')
+
+    // Build ORDER BY from sort
+    let orderSQL = 'ORDER BY created_at DESC'
+    if (options?.sort && Object.keys(options.sort).length > 0) {
+      const sortClauses: string[] = []
+      for (const [field, dir] of Object.entries(options.sort)) {
+        // Validate field name to prevent SQL injection (alphanumeric + underscore only)
+        if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(field)) continue
+        const direction = dir === -1 || dir === 'desc' ? 'DESC' : 'ASC'
+        // Map known top-level columns, otherwise use json_extract on data
+        if (field === 'name' || field === 'version') {
+          sortClauses.push(`${field} ${direction}`)
+        } else if (field === 'createdAt' || field === '$createdAt') {
+          sortClauses.push(`created_at ${direction}`)
+        } else if (field === 'updatedAt' || field === '$updatedAt') {
+          sortClauses.push(`updated_at ${direction}`)
+        } else {
+          sortClauses.push(`json_extract(data, '$.${field}') ${direction}`)
+        }
+      }
+      if (sortClauses.length > 0) {
+        orderSQL = `ORDER BY ${sortClauses.join(', ')}`
+      }
+    }
+
+    // Get total count (with filter)
     interface CountRow extends Record<string, SqlStorageValue> { cnt: number }
     const countRows = [...this.sql.exec<CountRow>(
-      `SELECT COUNT(*) as cnt FROM entities WHERE ns = ? AND deleted_at IS NULL`, ns
+      `SELECT COUNT(*) as cnt FROM entities WHERE ${whereSQL}`, ...whereParams
     )]
     const total = countRows[0]?.cnt ?? 0
 
     // Get page
     const rows = [...this.sql.exec<Row>(
       `SELECT ns, id, type, name, version, created_at, created_by, updated_at, updated_by, deleted_at, deleted_by, data
-       FROM entities WHERE ns = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-      ns, limit, offset
+       FROM entities WHERE ${whereSQL} ${orderSQL} LIMIT ? OFFSET ?`,
+      ...whereParams, limit, offset
     )]
 
     return {
       items: rows.map(r => this.sqliteRowToEntity(r)),
       total,
       hasMore: offset + rows.length < total,
+    }
+  }
+
+  /**
+   * Build SQL WHERE clauses from a MongoDB-style filter object.
+   * Supports: equality, $gt, $gte, $lt, $lte, $ne, $in, $nin, $regex, $exists, $and, $or
+   */
+  private _buildFilterClauses(filter: Record<string, unknown>, clauses: string[], params: unknown[]): void {
+    for (const [key, value] of Object.entries(filter)) {
+      // Validate field name
+      if (key === '$and' && Array.isArray(value)) {
+        const subClauses: string[] = []
+        for (const sub of value as Record<string, unknown>[]) {
+          const inner: string[] = []
+          this._buildFilterClauses(sub, inner, params)
+          if (inner.length > 0) subClauses.push(`(${inner.join(' AND ')})`)
+        }
+        if (subClauses.length > 0) clauses.push(`(${subClauses.join(' AND ')})`)
+        continue
+      }
+      if (key === '$or' && Array.isArray(value)) {
+        const subClauses: string[] = []
+        for (const sub of value as Record<string, unknown>[]) {
+          const inner: string[] = []
+          this._buildFilterClauses(sub, inner, params)
+          if (inner.length > 0) subClauses.push(`(${inner.join(' AND ')})`)
+        }
+        if (subClauses.length > 0) clauses.push(`(${subClauses.join(' OR ')})`)
+        continue
+      }
+
+      if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)) continue
+
+      // Map field to SQL expression
+      // Note: 'type' is NOT mapped to the top-level column because the SQLite 'type' column
+      // stores the entity model name (e.g., 'Event'), not the data field (e.g., 'track').
+      // Entity type filtering is already handled by the ns = ? clause.
+      let fieldExpr: string
+      if (key === 'name' || key === 'version') {
+        fieldExpr = key
+      } else if (key === '$id' || key === 'id') {
+        fieldExpr = 'id'
+      } else if (key === 'createdAt' || key === '$createdAt') {
+        fieldExpr = 'created_at'
+      } else if (key === 'updatedAt' || key === '$updatedAt') {
+        fieldExpr = 'updated_at'
+      } else {
+        fieldExpr = `json_extract(data, '$.${key}')`
+      }
+
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        // Operator object: { $gt: 5, $lt: 10 }
+        for (const [op, opVal] of Object.entries(value as Record<string, unknown>)) {
+          switch (op) {
+            case '$eq': clauses.push(`${fieldExpr} = ?`); params.push(opVal); break
+            case '$ne': clauses.push(`${fieldExpr} != ?`); params.push(opVal); break
+            case '$gt': clauses.push(`${fieldExpr} > ?`); params.push(opVal); break
+            case '$gte': clauses.push(`${fieldExpr} >= ?`); params.push(opVal); break
+            case '$lt': clauses.push(`${fieldExpr} < ?`); params.push(opVal); break
+            case '$lte': clauses.push(`${fieldExpr} <= ?`); params.push(opVal); break
+            case '$in':
+              if (Array.isArray(opVal) && opVal.length > 0) {
+                clauses.push(`${fieldExpr} IN (${opVal.map(() => '?').join(',')})`)
+                params.push(...opVal)
+              }
+              break
+            case '$nin':
+              if (Array.isArray(opVal) && opVal.length > 0) {
+                clauses.push(`${fieldExpr} NOT IN (${opVal.map(() => '?').join(',')})`)
+                params.push(...opVal)
+              }
+              break
+            case '$regex':
+              // SQLite LIKE approximation: ^ → prefix, $ → suffix, .* → %
+              if (typeof opVal === 'string') {
+                let pattern = opVal
+                if (pattern.startsWith('^')) pattern = pattern.slice(1) + '%'
+                else pattern = '%' + pattern + '%'
+                clauses.push(`${fieldExpr} LIKE ?`)
+                params.push(pattern)
+              }
+              break
+            case '$exists':
+              clauses.push(opVal ? `${fieldExpr} IS NOT NULL` : `${fieldExpr} IS NULL`)
+              break
+          }
+        }
+      } else {
+        // Simple equality
+        clauses.push(`${fieldExpr} = ?`)
+        params.push(value)
+      }
     }
   }
 
