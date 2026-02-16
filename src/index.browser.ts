@@ -80,13 +80,14 @@ export {
   R2OperationError,
   R2ETagMismatchError,
   R2NotFoundError,
+  DOSqliteBackend,
   getStorageCapabilities,
   hasStorageCapability,
   isStreamable,
   isMultipart,
   isTransactional,
 } from './storage/index'
-export type { R2BackendOptions, StorageCapabilities } from './storage/index'
+export type { R2BackendOptions, DOSqliteBackendOptions, StorageCapabilities } from './storage/index'
 
 // =============================================================================
 // Schema
@@ -574,6 +575,8 @@ export {
   removeManifestFile,
   SyncEngine,
   createSyncEngine,
+  resolveEventSync,
+  computeEventSyncCursor,
   type SyncManifest,
   type SyncFileEntry,
   type SyncDiff,
@@ -584,6 +587,12 @@ export {
   type SyncResult,
   type SyncError,
   type SyncEngineOptions,
+  type EventSyncEvent,
+  type EventSyncConflictStrategy,
+  type EventSyncConflictInfo,
+  type EventSyncResult,
+  type ResolveEventSyncParams,
+  type ResolveEventSyncResult,
 } from './sync/index'
 
 // =============================================================================
@@ -641,8 +650,13 @@ export {
   hybridSearch,
   suggest,
   createSearchClient,
+  scoreEntity,
+  searchEntities,
   type IMDBTitle,
   type ONETOccupation,
+  type ScoreResult,
+  type EntitySearchParams,
+  type EntitySearchResult,
 } from './search/index'
 
 // =============================================================================

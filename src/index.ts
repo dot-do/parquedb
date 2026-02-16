@@ -333,8 +333,27 @@ export {
   /** Checks if a storage backend supports transactions */
   isTransactional,
   // FsxBackend,
+  /**
+   * Cloudflare Durable Object SQLite storage backend.
+   * Stores parquet file blocks directly in DO SQLite as blobs.
+   * Sub-millisecond latency — co-located with the DO.
+   *
+   * @example
+   * ```typescript
+   * import { ParqueDB, DOSqliteBackend } from 'parquedb'
+   *
+   * export class MyDO extends DurableObject {
+   *   constructor(state, env) {
+   *     const db = new ParqueDB({
+   *       storage: new DOSqliteBackend(state.storage.sql)
+   *     })
+   *   }
+   * }
+   * ```
+   */
+  DOSqliteBackend,
 } from './storage'
-export type { R2BackendOptions, StorageCapabilities } from './storage'
+export type { R2BackendOptions, DOSqliteBackendOptions, StorageCapabilities } from './storage'
 
 // =============================================================================
 // Schema
