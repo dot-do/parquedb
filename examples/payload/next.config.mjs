@@ -2,16 +2,17 @@ import { withPayload } from '@payloadcms/next/withPayload'
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Payload requires this for proper module resolution
-  experimental: {
-    reactCompiler: false,
-  },
   // OpenNext compatibility
   output: 'standalone',
-  // Exclude native modules and Cloudflare-specific code from webpack bundling
   webpack: (config, { isServer, webpack }) => {
+    // Extension alias required by Payload
+    config.resolve.extensionAlias = {
+      '.cjs': ['.cts', '.cjs'],
+      '.js': ['.ts', '.tsx', '.js', '.jsx'],
+      '.mjs': ['.mts', '.mjs'],
+    }
+
     if (!isServer) {
-      // Client-side: exclude native modules entirely
       config.resolve.fallback = {
         ...config.resolve.fallback,
         keytar: false,
@@ -20,14 +21,12 @@ const nextConfig = {
       }
     }
 
-    // Mark problematic modules as external (won't be bundled)
     config.externals = config.externals || []
     config.externals.push({
       keytar: 'commonjs keytar',
       'cloudflare:workers': 'commonjs cloudflare:workers',
     })
 
-    // Replace problematic parquedb modules with browser-safe versions
     config.plugins.push(
       new webpack.NormalModuleReplacementPlugin(
         /parquedb[\/\\]dist[\/\\]migration[\/\\]index\.js$/,
@@ -65,19 +64,17 @@ const nextConfig = {
           )
         }
       ),
-      // Ignore bson - it's only needed for MongoDB migration
       new webpack.IgnorePlugin({
         resourceRegExp: /^bson$/,
       }),
     )
 
-    // Ignore cloudflare: scheme
     config.plugins.push({
       apply: (compiler) => {
         compiler.hooks.normalModuleFactory.tap('IgnoreCloudflare', (nmf) => {
           nmf.hooks.beforeResolve.tap('IgnoreCloudflare', (result) => {
             if (result?.request?.startsWith('cloudflare:')) {
-              return false // Skip this module
+              return false
             }
           })
         })
@@ -88,4 +85,4 @@ const nextConfig = {
   },
 }
 
-export default withPayload(nextConfig)
+export default withPayload(nextConfig, { devBundleServerPackages: false })

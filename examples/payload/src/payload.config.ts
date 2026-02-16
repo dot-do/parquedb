@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url'
 import { buildConfig } from 'payload'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { parquedbAdapter } from 'parquedb/payload'
-import { FileSystemBackend } from 'parquedb'
+import { FsBackend } from 'parquedb'
 
 // Collections
 import { Users, Posts, Categories, Media } from './collections'
@@ -32,7 +32,7 @@ function getStorageBackend() {
   // Check if we have an R2 bucket binding (Workers environment)
   // The R2Backend will be configured in the worker entry point
   const dataDir = process.env.DATA_DIR || path.join(process.cwd(), 'data')
-  return new FileSystemBackend(dataDir)
+  return new FsBackend(dataDir)
 }
 
 export default buildConfig({
