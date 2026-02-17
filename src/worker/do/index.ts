@@ -1,8 +1,14 @@
 /**
- * ParqueDB Durable Object
+ * ParqueDB Durable Object (MODULAR VERSION)
  *
- * Handles all write operations for consistency. Reads can bypass the DO
- * and go directly to R2 for better performance.
+ * @deprecated Use `ParqueDBDO` from `../ParqueDBDO.ts` instead.
+ * This modular version was a refactoring attempt but the canonical ParqueDBDO
+ * in the parent directory is the one used in production. The modular manager
+ * files (cache-manager.ts, event-wal.ts, relationship-wal.ts, flush-manager.ts,
+ * transaction-manager.ts) are still useful and may be imported independently.
+ *
+ * The canonical ParqueDBDO now exposes `protected` fields for subclassing
+ * (e.g., by @dotdo/db's DatabaseDO).
  *
  * EVENT-SOURCED ARCHITECTURE:
  * - events_wal is the SINGLE SOURCE OF TRUTH for entity state
@@ -10,16 +16,6 @@
  * - Entity cache provides fast lookups for recent entities
  * - Relationships table maintained for graph traversal performance
  * - Periodic flush to R2 as Parquet files for reads
- *
- * This follows true event-sourcing principles:
- * 1. All mutations append events to events_wal
- * 2. Entity state is reconstructed by replaying events
- * 3. Cache invalidation happens on write
- * 4. Snapshots can be used for performance (future enhancement)
- *
- * @see ParqueDBWorker - The Worker entrypoint that coordinates reads (R2) and writes (this DO)
- * @see QueryExecutor - Handles reads directly from R2 Parquet files
- * @see ReadPath - Caching layer for R2 reads
  */
 
 import { DurableObject } from 'cloudflare:workers'

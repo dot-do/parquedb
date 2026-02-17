@@ -538,8 +538,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     // Cast to DOCreateInput - the data should contain $type and name
     const result = await stub.create(ns, asParam<Parameters<typeof stub.create>[1]>(data), options)
 
-    // Invalidate cache after write
-    await this.invalidateCacheForNamespace(ns)
+    // Invalidate cache after write (fire-and-forget — don't block response)
+    this.ctx.waitUntil(this.invalidateCacheForNamespace(ns))
 
     return result as T
   }
@@ -568,8 +568,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     // Cast Update to DOUpdateInput - they have similar structure
     const result = await stub.update(ns, id, asParam<Parameters<typeof stub.update>[2]>(update), options)
 
-    // Invalidate cache after write
-    await this.invalidateCacheForNamespace(ns)
+    // Invalidate cache after write (fire-and-forget — don't block response)
+    this.ctx.waitUntil(this.invalidateCacheForNamespace(ns))
 
     return asUpdateResult(result)
   }
@@ -598,8 +598,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     }>(getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns))
     const result = await stub.updateMany(ns, filter, update, options)
 
-    // Invalidate cache after write
-    await this.invalidateCacheForNamespace(ns)
+    // Invalidate cache after write (fire-and-forget)
+    this.ctx.waitUntil(this.invalidateCacheForNamespace(ns))
 
     return result as UpdateResult
   }
@@ -623,8 +623,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     const stub = getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns)
     const result = await stub.delete(ns, id, options)
 
-    // Invalidate cache after write
-    await this.invalidateCacheForNamespace(ns)
+    // Invalidate cache after write (fire-and-forget)
+    this.ctx.waitUntil(this.invalidateCacheForNamespace(ns))
 
     return result as DeleteResult
   }
@@ -651,8 +651,8 @@ export class ParqueDBWorker extends WorkerEntrypoint<Env> {
     }>(getDOStubByName<ParqueDBDOStub>(this.env.PARQUEDB, ns))
     const result = await stub.deleteMany(ns, filter, options)
 
-    // Invalidate cache after write
-    await this.invalidateCacheForNamespace(ns)
+    // Invalidate cache after write (fire-and-forget)
+    this.ctx.waitUntil(this.invalidateCacheForNamespace(ns))
 
     return result as DeleteResult
   }

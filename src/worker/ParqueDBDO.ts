@@ -195,13 +195,13 @@ const BULK_THRESHOLD = BULK_WRITE_THRESHOLD
 
 export class ParqueDBDO extends DurableObject<Env> {
   /** SQLite storage */
-  private sql: SqlStorage
+  protected sql: SqlStorage
 
   /** Whether schema has been initialized */
-  private initialized = false
+  protected initialized = false
 
   /** Flush configuration */
-  private flushConfig: FlushConfig = {
+  protected flushConfig: FlushConfig = {
     minEvents: EVENT_BATCH_COUNT_THRESHOLD,
     maxInterval: DEFAULT_DO_FLUSH_INTERVAL_MS * 2, // 60 seconds
     maxEvents: 10000, // DEFAULT_MAX_EVENTS from constants
@@ -209,36 +209,36 @@ export class ParqueDBDO extends DurableObject<Env> {
   }
 
   /** Pending flush alarm */
-  private flushAlarmSet = false
+  protected flushAlarmSet = false
 
   /** Namespace sequence counters for short ID generation with Sqids */
-  private counters: Map<string, number> = new Map()
+  protected counters: Map<string, number> = new Map()
 
   /** Consolidated event buffers per namespace for WAL batching with sequence tracking
    *  This is the SINGLE event buffering system - events are routed here by appendEvent()
    *  and flushed to events_wal table */
-  private nsEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }> = new Map()
+  protected nsEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }> = new Map()
 
   /** Relationship event buffers per namespace for WAL batching (Phase 4) */
-  private relEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }> = new Map()
+  protected relEventBuffers: Map<string, { events: Event[]; firstSeq: number; lastSeq: number; sizeBytes: number }> = new Map()
 
   /** Whether counters have been initialized from SQLite */
-  private countersInitialized = false
+  protected countersInitialized = false
 
   /** LRU cache for recent entity states (derived from events) */
-  private entityCache: Map<string, { entity: Entity; version: number }> = new Map()
+  protected entityCache: Map<string, { entity: Entity; version: number }> = new Map()
 
   /** Maximum size of the entity cache */
-  private static readonly ENTITY_CACHE_MAX_SIZE = DEFAULT_ENTITY_CACHE_SIZE
+  protected static readonly ENTITY_CACHE_MAX_SIZE = DEFAULT_ENTITY_CACHE_SIZE
 
   /** Cache invalidation version per namespace - used by Workers to detect stale caches */
-  private invalidationVersions: Map<string, number> = new Map()
+  protected invalidationVersions: Map<string, number> = new Map()
 
   /** Pending invalidation signals - Workers poll this to know what to invalidate */
-  private pendingInvalidations: CacheInvalidationSignal[] = []
+  protected pendingInvalidations: CacheInvalidationSignal[] = []
 
   /** Maximum pending invalidation signals to keep (circular buffer behavior) */
-  private static readonly MAX_PENDING_INVALIDATIONS = IMPORTED_MAX_PENDING_INVALIDATIONS
+  protected static readonly MAX_PENDING_INVALIDATIONS = IMPORTED_MAX_PENDING_INVALIDATIONS
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -252,7 +252,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Initialize SQLite schema if not already done
    */
-  private async ensureInitialized(): Promise<void> {
+  protected async ensureInitialized(): Promise<void> {
     if (this.initialized) return
 
     // Create all tables and indexes using centralized schema definitions
@@ -268,7 +268,7 @@ export class ParqueDBDO extends DurableObject<Env> {
    * Initialize namespace counters from events_wal and rels_wal tables
    * On DO startup, load the max sequence for each namespace
    */
-  private async initializeCounters(): Promise<void> {
+  protected async initializeCounters(): Promise<void> {
     if (this.countersInitialized) return
 
     interface CounterRow {
@@ -305,7 +305,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Get next sequence number for namespace and generate short ID with Sqids
    */
-  private getNextId(ns: string): string {
+  protected getNextId(ns: string): string {
     const seq = this.counters.get(ns) || 1
     this.counters.set(ns, seq + 1)
     return sqids.encode([seq])
@@ -452,7 +452,7 @@ export class ParqueDBDO extends DurableObject<Env> {
    * @param options - Create options
    * @returns Created entities
    */
-  private async bulkWriteToR2(
+  protected async bulkWriteToR2(
     ns: string,
     items: CreateInput[],
     options: DOCreateOptions = {}
@@ -1305,7 +1305,7 @@ export class ParqueDBDO extends DurableObject<Env> {
    * Build SQL WHERE clauses from a MongoDB-style filter object.
    * Supports: equality, $gt, $gte, $lt, $lte, $ne, $in, $nin, $regex, $exists, $and, $or
    */
-  private _buildFilterClauses(filter: Record<string, unknown>, clauses: string[], params: unknown[]): void {
+  protected _buildFilterClauses(filter: Record<string, unknown>, clauses: string[], params: unknown[]): void {
     for (const [key, value] of Object.entries(filter)) {
       // Validate field name
       if (key === '$and' && Array.isArray(value)) {
@@ -1405,7 +1405,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   }
 
   /** Convert a SQLite entities row to an Entity object */
-  private sqliteRowToEntity(row: Record<string, SqlStorageValue> & {
+  protected sqliteRowToEntity(row: Record<string, SqlStorageValue> & {
     ns: string; id: string; type: string; name: string; version: number
     created_at: string; created_by: string; updated_at: string; updated_by: string
     deleted_at: string | null; deleted_by: string | null; data: string
@@ -1429,7 +1429,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Add an entity to the LRU cache
    */
-  private cacheEntity(key: string, entity: Entity): void {
+  protected cacheEntity(key: string, entity: Entity): void {
     this.entityCache.delete(key)
     this.entityCache.set(key, { entity, version: entity.version })
 
@@ -1444,7 +1444,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Invalidate an entity in the cache
    */
-  private invalidateCache(ns: string, id: string): void {
+  protected invalidateCache(ns: string, id: string): void {
     this.entityCache.delete(`${ns}/${id}`)
   }
 
@@ -1499,7 +1499,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Apply a single event to an entity state
    */
-  private applyEventToEntity(
+  protected applyEventToEntity(
     current: Entity | null,
     event: Event,
     ns: string,
@@ -1582,7 +1582,7 @@ export class ParqueDBDO extends DurableObject<Env> {
    * @param type - Type of invalidation (entity, relationship, or full)
    * @param entityId - Optional entity ID for entity-specific invalidation
    */
-  private signalCacheInvalidation(
+  protected signalCacheInvalidation(
     ns: string,
     type: 'entity' | 'relationship' | 'full',
     entityId?: string
@@ -1728,7 +1728,7 @@ export class ParqueDBDO extends DurableObject<Env> {
    * @param entityKeys - Array of entity keys in "ns/id" format
    * @returns Map of entity key to type/name info
    */
-  private async getEntityInfoBatch(
+  protected async getEntityInfoBatch(
     entityKeys: string[]
   ): Promise<Map<string, { type: string; name: string }>> {
     const result = new Map<string, { type: string; name: string }>()
@@ -2285,7 +2285,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Deserialize a batch blob back to events
    */
-  private deserializeEventBatch(batch: Uint8Array | ArrayBuffer): Event[] {
+  protected deserializeEventBatch(batch: Uint8Array | ArrayBuffer): Event[] {
     if (!batch) return []
 
     let data: Uint8Array
@@ -2338,7 +2338,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Flush events_wal for a specific namespace to Parquet
    */
-  private async flushNsWalToParquetForNamespace(ns: string): Promise<void> {
+  protected async flushNsWalToParquetForNamespace(ns: string): Promise<void> {
     interface WalRow extends Record<string, SqlStorageValue> {
       id: number
       events: ArrayBuffer
@@ -2448,7 +2448,7 @@ export class ParqueDBDO extends DurableObject<Env> {
    * The QueryExecutor reads from `{ns}.parquet` with columns `$id` and `$data`.
    * This method queries the entities SQLite table and writes the snapshot.
    */
-  private async materializeEntitySnapshot(ns: string): Promise<void> {
+  protected async materializeEntitySnapshot(ns: string): Promise<void> {
     interface EntityRow extends Record<string, SqlStorageValue> {
       ns: string
       id: string
@@ -2542,7 +2542,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Flush rels_wal for a specific namespace to Parquet
    */
-  private async flushRelWalToParquetForNamespace(ns: string): Promise<void> {
+  protected async flushRelWalToParquetForNamespace(ns: string): Promise<void> {
     interface WalRow extends Record<string, SqlStorageValue> {
       id: number
       events: ArrayBuffer
@@ -2678,7 +2678,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Schedule a flush if conditions are met
    */
-  private async maybeScheduleFlush(): Promise<void> {
+  protected async maybeScheduleFlush(): Promise<void> {
     if (this.flushAlarmSet) return
 
     const count = await this.getUnflushedEventCount()
@@ -2701,7 +2701,7 @@ export class ParqueDBDO extends DurableObject<Env> {
   /**
    * Convert stored entity to API entity format
    */
-  private toEntity(stored: StoredEntity): Entity {
+  protected toEntity(stored: StoredEntity): Entity {
     const data = parseStoredData(stored.data)
 
     return {
@@ -2725,7 +2725,7 @@ export class ParqueDBDO extends DurableObject<Env> {
    * @param stored - The stored relationship from SQLite
    * @param entityInfoMap - Optional map of entity keys (ns/id) to type/name info
    */
-  private toRelationship(
+  protected toRelationship(
     stored: StoredRelationship,
     entityInfoMap?: Map<string, { type: string; name: string }>
   ): Relationship {
@@ -2763,10 +2763,10 @@ export class ParqueDBDO extends DurableObject<Env> {
   // ===========================================================================
 
   /** Transaction snapshot for rollback */
-  private transactionSnapshot: TransactionSnapshot | null = null
+  protected transactionSnapshot: TransactionSnapshot | null = null
 
   /** Whether currently in a transaction */
-  private inTransaction = false
+  protected inTransaction = false
 
   /**
    * Begin a transaction

@@ -76,7 +76,7 @@ import type {
   CreateInput,
   Relationship,
 } from '../../types'
-import { ParqueDBDO, type DOCreateOptions, type DOUpdateOptions, type DODeleteOptions, type DOLinkOptions } from '../../worker/do'
+import { ParqueDBDO, type DOCreateOptions, type DOUpdateOptions, type DODeleteOptions, type DOLinkOptions } from '../../worker/ParqueDBDO'
 import type { Env } from '../../types/worker'
 import { logger } from '../../utils/logger'
 import { asInternalAccess } from '../../types/cast'

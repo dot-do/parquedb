@@ -63,6 +63,12 @@
     "./sync": {
       "import": "./dist/sync/index.js",
       "types": "./dist/sync/index.d.ts"
+    },
+    "./worker": {
+      "workerd": "./dist/worker/ParqueDBDO.js",
+      "worker": "./dist/worker/ParqueDBDO.js",
+      "import": "./dist/worker/ParqueDBDO.js",
+      "types": "./dist/worker/ParqueDBDO.d.ts"
     }
   },
   "browser": {
